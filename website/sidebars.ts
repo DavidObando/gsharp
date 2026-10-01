@@ -88,6 +88,7 @@ const sidebars: SidebarsConfig = {
     'tooling/debugging',
     'tooling/analyzers',
     'tooling/cs2gs',
+    'tooling/go2gs',
     'tooling/gsc',
     'tooling/lsp',
     'tooling/compiler-architecture',

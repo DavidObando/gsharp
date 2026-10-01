@@ -23,6 +23,200 @@ env:
   NBGV_SetCloudBuildVersionVars: false
 
 jobs:
+  go2gs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: tools/go2gs/go.sum
+
+      - name: Restore go2gs
+        working-directory: tools/go2gs
+        run: go mod download
+
+      - name: Test go2gs
+        working-directory: tools/go2gs
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go mod verify
+          go test -count=1 ./...
+          go test -race -timeout 20m -count=1 ./...
+          go vet ./...
+
+  go2gs-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: tools/go2gs/go.sum
+
+      - name: Test go2gs preload on Windows
+        working-directory: tools/go2gs
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go mod verify
+          $filter = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestWindowsSelectedGoPlatformValidation|TestWindowsAtomicWrite.*|TestWindowsExecutableCapsule.*|TestWindowsRootEntryIdentity.*|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$'
+          $securityTests = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe)$'
+          $topLevelTests = @(go test -list '^Test' .)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $relevantTests = @($topLevelTests | Where-Object { $_ -match $securityTests })
+          $selectedTests = @($relevantTests | Where-Object { $_ -match $filter })
+          if ($relevantTests.Count -ne 10 -or $selectedTests.Count -ne 10) {
+            throw "Windows security filter selected $($selectedTests.Count)/$($relevantTests.Count) relevant tests"
+          }
+          $publicationTests = @(
+            'TestWindowsAtomicWriteClosesStagedHandleBeforeRename'
+            'TestWindowsExecutableCapsuleStagesReadOnlyEntry'
+          )
+          $missingPublicationTests = @($publicationTests | Where-Object { $_ -notin $topLevelTests })
+          if ($missingPublicationTests.Count -ne 0) {
+            throw "Windows publication tests are missing: $($missingPublicationTests -join ', ')"
+          }
+          $requiredPassTests = @($selectedTests + $publicationTests)
+          function Get-SecurityTestResult {
+            param(
+              [object[]]$Events,
+              [string[]]$SelectedTests
+            )
+            foreach ($test in $SelectedTests) {
+              $topLevelEvents = @($Events | Where-Object { $_.Test -eq $test })
+              if ($topLevelEvents | Where-Object { $_.Action -eq 'skip' }) {
+                return [pscustomobject]@{ ExitCode = 1; Message = "Windows security test skipped: $test" }
+              }
+              $terminalEvents = @($topLevelEvents | Where-Object { $_.Action -in @('pass', 'fail', 'skip') })
+              if ($terminalEvents.Count -eq 0 -or $terminalEvents[-1].Action -ne 'pass') {
+                return [pscustomobject]@{ ExitCode = 1; Message = "Windows security test did not finish with pass: $test" }
+              }
+              $skippedSubtests = @($Events | Where-Object {
+                $_.Action -eq 'skip' -and
+                -not [string]::IsNullOrEmpty($_.Test) -and
+                $_.Test.StartsWith($test + '/', [System.StringComparison]::Ordinal)
+              })
+              if ($skippedSubtests.Count -ne 0) {
+                return [pscustomobject]@{
+                  ExitCode = 1
+                  Message = "Windows security test has skipped subtests: $($skippedSubtests.Test -join ', ')"
+                }
+              }
+            }
+            return [pscustomobject]@{ ExitCode = 0; Message = '' }
+          }
+          function Get-GoTestSecurityResult {
+            param(
+              [string[]]$RawEvents,
+              [string[]]$SelectedTests,
+              [int]$ExitCode
+            )
+            if ($ExitCode -ne 0) {
+              return [pscustomobject]@{ ExitCode = $ExitCode; Message = "go test exited with code $ExitCode" }
+            }
+            try {
+              $parsedEvents = @($RawEvents | ForEach-Object { $_ | ConvertFrom-Json -ErrorAction Stop })
+            }
+            catch {
+              return [pscustomobject]@{ ExitCode = 1; Message = "invalid go test JSON event: $_" }
+            }
+            return Get-SecurityTestResult $parsedEvents $SelectedTests
+          }
+          function Assert-SimulatedResult {
+            param([string]$Name, [object]$Result, [int]$ExpectedExitCode)
+            if ($Result.ExitCode -ne $ExpectedExitCode) {
+              throw "$Name simulation returned $($Result.ExitCode), expected $ExpectedExitCode`: $($Result.Message)"
+            }
+          }
+          function ConvertTo-SimulatedJson {
+            param([object[]]$Events)
+            return @($Events | ForEach-Object { $_ | ConvertTo-Json -Compress })
+          }
+          $passingEvents = @(
+            foreach ($test in $requiredPassTests) {
+              [pscustomobject]@{ Action = 'run'; Test = $test }
+              [pscustomobject]@{ Action = 'pass'; Test = $test }
+            }
+          )
+          $runThenSkipEvents = @($passingEvents)
+          $runThenSkipEvents += [pscustomobject]@{ Action = 'skip'; Test = $requiredPassTests[0] }
+          Assert-SimulatedResult 'run+skip' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $runThenSkipEvents) $requiredPassTests 0) 1
+          $subtestSkipEvents = @(
+            foreach ($test in $requiredPassTests) {
+              [pscustomobject]@{ Action = 'run'; Test = $test }
+              if ($test -eq $requiredPassTests[0]) {
+                [pscustomobject]@{ Action = 'run'; Test = "$test/skipped" }
+                [pscustomobject]@{ Action = 'skip'; Test = "$test/skipped" }
+              }
+              [pscustomobject]@{ Action = 'pass'; Test = $test }
+            }
+          )
+          Assert-SimulatedResult 'subtest skip' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $subtestSkipEvents) $requiredPassTests 0) 1
+          Assert-SimulatedResult 'all pass' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $passingEvents) $requiredPassTests 0) 0
+          $interleavedEvents = @(
+            [pscustomobject]@{ Action = 'start'; Package = 'go2gs' }
+            foreach ($test in $requiredPassTests) {
+              [pscustomobject]@{ Action = 'run'; Test = $test }
+              [pscustomobject]@{ Action = 'run'; Test = $test }
+            }
+            [pscustomobject]@{ Action = 'output'; Package = 'go2gs' }
+            for ($index = $requiredPassTests.Count - 1; $index -ge 0; $index--) {
+              [pscustomobject]@{ Action = 'pass'; Test = $requiredPassTests[$index] }
+            }
+            [pscustomobject]@{ Action = 'pass'; Package = 'go2gs' }
+          )
+          Assert-SimulatedResult 'interleaved duplicate events' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $interleavedEvents) $requiredPassTests 0) 0
+          $missingPassEvents = @($passingEvents | Where-Object {
+            -not ($_.Test -eq $requiredPassTests[-1] -and $_.Action -eq 'pass')
+          })
+          Assert-SimulatedResult 'missing pass' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $missingPassEvents) $requiredPassTests 0) 1
+          Assert-SimulatedResult 'malformed JSON' (Get-GoTestSecurityResult @('not JSON') $requiredPassTests 0) 1
+          Assert-SimulatedResult 'exit propagation' (Get-GoTestSecurityResult @('not JSON') $requiredPassTests 23) 23
+          $events = @(go test -json -count=1 -run $filter .)
+          $testExitCode = $LASTEXITCODE
+          $result = Get-GoTestSecurityResult $events $requiredPassTests $testExitCode
+          $events | ForEach-Object { Write-Output $_ }
+          if ($result.ExitCode -ne 0) {
+            if ($result.ExitCode -eq $testExitCode -and $testExitCode -ne 0) {
+              exit $testExitCode
+            }
+            throw $result.Message
+          }
+          go vet ./...
+
+  go2gs-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: tools/go2gs/go.sum
+
+      - name: Restore go2gs
+        working-directory: tools/go2gs
+        run: go mod download
+
+      - name: Test go2gs on macOS
+        working-directory: tools/go2gs
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go mod verify
+          go test -count=1 ./...
+          go vet ./...
+
   build:
     runs-on: ubuntu-latest
 

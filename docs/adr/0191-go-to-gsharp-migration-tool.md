@@ -22,6 +22,13 @@
   before application-scale performance readiness is claimed.
   Approval of their design direction is not implementation availability.
   This ADR neither accepts nor changes them.
+- **Implementation status**: M0 typed inventory is implemented under
+  [`tools/go2gs`](../../tools/go2gs/README.md) with schema/profile version 1.
+  It provides `analyze` and analysis validation only. Translation, lowering,
+  compatibility support, and runtime validation remain later milestones.
+  Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
+  value arrays, and concurrency are inventoried with migration blockers; their
+  G# lowering/runtime representations are explicit prerequisites for M1.
 
 ## Context
 
@@ -138,6 +145,7 @@ The profile fixes entry packages and the exact source/toolchain context:
 
 | Profile input | Required handling |
 | --- | --- |
+| Entry packages | Accept only `.` or canonical module-relative `./segment[/segment]` patterns, with `...` permitted only as the final recursive component. Do not normalize profile input into acceptance. Reject absolute, drive, UNC, URI, traversal, backslash, whitespace/control, `key=value`, bare meta-pattern, and other loader query/operator forms before every package load so entry selection cannot escape the captured module mirror. |
 | Toolchain and language | Record requested and actual Go executable version/hash, helper version/hash, module language versions, per-file language versions, GOROOT provenance, and relevant experiments/runtime compatibility settings. `go 1.26.6` is not proof of which executable was used. First cliamp profiles request that baseline explicitly; unavailable tooling is a loader blocker, not permission to upgrade it silently. |
 | Modules/workspace | Record `go.mod`, `go.sum`, any `go.work`/`go.work.sum`, selected module versions, replacements, local replacement content hashes, and vendor mode plus `vendor/modules.txt`. Workspace discovery is explicit; do not accidentally inherit a parent's workspace. Module paths and replacements are identities, not just directory names. |
 | Build selection | Record GOOS, GOARCH, architecture feature settings, tags, CGO_ENABLED, GOFLAGS, GOEXPERIMENT, build mode, and C/Objective-C compiler, SDK, flags, and native library provenance where relevant. Record GODEBUG settings affecting semantics. |
@@ -149,6 +157,10 @@ The [module reference][go-modules] and [GODEBUG contract][go-godebug] are inputs
 to profile interpretation, not excuses to follow whatever tooling is newest.
 Capture relevant settings in a sanitized allowlist, not a dump of credential-
 bearing environment variables. Unknown profile/schema versions fail explicitly.
+Before decoding, profile-v1 bootstrap reads only a stable regular file of at
+most 256 KiB. This fixed pre-profile ceiling applies before the profile's
+configured timeout exists; oversized, growing, replaced, symlink, and
+non-regular inputs fail without an artifact.
 
 Ask the loader for the import graph, compiled files, syntax, type information,
 type sizes, modules, and embed information needed by the selected closure.
@@ -162,10 +174,21 @@ command can obtain exports, invoke build tooling, write caches, and process
 CGo; native compilers and configured package drivers are executable trust
 boundaries. Disable unapproved `GOPACKAGESDRIVER`, automatic toolchain
 downloads, generators, and network access. Load in a bounded disposable
-environment with a read-only source snapshot and isolated caches. A
+environment with a read-only source snapshot and isolated caches. Before
+either `packages.Load` call, the Linux analysis worker applies a 2 GiB
+`RLIMIT_DATA` ceiling. This also bounds x/tools' internal `cmd/go`
+stdout/stderr buffers before package-count validation can run. Failure to
+apply the ceiling is a bootstrap failure, not permission to continue
+unbounded. A
 metadata-only/source-scan fallback is labeled untyped and incomplete.
 Neither `analyze` nor `translate` runs the target, `init` functions, tests,
 `go generate`, module-provided scripts, or arbitrary MSBuild imports.
+Source and selected local-replacement traversal reads directories in batches
+of at most 128 entries and checks cancellation between batches. It fails before
+sorting above 10,000 entries in one directory or 100,000 traversed entries
+across the captured trees. Every file, directory, symlink, and other entry
+consumes this traversal budget; the captured-file and byte limits remain
+independent.
 
 Checked-in generated files can be selected by the ordinary build rules.
 Missing generated inputs block the affected closure. Record `go:generate`
@@ -194,19 +217,71 @@ from identifier strings:
 
 | Interchange fact | Why it crosses the boundary |
 | --- | --- |
-| Stable package/symbol/type identities | Include module/replacement identity, import path, profile/test variant, declaration identity, and instantiated type arguments. Preserve named versus alias versus unnamed types and package-qualified unexported member identity. Go-identical unnamed types must canonicalize even across packages. Do not persist process pointers or assume `packages.Package.ID` alone is a portable semantic ID. |
+| Stable package/symbol/type identities | Include module/replacement identity, import path, profile/test variant, declaration identity, and instantiated type arguments. Preserve named versus alias versus unnamed types and package-qualified unexported member identity. Structural identities encode unexported field and interface-method ownership at its exact nested position; an unordered package set is insufficient. Go-identical unnamed types must canonicalize even across packages. Do not persist process pointers or assume `packages.Package.ID` alone is a portable semantic ID. |
 | Typed syntax and source coordinates | Node kinds, original and effective types, addressability, assignability, conversions, tuple/comma-ok forms, declaration/use links, lexical scopes, labels, and source comments/directives. Source byte spans and displayed positions are both needed; retain `//line` provenance rather than trusting it as a filesystem path. |
 | Constants and sizes | Exact integer/rational/complex constant components, untyped category, final contextual conversions, iota values, array lengths, and target `int`/`uint`/`uintptr` sizes. Do not round through JSON floating-point numbers. |
 | Calls and methods | Resolved builtin versus user call, signatures, variadic expansion, method values versus expressions, receiver type/mode, selections and embedded-field index paths, implicit address/dereference adjustments, and complete relevant method sets for `T` and `*T`. |
 | Generic/interface facts | Type parameters, constraint/type-set terms, substitutions/instances, relevant satisfaction checks, comparability, embedded obligations, and struct field tags/export flags. Interface type sets are not inferred from CLR reflection. |
-| Initialization/build provenance | Dependency graph, `types.Info.InitOrder`, ordered init functions and compiler input-file order, blank imports, resolved embedded assets, language versions, and source/content hashes. |
+| Initialization/build provenance | Dependency graph, `types.Info.InitOrder`, ordered init functions and compiler input-file order, blank imports, resolved embedded assets, effective per-file language versions from `types.Info.FileVersions` with module fallback for non-syntax inputs, and source/content hashes. |
 
 Use a bounded versioned JSON record stream with interned IDs and explicit
 length/count limits. Preserve raw string/constant bytes losslessly, including
 invalid UTF-8 string values, through an explicit byte encoding. Reject unknown
-required record kinds and dangling IDs; diagnostics cannot masquerade as
-missing optional type information. Deterministic output IDs come from
-canonical declarations/types, not dictionary traversal or absolute cache paths.
+required record kinds, stale payload-derived IDs, and dangling IDs; diagnostics
+cannot masquerade as missing optional type information. `validate-analysis`
+recomputes IDs for every record whose complete identity input is serialized:
+module, package, file, type, node, constant, scope, selection, call, method set,
+instance, embed, generate directive, dependency, feature, diagnostic, and
+blocker. Package identity combines the stable semantic profile, including the
+authoritative GOROOT/toolchain identity, with the actual serialized
+module/replacement record identity, import path, and test variant.
+Type identity combines the same semantic-profile discriminator with its
+canonical Go identity, preserving cross-package canonicalization within one
+profile while separating target-dependent facts across profiles. Symbol IDs
+additionally depend on canonical type ownership inputs that schema v1 does not
+duplicate into those records, so their uniqueness, references, and ownership
+are validated without claiming payload recomputation. Deterministic output IDs
+come from canonical declarations/types, not dictionary traversal or absolute
+cache paths.
+Schema-v1 file roles are closed to `compiled`, `active`, `test`, `ignored`,
+`native`, and `embed`; the serialized native/embed flags must agree with the
+role. Every serialized syntax node belongs to a compiled file, and each
+node-bearing file is exactly one `*ast.File`-rooted parent tree with no
+detached nodes or cycles. Incomplete inventories may omit a compiled file's
+tree, while complete inventories require one for every compiled file.
+Blocker messages redact machine-local source, mirror, replacement, temporary,
+and output roots, normalize invalid UTF-8, and apply the profile string limit
+before stable-ID derivation, deduplication, counting, sorting, or publication.
+Redaction is component-boundary-aware, orders nested roots most-specific first,
+and treats Windows drive/UNC case and slash variants as aliases.
+Non-`file:` URI text is not a filesystem candidate. Absolute Unix,
+Windows-drive, case-insensitive `localhost`, drive-authority, and configured
+UNC `file:` paths are redacted without decoding. Absolute drive paths accept
+zero, one, or three separators after `file:`. Unknown authorities, relative
+non-drive or percent-encoded forms, and ambiguous noncanonical separator
+counts fail closed as `file:<private-path>`; unmatched drive-shaped paths do
+likewise. Exact `.` or `..` path components, invalid bytes, and encoded or
+Unicode dot/separator ambiguities collapse the complete URI before matching or
+any unchanged fallback. Path components admit ASCII alphanumerics and `-._~`
+plus ordinary Unicode letters/numbers only. Raw whitespace and unexpected
+punctuation fail closed; a drive component is legal only first or immediately
+after `localhost` when it is the parsed authority in an exactly two-separator
+`file://localhost/...` form. Ordinary path components named `localhost` grant
+no drive exception. The scanner consumes malformed unwrapped tails as part of
+the failing file URI, while a recognized quote, parenthesis, bracket, brace,
+or angle wrapper ends the URI and leaves an adjacent path to the ordinary
+redactor.
+Query text is preserved only as unique nonempty `key=value` pairs separated by
+one `&`. Keys and values start and end with an ASCII alphanumeric and may use
+`-._~` internally, but cannot equal `.` or `..`; key-only parameters are
+forbidden. A fragment is one nonempty token under the same rule. Empty or
+duplicate components, duplicate delimiters or keys, filesystem separators,
+drive colons, percent encoding, controls, Unicode, and any other suffix byte
+collapse the complete URI rather than reattaching unexamined text.
+The blocker ID uses the exact bounded message present in the artifact.
+The final record bound applies equally to preload-only failure inventories.
+Validation recomputes source-manifest identity and byte-validity claims, and
+indexes record ownership rather than repeatedly scanning record collections.
 
 Normalize expression sequencing, multi-assignment, return slots, range loops,
 and defer registration into a small set of Go-specific operations. Maintain
@@ -226,13 +301,14 @@ for the first correct lowering.
 
 ### 4. Proposed CLI and artifact contracts
 
-Use three verbs initially; `translate` is the emission operation, not an
-alias for a successful migration:
+M0 implements `analyze` plus `validate-analysis`. Later milestones add
+`translate` and runtime `validate`; `translate` is the emission operation, not
+an alias for a successful migration:
 
 ```sh
-# Proposed commands, not commands available in this checkout.
 go2gs analyze --source ../cliamp --profile cliamp-leaf.json \
   --out artifacts/cliamp-analysis
+# Later milestones:
 go2gs translate --source ../cliamp \
   --analysis artifacts/cliamp-analysis/analysis.json \
   --out migrated-cliamp --artifacts artifacts/cliamp-translation
@@ -737,6 +813,16 @@ introduce a narrow bounded driver/PTY boundary only for that later milestone.
 Do not inherit shell interpolation, unbounded output capture, or stdin behavior
 incompatible with the specified fixture. Cap logs/artifacts and report
 truncation; it is not a successful comparison.
+Schema-v1 producers and `validate-analysis` share a deterministic 512 MiB
+artifact ceiling. Validation verifies regular-file identity and size before a
+bounded read, rejects initially oversized inputs before decoding, and rejects
+growth that crosses the ceiling while reading. Producer and validator also
+share the payload-derived record-ID formulas listed above, so a payload edit
+cannot retain a stale deterministic ID and still pass structural validation.
+The validator also closes the schema-v1 file-role vocabulary and verifies each
+serialized per-file AST as one bounded, iterative parent walk rather than
+trusting producer-only tree construction.
+This is an internal consistency check, not artifact authentication.
 
 Canonicalize output paths under declared roots, reject traversal and symlink
 escapes, and distinguish display/source-map names from paths authorized for
@@ -745,10 +831,23 @@ translation; require redistribution review for translated dependencies and
 native assets. Deterministic source output excludes timestamps, random IDs
 and absolute developer paths. Run-time timestamps belong only in artifacts.
 
+The selected output root must be exclusively controlled by go2gs for the
+duration of locking, invalidation, and publication. M0 binds operations to an
+opened root descriptor or handle, rejects symlink/reparse traversal, excludes
+cooperating writers with a lock, and fails when identity drift is observed.
+An actively malicious same-UID peer with equal filesystem authority is outside
+this boundary: portable Unix and Windows APIs cannot make pathname removal or
+rename conditional on a previously opened identity without extra privilege.
+Artifact hashes and structural validation detect provenance drift; they do not
+authenticate or mediate such a peer.
+
 Use typed failures, not broad catch-and-default fallback. On cancellation or
 failure, close pipes, cancel owned subprocesses, release native handles and
 temporary storage, and leave a failed/incomplete manifest. Resource cleanup
-must not delete user files or mask the primary diagnostic. Go compatibility
+must not delete user files or mask the primary diagnostic. Descriptor-relative
+temporary-file opens ignore only disappearance and changed-to-symlink races;
+permission and other persistent failures abort cleanup rather than spin.
+Go compatibility
 panic handling catches the explicitly modeled Go carrier/faults; arbitrary
 CLR/native failures remain unexpected failures, not recovered nil results.
 

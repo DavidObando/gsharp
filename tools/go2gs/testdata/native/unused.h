@@ -1,0 +1,1 @@
+#define UNUSED_VALUE 99

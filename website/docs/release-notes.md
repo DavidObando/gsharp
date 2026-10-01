@@ -94,6 +94,100 @@ Before moving an application to a different compiler version, pin the intended S
 
 ### Added
 
+- **[`go2gs analyze`](tooling/go2gs.md) now provides the M0 typed Go inventory** (ADR-0191,
+  issue [#4333](https://github.com/DavidObando/gsharp/issues/4333)). The
+  separately versioned Go helper pins `golang.org/x/tools/go/packages` and
+  records schema-v1 package/test variants, module and build provenance,
+  source bytes/spans, stable typed identities, exact constants, scopes,
+  selections, calls, method sets, generic instances, embeds, generators,
+  dependencies, diagnostics, and blockers. Analysis is offline and
+  fail-closed: automatic toolchain downloads, ambient workspaces,
+  `GOPACKAGESDRIVER`, generators, target binaries, and network module
+  resolution are disabled. Exit zero means the requested inventory completed,
+  while `migrationReady` remains independent and false in M0. Migration
+  blockers preserve typed nil/interface, byte-string, map,
+  panic/defer/recover, fixed-array, and concurrency sites without choosing
+  their later G# representation. Profile flags are allowlisted against tool
+  execution/path overrides, and the selected Go executable supplies its own
+  verified GOROOT. Preload-only failure inventories now obey the same final
+  record bound as loaded inventories; package-input drift covers every
+  Go-recognized extension independently of CGo selection; and validation
+  recomputes source-manifest identity and UTF-8 claims while indexing scope
+  ownership linearly. Version and GOROOT discovery use captured build metadata and
+  the verified path/handoff rather than executing `go version` or `go env`.
+  The captured executable must identify as native `cmd/go`; on Linux it must
+  also be static ELF (including an internally linked static PIE) with no
+  interpreter, dynamic imports, RPATH, or RUNPATH. Scripts and wrappers are
+  rejected, and child PATH contains only its private stage. The Linux analysis
+  worker applies a 2 GiB `RLIMIT_DATA` ceiling before package loading so
+  x/tools' internal command buffers remain process-bounded. Darwin preload now
+  requires a native executable Mach-O with the matching CPU and executable file
+  type. Non-Linux preload
+  checks can publish deterministic toolchain/source mismatch blockers without
+  loading packages; a matching profile still fails closed before publication.
+  M0 now uses `go/packages` only for metadata with `CGO_ENABLED=0`, then parses
+  captured source and type-checks it in-process without compiled-file/export
+  requests. It never executes the GOROOT compiler, assembler, linker, cgo, vet,
+  a C/C++ compiler, pkg-config, or helper. It independently records
+  profile-selected CGo/native source inputs and emits deterministic blockers;
+  legacy profile compiler fields must be empty. The selected `cmd/go`,
+  captured GOROOT, and helper runtime/build information must self-report the
+  same canonical final-release Go version label before preload. These labels
+  are provenance metadata rather than authentication; executable and captured
+  content hashes are authoritative identities, while validation checks
+  structural and relational consistency. Unsupported labels and nonempty
+  `goExperiment`/`goDebug` settings or helper build-time
+  `GOEXPERIMENT`/`DefaultGODEBUG` overrides fail bootstrap rather than silently
+  using different in-process parser/type-checker semantics. Entry package
+  patterns are limited to canonical module-relative paths (with an optional
+  final `/...` recursion), preventing `go/packages` query forms or absolute
+  paths from selecting source outside the captured mirror. Source capture and
+  verification reject symlinks in every path component, bound directory reads
+  and all traversed entry types before sorting, and share a deterministic
+  traversal budget with local replacements. Profile bootstrap now requires a
+  stable regular file no larger than 256 KiB before decoding or applying the
+  configured timeout. Blocker messages now redact private filesystem roots and
+  are UTF-8-normalized and bounded before stable-ID derivation, so incomplete
+  inventories remain checkout-independent and each ID names the exact
+  published message. Redaction respects path-component boundaries, selects
+  nested roots before their parents, and recognizes Windows drive/UNC case and
+  separator aliases without over-redacting lookalike prefixes or remote URIs;
+  absolute, `localhost`, drive-authority, and configured UNC `file:` URI paths
+  are redacted, while unknown or encoded authority forms, unmatched drive
+  paths, dot-segment aliases, and malformed or path-bearing query/fragment
+  text fail closed. Strict path components also reject malformed whitespace,
+  punctuation, and embedded drive tails, including `localhost` text outside
+  the actual file authority. Operational local-replacement rewriting makes
+  only the mirrored `go.mod` owner-writable; persistent descriptor-relative
+  temporary-file open failures now abort cleanup instead of being retried.
+  Structural type identities include positional ownership for unexported
+  anonymous fields and interface methods, and compiled-file records publish
+  `go/types`' effective per-file language version. Profile and `goFlags`
+  tags share one canonical selection set, architecture feature levels expand
+  to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
+  typed `*ast.File` root for every compiled file. Output locking, invalidation,
+  and publication stay relative to one held directory handle across ancestor
+  renames. The output directory must remain exclusively controlled by go2gs;
+  the lock excludes cooperating writers and observed identity drift fails,
+  while active same-UID mutation is explicitly outside the portable threat
+  boundary. Hashes detect provenance drift but do not authenticate such a peer.
+  Span validation reparses captured bytes to verify exact raw and
+  line-directive-adjusted paths, lines, and columns. Diagnostics
+  are path-stable, initialization order is explicit, and schema validation
+  rejects missing fields, count mismatches, stale payload-derived deterministic
+  record IDs, including package IDs derived from semantic-profile plus
+  authoritative GOROOT/toolchain and actual module/replacement identities, and
+  type IDs scoped to that semantic profile.
+  This separates GOOS/GOARCH/tag and local-replacement-content inventories
+  without losing within-profile canonical type deduplication. Validation also
+  rejects unknown file roles, native/embed role-flag disagreement,
+  noncompiled-file syntax trees, detached nodes, parent cycles, and complete
+  artifacts without a loaded main-module package/source ownership graph. Each
+  node-bearing file must be one `*ast.File`-rooted tree. These checks reuse
+  producer contracts and establish internal consistency, not artifact
+  authenticity. The pinned
+  cliamp profile reports an actionable mismatch rather than substituting the
+  installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values

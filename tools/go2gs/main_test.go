@@ -1,0 +1,7085 @@
+// Copyright (C) GSharp Authors. All rights reserved.
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"go/ast"
+	"go/build"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"runtime/debug"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+	"unicode/utf8"
+
+	"golang.org/x/tools/go/packages"
+)
+
+func testProfile() Profile {
+	return Profile{
+		Schema:             SchemaHandshake{Name: profileName, Version: profileVersion},
+		ID:                 "test",
+		EntryPatterns:      []string{"./..."},
+		RequestedGoVersion: strings.TrimPrefix(runtime.Version(), "go"),
+		LoadTests:          true,
+		GOOS:               runtime.GOOS,
+		GOARCH:             runtime.GOARCH,
+		CCompilerHelpers:   []CompilerHelper{},
+		CGOEnabled:         false,
+		ModuleMode:         "readonly",
+		WorkspaceMode:      "off",
+		Offline:            true,
+		Limits: Limits{
+			MaxDurationSeconds: 120, MaxPackages: 500, MaxFiles: 200,
+			MaxRecords: 100000, MaxStringBytes: 65536, MaxLogBytes: 1 << 20,
+			MaxOutputBytes: 64 << 20, MaxLocalHashBytes: 64 << 20,
+		},
+	}
+}
+
+func validIncompleteAnalysis() Analysis {
+	hash := strings.Repeat("0", 64)
+	analysis := Analysis{
+		Schema: SchemaHandshake{
+			Name: schemaName, Version: schemaVersion,
+			RequiredRecordKinds: append([]string{}, requiredRecordKinds...),
+		},
+		Tool:   VersionIdentity{Version: toolVersion, SHA256: hash},
+		Helper: VersionIdentity{Version: helperVersion, SHA256: hash},
+		Profile: ProfileSnapshot{
+			ID: "test", SHA256: hash, SourceRootIdentity: "source:test",
+			ExpectedSourceCommit: strings.Repeat("a", 40), ActualSourceCommit: strings.Repeat("a", 40),
+			EntryPatterns: []string{"./..."}, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+			CCompilerHelpers:     []CompilerHelperIdentity{},
+			ArchitectureFeatures: []string{}, BuildTags: []string{}, GOFLAGS: []string{},
+			GODEBUG: map[string]string{}, ModuleMode: "readonly", WorkspaceMode: "off",
+			Offline: true, TrustBoundary: "test", Limits: testProfile().Limits,
+		},
+		Toolchain: ToolchainProvenance{
+			RequestedVersion: "1.0", ActualVersion: "1.0",
+			HelperSemanticVersion: "1.0", GOROOTVersion: "1.0", ExecutableSHA256: hash,
+			ExecutableName:      "go",
+			GOROOTIdentity:      stableID("goroot", "1.0\x001.0\x001.0\x00"+hash+"\x00"+hash),
+			GOROOTVersionSHA256: hash, GOROOTSource: "test",
+			CCompilerHelpers: []CompilerHelperIdentity{},
+		},
+		Manifests: []ManifestRecord{}, Modules: []ModuleRecord{}, Packages: []PackageRecord{},
+		Files: []FileRecord{}, Types: []TypeRecord{}, Symbols: []SymbolRecord{}, Nodes: []NodeRecord{},
+		Constants: []ConstantRecord{}, Scopes: []ScopeRecord{}, Selections: []SelectionRecord{},
+		Calls: []CallRecord{}, MethodSets: []MethodSetRecord{}, Instances: []InstanceRecord{},
+		Embeds: []EmbedRecord{}, GenerateDirectives: []GenerateRecord{}, Dependencies: []DependencyRecord{},
+		FeatureSites: []FeatureSite{}, Diagnostics: []DiagnosticRecord{},
+		Blockers: []BlockerRecord{{
+			ID: "blocker:test", Blocks: "inventory", Category: "test", Message: "incomplete",
+			AffectedUnits: []string{}, DiagnosticIDs: []string{},
+		}},
+		RecordCounts: RecordCounts{Blockers: 1, Total: 1},
+	}
+	analysis.Blockers[0].ID = blockerRecordID(analysis.Blockers[0])
+	refreshSourceIdentity(&analysis)
+	return analysis
+}
+
+func TestEntryPatternGrammarIsClosedAndCanonical(t *testing.T) {
+	for _, patterns := range [][]string{
+		{"."},
+		{"./..."},
+		{"./cmd"},
+		{"./cmd/go2gs"},
+		{"./cmd/..."},
+		{"./internal/foo-bar_baz.v2"},
+		{".", "./cmd/go2gs", "./internal/..."},
+	} {
+		if err := validateEntryPatterns(patterns); err != nil {
+			t.Errorf("valid entry patterns %q rejected: %v", patterns, err)
+		}
+	}
+
+	for _, pattern := range invalidEntryPatterns() {
+		if err := validateEntryPatterns([]string{pattern}); err == nil {
+			t.Errorf("invalid entry pattern %q accepted", pattern)
+		}
+	}
+	if err := validateEntryPatterns([]string{"./cmd", "./cmd"}); err == nil {
+		t.Fatal("duplicate entry pattern accepted")
+	}
+}
+
+func TestEntryPatternsAreValidatedAtEveryBoundary(t *testing.T) {
+	for index, pattern := range invalidEntryPatterns() {
+		t.Run(strconv.Itoa(index), func(t *testing.T) {
+			profile := testProfile()
+			profile.EntryPatterns = []string{pattern}
+			if _, err := readProfile(writeTestProfile(t, profile)); err == nil {
+				t.Fatal("profile ingestion accepted invalid entry pattern")
+			}
+
+			analysis := validIncompleteAnalysis()
+			analysis.Profile.EntryPatterns = []string{pattern}
+			if err := validateAnalysis(analysis); err == nil {
+				t.Fatal("analysis artifact accepted invalid entry pattern")
+			}
+		})
+	}
+
+	profile := testProfile()
+	profile.EntryPatterns = []string{"file=outside.go"}
+	out := filepath.Join(t.TempDir(), "out")
+	if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), out, profile); err == nil {
+		t.Fatal("direct analysis accepted invalid entry pattern")
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("invalid entry pattern mutated output before rejection: %v", err)
+	}
+}
+
+func TestEntryPatternValidationStopsBeforeProductionPackageLoad(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.go")
+	if err := os.WriteFile(outside, []byte("package outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	packageLoadTestHook = func(phase string) {
+		t.Fatalf("invalid entry pattern reached production package load phase %q", phase)
+	}
+	t.Cleanup(func() { packageLoadTestHook = nil })
+
+	config := &packages.Config{
+		Context: t.Context(),
+		Mode:    packages.NeedName,
+		Dir:     t.TempDir(),
+	}
+	patterns := append([]string{"file=" + outside}, invalidEntryPatterns()...)
+	for _, phase := range []string{"preflight", "typed"} {
+		for _, pattern := range patterns {
+			if _, err := loadPackages(config, []string{pattern}, phase); err == nil {
+				t.Errorf("invalid entry pattern %q reached %s packages.Load", pattern, phase)
+			}
+		}
+	}
+}
+
+func TestEntryPatternProfilesRemainDeterministic(t *testing.T) {
+	profile := testProfile()
+	profile.EntryPatterns = []string{"./internal/...", ".", "./cmd/go2gs"}
+	loaded, err := readProfile(writeTestProfile(t, profile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{".", "./cmd/go2gs", "./internal/..."}
+	if !slices.Equal(loaded.EntryPatterns, want) {
+		t.Fatalf("canonical entry patterns = %q, want %q", loaded.EntryPatterns, want)
+	}
+
+	cliamp, err := readProfile(filepath.Join("profiles", "cliamp-m0.json"))
+	if err != nil {
+		t.Fatalf("pinned cliamp profile rejected: %v", err)
+	}
+	if !slices.Equal(cliamp.EntryPatterns, []string{"./..."}) {
+		t.Fatalf("pinned cliamp entry patterns = %q", cliamp.EntryPatterns)
+	}
+}
+
+func invalidEntryPatterns() []string {
+	return []string{
+		"",
+		"file=outside.go",
+		"file=/tmp/outside.go",
+		"pattern=./...",
+		"other=value",
+		"/tmp/package",
+		"C:/outside/package",
+		`C:\outside\package`,
+		`\\server\share\package`,
+		"//server/share/package",
+		"file:///tmp/package",
+		"https://example.invalid/package",
+		"std",
+		"cmd",
+		"all",
+		"...",
+		"example.com/package",
+		"../package",
+		"./../package",
+		"./child/../package",
+		"./%2e%2e/package",
+		"./\uff0e\uff0e/package",
+		"./",
+		"./child/",
+		"./child//package",
+		"././package",
+		"./child/./package",
+		"./child\\package",
+		"./child/.../package",
+		"./child...package",
+		"./....",
+		"./white space",
+		"./tab\tpackage",
+		"./line\npackage",
+		"./nul\x00package",
+	}
+}
+
+func TestSourceTraversalEntryBudgetCountsEveryEntryType(t *testing.T) {
+	sourceTraversalEntryLimitTestHook = func() int { return 3 }
+	t.Cleanup(func() { sourceTraversalEntryLimitTestHook = nil })
+
+	t.Run("empty-directories", func(t *testing.T) {
+		root, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := 0; index < 4; index++ {
+			if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("empty-%d", index)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sorted := false
+		metadataDirectorySortTestHook = func(string) { sorted = true }
+		t.Cleanup(func() { metadataDirectorySortTestHook = nil })
+		_, err = captureTreeContext(
+			t.Context(), root, filepath.Join(t.TempDir(), "mirror"), nil,
+			testProfile().Limits, &mirrorBudget{})
+		if err == nil || !strings.Contains(err.Error(), "entry limit 3") {
+			t.Fatalf("empty-directory flood returned %v", err)
+		}
+		if sorted {
+			t.Fatal("over-budget directory was sorted")
+		}
+	})
+
+	t.Run("symlinks", func(t *testing.T) {
+		root, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for index := 0; index < 4; index++ {
+			if err := os.Symlink(target, filepath.Join(root, fmt.Sprintf("link-%d", index))); err != nil {
+				t.Skipf("symlink creation unavailable: %v", err)
+			}
+		}
+		if _, err := captureTreeContext(
+			t.Context(), root, filepath.Join(t.TempDir(), "mirror"), nil,
+			testProfile().Limits, &mirrorBudget{}); err == nil ||
+			!strings.Contains(err.Error(), "entry limit 3") {
+			t.Fatalf("symlink flood returned %v", err)
+		}
+	})
+}
+
+func TestSourceTraversalReadsBoundedBatchesInLexicalOrder(t *testing.T) {
+	root, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := metadataReadDirBatchSize; index >= 0; index-- {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("entry-%03d", index)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	batches := 0
+	metadataReadDirBatchTestHook = func(string) { batches++ }
+	t.Cleanup(func() { metadataReadDirBatchTestHook = nil })
+	var visited []string
+	budget := newMetadataTraversalBudget()
+	if err := walkRootedMetadataTreeContext(
+		t.Context(), root, &budget, func(relative string, _ os.DirEntry) (bool, error) {
+			visited = append(visited, relative)
+			return false, nil
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if batches < 2 {
+		t.Fatalf("directory was read in %d batch(es), want at least 2", batches)
+	}
+	if !sort.StringsAreSorted(visited) {
+		t.Fatalf("traversal order is not lexical: %v", visited)
+	}
+}
+
+func TestSourceTraversalCancellationStopsBetweenBatches(t *testing.T) {
+	root, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index <= metadataReadDirBatchSize; index++ {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("entry-%03d", index)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	batches := 0
+	metadataReadDirBatchTestHook = func(string) {
+		batches++
+		cancel()
+	}
+	sorted := false
+	metadataDirectorySortTestHook = func(string) { sorted = true }
+	t.Cleanup(func() {
+		metadataReadDirBatchTestHook = nil
+		metadataDirectorySortTestHook = nil
+	})
+	budget := newMetadataTraversalBudget()
+	err = walkRootedMetadataTreeContext(ctx, root, &budget, func(string, os.DirEntry) (bool, error) {
+		return false, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled traversal returned %v", err)
+	}
+	if batches != 1 {
+		t.Fatalf("cancelled traversal read %d batches, want 1", batches)
+	}
+	if sorted {
+		t.Fatal("cancelled directory was sorted")
+	}
+}
+
+func TestMetadataDirectoryEntryLimitStopsBeforeSort(t *testing.T) {
+	root, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 4; index++ {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("entry-%d", index)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metadataDirectoryEntryLimitTestHook = func() int { return 3 }
+	sorted := false
+	metadataDirectorySortTestHook = func(string) { sorted = true }
+	t.Cleanup(func() {
+		metadataDirectoryEntryLimitTestHook = nil
+		metadataDirectorySortTestHook = nil
+	})
+	budget := newMetadataTraversalBudget()
+	err = walkRootedMetadataTreeContext(t.Context(), root, &budget, func(string, os.DirEntry) (bool, error) {
+		return false, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "directory exceeds entry limit 3") {
+		t.Fatalf("directory entry limit returned %v", err)
+	}
+	if sorted {
+		t.Fatal("over-budget directory was sorted")
+	}
+}
+
+func TestProfileBootstrapReadIsBoundedAndIdentitySafe(t *testing.T) {
+	t.Run("exact-bound", func(t *testing.T) {
+		path := writeSizedTestProfile(t, maxProfileBytes)
+		if _, err := readProfile(path); err != nil {
+			t.Fatalf("exact-bound profile rejected: %v", err)
+		}
+	})
+
+	t.Run("one-byte-over", func(t *testing.T) {
+		path := writeSizedTestProfile(t, maxProfileBytes+1)
+		chunks := 0
+		boundedReadChunkHook = func() { chunks++ }
+		t.Cleanup(func() { boundedReadChunkHook = nil })
+		if _, err := readProfile(path); err == nil {
+			t.Fatal("oversized profile accepted")
+		}
+		if chunks != 0 {
+			t.Fatalf("oversized profile entered bounded read loop %d times", chunks)
+		}
+	})
+
+	t.Run("growth-after-open", func(t *testing.T) {
+		path := writeTestProfile(t, testProfile())
+		hookCalled := false
+		boundedRegularFileBeforeFinalStatTestHook = func() {
+			hookCalled = true
+			file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := file.Write([]byte(" ")); err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() { boundedRegularFileBeforeFinalStatTestHook = nil })
+		if _, err := readProfile(path); err == nil {
+			t.Fatal("growing profile accepted")
+		}
+		if !hookCalled {
+			t.Fatal("profile growth hook was not reached")
+		}
+	})
+
+	t.Run("identity-drift", func(t *testing.T) {
+		path := writeTestProfile(t, testProfile())
+		displaced := path + ".displaced"
+		hookCalled := false
+		boundedRegularFileBeforeFinalStatTestHook = func() {
+			hookCalled = true
+			if err := os.Rename(path, displaced); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() { boundedRegularFileBeforeFinalStatTestHook = nil })
+		if _, err := readProfile(path); err == nil {
+			t.Fatal("profile path replacement accepted")
+		}
+		if !hookCalled {
+			t.Fatal("profile identity hook was not reached")
+		}
+	})
+
+	t.Run("symlink", func(t *testing.T) {
+		target := writeTestProfile(t, testProfile())
+		link := filepath.Join(t.TempDir(), "profile.json")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink creation unavailable: %v", err)
+		}
+		if _, err := readProfile(link); err == nil {
+			t.Fatal("symlink profile accepted")
+		}
+	})
+
+	t.Run("non-regular", func(t *testing.T) {
+		if _, err := readProfile(t.TempDir()); err == nil {
+			t.Fatal("directory profile accepted")
+		}
+	})
+}
+
+func TestOversizedProfileFailsBeforeOutputBootstrap(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out")
+	err := runAnalyze(t.Context(), []string{
+		"--source", copyFixture(t, "complete"),
+		"--profile", writeSizedTestProfile(t, maxProfileBytes+1),
+		"--out", out,
+	})
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("oversized profile exit = %v", err)
+	}
+	if _, statErr := os.Lstat(out); !os.IsNotExist(statErr) {
+		t.Fatalf("oversized profile created output: %v", statErr)
+	}
+}
+
+func writeSizedTestProfile(t *testing.T, size int64) string {
+	t.Helper()
+	data, err := json.Marshal(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(data)) > size {
+		t.Fatalf("profile JSON size %d exceeds requested test size %d", len(data), size)
+	}
+	data = append(data, bytes.Repeat([]byte{' '}, int(size)-len(data))...)
+	path := filepath.Join(t.TempDir(), "profile.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func refreshSourceIdentity(analysis *Analysis) {
+	analysis.Profile.SourceRootIdentity = sourceIdentity(analysis.Profile.ActualSourceCommit, analysis.Manifests)
+}
+
+func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
+	root := copyFixture(t, "complete")
+	appendInvalidUTF8(t, filepath.Join(root, "ignored_windows.go"))
+	first := filepath.Join(t.TempDir(), "first")
+	secondRoot := filepath.Join(t.TempDir(), "different-root")
+	copyTree(t, root, secondRoot)
+	second := filepath.Join(t.TempDir(), "second")
+	profile := testProfile()
+
+	a1, complete, err := analyze(t.Context(), root, first, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete || !a1.InventoryComplete {
+		t.Fatalf("expected complete inventory, blockers: %#v", a1.Blockers)
+	}
+	a2, complete, err := analyze(t.Context(), secondRoot, second, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete {
+		t.Fatal("second inventory incomplete")
+	}
+	b1, err := marshalCanonical(a1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2, err := marshalCanonical(a2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b1) != string(b2) {
+		t.Fatalf("analysis differs by checkout root near: %s", firstDifference(string(b1), string(b2)))
+	}
+	if err := validateAnalysis(a1); err != nil {
+		t.Fatal(err)
+	}
+
+	if a1.MigrationReady {
+		t.Fatal("M0 inventory must not claim migration readiness")
+	}
+
+	var variants []string
+	for _, pkg := range a1.Packages {
+		if strings.HasPrefix(pkg.ImportPath, "example.com/go2gsfixture") {
+			variants = append(variants, pkg.Variant)
+		}
+	}
+	for _, want := range []string{"ordinary", "in-package-test", "external-test"} {
+		if !slices.Contains(variants, want) {
+			t.Fatalf("missing package variant %q in %v", want, variants)
+		}
+	}
+	foundImports, foundInitialization, foundTestFile := false, false, false
+	for _, pkg := range a1.Packages {
+		if strings.HasPrefix(pkg.ImportPath, "example.com/go2gsfixture") {
+			foundImports = foundImports || len(pkg.ImportPackageIDs) > 0
+			foundInitialization = foundInitialization || len(pkg.InitializationOrder) > 0
+		}
+	}
+	for _, file := range a1.Files {
+		foundTestFile = foundTestFile || file.Role == "test"
+	}
+	if !foundImports || !foundInitialization || !foundTestFile {
+		t.Fatalf("package graph facts missing: imports=%v initialization=%v test-file=%v", foundImports, foundInitialization, foundTestFile)
+	}
+	assertInitializationOrder(t, a1)
+	if len(a1.Embeds) == 0 || len(a1.GenerateDirectives) == 0 {
+		t.Fatal("embed and go:generate provenance were not recorded")
+	}
+	if a1.GenerateDirectives[0].Executed {
+		t.Fatal("go:generate directive was executed")
+	}
+
+	foundLarge, foundRational, foundComplex, foundArrayLength := false, false, false, false
+	declaredConstants := map[string]ConstantRecord{}
+	symbolNames := map[string]string{}
+	for _, symbol := range a1.Symbols {
+		symbolNames[symbol.ID] = symbol.Name
+	}
+	for _, value := range a1.Constants {
+		foundLarge = foundLarge || strings.Contains(value.Exact, "1234567890123456789012345678901234567890")
+		foundRational = foundRational || value.Exact == "1/3"
+		foundComplex = foundComplex || (value.RealExact != "" && value.ImaginaryExact != "")
+		foundArrayLength = foundArrayLength || value.ArrayLength
+		if value.SymbolID != "" {
+			declaredConstants[symbolNames[value.SymbolID]] = value
+		}
+	}
+	if !foundLarge || !foundRational || !foundComplex || !foundArrayLength {
+		t.Fatalf("lossless constants missing: large=%v rational=%v complex=%v array-length=%v", foundLarge, foundRational, foundComplex, foundArrayLength)
+	}
+	for name, exact := range map[string]string{
+		"HugeInteger": "1234567890123456789012345678901234567890",
+		"ExactThird":  "1/3",
+		"IotaZero":    "3",
+		"IotaOne":     "4",
+	} {
+		value, ok := declaredConstants[name]
+		if !ok || value.Exact != exact {
+			t.Fatalf("declared constant %s was not recorded exactly: %#v", name, value)
+		}
+	}
+	if !declaredConstants["IotaOne"].Iota || !declaredConstants["MixedIota"].Iota ||
+		declaredConstants["MixedZero"].Iota || declaredConstants["ExactComplex"].ImaginaryExact == "" {
+		t.Fatalf("inherited iota or complex declaration provenance missing: %#v", declaredConstants)
+	}
+	nodes := map[string]NodeRecord{}
+	typesByID := map[string]string{}
+	for _, value := range a1.Types {
+		typesByID[value.ID] = value.Canonical
+	}
+	for _, node := range a1.Nodes {
+		nodes[node.ID] = node
+	}
+	if !slices.ContainsFunc(a1.Constants, func(value ConstantRecord) bool {
+		node := nodes[value.NodeID]
+		return value.Exact == "7" && value.ContextTypeID != "" &&
+			node.OriginalTypeID != "" && node.OriginalTypeID != node.EffectiveTypeID &&
+			node.ConversionTypeID == node.EffectiveTypeID && value.ContextTypeID == node.EffectiveTypeID
+	}) {
+		t.Fatal("untyped contextual conversion facts missing")
+	}
+	if !slices.ContainsFunc(a1.Calls, func(call CallRecord) bool {
+		node := nodes[call.NodeID]
+		return call.Kind == "conversion" && typesByID[node.OriginalTypeID] == "untyped int" &&
+			typesByID[node.EffectiveTypeID] == "int64" && node.ConversionTypeID == node.EffectiveTypeID
+	}) {
+		t.Fatal("explicit conversion did not preserve its untyped operand type")
+	}
+	if !hasLineDirective(a1) {
+		t.Fatal("//line display provenance missing")
+	}
+	if !hasInvalidUTF8(a1) {
+		t.Fatal("invalid UTF-8 source bytes were not preserved")
+	}
+	if len(a1.Selections) == 0 || len(a1.Instances) == 0 || len(a1.MethodSets) == 0 {
+		t.Fatal("selection, generic instance, or method-set facts missing")
+	}
+	if !slices.ContainsFunc(a1.Calls, func(call CallRecord) bool { return call.Kind == "conversion" }) {
+		t.Fatal("conversion call fact missing")
+	}
+	for _, name := range []string{"Add", "Identity", "Sprint"} {
+		if !slices.ContainsFunc(a1.Calls, func(call CallRecord) bool {
+			return call.CalleeSymbolID != "" && symbolNames[call.CalleeSymbolID] == name
+		}) {
+			t.Fatalf("callee symbol %q missing from selector or generic call", name)
+		}
+	}
+	assertEmbedMatches(t, a1)
+	for _, want := range []string{
+		"nil-value", "interface-value", "byte-string", "map-value",
+		"panic", "defer", "recover", "fixed-value-array",
+		"goroutine", "channel-type", "channel-send", "channel-receive", "channel-close",
+	} {
+		if !slices.ContainsFunc(a1.FeatureSites, func(site FeatureSite) bool {
+			return site.Feature == want && site.NodeID != "" && site.Disposition == "m1-prerequisite"
+		}) {
+			t.Fatalf("missing M1 prerequisite feature %q", want)
+		}
+	}
+	for _, category := range []string{
+		"m1-typed-nil-interface", "m1-byte-strings-maps",
+		"m1-panic-defer-recover", "m1-fixed-value-arrays", "m1-concurrency",
+	} {
+		if !slices.ContainsFunc(a1.Blockers, func(blocker BlockerRecord) bool {
+			return blocker.Category == category && blocker.Blocks == "migration"
+		}) {
+			t.Fatalf("missing migration blocker %q", category)
+		}
+	}
+	if !slices.ContainsFunc(a1.Nodes, func(node NodeRecord) bool { return node.ParentID != "" }) {
+		t.Fatal("typed syntax parent relationships missing")
+	}
+}
+
+func TestNilFeatureRequiresPredeclaredNilObject(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod": "module example.com/nilfeatures\n\ngo 1.27.0\n",
+		"real/real.go": `package real
+var Pointer *int = nil
+func Value() any { return nil }
+`,
+		"local/local.go": `package local
+func Value() int { nil := 1; return nil }
+`,
+		"parameter/parameter.go": `package parameter
+func Value(nil int) int { return nil }
+`,
+		"packagevar/packagevar.go": `package packagevar
+var nil = 1
+var Value = nil
+`,
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("nil fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	paths := map[string]string{}
+	for _, pkg := range analysis.Packages {
+		paths[pkg.ID] = pkg.ImportPath
+	}
+	count := 0
+	for _, site := range analysis.FeatureSites {
+		if site.Feature != "nil-value" {
+			continue
+		}
+		count++
+		if paths[site.PackageID] != "example.com/nilfeatures/real" {
+			t.Fatalf("shadowed nil was classified as predeclared nil in %q", paths[site.PackageID])
+		}
+	}
+	if count != 2 {
+		t.Fatalf("predeclared nil feature count = %d, want 2", count)
+	}
+}
+
+func TestOfflineMissingDependencyIsIncomplete(t *testing.T) {
+	root := copyFixture(t, "missing")
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || len(analysis.Blockers) == 0 || len(analysis.Diagnostics) == 0 {
+		t.Fatalf("missing dependency must be incomplete with provenance: %#v", analysis)
+	}
+}
+
+func TestCgoDisabledIgnoresDefensivelyDiscoveredInputs(t *testing.T) {
+	root := copyFixture(t, "cgo")
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete || !analysis.InventoryComplete {
+		t.Fatalf("ignored CGo inputs made inventory incomplete: %#v", analysis.Blockers)
+	}
+	if hasBlockerCategory(analysis, "cgo") || hasBlockerCategory(analysis, "native") {
+		t.Fatalf("ignored CGo/native inputs created blockers: %#v", analysis.Blockers)
+	}
+	for path, role := range map[string]string{
+		"source://base.go":        "compiled",
+		"source://cgo.go":         "ignored",
+		"source://cgo_tagged.go":  "ignored",
+		"source://cgo_windows.go": "ignored",
+		"source://native.c":       "ignored",
+		"source://native.h":       "ignored",
+	} {
+		index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == path })
+		if index < 0 || analysis.Files[index].Role != role {
+			t.Fatalf("%s role: got %#v, want %s", path, analysis.Files, role)
+		}
+	}
+}
+
+func TestGoPackageInputClassifierMatchesGo127(t *testing.T) {
+	for _, extension := range []string{
+		".go", ".c", ".cc", ".cpp", ".cxx", ".m",
+		".h", ".hh", ".hpp", ".hxx",
+		".f", ".F", ".for", ".f90",
+		".s", ".S", ".sx", ".swig", ".swigcxx", ".syso",
+	} {
+		if !recognizedGoPackageInput("input" + extension) {
+			t.Errorf("Go 1.27 package input %s was not recognized", extension)
+		}
+	}
+	for _, extension := range []string{".C", ".H", ".mm", ".txt", ""} {
+		if recognizedGoPackageInput("input" + extension) {
+			t.Errorf("non-Go 1.27 package input %s was recognized", extension)
+		}
+	}
+	for _, name := range []string{"_hidden.go", ".hidden.c"} {
+		if recognizedGoPackageInput(name) {
+			t.Errorf("Go-ignored package input %s was recognized", name)
+		}
+	}
+	if !nativeHeader("_internal.h") || !nativeIncludeCarrier("_internal.h") {
+		t.Fatal("explicit hidden header was not recognized as an include dependency")
+	}
+}
+
+func TestIgnoredPackageInputsDoNotCreateDriftOrLoadErrors(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		initial map[string]string
+		mutate  func(*testing.T, string)
+	}{
+		{
+			name: "add-underscore-go",
+			mutate: func(t *testing.T, root string) {
+				if err := os.WriteFile(filepath.Join(root, "_hidden.go"), []byte("not valid Go"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:    "remove-underscore-go",
+			initial: map[string]string{"_hidden.go": "not valid Go"},
+			mutate: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, "_hidden.go")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "add-dot-c",
+			mutate: func(t *testing.T, root string) {
+				if err := os.WriteFile(filepath.Join(root, ".hidden.c"), []byte("not valid C"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:    "remove-dot-c",
+			initial: map[string]string{".hidden.c": "not valid C"},
+			mutate: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, ".hidden.c")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			for name, content := range test.initial {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				test.mutate(t, root)
+			})
+			if err != nil || !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("Go-ignored input affected analysis: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+			}
+			if slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+				return file.Path == "source://_hidden.go" || file.Path == "source://.hidden.c"
+			}) {
+				t.Fatalf("Go-ignored input was captured: %#v", analysis.Files)
+			}
+		})
+	}
+}
+
+func TestDefensiveNativeMutationDoesNotCreateDrift(t *testing.T) {
+	for _, name := range []string{"native.c", "inactive.S", "inactive.sx"} {
+		t.Run(name, func(t *testing.T) {
+			root := copyFixture(t, "cgo")
+			path := filepath.Join(root, name)
+			if name != "native.c" {
+				if err := os.WriteFile(path, []byte("#include \"native.h\"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				if writeErr := os.WriteFile(path, []byte("changed defensive input"), 0o644); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			})
+			if err != nil || !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("defensive-only mutation affected completeness: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+			}
+			index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == "source://"+name })
+			if index < 0 || analysis.Files[index].Role != "ignored" {
+				t.Fatalf("defensive input was not retained as ignored: %#v", analysis.Files)
+			}
+			data, err := base64.StdEncoding.DecodeString(analysis.Files[index].ContentBase64)
+			if err != nil || !bytes.Equal(data, original) {
+				t.Fatalf("defensive input did not use captured bytes: %q, %v", data, err)
+			}
+		})
+	}
+}
+
+func TestCgoInventoryUsesSourceWithoutNativeToolchain(t *testing.T) {
+	profile := testProfile()
+	profile.CGOEnabled = true
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "cgo"), t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "cgo") ||
+		!hasBlockerCategory(analysis, "native") {
+		t.Fatalf("CGo source was not fail-closed: %#v", analysis.Blockers)
+	}
+	for _, name := range []string{"cgo.go", "native.h", "native.c"} {
+		path := "source://" + name
+		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+			if file.Path != path {
+				return false
+			}
+			if name == "cgo.go" {
+				return file.Role == "active"
+			}
+			return file.Role == "native"
+		}) {
+			t.Fatalf("captured CGo input %s missing: %#v", path, analysis.Files)
+		}
+	}
+	if analysis.Toolchain.CCompilerName != "" || analysis.Toolchain.CCompilerSHA256 != "" ||
+		len(analysis.Toolchain.CCompilerHelpers) != 0 {
+		t.Fatalf("obsolete compiler provenance was emitted: %#v", analysis.Toolchain)
+	}
+}
+
+func TestCgoInventoryHonorsNativeAndTestBuildConstraints(t *testing.T) {
+	root := copyFixture(t, "cgo")
+	for name, content := range map[string]string{
+		"native.s":            "//go:build windows\n\nTEXT ·ignored(SB),$0\n",
+		"cgo_windows_test.go": "package cgofixture\n\n/* int ignored(void); */\nimport \"C\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.GOOS = "linux"
+	analysis, _, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"native.s", "cgo_windows_test.go"} {
+		path := "source://" + name
+		index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == path })
+		if index < 0 || analysis.Files[index].Role != "ignored" || analysis.Files[index].Native {
+			t.Fatalf("build-rejected input %s was selected: %#v", path, analysis.Files)
+		}
+	}
+}
+
+func TestProfileRejectsObsoleteCompilerConfiguration(t *testing.T) {
+	for name, mutate := range map[string]func(*Profile){
+		"compiler": func(profile *Profile) { profile.CCompiler = "/usr/bin/cc" },
+		"helper": func(profile *Profile) {
+			profile.CCompilerHelpers = []CompilerHelper{{Name: "cc1", Path: "/usr/bin/cc1", SHA256: strings.Repeat("0", 64)}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			profile := testProfile()
+			mutate(&profile)
+			path := filepath.Join(t.TempDir(), "profile.json")
+			data, err := json.Marshal(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "obsolete") {
+				t.Fatalf("obsolete compiler configuration was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestProfileRejectsUnsupportedSemanticSettings(t *testing.T) {
+	for name, mutate := range map[string]func(*Profile){
+		"goexperiment": func(profile *Profile) { profile.GOEXPERIMENT = "boringcrypto" },
+		"gotypesalias": func(profile *Profile) { profile.GODEBUG = map[string]string{"gotypesalias": "0"} },
+		"case-variant": func(profile *Profile) { profile.GODEBUG = map[string]string{"GOTYPESALIAS": "0"} },
+		"malformed":    func(profile *Profile) { profile.GODEBUG = map[string]string{"gotypesalias": "maybe"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			profile := testProfile()
+			mutate(&profile)
+			path := writeTestProfile(t, profile)
+			if _, err := readProfile(path); err == nil ||
+				(!strings.Contains(err.Error(), "goExperiment") && !strings.Contains(err.Error(), "goDebug")) {
+				t.Fatalf("unsupported semantic setting was accepted: %v", err)
+			}
+		})
+	}
+
+	profileBytes, err := json.Marshal(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate := bytes.Replace(profileBytes, []byte(`"moduleMode"`),
+		[]byte(`"goDebug":{"gotypesalias":"0","gotypesalias":"1"},"moduleMode"`), 1)
+	path := filepath.Join(t.TempDir(), "profile.json")
+	if err := os.WriteFile(path, duplicate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "goDebug") {
+		t.Fatalf("duplicate semantic debug setting was accepted: %v", err)
+	}
+}
+
+func TestOfficialGoVersionNormalization(t *testing.T) {
+	for _, test := range []struct {
+		value         string
+		requirePrefix bool
+		want          string
+	}{
+		{"1.27", false, "1.27"},
+		{"1.27.1", false, "1.27.1"},
+		{"go1.27", true, "1.27"},
+		{"go1.27.1", true, "1.27.1"},
+	} {
+		if got, err := normalizeOfficialGoVersion(test.value, test.requirePrefix); err != nil || got != test.want {
+			t.Fatalf("normalize %q = %q, %v; want %q", test.value, got, err, test.want)
+		}
+	}
+	for _, value := range []string{
+		"go1.27rc1", "go1.27beta1", "devel go1.28-abc", "go1.27.1-custom",
+		"go1.027.1", "go1.27.01", "1.27.1", "go2.0",
+	} {
+		if got, err := normalizeOfficialGoVersion(value, true); err == nil {
+			t.Fatalf("unsupported Go version %q normalized to %q", value, got)
+		}
+	}
+	for _, data := range [][]byte{
+		[]byte("go1.27.1\n"),
+		[]byte("go1.27.1\ntime 2026-08-28T16:20:06Z\n"),
+	} {
+		if got, err := parseGOROOTVersion(data); err != nil || got != "1.27.1" {
+			t.Fatalf("parse GOROOT VERSION = %q, %v", got, err)
+		}
+	}
+	for _, data := range [][]byte{
+		[]byte("go1.27rc1\n"),
+		[]byte("devel go1.28\n"),
+		[]byte("go1.27.1\ncustom\n"),
+	} {
+		if got, err := parseGOROOTVersion(data); err == nil {
+			t.Fatalf("unsupported GOROOT VERSION normalized to %q", got)
+		}
+	}
+}
+
+func TestSemanticGoVersionAgreement(t *testing.T) {
+	if err := validateSemanticGoVersions("1.27.1", "1.27.1", "1.27.1"); err != nil {
+		t.Fatalf("matching semantic versions were rejected: %v", err)
+	}
+	for _, test := range []struct {
+		selected string
+		goroot   string
+		helper   string
+	}{
+		{"1.27.1", "1.27.2", "1.27.1"},
+		{"1.27.1", "1.27.1", "1.27.2"},
+		{"1.27.2", "1.27.1", "1.27.1"},
+	} {
+		if err := validateSemanticGoVersions(test.selected, test.goroot, test.helper); err == nil {
+			t.Fatalf("semantic mismatch was accepted: %#v", test)
+		}
+	}
+}
+
+func TestHelperSemanticBuildSettingsRejectOverrides(t *testing.T) {
+	if err := validateHelperBuildSettings(nil); err != nil {
+		t.Fatalf("empty helper build settings were rejected: %v", err)
+	}
+	for _, setting := range []debug.BuildSetting{
+		{Key: "GOEXPERIMENT", Value: "boringcrypto"},
+		{Key: "DefaultGODEBUG", Value: "gotypesalias=0"},
+	} {
+		if err := validateHelperBuildSettings([]debug.BuildSetting{setting}); err == nil {
+			t.Fatalf("helper semantic build setting was accepted: %#v", setting)
+		}
+	}
+}
+
+func TestSelectedGoGOROOTVersionMismatchFailsBeforePackageLoad(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goData, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "bin", selectedGoName()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedGo := filepath.Join(root, "bin", selectedGoName())
+	if err := os.WriteFile(selectedGo, goData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := normalizeOfficialGoVersion(runtime.Version(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := actual + ".1"
+	if strings.Count(actual, ".") == 2 {
+		parts := strings.Split(actual, ".")
+		patch, parseErr := strconv.Atoi(parts[2])
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		other = parts[0] + "." + parts[1] + "." + strconv.Itoa(patch+1)
+	}
+	if err := os.WriteFile(filepath.Join(root, "VERSION"), []byte("go"+other+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO2GS_SELECTED_GO", selectedGo)
+	t.Setenv("GO2GS_SELECTED_GO_SHA256", hashBytes(goData))
+	t.Setenv("GO2GS_SELECTED_GOROOT", root)
+	loads := 0
+	packageLoadTestHook = func(string) { loads++ }
+	t.Cleanup(func() { packageLoadTestHook = nil })
+	if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile()); err == nil ||
+		!strings.Contains(err.Error(), "canonical Go version labels differ") {
+		t.Fatalf("selected/GOROOT mismatch was accepted: %v", err)
+	}
+	if loads != 0 {
+		t.Fatalf("semantic mismatch reached packages.Load %d times", loads)
+	}
+}
+
+func TestSelectedGoScriptIsRejectedBeforeDelegateExecution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled shell executable fixture")
+	}
+	marker := filepath.Join(t.TempDir(), "selected-go-ran")
+	selectedGo := filepath.Join(t.TempDir(), selectedGoName())
+	body := "#!/bin/sh\n: > " + strconv.Quote(marker) + "\nexec " +
+		strconv.Quote(filepath.Join(runtime.GOROOT(), "bin", "go")) + " \"$@\"\n"
+	if err := os.WriteFile(selectedGo, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO2GS_SELECTED_GO", selectedGo)
+	t.Setenv("GO2GS_SELECTED_GO_SHA256", hashBytes([]byte(body)))
+	_, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err == nil {
+		t.Fatalf("selected Go script was accepted: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("selected Go delegate executed: %v", err)
+	}
+}
+
+func TestSelectedPathContainsOnlyPrivateStagedDirectories(t *testing.T) {
+	first := filepath.Join(string(filepath.Separator), "private-tools")
+	second := filepath.Join(string(filepath.Separator), "private-helpers")
+	paths := filepath.SplitList(selectedPath(first, second))
+	if !slices.Equal(paths, []string{first, second}) {
+		t.Fatalf("PATH contains an unstaged directory: %v", paths)
+	}
+}
+
+func TestInactivePkgConfigDirectiveDoesNotBlock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
+	}
+	root := copyFixture(t, "pkgconfig")
+	path := filepath.Join(root, "pkgconfig.go")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("#cgo pkg-config:"), []byte("#cgo windows pkg-config:"), 1)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || hasBlockerCategory(analysis, "pkg-config") || !hasBlockerCategory(analysis, "cgo") {
+		t.Fatalf("inactive pkg-config directive did not defer solely to the CGo inventory blocker: %#v", analysis.Blockers)
+	}
+}
+
+func TestPkgConfigFallbackScansOnlySelectedCgoFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
+	}
+	for _, test := range []struct {
+		name    string
+		file    string
+		source  string
+		tests   bool
+		blocked bool
+	}{
+		{
+			name: "build-tag-excluded", file: "inactive_pkgconfig.go",
+			source:  "//go:build go2gs_never\n\npackage cgofixture\n/*\n#cgo pkg-config: inactive-package\n*/\nimport \"C\"\n",
+			tests:   true,
+			blocked: false,
+		},
+		{
+			name: "filename-excluded", file: "inactive_pkgconfig_windows.go",
+			source:  "package cgofixture\n/*\n#cgo pkg-config: inactive-package\n*/\nimport \"C\"\n",
+			tests:   true,
+			blocked: false,
+		},
+		{
+			name: "active-selected", file: "active_pkgconfig.go",
+			source:  "package cgofixture\n/*\n#cgo pkg-config: active-package\n*/\nimport \"C\"\n",
+			tests:   true,
+			blocked: true,
+		},
+		{
+			name: "test-not-loaded", file: "pkgconfig_test.go",
+			source:  "package cgofixture\n/*\n#cgo pkg-config: test-package\n*/\nimport \"C\"\n",
+			tests:   false,
+			blocked: false,
+		},
+		{
+			name: "test-loaded", file: "pkgconfig_test.go",
+			source:  "package cgofixture\n/*\n#cgo pkg-config: test-package\n*/\nimport \"C\"\n",
+			tests:   true,
+			blocked: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := copyFixture(t, "cgo")
+			if err := os.WriteFile(filepath.Join(root, test.file), []byte(test.source), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			profile := testProfile()
+			profile.LoadTests = test.tests
+			profile.CGOEnabled = true
+			analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "cgo") {
+				t.Fatalf("CGo fixture did not fail closed: complete=%v blockers=%#v", complete, analysis.Blockers)
+			}
+			if got := hasBlockerCategory(analysis, "pkg-config"); got != test.blocked {
+				t.Fatalf("pkg-config blocker=%v, want %v: %#v", got, test.blocked, analysis.Blockers)
+			}
+		})
+	}
+}
+
+func TestPkgConfigFallbackReadsOnlyImportCPreamble(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		blocked bool
+	}{
+		{"raw-string", "package p\nimport \"C\"\nvar _ = `#cgo pkg-config: raw`\n", false},
+		{"ordinary-comment", "package p\nimport \"C\"\n// #cgo pkg-config: ordinary\nvar _ = 1\n", false},
+		{"detached-comment", "package p\n// #cgo pkg-config: detached\n\nimport \"C\"\n", false},
+		{"other-import", "package p\n// #cgo pkg-config: other\nimport _ \"fmt\"\nimport \"C\"\n", false},
+		{"group-declaration-comment", "package p\n// #cgo pkg-config: unrelated\nimport (\n\"C\"\n_ \"fmt\"\n)\n", false},
+		{"group-declaration-block-comment", "package p\n/* #cgo pkg-config: unrelated */\nimport (\n\"C\"\n_ \"fmt\"\n)\n", false},
+		{"group-spec-comment", "package p\nimport (\n// #cgo pkg-config: grouped\n\"C\"\n_ \"fmt\"\n)\n", true},
+		{"group-spec-tab-comment", "package p\nimport (\n// #cgo\tpkg-config: grouped\n\"C\"\n_ \"fmt\"\n)\n", true},
+		{"group-spec-block-comment", "package p\nimport (\n/* #cgo pkg-config: grouped */\n\"C\"\n_ \"fmt\"\n)\n", true},
+		{"spec-doc-precedes-declaration-doc", "package p\n// #cgo pkg-config: declaration\nimport (\n// ordinary C preamble\n\"C\"\n)\n", false},
+		{"line-preamble", "package p\n// #cgo pkg-config: line\nimport \"C\"\n", true},
+		{"tab-preamble", "package p\n// #cgo\tpkg-config: tab\nimport \"C\"\n", true},
+		{"block-preamble", "package p\n/*\n#cgo pkg-config: block\n*/\nimport \"C\"\n", true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "input.go")
+			snapshot := packageInputSnapshot{
+				data:           map[string][]byte{path: []byte(test.source)},
+				selectedOwners: map[string]map[string]bool{path: {"package": true}},
+				packageRoles:   map[string]map[string]string{"package": {path: "active"}},
+			}
+			if got := selectedPkgConfigDirective(snapshot, testProfile()); got != test.blocked {
+				t.Fatalf("pkg-config blocker=%v, want %v", got, test.blocked)
+			}
+		})
+	}
+}
+
+func TestCgoPkgConfigConstraintsUseSelectedGo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
+	}
+	active := []string{"unix", runtime.GOOS, runtime.GOARCH, "gc", "go2gs_selected", currentReleaseTag()}
+	switch runtime.GOARCH {
+	case "amd64":
+		active = append(active, "amd64.v1")
+	case "arm64":
+		active = append(active, "arm64.v8.0")
+	}
+	for _, constraint := range active {
+		t.Run("active-"+constraint, func(t *testing.T) {
+			analysis, complete := analyzePkgConfigConstraint(t, constraint)
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "pkg-config") {
+				t.Fatalf("selected Go did not activate %q: %#v", constraint, analysis.Blockers)
+			}
+		})
+	}
+	for _, constraint := range []string{"!unix", "gccgo", "go2gs_unselected"} {
+		t.Run("inactive-"+constraint, func(t *testing.T) {
+			analysis, complete := analyzePkgConfigConstraint(t, constraint)
+			if complete || analysis.InventoryComplete || hasBlockerCategory(analysis, "pkg-config") || !hasBlockerCategory(analysis, "cgo") {
+				t.Fatalf("selected Go unexpectedly activated %q: %#v", constraint, analysis.Blockers)
+			}
+		})
+	}
+}
+
+func TestUnselectedAndBuildIgnoredCgoOrNativeDoNotBlock(t *testing.T) {
+	root := copyFixture(t, "complete")
+	if err := os.MkdirAll(filepath.Join(root, "unselected"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		filepath.Join(root, "unselected", "cgo.go"):   "package unselected\nimport \"C\"\n",
+		filepath.Join(root, "unselected", "native.s"): "TEXT ·unused(SB),$0\n",
+		filepath.Join(root, "ignored_cgo.go"):         "//go:build go2gs_never\n\npackage fixture\nimport \"C\"\n",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := testProfile()
+	profile.EntryPatterns = []string{"."}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete || hasBlockerCategory(analysis, "cgo") || hasBlockerCategory(analysis, "native") {
+		t.Fatalf("unselected or build-ignored CGo/native input blocked selected package: %#v", analysis.Blockers)
+	}
+}
+
+func TestAnalyzeDoesNotExecuteAmbientGit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled shell executable fixture")
+	}
+	root, err := secureRoot(copyFixture(t, "complete"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := strings.Repeat("a", 40)
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte(commit+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fakeDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ambient-git-ran")
+	if err := os.WriteFile(filepath.Join(fakeDir, "git"), []byte("#!/bin/sh\n: > "+strconv.Quote(marker)+"\necho "+strings.Repeat("b", 40)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	profile := testProfile()
+	profile.ExpectedSourceCommit = commit
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil || !complete {
+		t.Fatalf("analysis failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	if analysis.Profile.ActualSourceCommit != commit {
+		t.Fatalf("repository provenance was not read from .git metadata: %q", analysis.Profile.ActualSourceCommit)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("ambient git ran or marker check failed: %v", err)
+	}
+}
+
+func TestAnalyzeMalformedGitMetadataFailsClosed(t *testing.T) {
+	root := copyFixture(t, "complete")
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/bad name\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.ExpectedSourceCommit = strings.Repeat("a", 40)
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || analysis.Profile.ActualSourceCommit != "" ||
+		!hasBlockerCategory(analysis, "source-metadata") || len(analysis.Packages) != 0 {
+		t.Fatalf("malformed Git metadata did not fail closed: %#v", analysis)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("pinned source-metadata failure produced an invalid artifact: %v", err)
+	}
+}
+
+func TestGitMetadataReader(t *testing.T) {
+	hash := strings.Repeat("a", 40)
+	makeRoot := func(t *testing.T) string {
+		t.Helper()
+		root, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+	t.Run("absent", func(t *testing.T) {
+		commit, err := sourceCommit(makeRoot(t))
+		if err != nil || commit != "" {
+			t.Fatalf("absent metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	t.Run("detached", func(t *testing.T) {
+		root := makeRoot(t)
+		if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte(hash+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		commit, err := sourceCommit(root)
+		if err != nil || commit != hash {
+			t.Fatalf("detached metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	t.Run("ordinary-ref", func(t *testing.T) {
+		root := makeRoot(t)
+		if err := os.MkdirAll(filepath.Join(root, ".git", "refs", "heads"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "refs", "heads", "main"), []byte(hash+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		commit, err := sourceCommit(root)
+		if err != nil || commit != hash {
+			t.Fatalf("ordinary metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	t.Run("packed-ref", func(t *testing.T) {
+		root := makeRoot(t)
+		if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "packed-refs"), []byte("# pack-refs with: sorted\n"+hash+" refs/heads/main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		commit, err := sourceCommit(root)
+		if err != nil || commit != hash {
+			t.Fatalf("packed metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	t.Run("linked-worktree", func(t *testing.T) {
+		container := makeRoot(t)
+		root := filepath.Join(container, "source")
+		common := filepath.Join(container, "repo.git")
+		gitDir := filepath.Join(common, "worktrees", "source")
+		if err := os.MkdirAll(filepath.Join(common, "refs", "heads"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(gitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitPath := filepath.Join(root, ".git")
+		for path, content := range map[string]string{
+			gitPath:                                        "gitdir: " + gitDir + "\n",
+			filepath.Join(gitDir, "HEAD"):                  "ref: refs/heads/main\n",
+			filepath.Join(gitDir, "commondir"):             "../..\n",
+			filepath.Join(gitDir, "gitdir"):                gitPath + "\n",
+			filepath.Join(common, "refs", "heads", "main"): hash + "\n",
+		} {
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		commit, err := sourceCommit(root)
+		if err != nil || commit != hash {
+			t.Fatalf("worktree metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	for _, test := range []struct {
+		name    string
+		prepare func(*testing.T, string)
+	}{
+		{"invalid-ref", func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/bad name\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"malformed-head", func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("not-a-commit\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"malformed-packed-ref", func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "packed-refs"), []byte("not-a-hash refs/heads/main\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"oversized-head", func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), bytes.Repeat([]byte("a"), 4097), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"escaping-gitdir", func(t *testing.T, root string) {
+			outside := filepath.Join(filepath.Dir(root), "outside.git")
+			if err := os.Mkdir(outside, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+outside+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := makeRoot(t)
+			test.prepare(t, root)
+			if commit, err := sourceCommit(root); err == nil || commit != "" {
+				t.Fatalf("malformed metadata accepted: commit=%q err=%v", commit, err)
+			}
+		})
+	}
+	if runtime.GOOS != "windows" {
+		t.Run("symlink-head", func(t *testing.T) {
+			root := makeRoot(t)
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(root, "head-target")
+			if err := os.WriteFile(target, []byte(hash+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(root, ".git", "HEAD")); err != nil {
+				t.Fatal(err)
+			}
+			if commit, err := sourceCommit(root); err == nil || commit != "" {
+				t.Fatalf("symlinked HEAD accepted: commit=%q err=%v", commit, err)
+			}
+		})
+	}
+}
+
+func TestGitRefValidationMatchesSecuritySubset(t *testing.T) {
+	for _, value := range []string{"refs/heads/main", "refs/tags/v1.0", "refs/remotes/origin/topic"} {
+		if !validGitRef(value) {
+			t.Errorf("valid Git ref rejected: %q", value)
+		}
+	}
+	for _, value := range []string{
+		"heads/main", "/refs/heads/main", "refs/heads/main/", "refs//heads/main",
+		"refs/heads/.hidden", "refs/heads/trailing.", "refs/heads/bad.lock",
+		"refs/heads/two..dots", "refs/heads/reflog@{1}", `refs\heads\main`,
+		"refs/heads/bad name", "refs/heads/bad\tname", "refs/heads/bad\x7fname",
+	} {
+		if validGitRef(value) {
+			t.Errorf("invalid Git ref accepted: %q", value)
+		}
+	}
+}
+
+func TestPackedGitReferenceValidatesWholeFile(t *testing.T) {
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	c := strings.Repeat("c", 40)
+	long := strings.Repeat("d", 64)
+	tests := []struct {
+		name      string
+		content   string
+		ref       string
+		want      string
+		wantError bool
+	}{
+		{"ordinary", a + " refs/heads/main\n", "refs/heads/main", a, false},
+		{"recognized-header", "# pack-refs with: peeled fully-peeled sorted \n" + a + " refs/heads/main\n", "refs/heads/main", a, false},
+		{"arbitrary-comment", "# arbitrary\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"generated-comment", "# generated by git\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"unknown-header-trait", "# pack-refs with: unknown\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"empty-header", "# pack-refs with: \n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"multiple-headers", "# pack-refs with: peeled\n# pack-refs with: sorted\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"annotated-tag-peel", a + " refs/tags/v1\n^" + b + "\n", "refs/tags/v1", a, false},
+		{"custom-namespace-peel", a + " refs/custom/release\n^" + b + "\n", "refs/custom/release", a, false},
+		{"orphan-peel", "^" + b + "\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"consecutive-peel", a + " refs/tags/v1\n^" + b + "\n^" + c + "\n", "refs/tags/v1", "", true},
+		{"unterminated-record", a + " refs/heads/main", "refs/heads/main", "", true},
+		{"mixed-ref-width", a + " refs/heads/main\n" + long + " refs/heads/other\n", "refs/heads/main", "", true},
+		{"mixed-peel-width", a + " refs/tags/v1\n^" + long + "\n", "refs/tags/v1", "", true},
+		{"crlf-record", a + " refs/heads/main\r\n", "refs/heads/main", "", true},
+		{"blank-before-ref", "\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"blank-after-ref", a + " refs/heads/main\n\n", "refs/heads/main", "", true},
+		{"comment-after-ref", a + " refs/heads/main\n# trailing comment\n", "refs/heads/main", "", true},
+		{"header-after-ref", a + " refs/heads/main\n# pack-refs with: sorted\n", "refs/heads/main", "", true},
+		{"malformed-before-match", "bad\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"malformed-after-match", a + " refs/heads/main\nbad\n", "refs/heads/main", "", true},
+		{"duplicate-ref", a + " refs/heads/main\n" + b + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"declared-sorted-order", "# pack-refs with: sorted\n" + b + " refs/heads/z\n" + a + " refs/heads/a\n", "refs/heads/a", "", true},
+		{"undeclared-unsorted-order", b + " refs/heads/z\n" + a + " refs/heads/a\n", "refs/heads/a", a, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "packed-refs")
+			if err := os.WriteFile(path, []byte(test.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, found, err := packedGitReference(path, test.ref)
+			if test.wantError {
+				if err == nil || found || got != "" {
+					t.Fatalf("malformed packed refs accepted: got=%q found=%v err=%v", got, found, err)
+				}
+				return
+			}
+			if err != nil || !found || got != test.want {
+				t.Fatalf("packed ref mismatch: got=%q found=%v err=%v", got, found, err)
+			}
+		})
+	}
+}
+
+func analyzePkgConfigConstraint(t *testing.T, constraint string) (Analysis, bool) {
+	t.Helper()
+	root := copyFixture(t, "pkgconfig")
+	path := filepath.Join(root, "pkgconfig.go")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("#cgo pkg-config:"), []byte("#cgo "+constraint+" pkg-config:"), 1)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.BuildTags = []string{"go2gs_selected"}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return analysis, complete
+}
+
+func currentReleaseTag() string {
+	version := strings.TrimPrefix(runtime.Version(), "go")
+	parts := strings.Split(version, ".")
+	if len(parts) < 2 {
+		return "go1"
+	}
+	return "go" + parts[0] + "." + parts[1]
+}
+
+func TestReadBoundedRegularFileRejectsGrowthAndReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "HEAD")
+	if err := os.WriteFile(path, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readBoundedRegularFileAfterOpen(path, 2, func() {
+		file, openErr := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.WriteString("overflow"); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}); err == nil {
+		t.Fatal("file growth beyond the bound was accepted")
+	}
+	original := filepath.Join(filepath.Dir(path), "original")
+	if err := os.WriteFile(path, []byte("same"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readBoundedRegularFileWithHooks(path, 4, func() {
+		if renameErr := os.Rename(path, original); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+		if writeErr := os.WriteFile(path, []byte("size"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}, nil); err == nil {
+		t.Fatal("same-size regular-file replacement before open was accepted")
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readBoundedRegularFileAfterOpen(path, 64, func() {
+		if removeErr := os.Remove(path); removeErr != nil {
+			t.Fatal(removeErr)
+		}
+		if symlinkErr := os.Symlink(outside, path); symlinkErr != nil {
+			t.Fatal(symlinkErr)
+		}
+	}); err == nil {
+		t.Fatal("path replacement with an outside symlink was accepted")
+	}
+}
+
+func TestNativeRequirementIsIncomplete(t *testing.T) {
+	root := copyFixture(t, "native")
+	platformAssembly := "platform_" + runtime.GOOS + ".s"
+	if err := os.WriteFile(filepath.Join(root, platformAssembly), []byte("//go:build "+runtime.GOOS+"\n\n#include \"textflag.h\"\n#include \"constants.h\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "native") {
+		t.Fatalf("native requirement was not reported as incomplete: %#v", analysis.Blockers)
+	}
+	for _, name := range []string{"native.s", "constants.h", "cycle.h", platformAssembly} {
+		path := "source://" + name
+		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+			return file.Path == path && file.Native && file.Role == "native"
+		}) {
+			t.Fatalf("selected native input %s was not recorded as native: %#v", path, analysis.Files)
+		}
+	}
+	unused := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == "source://unused.h" })
+	if unused < 0 || analysis.Files[unused].Role != "ignored" || analysis.Files[unused].Native {
+		t.Fatalf("unreachable header was not ignored: %#v", analysis.Files)
+	}
+}
+
+func TestSelectedHXXAndSXIncludesAreCaptured(t *testing.T) {
+	root := copyFixture(t, "cgo")
+	for name, content := range map[string]string{
+		"carrier.hxx":  "#include \"nested_hxx.h\"\n",
+		"carrier.sx":   "#include \"nested_sx.h\"\n",
+		"nested_hxx.h": "#define HXX_VALUE 1\n",
+		"nested_sx.h":  "#define SX_VALUE 2\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	analysis, _, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasBlockerCategory(analysis, "native-include") {
+		t.Fatalf("valid .hxx/.sx include closure produced a blocker: %#v", analysis.Blockers)
+	}
+	for _, name := range []string{"carrier.hxx", "carrier.sx", "nested_hxx.h", "nested_sx.h"} {
+		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+			return file.Path == "source://"+name && file.Role == "native"
+		}) {
+			t.Fatalf("selected native include %s was not captured: %#v", name, analysis.Files)
+		}
+	}
+}
+
+func TestExplicitHiddenHeaderIncludeIsCaptured(t *testing.T) {
+	root := copyFixture(t, "cgo")
+	for name, content := range map[string]string{
+		"_internal.h": "#include \"_nested.h\"\n#define INTERNAL_VALUE 1\n",
+		"_nested.h":   "#define NESTED_VALUE 2\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(root, "native.c")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, []byte("\n#include \"_internal.h\"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	analysis, _, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasBlockerCategory(analysis, "native-include") {
+		t.Fatalf("explicit hidden header include produced a blocker: %#v", analysis.Blockers)
+	}
+	for _, name := range []string{"_internal.h", "_nested.h"} {
+		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+			return file.Path == "source://"+name && file.Role == "native"
+		}) {
+			t.Fatalf("explicit hidden header include %s was not captured: %#v", name, analysis.Files)
+		}
+	}
+}
+
+func TestUnsafeNativeIncludeFailsClosed(t *testing.T) {
+	root := copyFixture(t, "native")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(root), "outside.h"), []byte("#define OUTSIDE 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "native.s"), []byte("#include \"../outside.h\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "native-include") {
+		t.Fatalf("unsafe native include did not fail closed: %#v", analysis.Blockers)
+	}
+}
+
+func TestNativeIncludeGraphHandlesNestedCycle(t *testing.T) {
+	root := t.TempDir()
+	paths := map[string][]byte{
+		"native.s":               []byte("#include \"include/constants.h\"\n"),
+		"include/constants.h":    []byte("#include \"nested/cycle.h\"\n"),
+		"include/nested/cycle.h": []byte("#include \"../constants.h\"\n"),
+	}
+	snapshot := map[string][]byte{}
+	var otherFiles []string
+	for name, data := range paths {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[path] = data
+		otherFiles = append(otherFiles, path)
+	}
+	pkg := &packages.Package{Dir: root, OtherFiles: otherFiles}
+	reachable, unsafe := selectedNativeIncludes(pkg, nil, snapshot)
+	if unsafe || len(reachable) != 2 {
+		t.Fatalf("nested cyclic include graph mismatch: reachable=%v unsafe=%v", reachable, unsafe)
+	}
+}
+
+func TestLocalQuotedIncludesUsesPreprocessorLexing(t *testing.T) {
+	source := []byte("#include /* gap */ \"constants.h\"\n" +
+		"#inc\\\nlude \"spliced.h\"\n" +
+		"#inc\\\r\nlude \"crlf.h\"\r\n" +
+		"# /* before */ include/* after */\"comments.h\"\n" +
+		"// #include \"line-comment.h\"\n" +
+		"/* #include \"block-comment.h\" */\n" +
+		"/* multiline\n#include \"multiline-comment.h\"\n*/\n" +
+		"\"#include \\\"string.h\\\"\"\n" +
+		"'#'; #include \"character.h\"\n" +
+		"#include <system.h>\n" +
+		"#include_next \"next.h\"\n")
+	want := []string{"comments.h", "constants.h", "crlf.h", "spliced.h"}
+	got, malformed := localQuotedIncludes(source)
+	if malformed || !slices.Equal(got, want) {
+		t.Fatalf("quoted include tokens mismatch:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+func TestLocalQuotedIncludesSkipsCXXRawStrings(t *testing.T) {
+	source := []byte(`const char* exact = R"tag(
+#include "fake-exact.h"
+)ta"
+)tag";
+const char* empty = u8R"(
+#include "fake-empty.h"
+)";
+const char* utf16 = uR"x(#include "fake-u.h")x";
+const char* utf32 = UR"xx(#include "fake-U.h")xx";
+const char* wide = LR"custom(
+// #include "fake-L.h"
+/* "#include fake-comment.h" */
+)custom";
+const char* preserved = R"raw(backslash\
+#include "fake-preserved.h"
+)raw";
+const char* ordinary = "R\"tag(#include fake-string.h)tag\"";
+#include "real.h"
+`)
+	got, malformed := localQuotedIncludes(source)
+	if malformed || !slices.Equal(got, []string{"real.h"}) {
+		t.Fatalf("raw strings affected quoted includes: got=%q malformed=%v", got, malformed)
+	}
+}
+
+func TestLocalQuotedIncludesRejectsMalformedCXXRawStrings(t *testing.T) {
+	for name, source := range map[string][]byte{
+		"unterminated":   []byte("R\"tag(\n#include \"fake.h\"\n"),
+		"space":          []byte("R\"bad tag(content)bad tag\""),
+		"control":        []byte("R\"bad\x01tag(content)bad\x01tag\""),
+		"parenthesis":    []byte("R\"bad)(content)bad)\""),
+		"backslash":      []byte("R\"bad\\tag(content)bad\\tag\""),
+		"long-delimiter": []byte("R\"12345678901234567(content)12345678901234567\""),
+		"split-lf":       []byte("R\"tag(body)ta\\\ng\""),
+		"split-crlf":     []byte("R\"tag(body)ta\\\r\ng\""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			includes, malformed := localQuotedIncludes(source)
+			if !malformed || len(includes) != 0 {
+				t.Fatalf("malformed raw string was accepted: includes=%q malformed=%v", includes, malformed)
+			}
+		})
+	}
+}
+
+func TestMalformedNativeRawStringFailsClosed(t *testing.T) {
+	root := copyFixture(t, "native")
+	if err := os.WriteFile(filepath.Join(root, "native.s"), []byte("R\"tag(\n#include \"fake.h\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "native-include") {
+		t.Fatalf("malformed native raw string did not fail closed: %#v", analysis.Blockers)
+	}
+}
+
+func TestSelectedNativeHeaderMutationCreatesDrift(t *testing.T) {
+	root := copyFixture(t, "native")
+	path := filepath.Join(root, "constants.h")
+	analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+		if writeErr := os.WriteFile(path, []byte("#define NATIVE_VALUE 8\n"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	})
+	if err != nil || complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+		t.Fatalf("selected native header mutation was not detected: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+}
+
+func TestToolchainMismatchFailsClosedBeforeLoading(t *testing.T) {
+	profile := testProfile()
+	profile.RequestedGoVersion = "1.26.6"
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || len(analysis.Packages) != 0 || !hasBlockerCategory(analysis, "toolchain") {
+		t.Fatalf("toolchain mismatch was not fail-closed: %#v", analysis)
+	}
+}
+
+func TestSchemaValidationRejectsUnknownRequiredKindAndDanglingID(t *testing.T) {
+	analysis := validIncompleteAnalysis()
+	analysis.Schema.RequiredRecordKinds = append(analysis.Schema.RequiredRecordKinds, "future-required")
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "unknown required") {
+		t.Fatalf("expected unknown required kind rejection, got %v", err)
+	}
+	analysis = validIncompleteAnalysis()
+	record := PackageRecord{
+		ImportPath: "example.com/test", Name: "test", Variant: "ordinary",
+		FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{"package:missing"},
+		InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
+	}
+	record.ID = packageRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+	analysis.Packages = []PackageRecord{record}
+	analysis.RecordCounts.Packages = 1
+	analysis.RecordCounts.Total++
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "dangling") {
+		t.Fatalf("expected dangling id rejection, got %v", err)
+	}
+	analysis = validIncompleteAnalysis()
+	analysis.Schema.RequiredRecordKinds = nil
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "handshake") {
+		t.Fatalf("expected exact handshake rejection, got %v", err)
+	}
+	analysis = validIncompleteAnalysis()
+	analysis.Blockers = append(analysis.Blockers, analysis.Blockers[0])
+	analysis.RecordCounts.Blockers++
+	analysis.RecordCounts.Total++
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("expected duplicate id rejection, got %v", err)
+	}
+}
+
+func TestProfileValidationAndResourceLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.json")
+	if err := os.WriteFile(path, []byte(`{"schema":{"name":"go2gs.profile","version":99}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "unsupported profile") {
+		t.Fatalf("expected profile version rejection, got %v", err)
+	}
+	profile := testProfile()
+	profile.WorkspaceMode = "explicit"
+	data, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "workspaceMode=off") {
+		t.Fatalf("expected unsupported workspace rejection, got %v", err)
+	}
+	profile.WorkspaceMode = "off"
+	profile.CGOEnabled = true
+	profile.CCompiler = "cc"
+	data, err = json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "obsolete") {
+		t.Fatalf("expected obsolete C compiler rejection, got %v", err)
+	}
+	profile.CGOEnabled = false
+	profile.CCompiler = ""
+	profile.Limits.MaxPackages = 1
+	if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile); err == nil || !strings.Contains(err.Error(), "package count") {
+		t.Fatalf("expected package limit rejection, got %v", err)
+	}
+}
+
+func TestAnalysisJSONRoundTripRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analysis.json")
+	if err := os.WriteFile(path, []byte(`{"schema":{"name":"go2gs.analysis","version":1},"unexpected":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readAnalysis(path); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("expected unknown field rejection, got %v", err)
+	}
+}
+
+func TestReadAnalysisEnforcesBoundedRegularInput(t *testing.T) {
+	base, err := marshalCanonical(validIncompleteAnalysis())
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := int64(len(base) + 32)
+	exact := append(append([]byte{}, base...), bytes.Repeat([]byte(" "), int(limit)-len(base))...)
+
+	t.Run("exact-bound", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "analysis.json")
+		if err := os.WriteFile(path, exact, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readAnalysisBounded(path, limit); err != nil {
+			t.Fatalf("exact-bound analysis rejected: %v", err)
+		}
+	})
+
+	t.Run("one-byte-over", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "analysis.json")
+		if err := os.WriteFile(path, append(exact, ' '), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		chunks := 0
+		boundedReadChunkHook = func() { chunks++ }
+		t.Cleanup(func() { boundedReadChunkHook = nil })
+		if _, err := readAnalysisBounded(path, limit); err == nil {
+			t.Fatal("one-byte-oversized analysis accepted")
+		}
+		if chunks != 0 {
+			t.Fatalf("oversized analysis was read in %d chunks", chunks)
+		}
+	})
+
+	t.Run("growth-during-read", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "analysis.json")
+		if err := os.WriteFile(path, base, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		grew := false
+		boundedReadChunkHook = func() {
+			if grew {
+				return
+			}
+			grew = true
+			file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := file.Write(bytes.Repeat([]byte(" "), 64)); err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() { boundedReadChunkHook = nil })
+		if _, err := readAnalysisBounded(path, int64(len(base)+32)); err == nil {
+			t.Fatal("analysis growth beyond the bound was accepted")
+		}
+	})
+
+	t.Run("non-regular", func(t *testing.T) {
+		if _, err := readAnalysisBounded(t.TempDir(), limit); err == nil {
+			t.Fatal("directory accepted as an analysis artifact")
+		}
+	})
+}
+
+func TestReadAnalysisRejectsHardCapBeforeReading(t *testing.T) {
+	base, err := marshalCanonical(validIncompleteAnalysis())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "analysis.json")
+	if err := os.WriteFile(path, append(base, ' '), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	analysisValidationLimitTestHook = func() int64 { return int64(len(base)) }
+	t.Cleanup(func() { analysisValidationLimitTestHook = nil })
+	chunks := 0
+	boundedReadChunkHook = func() { chunks++ }
+	t.Cleanup(func() { boundedReadChunkHook = nil })
+	err = runValidate([]string{"--analysis", path})
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 ||
+		!strings.Contains(err.Error(), "not a bounded regular file") {
+		t.Fatalf("validate-analysis above the production limit returned %v", err)
+	}
+	if chunks != 0 {
+		t.Fatalf("hard-cap rejection read %d chunks", chunks)
+	}
+}
+
+func TestValidateLimitsRejectsUnvalidatableOutputSize(t *testing.T) {
+	limits := testProfile().Limits
+	limits.MaxOutputBytes = maxValidatedAnalysisBytes
+	if err := validateLimits(limits); err != nil {
+		t.Fatalf("exact validation cap rejected: %v", err)
+	}
+	limits.MaxOutputBytes++
+	if err := validateLimits(limits); err == nil {
+		t.Fatal("output limit above the validator hard cap accepted")
+	}
+}
+
+func TestProfileRejectsTrailingJSONValues(t *testing.T) {
+	profile, err := json.Marshal(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{` {}`, ` 1`, "\nnull"} {
+		path := filepath.Join(t.TempDir(), "profile.json")
+		if err := os.WriteFile(path, append(profile, suffix...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "trailing") {
+			t.Fatalf("trailing JSON %q was accepted: %v", suffix, err)
+		}
+	}
+}
+
+func TestProfileRejectsMalformedExpectedSourceCommit(t *testing.T) {
+	profile := testProfile()
+	profile.ExpectedSourceCommit = "not-a-commit"
+	data, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "profile.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "expectedSourceCommit") {
+		t.Fatalf("malformed expected source commit was accepted: %v", err)
+	}
+}
+
+func TestMissingGoBootstrapProducesNoArtifact(t *testing.T) {
+	root := copyFixture(t, "complete")
+	profilePath := filepath.Join(t.TempDir(), "profile.json")
+	data, err := json.Marshal(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "")
+	err = runAnalyze(t.Context(), []string{"--source", root, "--profile", profilePath, "--out", out})
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("missing Go bootstrap should exit 2, got %v", err)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, statErr := os.Stat(filepath.Join(out, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("bootstrap failure unexpectedly wrote %s: %v", name, statErr)
+		}
+	}
+}
+
+func TestPublicAnalyzeNeedsNoAmbientGoAfterStaging(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("public analyze requires Linux execution binding")
+	}
+	requireExecutableNamespaceTest(t)
+	binary := buildGo2gsBinary(t)
+	toolDir := t.TempDir()
+	if err := os.Symlink(filepath.Join(runtime.GOROOT(), "bin", "go"), filepath.Join(toolDir, selectedGoName())); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := writeTestProfile(t, testProfile())
+	out, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "analyze", "--source", copyFixture(t, "complete"), "--profile", profilePath, "--out", out)
+	cmd.Env = replaceEnvironment(os.Environ(), "PATH", toolDir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("public analyze failed without ambient Go: %v\n%s", err, output)
+	}
+	analysis, err := readAnalysis(filepath.Join(out, "analysis.json"))
+	if err != nil || !analysis.InventoryComplete {
+		t.Fatalf("public analysis was incomplete: %v %#v", err, analysis.Blockers)
+	}
+}
+
+func TestPublicCgoAnalysisExecutesNoNativeTools(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("public analyze requires Linux execution binding")
+	}
+	requireExecutableNamespaceTest(t)
+	binary := buildGo2gsBinary(t)
+	ambient := t.TempDir()
+	selected := t.TempDir()
+	if err := os.Symlink(filepath.Join(runtime.GOROOT(), "bin", "go"), filepath.Join(selected, selectedGoName())); err != nil {
+		t.Fatal(err)
+	}
+	var markers []string
+	for _, directory := range []string{ambient, selected} {
+		for _, name := range []string{"cc", "gcc", "clang", "pkg-config", "as", "ld", "cc1", "collect2", "gofmt"} {
+			marker := filepath.Join(t.TempDir(), name+"-ran")
+			markers = append(markers, marker)
+			body := "#!/bin/sh\n: > " + strconv.Quote(marker) + "\nexit 99\n"
+			if err := os.WriteFile(filepath.Join(directory, name), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profilePath := writeTestProfile(t, profile)
+	out, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "analyze", "--source", copyFixture(t, "cgo"), "--profile", profilePath, "--out", out)
+	cmd.Env = replaceEnvironment(os.Environ(), "PATH", selectedPath(ambient, selected))
+	if output, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("CGo inventory unexpectedly completed:\n%s", output)
+	}
+	analysis, err := readAnalysis(filepath.Join(out, "analysis.json"))
+	if err != nil || !hasBlockerCategory(analysis, "cgo") || !hasBlockerCategory(analysis, "native") {
+		t.Fatalf("CGo/native blockers missing: %v %#v", err, analysis.Blockers)
+	}
+	for _, name := range []string{"cgo.go", "native.h", "native.c"} {
+		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool { return file.Path == "source://"+name }) {
+			t.Fatalf("source-level CGo/native input %s missing", name)
+		}
+	}
+	for _, marker := range markers {
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatalf("hostile native tool executed: %s: %v", marker, err)
+		}
+	}
+}
+
+func buildGo2gsBinary(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "go2gs")
+	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", path, ".")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build go2gs: %v\n%s", err, output)
+	}
+	return path
+}
+
+func writeTestProfile(t *testing.T, profile Profile) string {
+	t.Helper()
+	data, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "profile.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestAtomicWriteDoesNotFollowPredictableSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled symlink fixture")
+	}
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("safe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "analysis.json")
+	for _, attacker := range []string{
+		filepath.Join(dir, ".analysis.json.staged"),
+		filepath.Join(dir, ".analysis.json.staged-attacker"),
+		path,
+	} {
+		if err := os.Symlink(outside, attacker); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := atomicWrite(path, []byte("inventory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "safe" {
+		t.Fatalf("outside symlink target changed: %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "inventory" {
+		t.Fatalf("atomic output mismatch: %q, %v", data, err)
+	}
+}
+
+func TestAtomicWriteRejectsStagedAndFinalPathReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled symlink fixture")
+	}
+	t.Run("staged symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "analysis.json")
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, []byte("safe"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var displaced string
+		err := atomicWriteWithHooks(path, bytes.Repeat([]byte("x"), 1<<20), 0o644, func(staged string) {
+			displaced = staged + ".attacker-moved"
+			if renameErr := os.Rename(staged, displaced); renameErr != nil {
+				t.Fatal(renameErr)
+			}
+			if symlinkErr := os.Symlink(outside, staged); symlinkErr != nil {
+				t.Fatal(symlinkErr)
+			}
+		}, nil)
+		if err == nil {
+			t.Fatal("staged pathname replacement was accepted")
+		}
+		if data, readErr := os.ReadFile(outside); readErr != nil || string(data) != "safe" {
+			t.Fatalf("outside target changed: %q, %v", data, readErr)
+		}
+		_ = os.Remove(displaced)
+	})
+
+	t.Run("unrelated final replacement", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "analysis.json")
+		var displaced string
+		err := atomicWriteWithHooks(path, []byte("writer1"), 0o644, nil, func(final string) {
+			displaced = final + ".writer1"
+			if renameErr := os.Rename(final, displaced); renameErr != nil {
+				t.Fatal(renameErr)
+			}
+			if writeErr := os.WriteFile(final, []byte("replacement"), 0o644); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		})
+		if err == nil {
+			t.Fatal("unrelated final replacement was accepted")
+		}
+		if data, readErr := os.ReadFile(path); readErr != nil || string(data) != "replacement" {
+			t.Fatalf("failed writer removed unrelated output: %q, %v", data, readErr)
+		}
+		_ = os.Remove(displaced)
+	})
+}
+
+func TestAtomicWriteFailurePreservesConcurrentSuccessfulOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analysis.json")
+	renamed := make(chan struct{})
+	resume := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- atomicWriteWithHooks(path, []byte("writer1"), 0o644, nil, func(string) {
+			close(renamed)
+			<-resume
+		})
+	}()
+	<-renamed
+	if err := atomicWrite(path, []byte("writer2"), 0o644); err != nil {
+		close(resume)
+		t.Fatal(err)
+	}
+	close(resume)
+	if err := <-firstDone; err == nil {
+		t.Fatal("superseded writer unexpectedly succeeded")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "writer2" {
+		t.Fatalf("failed writer removed concurrent successful output: %q, %v", data, err)
+	}
+}
+
+func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
+	out := t.TempDir()
+	unrelated := filepath.Join(out, "keep.txt")
+	userData := filepath.Join(out, ".go2gs-worker-user-data", "valuable.txt")
+	for name, content := range map[string]string{
+		"analysis.json":                 "stale analysis",
+		"run.json":                      "stale run",
+		".analysis.json.staged-crashed": "staged",
+		"keep.txt":                      "keep",
+	} {
+		if err := os.WriteFile(filepath.Join(out, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(userData), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userData, []byte("valuable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockAndInvalidateOutput(out); err == nil {
+		t.Fatal("concurrent output writer acquired the same lock")
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
+			t.Fatalf("owned stale output %s remains: %v", name, err)
+		}
+	}
+	if data, err := os.ReadFile(unrelated); err != nil || string(data) != "keep" {
+		t.Fatalf("unrelated output was changed: %q, %v", data, err)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(out, ".analysis.json.staged-crashed"): "staged",
+		userData: "valuable",
+	} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != want {
+			t.Fatalf("unowned prefixed data was changed: %s: %q, %v", path, data, err)
+		}
+	}
+	if err := publishWorkerArtifacts(output, []byte("new analysis"), []byte("new run"), func() {
+		if mkdirErr := os.Mkdir(filepath.Join(out, "run.json"), 0o755); mkdirErr != nil {
+			t.Fatal(mkdirErr)
+		}
+	}); err == nil {
+		t.Fatal("worker publish unexpectedly succeeded")
+	}
+	if _, err := os.Lstat(filepath.Join(out, "analysis.json")); !os.IsNotExist(err) {
+		t.Fatalf("failed publish retained analysis.json: %v", err)
+	}
+	if err := output.release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(out, ".go2gs-lock")); !os.IsNotExist(err) {
+		t.Fatalf("output lock was not released: %v", err)
+	}
+}
+
+func TestStaleInvalidationRejectsObservedIdentityDrift(t *testing.T) {
+	out := t.TempDir()
+	path := filepath.Join(out, "analysis.json")
+	displaced := filepath.Join(out, "displaced-analysis")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outputBeforeStaleRemoveHook = func(name string) {
+		if name != "analysis.json" {
+			return
+		}
+		outputBeforeStaleRemoveHook = nil
+		if err := os.Rename(path, displaced); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("replacement"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { outputBeforeStaleRemoveHook = nil })
+	if _, err := lockAndInvalidateOutput(out); err == nil {
+		t.Fatal("stale invalidation succeeded after observed identity drift")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "replacement" {
+		t.Fatalf("mismatched replacement changed: %q, %v", data, err)
+	}
+}
+
+func TestBoundOutputRootRejectsStaleSymlinks(t *testing.T) {
+	out := t.TempDir()
+	target := filepath.Join(out, "target")
+	path := filepath.Join(out, "analysis.json")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := lockAndInvalidateOutput(out); err == nil {
+		t.Fatal("stale symlink was accepted")
+	}
+	if destination, err := os.Readlink(path); err != nil || destination != target {
+		t.Fatalf("stale symlink changed: %q, %v", destination, err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "keep" {
+		t.Fatalf("symlink target changed: %q, %v", data, err)
+	}
+}
+
+func TestArtifactPairRejectsObservedAnalysisReplacement(t *testing.T) {
+	out := t.TempDir()
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.release()
+	err = publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), func() {
+		path := filepath.Join(out, "analysis.json")
+		if err := os.Rename(path, path+".owned"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("replacement"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err == nil {
+		t.Fatal("publication succeeded after observed analysis identity drift")
+	}
+	if data, err := os.ReadFile(filepath.Join(out, "analysis.json")); err != nil || string(data) != "replacement" {
+		t.Fatalf("mismatched analysis replacement changed: %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(out, "analysis.json.owned")); err != nil || string(data) != "owned analysis" {
+		t.Fatalf("displaced owned analysis changed: %q, %v", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(out, "run.json")); !os.IsNotExist(err) {
+		t.Fatalf("run.json was published after analysis drift: %v", err)
+	}
+}
+
+func TestBoundOutputRootResistsAncestorReplacement(t *testing.T) {
+	base := t.TempDir()
+	ancestor := filepath.Join(base, "ancestor")
+	out := filepath.Join(ancestor, "out")
+	displaced := filepath.Join(base, "displaced")
+	if err := os.MkdirAll(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if err := os.WriteFile(filepath.Join(out, name), []byte("original stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var replacementErr error
+	outputRootBoundHook = func() {
+		outputRootBoundHook = nil
+		if replacementErr = os.Rename(ancestor, displaced); replacementErr != nil {
+			return
+		}
+		if err := os.MkdirAll(out, 0o700); err != nil {
+			replacementErr = err
+			return
+		}
+		for _, name := range []string{"analysis.json", "run.json"} {
+			if err := os.WriteFile(filepath.Join(out, name), []byte("attacker"), 0o644); err != nil {
+				replacementErr = err
+				return
+			}
+		}
+	}
+	t.Cleanup(func() { outputRootBoundHook = nil })
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			_ = output.release()
+		}
+	}()
+	if runtime.GOOS == "windows" {
+		if replacementErr == nil {
+			t.Fatal("Windows allowed replacing an ancestor of the bound output root")
+		}
+		if err := publishWorkerArtifacts(output, []byte("bound analysis"), []byte("bound run"), nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := output.release(); err != nil {
+			t.Fatal(err)
+		}
+		released = true
+		if err := os.Rename(ancestor, displaced); err != nil {
+			t.Fatalf("bound output handle remained open after release: %v", err)
+		}
+		for name, want := range map[string]string{
+			"analysis.json": "bound analysis",
+			"run.json":      "bound run",
+		} {
+			if data, err := os.ReadFile(filepath.Join(displaced, "out", name)); err != nil || string(data) != want {
+				t.Fatalf("bound output %s = %q, %v", name, data, err)
+			}
+		}
+		return
+	}
+	if replacementErr != nil {
+		t.Fatal(replacementErr)
+	}
+	original := filepath.Join(displaced, "out")
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, err := os.Lstat(filepath.Join(original, name)); !os.IsNotExist(err) {
+			t.Fatalf("bound stale output %s remains: %v", name, err)
+		}
+		if data, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(data) != "attacker" {
+			t.Fatalf("replacement output %s changed: %q, %v", name, data, err)
+		}
+	}
+	if err := publishWorkerArtifacts(output, []byte("bound analysis"), []byte("bound run"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.release(); err != nil {
+		t.Fatal(err)
+	}
+	released = true
+	for name, want := range map[string]string{
+		"analysis.json": "bound analysis",
+		"run.json":      "bound run",
+	} {
+		if data, err := os.ReadFile(filepath.Join(original, name)); err != nil || string(data) != want {
+			t.Fatalf("bound output %s = %q, %v", name, data, err)
+		}
+		if data, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(data) != "attacker" {
+			t.Fatalf("replacement output %s changed after publish: %q, %v", name, data, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(original, ".go2gs-lock")); !os.IsNotExist(err) {
+		t.Fatalf("bound lock was not released: %v", err)
+	}
+}
+
+func TestBoundOutputRootReleaseFailsAfterLockLoss(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		attack func(string) error
+	}{
+		{
+			name: "removed",
+			attack: func(lock string) error {
+				return os.Remove(lock)
+			},
+		},
+		{
+			name: "replaced",
+			attack: func(lock string) error {
+				if err := os.Remove(lock); err != nil {
+					return err
+				}
+				return os.Mkdir(lock, 0o700)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			out := t.TempDir()
+			output, err := lockAndInvalidateOutput(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.attack(filepath.Join(out, ".go2gs-lock")); err != nil {
+				t.Fatal(err)
+			}
+			if err := output.release(); err == nil {
+				t.Fatal("release succeeded after output lock identity loss")
+			}
+			if test.name == "replaced" {
+				if info, err := os.Lstat(filepath.Join(out, ".go2gs-lock")); err != nil || !info.IsDir() {
+					t.Fatalf("mismatched replacement lock changed: %v, %v", info, err)
+				}
+			}
+		})
+	}
+}
+
+func TestOutputReleaseFailureOverridesIncompleteExit(t *testing.T) {
+	err := joinOutputReleaseError(
+		&exitError{1, errors.New("inventory incomplete")},
+		errors.New("output ownership lost"),
+	)
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("release failure did not take exit-code precedence: %v", err)
+	}
+}
+
+func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
+	if !secureTempCleanupSupported() {
+		parent := t.TempDir()
+		if _, err := createOwnedTempDir(parent, ".go2gs-work-*"); err == nil ||
+			!strings.Contains(err.Error(), "unsupported on this platform") {
+			t.Fatalf("unsupported platform created a private directory: %v", err)
+		}
+		entries, err := os.ReadDir(parent)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("unsupported cleanup path mutated its parent: %v, %#v", err, entries)
+		}
+		return
+	}
+	for _, pattern := range []string{".go2gs-bootstrap-*", ".go2gs-worker-*", ".go2gs-work-*"} {
+		t.Run("ordinary-"+pattern, func(t *testing.T) {
+			directory, err := createOwnedTempDir(t.TempDir(), pattern)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nested := filepath.Join(directory.path, "nested")
+			if err := os.Mkdir(nested, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(nested, "artifact"), []byte("owned"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := directory.cleanup(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(directory.path); !os.IsNotExist(err) {
+				t.Fatalf("ordinary owned directory remains: %v", err)
+			}
+		})
+	}
+
+	t.Run("source traversal limits do not constrain cleanup", func(t *testing.T) {
+		sourceTraversalEntryLimitTestHook = func() int { return 1 }
+		metadataDirectoryEntryLimitTestHook = func() int { return 1 }
+		t.Cleanup(func() {
+			sourceTraversalEntryLimitTestHook = nil
+			metadataDirectoryEntryLimitTestHook = nil
+		})
+		directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-work-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := 0; index < metadataReadDirBatchSize+1; index++ {
+			if err := os.WriteFile(
+				filepath.Join(directory.path, fmt.Sprintf("artifact-%03d", index)),
+				[]byte("owned"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := directory.cleanup(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(directory.path); !os.IsNotExist(err) {
+			t.Fatalf("owned directory remains: %v", err)
+		}
+	})
+
+	t.Run("symlink child retained", func(t *testing.T) {
+		if !secureTempCleanupSupported() {
+			t.Skip("descriptor-relative cleanup is unavailable")
+		}
+		directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-worker-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, []byte("safe"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(directory.path, "link")
+		if err := os.Symlink(outside, link); err != nil {
+			t.Fatal(err)
+		}
+		var tombstone string
+		err = directory.cleanupWithHooks(nil, func(path string) { tombstone = path })
+		if runtime.GOOS == "windows" && err != nil {
+			t.Fatalf("reparse-safe cleanup failed: %v", err)
+		}
+		if runtime.GOOS != "windows" && (err == nil || !strings.Contains(err.Error(), "remains non-empty")) {
+			t.Fatalf("retained symlink should report incomplete cleanup, got %v", err)
+		}
+		if runtime.GOOS != "windows" {
+			if info, err := os.Lstat(filepath.Join(tombstone, "link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("unbound symlink was not safely retained: %v, %v", info, err)
+			}
+		}
+		if data, err := os.ReadFile(outside); err != nil || string(data) != "safe" {
+			t.Fatalf("symlink target was changed: %q, %v", data, err)
+		}
+	})
+
+	t.Run("pathname replacement", func(t *testing.T) {
+		parent := t.TempDir()
+		directory, err := createOwnedTempDir(parent, ".go2gs-worker-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		displaced := directory.path + ".displaced"
+		err = directory.cleanupWithHook(func() {
+			if renameErr := os.Rename(directory.path, displaced); renameErr != nil {
+				t.Fatal(renameErr)
+			}
+			if mkdirErr := os.Mkdir(directory.path, 0o700); mkdirErr != nil {
+				t.Fatal(mkdirErr)
+			}
+			if writeErr := os.WriteFile(filepath.Join(directory.path, "valuable.txt"), []byte("valuable"), 0o600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		})
+		if err == nil || !strings.Contains(err.Error(), "changed during cleanup") {
+			t.Fatalf("pathname replacement should report cleanup failure, got %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(directory.path, "valuable.txt"))
+		if err != nil || string(data) != "valuable" {
+			t.Fatalf("replacement directory was deleted: %q, %v", data, err)
+		}
+		if _, err := os.Lstat(displaced); err != nil {
+			t.Fatalf("displaced owned directory was unexpectedly removed: %v", err)
+		}
+	})
+
+	t.Run("post-tombstone identity replacement", func(t *testing.T) {
+		if !secureTempCleanupSupported() {
+			t.Skip("descriptor-relative cleanup is unavailable")
+		}
+		parent := t.TempDir()
+		directory, err := createOwnedTempDir(parent, ".go2gs-worker-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory.path, "owned.txt"), []byte("owned"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var tombstone, displaced string
+		err = directory.cleanupWithHooks(nil, func(path string) {
+			tombstone = path
+			displaced = path + ".displaced"
+			if renameErr := os.Rename(path, displaced); renameErr != nil {
+				t.Fatal(renameErr)
+			}
+			if mkdirErr := os.Mkdir(path, 0o700); mkdirErr != nil {
+				t.Fatal(mkdirErr)
+			}
+			if writeErr := os.WriteFile(filepath.Join(path, "valuable.txt"), []byte("valuable"), 0o600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		})
+		if err == nil || !strings.Contains(err.Error(), "tombstone was replaced") {
+			t.Fatalf("tombstone replacement should report cleanup failure, got %v", err)
+		}
+		if data, err := os.ReadFile(filepath.Join(tombstone, "valuable.txt")); err != nil || string(data) != "valuable" {
+			t.Fatalf("post-check replacement was deleted: %q, %v", data, err)
+		}
+		if _, err := os.Lstat(displaced); err != nil {
+			t.Fatalf("descriptor-owned directory was unexpectedly removed by pathname: %v", err)
+		}
+	})
+}
+
+func TestOwnedTemporaryDirectoryLateFileReplacementSurvives(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("atomic exchange cleanup is Unix-specific")
+	}
+	if !secureTempCleanupSupported() {
+		t.Skip("atomic exchange cleanup is unavailable")
+	}
+	for _, replacement := range []string{"file", "symlink"} {
+		t.Run(replacement, func(t *testing.T) {
+			directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-worker-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			const fileCount = 2000
+			for index := 0; index < fileCount; index++ {
+				name := filepath.Join(directory.path, fmt.Sprintf("%04d", index))
+				if err := os.WriteFile(name, []byte("owned"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var tombstone string
+			var replacementErr error
+			previous := tempCleanupPlaceholderCreatedHook
+			tempCleanupPlaceholderCreatedHook = func(directoryPath, name, _ string) {
+				if name != "1999" || replacementErr != nil {
+					return
+				}
+				target := filepath.Join(directoryPath, name)
+				displaced := target + ".owned"
+				if replacementErr = os.Rename(target, displaced); replacementErr != nil {
+					return
+				}
+				if replacement == "symlink" {
+					outside := filepath.Join(filepath.Dir(directoryPath), "valuable-target")
+					if replacementErr = os.WriteFile(outside, []byte("valuable"), 0o600); replacementErr != nil {
+						return
+					}
+					replacementErr = os.Symlink(outside, target)
+					return
+				}
+				replacementErr = os.WriteFile(target, []byte("valuable"), 0o600)
+			}
+			t.Cleanup(func() { tempCleanupPlaceholderCreatedHook = previous })
+			err = directory.cleanupWithHooks(nil, func(path string) {
+				tombstone = path
+			})
+			if replacementErr != nil {
+				t.Fatal(replacementErr)
+			}
+			if err == nil ||
+				(!strings.Contains(err.Error(), "remains non-empty") &&
+					!strings.Contains(err.Error(), "quarantine identity changed")) {
+				t.Fatalf("retained replacement should report cleanup failure, got %v", err)
+			}
+			target := filepath.Join(tombstone, "1999")
+			if replacement == "symlink" {
+				info, statErr := os.Lstat(target)
+				if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+					t.Fatalf("replacement symlink was deleted: %v, %v", info, statErr)
+				}
+			} else if data, readErr := os.ReadFile(target); readErr != nil || string(data) != "valuable" {
+				t.Fatalf("replacement file was deleted: %q, %v", data, readErr)
+			}
+		})
+	}
+}
+
+func TestOwnedTemporaryDirectoryExchangeFailureIsSafeAndReported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("atomic exchange cleanup is Unix-specific")
+	}
+	if !secureTempCleanupSupported() {
+		t.Skip("atomic exchange cleanup is unavailable")
+	}
+	for _, swappedPlaceholder := range []bool{false, true} {
+		name := "placeholder-removed"
+		if swappedPlaceholder {
+			name = "placeholder-swapped"
+		}
+		t.Run(name, func(t *testing.T) {
+			directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-worker-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory.path, "owned"), []byte("owned"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var hookErr error
+			var tombstone, placeholder, displaced string
+			previous := tempCleanupPlaceholderCreatedHook
+			tempCleanupPlaceholderCreatedHook = func(path, entry, created string) {
+				if entry != "owned" {
+					return
+				}
+				placeholder = filepath.Join(path, created)
+				hookErr = os.Remove(filepath.Join(path, entry))
+				if hookErr != nil || !swappedPlaceholder {
+					return
+				}
+				displaced = placeholder + ".owned"
+				if hookErr = os.Rename(placeholder, displaced); hookErr == nil {
+					hookErr = os.WriteFile(placeholder, []byte("valuable"), 0o600)
+				}
+			}
+			t.Cleanup(func() { tempCleanupPlaceholderCreatedHook = previous })
+
+			err = directory.cleanupWithHooks(nil, func(path string) { tombstone = path })
+			if hookErr != nil {
+				t.Fatal(hookErr)
+			}
+			if err == nil || !strings.Contains(err.Error(), "atomically exchange") {
+				t.Fatalf("exchange failure was not reported: %v", err)
+			}
+			if swappedPlaceholder {
+				if data, readErr := os.ReadFile(placeholder); readErr != nil || string(data) != "valuable" {
+					t.Fatalf("swapped placeholder was deleted: %q, %v", data, readErr)
+				}
+				if _, statErr := os.Lstat(displaced); statErr != nil {
+					t.Fatalf("displaced known placeholder was deleted: %v", statErr)
+				}
+				return
+			}
+			entries, readErr := os.ReadDir(tombstone)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), ".go2gs-entry-") {
+					t.Fatalf("known placeholder leaked after exchange failure: %s", entry.Name())
+				}
+			}
+		})
+	}
+}
+
+func TestOwnedTemporaryDirectoryCleanupErrorsReachOwners(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix failure injection uses atomic exchange hooks")
+	}
+	if !secureTempCleanupSupported() {
+		t.Skip("atomic exchange cleanup is unavailable")
+	}
+	writeProfile := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "profile.json")
+		data, err := marshalCanonical(testProfile())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	installFailure := func(t *testing.T, prefix, probe string, prepare func(ownedTempDir)) *error {
+		t.Helper()
+		previousCreated := tempDirectoryCreatedHook
+		previousPlaceholder := tempCleanupPlaceholderCreatedHook
+		var hookErr error
+		tempDirectoryCreatedHook = func(directory ownedTempDir) {
+			if !strings.HasPrefix(filepath.Base(directory.path), prefix) {
+				return
+			}
+			hookErr = os.WriteFile(filepath.Join(directory.path, probe), []byte("owned"), 0o600)
+			if hookErr == nil && prepare != nil {
+				prepare(directory)
+			}
+		}
+		tempCleanupPlaceholderCreatedHook = func(path, entry, _ string) {
+			if hookErr == nil && entry == probe {
+				hookErr = os.Remove(filepath.Join(path, entry))
+			}
+		}
+		t.Cleanup(func() {
+			tempDirectoryCreatedHook = previousCreated
+			tempCleanupPlaceholderCreatedHook = previousPlaceholder
+		})
+		return &hookErr
+	}
+
+	t.Run("bootstrap", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("public analyze requires Linux execution binding")
+		}
+		root := copyFixture(t, "complete")
+		hookErr := installFailure(t, ".go2gs-bootstrap-", "bootstrap-probe", nil)
+		out, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = runAnalyze(t.Context(), []string{
+			"--source", root, "--profile", writeProfile(t), "--out", out,
+		})
+		if *hookErr != nil {
+			t.Fatal(*hookErr)
+		}
+		if err == nil || !strings.Contains(err.Error(), "cleanup bootstrap directory") {
+			t.Fatalf("bootstrap cleanup failure was not surfaced: %v", err)
+		}
+	})
+
+	t.Run("worker", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("public analyze requires Linux execution binding")
+		}
+		root := copyFixture(t, "complete")
+		var prepareErr error
+		hookErr := installFailure(t, ".go2gs-worker-", "worker-probe", func(directory ownedTempDir) {
+			prepareErr = os.Mkdir(filepath.Join(directory.path, "profile.json"), 0o700)
+		})
+		out, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = runAnalyze(t.Context(), []string{
+			"--source", root, "--profile", writeProfile(t), "--out", out,
+		})
+		if *hookErr != nil {
+			t.Fatal(*hookErr)
+		}
+		if prepareErr != nil {
+			t.Fatal(prepareErr)
+		}
+		if err == nil || !strings.Contains(err.Error(), "cleanup worker directory") {
+			t.Fatalf("worker cleanup failure was not surfaced: %v", err)
+		}
+	})
+
+	t.Run("analysis work", func(t *testing.T) {
+		root := copyFixture(t, "complete")
+		hookErr := installFailure(t, ".go2gs-work-", "work-probe", nil)
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if *hookErr != nil {
+			t.Fatal(*hookErr)
+		}
+		if !complete || !analysis.InventoryComplete {
+			t.Fatalf("fixture did not complete before cleanup: %#v", analysis.Blockers)
+		}
+		if err == nil || !strings.Contains(err.Error(), "cleanup analysis work directory") {
+			t.Fatalf("work cleanup failure was not surfaced: %v", err)
+		}
+	})
+}
+
+func TestLoadFailureReplacesStaleSuccessfulArtifacts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled CGo loader failure fixture")
+	}
+	root := copyFixture(t, "pkgconfig")
+	out := t.TempDir()
+	out, err := secureRoot(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(t.TempDir(), "profile.json")
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profileBytes, err := marshalCanonical(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, profileBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if err := os.WriteFile(filepath.Join(out, name), []byte("stale-success"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.release()
+	goExecutable := filepath.Join(runtime.GOROOT(), "bin", selectedGoName())
+	goData, err := os.ReadFile(goExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO2GS_SELECTED_GO", goExecutable)
+	t.Setenv("GO2GS_SELECTED_GO_SHA256", hashBytes(goData))
+	t.Setenv("GO2GS_SELECTED_GOROOT", runtime.GOROOT())
+	analysis, complete, err := analyze(t.Context(), root, out, profile)
+	if err != nil || complete {
+		t.Fatalf("invalid package should produce an incomplete inventory, complete=%v err=%v", complete, err)
+	}
+	analysisBytes, err := writeAnalysis(filepath.Join(out, "analysis.json"), analysis, profile.Limits.MaxOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := RunMetadata{SchemaVersion: schemaVersion, AnalysisBytes: int64(analysisBytes)}
+	if err := writeJSON(filepath.Join(out, "run.json"), run, profile.Limits.MaxOutputBytes); err != nil {
+		t.Fatal(err)
+	}
+	analysis, err = readAnalysis(filepath.Join(out, "analysis.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.InventoryComplete || !hasBlockerCategory(analysis, "pkg-config") {
+		t.Fatalf("load failure did not replace stale success: %#v", analysis.Blockers)
+	}
+	if data, err := os.ReadFile(filepath.Join(out, "run.json")); err != nil || bytes.Equal(data, []byte("stale-success")) {
+		t.Fatalf("run metadata was not replaced: %q, %v", data, err)
+	}
+}
+
+func TestImmutableInputSnapshotDetectsLoadTimeDrift(t *testing.T) {
+	cases := []struct {
+		name   string
+		path   string
+		mutate func(*testing.T, string)
+	}{
+		{"go-change", "main.go", func(t *testing.T, path string) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = bytes.Replace(data, []byte("ContextualInt int64 = 7"), []byte("ContextualInt int64 = 8"), 1)
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"embed-change", "assets/visible.txt", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("changed"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"embed-delete", "assets/visible.txt", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"embed-replace", "assets/visible.txt", func(t *testing.T, path string) {
+			replacement := path + ".replacement"
+			if err := os.WriteFile(replacement, []byte("replacement"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"go-add", "added.go", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("package fixture\nconst Added = 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			path := filepath.Join(root, filepath.FromSlash(test.path))
+			original, readErr := os.ReadFile(path)
+			if readErr != nil && test.name != "go-add" {
+				t.Fatal(readErr)
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				test.mutate(t, path)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("load-time drift was not fail-closed: complete=%v blockers=%#v", complete, analysis.Blockers)
+			}
+			if strings.HasPrefix(test.name, "embed-") {
+				index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool {
+					return file.Path == "source://assets/visible.txt"
+				})
+				if index < 0 {
+					t.Fatal("captured embed input missing")
+				}
+				data, decodeErr := base64.StdEncoding.DecodeString(analysis.Files[index].ContentBase64)
+				if decodeErr != nil || !bytes.Equal(data, original) {
+					t.Fatalf("inventory did not use captured embed bytes: %q, %v", data, decodeErr)
+				}
+			}
+			if test.name == "go-add" && slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+				return file.Path == "source://added.go"
+			}) {
+				t.Fatal("uncaptured added source was emitted")
+			}
+		})
+	}
+
+	root := copyFixture(t, "native")
+	nativePath := filepath.Join(root, "native.s")
+	originalNative, err := os.ReadFile(nativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	analysis, _, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), profile, func() {
+		if writeErr := os.WriteFile(nativePath, []byte("changed"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	})
+	if err != nil || !hasBlockerCategory(analysis, "input-drift") {
+		t.Fatalf("native input drift was not detected: err=%v blockers=%#v", err, analysis.Blockers)
+	}
+	index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == "source://native.s" })
+	if index < 0 {
+		t.Fatal("captured native input missing")
+	}
+	nativeData, err := base64.StdEncoding.DecodeString(analysis.Files[index].ContentBase64)
+	if err != nil || !bytes.Equal(nativeData, originalNative) {
+		t.Fatalf("inventory did not use captured native bytes: %q, %v", nativeData, err)
+	}
+}
+
+func TestPackageInputSetDriftCoversAllRecognizedExtensions(t *testing.T) {
+	for _, cgoEnabled := range []bool{false, true} {
+		for _, operation := range []string{"add", "remove", "rename"} {
+			t.Run(fmt.Sprintf("cgo=%t/%s", cgoEnabled, operation), func(t *testing.T) {
+				root := copyFixture(t, "complete")
+				var mutate func()
+				switch operation {
+				case "add":
+					path := filepath.Join(root, "added.hxx")
+					mutate = func() {
+						if err := os.WriteFile(path, []byte("#define ADDED 1\n"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				case "remove":
+					path := filepath.Join(root, "removed.sx")
+					if err := os.WriteFile(path, []byte("#include \"textflag.h\"\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					mutate = func() {
+						if err := os.Remove(path); err != nil {
+							t.Fatal(err)
+						}
+					}
+				case "rename":
+					path := filepath.Join(root, "renamed.syso")
+					if err := os.WriteFile(path, []byte("object"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					mutate = func() {
+						if err := os.Rename(path, filepath.Join(root, "replacement.syso")); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				profile := testProfile()
+				profile.CGOEnabled = cgoEnabled
+				analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), profile, mutate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+					t.Fatalf("recognized input %s was not detected with CGO_ENABLED=%t: %#v", operation, cgoEnabled, analysis.Blockers)
+				}
+			})
+		}
+	}
+}
+
+func TestManifestSnapshotRejectsSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled symlink fixture")
+	}
+	for _, name := range []string{"go.mod", "go.sum", filepath.Join("vendor", "modules.txt")} {
+		t.Run(filepath.ToSlash(name), func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			path := filepath.Join(root, name)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.Remove(path)
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("module outside\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, path); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := snapshotManifests(root, testProfile().Limits.MaxLocalHashBytes); err == nil {
+				t.Fatalf("symlinked manifest %s was accepted", name)
+			}
+		})
+	}
+}
+
+func TestManifestSnapshotDetectsLoadTimeDrift(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		path   string
+		create string
+		mutate func(*testing.T, string)
+	}{
+		{"change-go-mod", "go.mod", "", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("module example.com/changed\n\ngo 1.27.0\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"delete-go-sum", "go.sum", "example.com/module v1.0.0 h1:test\n", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"replace-vendor-manifest", filepath.Join("vendor", "modules.txt"), "# captured\n", func(t *testing.T, path string) {
+			replacement := path + ".replacement"
+			if err := os.WriteFile(replacement, []byte("# captured\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"add-go-sum", "go.sum", "", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("added\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			path := filepath.Join(root, test.path)
+			if test.create != "" {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(test.create), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				test.mutate(t, path)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("manifest drift was not fail-closed: complete=%v blockers=%#v", complete, analysis.Blockers)
+			}
+		})
+	}
+}
+
+func TestTransientManifestMutationCannotAffectLoader(t *testing.T) {
+	baselineRoot := copyFixture(t, "complete")
+	baseline, complete, err := analyze(t.Context(), baselineRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("baseline analysis failed: complete=%v err=%v", complete, err)
+	}
+	want, err := marshalCanonical(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		path   string
+		mutate func([]byte) []byte
+	}{
+		"manifest": {"go.mod", func(data []byte) []byte {
+			return bytes.Replace(data, []byte("module example.com/go2gsfixture"), []byte("module example.com/transient"), 1)
+		}},
+		"source": {"main.go", func(data []byte) []byte {
+			return bytes.Replace(data, []byte("return int(int64(Identity(outer.Add(3))))"), []byte("return 999"), 1)
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			path := filepath.Join(root, test.path)
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			analysis, complete, err := analyzeWithSnapshotHooks(t.Context(), root, t.TempDir(), testProfile(), func() {
+				if writeErr := os.WriteFile(path, test.mutate(original), 0o644); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}, func() {
+				if writeErr := os.WriteFile(path, original, 0o644); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			})
+			if err != nil || !complete {
+				t.Fatalf("transient mutation affected completeness: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+			}
+			got, err := marshalCanonical(analysis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("loader observed transient live %s mutation near: %s", name, firstDifference(string(got), string(want)))
+			}
+		})
+	}
+}
+
+func TestExternalReplacementManifestDriftFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		path   string
+		mutate func(*testing.T, string)
+	}{
+		{"go-mod-change", "go.mod", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("module example.com/changed\n\ngo 1.23\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"go-sum-delete", "go.sum", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"vendor-manifest-replace", filepath.Join("vendor", "modules.txt"), func(t *testing.T, path string) {
+			replacement := path + ".replacement"
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(replacement, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"go-sum-symlink", "go.sum", func(t *testing.T, path string) {
+			if runtime.GOOS == "windows" {
+				t.Skip("controlled symlink fixture")
+			}
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, dependency := externalReplacementFixture(t)
+			path := filepath.Join(dependency, test.path)
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				test.mutate(t, path)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("external manifest drift was not fail-closed: complete=%v blockers=%#v", complete, analysis.Blockers)
+			}
+			wantPath := "module://example.com/replacement@local/" + filepath.ToSlash(test.path)
+			if !slices.ContainsFunc(analysis.Manifests, func(manifest ManifestRecord) bool {
+				return manifest.Path == wantPath && manifest.SHA256 == hashBytes(original)
+			}) {
+				t.Fatalf("captured external manifest missing: %s in %#v", wantPath, analysis.Manifests)
+			}
+		})
+	}
+}
+
+func TestTransientExternalReplacementManifestCannotAffectLoader(t *testing.T) {
+	root, dependency := externalReplacementFixture(t)
+	baseline, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("baseline external replacement failed: complete=%v err=%v", complete, err)
+	}
+	path := filepath.Join(dependency, "go.mod")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyzeWithSnapshotHooks(t.Context(), root, t.TempDir(), testProfile(), func() {
+		if writeErr := os.WriteFile(path, []byte("module example.com/transient\n\ngo 1.23\n"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}, func() {
+		if writeErr := os.WriteFile(path, original, 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	})
+	if err != nil || !complete {
+		t.Fatalf("transient external manifest affected completeness: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	want, _ := marshalCanonical(baseline)
+	got, _ := marshalCanonical(analysis)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("loader observed transient external manifest near: %s", firstDifference(string(got), string(want)))
+	}
+}
+
+func TestScopedTypeAndMemberIdentitiesAreDistinct(t *testing.T) {
+	analyzeRoot := func(root string) Analysis {
+		t.Helper()
+		path := filepath.Join(root, "main.go")
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = file.WriteString(`
+func GenericInt[T ~int](value T) { type Local int; var _ Local }
+func GenericString[T ~string](value T) { type Local int; var _ Local }
+`)
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if err != nil || !complete {
+			t.Fatalf("identity fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+		}
+		return analysis
+	}
+	first := analyzeRoot(copyFixture(t, "complete"))
+	second := analyzeRoot(copyFixture(t, "complete"))
+	left, _ := marshalCanonical(first)
+	right, _ := marshalCanonical(second)
+	if !bytes.Equal(left, right) {
+		t.Fatalf("scoped type identities differ by root near: %s", firstDifference(string(left), string(right)))
+	}
+	typeParameters, locals := map[string]bool{}, map[string]bool{}
+	for _, record := range first.Types {
+		if record.Display == "T" && (record.Constraint == "~int" || record.Constraint == "~string") {
+			typeParameters[record.ID] = true
+		}
+		if record.Name == "Local" {
+			locals[record.ID] = true
+		}
+	}
+	if len(typeParameters) != 2 || len(locals) != 2 {
+		t.Fatalf("scoped type identities collided: typeParameters=%v locals=%v", typeParameters, locals)
+	}
+
+	dependency := types.NewPackage("example.com/dependency", "dependency")
+	consumer := &packages.Package{PkgPath: "example.com/consumer", Fset: token.NewFileSet()}
+	identityAnalysis := validIncompleteAnalysis()
+	builder := newInventoryBuilder(&identityAnalysis, "", "", testProfile())
+	builder.packageIDs[consumer] = "package:consumer"
+	builder.packagePathIDs[dependency.Path()] = "package:dependency"
+	fieldA := types.NewField(token.NoPos, dependency, "X", types.Typ[types.Int], false)
+	fieldB := types.NewField(token.NoPos, dependency, "X", types.Typ[types.Int], false)
+	fieldIDA := builder.addObjectWithFallback(consumer, fieldA, SourceSpan{}, "selection\x00example.com/dependency.A\x000")
+	fieldIDB := builder.addObjectWithFallback(consumer, fieldB, SourceSpan{}, "selection\x00example.com/dependency.B\x000")
+	if fieldIDA == fieldIDB {
+		t.Fatal("same-name imported fields collided")
+	}
+	namedA := types.NewNamed(types.NewTypeName(token.NoPos, dependency, "A", nil), types.NewStruct(nil, nil), nil)
+	namedB := types.NewNamed(types.NewTypeName(token.NoPos, dependency, "B", nil), types.NewStruct(nil, nil), nil)
+	method := func(receiver types.Type) *types.Func {
+		signature := types.NewSignatureType(types.NewVar(token.NoPos, dependency, "", receiver), nil, nil, types.NewTuple(), types.NewTuple(), false)
+		return types.NewFunc(token.NoPos, dependency, "M", signature)
+	}
+	methodIDA := builder.addObject(consumer, method(namedA), SourceSpan{})
+	methodIDB := builder.addObject(consumer, method(namedB), SourceSpan{})
+	if methodIDA == methodIDB {
+		t.Fatal("same-name imported methods collided")
+	}
+}
+
+func TestPromotedMemberIdentityUsesImportedDeclaration(t *testing.T) {
+	analyzeFixture := func(reverse bool) Analysis {
+		t.Helper()
+		root := t.TempDir()
+		files := map[string]string{
+			"go.mod": "module example.com/members\n\ngo 1.27.0\n",
+			"dep/dep.go": `package dep
+type A struct{ X int }
+func (A) M() {}
+type B struct{ X int }
+func (B) M() {}
+type E struct{ A }
+`,
+		}
+		if reverse {
+			files["main.go"] = `package members
+import "example.com/members/dep"
+type Right struct{ dep.E }
+type Left struct{ dep.E }
+func use(right Right, left Left, b dep.B) { _, _, _ = right.X, left.X, b.X; right.M(); left.M(); b.M(); _, _ = right.A, left.A }
+`
+		} else {
+			files["main.go"] = `package members
+import "example.com/members/dep"
+type Left struct{ dep.E }
+type Right struct{ dep.E }
+func use(left Left, right Right, b dep.B) { _, _, _ = left.X, right.X, b.X; left.M(); right.M(); b.M(); _, _ = left.A, right.A }
+`
+		}
+		for name, content := range files {
+			path := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if err != nil || !complete {
+			t.Fatalf("member fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+		}
+		return analysis
+	}
+	memberIDs := func(analysis Analysis) map[string][]string {
+		names := map[string]string{}
+		for _, symbol := range analysis.Symbols {
+			if symbol.Name == "X" || symbol.Name == "M" || symbol.Name == "A" {
+				names[symbol.ID] = symbol.Name
+			}
+		}
+		result := map[string][]string{}
+		for _, selection := range analysis.Selections {
+			if name := names[selection.ObjectID]; name != "" {
+				result[name] = append(result[name], selection.ObjectID)
+			}
+		}
+		for name := range result {
+			sort.Strings(result[name])
+			result[name] = slices.Compact(result[name])
+		}
+		return result
+	}
+	first := memberIDs(analyzeFixture(false))
+	second := memberIDs(analyzeFixture(true))
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("member identities depend on consumer order: first=%v second=%v", first, second)
+	}
+	if len(first["X"]) != 2 || len(first["M"]) != 2 || len(first["A"]) != 1 {
+		t.Fatalf("declaration identities were not reused or distinguished: %v", first)
+	}
+
+	dependency := types.NewPackage("example.com/dependency", "dependency")
+	field := types.NewField(token.NoPos, dependency, "X", types.Typ[types.Int], false)
+	typeName := types.NewTypeName(token.NoPos, dependency, "A", nil)
+	named := types.NewNamed(typeName, types.NewStruct([]*types.Var{field}, nil), nil)
+	dependency.Scope().Insert(typeName)
+	method := types.NewFunc(token.NoPos, dependency, "M", types.NewSignatureType(
+		types.NewVar(token.NoPos, dependency, "", named), nil, nil, types.NewTuple(), types.NewTuple(), false))
+	named.AddMethod(method)
+	dependencyPackage := &packages.Package{PkgPath: dependency.Path(), Types: dependency, Fset: token.NewFileSet()}
+	consumer := &packages.Package{PkgPath: "example.com/consumer", Types: types.NewPackage("example.com/consumer", "consumer"), Fset: token.NewFileSet()}
+	traversalIDs := func(declarationFirst bool) []string {
+		analysis := validIncompleteAnalysis()
+		builder := newInventoryBuilder(&analysis, "", "", testProfile())
+		if err := builder.indexPackages([]*packages.Package{consumer, dependencyPackage}); err != nil {
+			t.Fatal(err)
+		}
+		add := func(object types.Object) string {
+			if declarationFirst {
+				builder.addObject(dependencyPackage, object, SourceSpan{Path: "module://example.com/dependency@local/dep.go", StartByte: 10})
+			}
+			id := builder.addObjectWithFallback(consumer, object, SourceSpan{}, "consumer-selection")
+			if !declarationFirst {
+				builder.addObject(dependencyPackage, object, SourceSpan{Path: "module://example.com/dependency@local/dep.go", StartByte: 10})
+			}
+			return id
+		}
+		return []string{add(field), add(method)}
+	}
+	if early, late := traversalIDs(true), traversalIDs(false); !slices.Equal(early, late) {
+		t.Fatalf("member identities depend on package traversal: declaration-first=%v consumer-first=%v", early, late)
+	}
+}
+
+func TestGenericMemberIdentityUsesOriginDeclaration(t *testing.T) {
+	analyzeFixture := func(withAliasEmbedding bool) map[string][]string {
+		t.Helper()
+		root := t.TempDir()
+		dependency := `package dep
+type A[T any] struct{ X T }
+func (A[T]) M() {}
+func (*A[T]) P() {}
+`
+		consumer := `package members
+import "example.com/genericmembers/dep"
+func use(a dep.A[int]) { _ = a.X; a.M(); (&a).P() }
+`
+		if withAliasEmbedding {
+			dependency += "type Alias = A[string]\ntype Z struct{ Alias }\n"
+			consumer = `package members
+import "example.com/genericmembers/dep"
+func use(a dep.A[int], z dep.Z) { _, _ = a.X, z.X; a.M(); z.M(); (&a).P(); (&z).P() }
+`
+		}
+		for name, content := range map[string]string{
+			"go.mod":     "module example.com/genericmembers\n\ngo 1.27.0\n",
+			"dep/dep.go": dependency,
+			"main.go":    consumer,
+		} {
+			path := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if err != nil || !complete {
+			t.Fatalf("generic member fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+		}
+		names := map[string]string{}
+		for _, symbol := range analysis.Symbols {
+			if symbol.Name == "X" || symbol.Name == "M" || symbol.Name == "P" {
+				names[symbol.ID] = symbol.Name
+			}
+		}
+		result := map[string][]string{}
+		for _, selection := range analysis.Selections {
+			if name := names[selection.ObjectID]; name != "" {
+				result[name] = append(result[name], selection.ObjectID)
+			}
+		}
+		for name := range result {
+			sort.Strings(result[name])
+			result[name] = slices.Compact(result[name])
+		}
+		return result
+	}
+	baseline := analyzeFixture(false)
+	withAlias := analyzeFixture(true)
+	if !reflect.DeepEqual(baseline, withAlias) {
+		t.Fatalf("generic instantiation changed canonical member IDs: baseline=%v withAlias=%v", baseline, withAlias)
+	}
+	for _, name := range []string{"X", "M", "P"} {
+		if len(baseline[name]) != 1 {
+			t.Fatalf("generic member %s did not have one declaration identity: %v", name, baseline)
+		}
+	}
+}
+
+func TestImportedGenericTypeIdentityUsesDeclaringPackageFileSet(t *testing.T) {
+	analyzeFixture := func(consumers []string) (string, string, string) {
+		t.Helper()
+		root := t.TempDir()
+		files := map[string]string{
+			"go.mod":     "module example.com/typeowner\n\ngo 1.27.0\n",
+			"dep/dep.go": "package dep\nfunc Identity[T any](value T) T { return value }\n",
+		}
+		for _, consumer := range consumers {
+			files[consumer+"/use.go"] = "package " + consumer + `
+import "example.com/typeowner/dep"
+func Use() int { return dep.Identity(1) }
+`
+		}
+		for name, content := range files {
+			path := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if err != nil || !complete {
+			t.Fatalf("generic owner fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+		}
+		dependencyID := ""
+		for _, pkg := range analysis.Packages {
+			if pkg.ImportPath == "example.com/typeowner/dep" && pkg.Variant == "ordinary" {
+				dependencyID = pkg.ID
+				break
+			}
+		}
+		for _, symbol := range analysis.Symbols {
+			if symbol.PackageID == dependencyID && symbol.Name == "Identity" {
+				for _, record := range analysis.Types {
+					if record.ID == symbol.TypeID {
+						declaration := ""
+						if symbol.Declaration != nil {
+							declaration = symbol.Declaration.Path
+						}
+						return symbol.TypeID, record.Canonical, declaration
+					}
+				}
+			}
+		}
+		t.Fatal("dependency generic function type was not inventoried")
+		return "", "", ""
+	}
+	firstID, firstCanonical, firstDeclaration := analyzeFixture([]string{"a", "b"})
+	secondID, secondCanonical, secondDeclaration := analyzeFixture([]string{"x", "y"})
+	if firstID != secondID || firstCanonical != secondCanonical || firstDeclaration != secondDeclaration {
+		t.Fatalf("generic identity depends on consumer layout: first=%q %q %q second=%q %q %q",
+			firstID, firstCanonical, firstDeclaration, secondID, secondCanonical, secondDeclaration)
+	}
+	if !strings.Contains(firstCanonical, "source://dep/dep.go") || firstDeclaration != "source://dep/dep.go" {
+		t.Fatalf("generic identity does not use its declaring package: type=%q declaration=%q",
+			firstCanonical, firstDeclaration)
+	}
+
+	root := t.TempDir()
+	ownerPath := filepath.Join(root, "dep.go")
+	ownerSource := "package dep\nfunc Identity[T any](value T) T { return value }\n"
+	if err := os.WriteFile(ownerPath, []byte(ownerSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ownerSet := token.NewFileSet()
+	ownerSyntax, err := parser.ParseFile(ownerSet, ownerPath,
+		ownerSource, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependency, err := (&types.Config{}).Check(
+		"example.com/typeowner/dep", ownerSet, []*ast.File{ownerSyntax}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameter := dependency.Scope().Lookup("Identity").Type().(*types.Signature).TypeParams().At(0)
+	consumerSet := token.NewFileSet()
+	consumerSet.AddFile(filepath.Join(root, "consumer.go"), -1, 64)
+	consumer := &packages.Package{PkgPath: "example.com/typeowner/consumer", Fset: consumerSet}
+	analysis := validIncompleteAnalysis()
+	builder := newInventoryBuilder(&analysis, root, "", testProfile())
+	if identity := builder.typeIdentity(consumer, parameter); identity != canonicalTypeIdentity(parameter) {
+		t.Fatalf("unknown declaring package did not use stable fallback: %q", identity)
+	}
+	builder.typeOwners[dependency] = &packages.Package{
+		PkgPath: dependency.Path(), Types: dependency, Fset: ownerSet,
+	}
+	identity := builder.typeIdentity(consumer, parameter)
+	if !strings.Contains(identity, "source://dep.go:26") || strings.Contains(identity, "consumer.go") {
+		t.Fatalf("declaring position was resolved through the wrong FileSet: %q", identity)
+	}
+}
+
+func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analysis.json")
+	if err := os.WriteFile(path, []byte(`{"schema":{"name":"go2gs.analysis","version":1}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var exitErr *exitError
+	err := runValidate([]string{"--analysis", path})
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("schema-only artifact should exit 2, got %v", err)
+	}
+	if err := writeJSON(path, validIncompleteAnalysis(), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := runValidate([]string{"--analysis", path}); err != nil {
+		t.Fatalf("valid incomplete inventory was rejected: %v", err)
+	}
+	mismatch := validIncompleteAnalysis()
+	mismatch.Toolchain.RequestedVersion = "1.1"
+	mismatch.Blockers[0].Category = "toolchain"
+	mismatch.Blockers[0].ID = blockerRecordID(mismatch.Blockers[0])
+	if err := writeJSON(path, mismatch, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := runValidate([]string{"--analysis", path}); err != nil {
+		t.Fatalf("valid incomplete toolchain mismatch was rejected: %v", err)
+	}
+	invalid := validIncompleteAnalysis()
+	invalid.RecordCounts.Total = 0
+	if err := writeJSON(path, invalid, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	err = runValidate([]string{"--analysis", path})
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("count mismatch should exit 2, got %v", err)
+	}
+	invalid = validIncompleteAnalysis()
+	invalid.Packages = nil
+	if err := writeJSON(path, invalid, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	err = runValidate([]string{"--analysis", path})
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("null collection should exit 2, got %v", err)
+	}
+	validData, err := marshalCanonical(validIncompleteAnalysis())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(validData, &raw); err != nil {
+		t.Fatal(err)
+	}
+	delete(raw["blockers"].([]any)[0].(map[string]any), "diagnosticIds")
+	missingField, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, missingField, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = runValidate([]string{"--analysis", path})
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("missing record field should exit 2, got %v", err)
+	}
+	for _, owner := range []string{"profile", "toolchain"} {
+		var helperRaw map[string]any
+		if err := json.Unmarshal(validData, &helperRaw); err != nil {
+			t.Fatal(err)
+		}
+		delete(helperRaw[owner].(map[string]any), "cCompilerHelpers")
+		missingHelpers, err := json.Marshal(helperRaw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, missingHelpers, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err = runValidate([]string{"--analysis", path})
+		if !errors.As(err, &exitErr) || exitErr.code != 2 {
+			t.Fatalf("missing %s compiler helper provenance should exit 2, got %v", owner, err)
+		}
+	}
+	for _, field := range []string{"helperSemanticVersion", "gorootVersion"} {
+		var provenanceRaw map[string]any
+		if err := json.Unmarshal(validData, &provenanceRaw); err != nil {
+			t.Fatal(err)
+		}
+		delete(provenanceRaw["toolchain"].(map[string]any), field)
+		missingProvenance, err := json.Marshal(provenanceRaw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, missingProvenance, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err = runValidate([]string{"--analysis", path})
+		if !errors.As(err, &exitErr) || exitErr.code != 2 {
+			t.Fatalf("missing %s should exit 2, got %v", field, err)
+		}
+	}
+}
+
+func TestSchemaV1RejectsMigrationReady(t *testing.T) {
+	analysis := validIncompleteAnalysis()
+	analysis.Blockers = []BlockerRecord{}
+	analysis.RecordCounts = RecordCounts{}
+	analysis.InventoryComplete = true
+	analysis.MigrationReady = true
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "migrationReady") {
+		t.Fatalf("schema v1 accepted migrationReady=true: %v", err)
+	}
+}
+
+func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
+	const expected = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const actual = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	blocker := func(category, blocks string) BlockerRecord {
+		record := BlockerRecord{
+			Blocks: blocks, Category: category,
+			Message: "test", AffectedUnits: []string{}, DiagnosticIDs: []string{},
+		}
+		record.ID = blockerRecordID(record)
+		return record
+	}
+	withBlockers := func(analysis Analysis, blockers ...BlockerRecord) Analysis {
+		if blockers == nil {
+			blockers = []BlockerRecord{}
+		}
+		analysis.RecordCounts.Total += len(blockers) - len(analysis.Blockers)
+		analysis.RecordCounts.Blockers = len(blockers)
+		analysis.Blockers = blockers
+		return analysis
+	}
+	complete, loaded, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !loaded {
+		t.Fatalf("build complete validation fixture: loaded=%v err=%v", loaded, err)
+	}
+	complete = withBlockers(complete)
+	complete.Profile.ExpectedSourceCommit = expected
+	complete.Profile.ActualSourceCommit = expected
+	refreshSourceIdentity(&complete)
+	if err := validateAnalysis(complete); err != nil {
+		t.Fatalf("matching complete provenance was rejected: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		analysis Analysis
+		want     string
+	}{
+		{
+			name: "complete mismatch without blocker",
+			analysis: func() Analysis {
+				value := complete
+				value.Profile.ExpectedSourceCommit = expected
+				value.Profile.ActualSourceCommit = actual
+				refreshSourceIdentity(&value)
+				return value
+			}(),
+			want: "source commit mismatch",
+		},
+		{
+			name: "incomplete mismatch missing source blocker",
+			analysis: func() Analysis {
+				value := validIncompleteAnalysis()
+				value.Profile.ExpectedSourceCommit = expected
+				value.Profile.ActualSourceCommit = actual
+				refreshSourceIdentity(&value)
+				return value
+			}(),
+			want: "source commit mismatch",
+		},
+		{
+			name: "matching provenance with unexpected source blocker",
+			analysis: withBlockers(
+				validIncompleteAnalysis(),
+				blocker("source", "inventory"),
+			),
+			want: "source commit mismatch",
+		},
+		{
+			name: "mismatch with migration-only source blocker",
+			analysis: func() Analysis {
+				value := withBlockers(validIncompleteAnalysis(), blocker("source", "migration"))
+				value.Profile.ExpectedSourceCommit = expected
+				value.Profile.ActualSourceCommit = actual
+				refreshSourceIdentity(&value)
+				return value
+			}(),
+			want: "source commit mismatch",
+		},
+		{
+			name: "missing actual commit without source blocker",
+			analysis: func() Analysis {
+				value := validIncompleteAnalysis()
+				value.Profile.ExpectedSourceCommit = expected
+				value.Profile.ActualSourceCommit = ""
+				refreshSourceIdentity(&value)
+				return value
+			}(),
+			want: "missing actual source commit",
+		},
+		{
+			name: "present actual commit with unexpected metadata blocker",
+			analysis: withBlockers(
+				validIncompleteAnalysis(),
+				blocker("source-metadata", "inventory"),
+			),
+			want: "source-metadata blocker",
+		},
+		{
+			name: "matching malformed commit IDs",
+			analysis: func() Analysis {
+				value := complete
+				value.Profile.ExpectedSourceCommit = "not-a-commit"
+				value.Profile.ActualSourceCommit = "not-a-commit"
+				return value
+			}(),
+			want: "source commits",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateAnalysis(test.analysis); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("contradictory source provenance was accepted: %v", err)
+			}
+		})
+	}
+
+	mismatch := withBlockers(validIncompleteAnalysis(), blocker("source", "inventory"))
+	mismatch.Profile.ExpectedSourceCommit = expected
+	mismatch.Profile.ActualSourceCommit = actual
+	refreshSourceIdentity(&mismatch)
+	if err := validateAnalysis(mismatch); err != nil {
+		t.Fatalf("consistent source mismatch was rejected: %v", err)
+	}
+	missing := withBlockers(validIncompleteAnalysis(), blocker("source-metadata", "inventory"))
+	missing.Profile.ExpectedSourceCommit = expected
+	missing.Profile.ActualSourceCommit = ""
+	refreshSourceIdentity(&missing)
+	if err := validateAnalysis(missing); err != nil {
+		t.Fatalf("consistent missing actual source commit was rejected: %v", err)
+	}
+}
+
+func TestValidateAnalysisRejectsForgedCompletePreloadArtifact(t *testing.T) {
+	profile := testProfile()
+	profile.RequestedGoVersion = "1.26.6"
+	if profile.RequestedGoVersion == strings.TrimPrefix(runtime.Version(), "go") {
+		profile.RequestedGoVersion = "1.26.7"
+	}
+	analysis, complete, err := analyzePreload(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile)
+	if err != nil || complete || !hasBlockerCategory(analysis, "toolchain") {
+		t.Fatalf("build preload artifact: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	analysis.Toolchain.RequestedVersion = analysis.Toolchain.ActualVersion
+	analysis.RecordCounts.Total -= len(analysis.Blockers)
+	analysis.RecordCounts.Blockers = 0
+	analysis.Blockers = []BlockerRecord{}
+	analysis.InventoryComplete = true
+	if err := validateAnalysis(analysis); err == nil ||
+		!strings.Contains(err.Error(), "loaded modules, packages, and source files") {
+		t.Fatalf("forged complete preload artifact was accepted: %v", err)
+	}
+}
+
+func TestPreloadAnalysisEnforcesFinalRecordLimit(t *testing.T) {
+	profile := testProfile()
+	profile.RequestedGoVersion = "1.26.6"
+	if profile.RequestedGoVersion == strings.TrimPrefix(runtime.Version(), "go") {
+		profile.RequestedGoVersion = "1.26.7"
+	}
+	profile.ExpectedSourceCommit = strings.Repeat("a", 40)
+	root := copyFixture(t, "complete")
+	analysis, complete, err := analyzePreload(t.Context(), root, t.TempDir(), profile)
+	if err != nil || complete || len(analysis.Blockers) < 2 {
+		t.Fatalf("expected multiple preload blockers: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	profile.Limits.MaxRecords = analysis.RecordCounts.Total
+	if _, _, err := analyzePreload(t.Context(), root, t.TempDir(), profile); err != nil {
+		t.Fatalf("exact preload record limit was rejected: %v", err)
+	}
+	profile.Limits.MaxRecords--
+	rejected, complete, err := analyzePreload(t.Context(), root, t.TempDir(), profile)
+	if err == nil || !strings.Contains(err.Error(), "record count exceeds limit") {
+		t.Fatalf("over-limit preload analysis was accepted: complete=%v err=%v", complete, err)
+	}
+	if rejected.Schema.Name != "" || len(rejected.Blockers) != 0 {
+		t.Fatalf("over-limit preload analysis returned a publishable artifact: %#v", rejected)
+	}
+}
+
+func TestPackageInventoryEnforcesRecordLimitDuringInsertion(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/recordlimit\n\ngo 1.27.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var source strings.Builder
+	source.WriteString("package recordlimit\n\n")
+	for index := range 2000 {
+		fmt.Fprintf(&source, "var V%d = %d + %d\n", index, index, index+1)
+	}
+	if err := os.WriteFile(filepath.Join(root, "large.go"), []byte(source.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	profile := testProfile()
+	baseline, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil || !complete {
+		t.Fatalf("baseline inventory failed: complete=%v err=%v", complete, err)
+	}
+	profile.Limits.MaxRecords = baseline.RecordCounts.Total
+	exact, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil || !complete || exact.RecordCounts.Total != profile.Limits.MaxRecords {
+		t.Fatalf("exact package record limit failed: complete=%v records=%d err=%v", complete, exact.RecordCounts.Total, err)
+	}
+
+	profile.Limits.MaxRecords--
+	rejected, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err == nil || !strings.Contains(err.Error(), "record count exceeds limit") || complete {
+		t.Fatalf("over-limit package inventory was accepted: complete=%v err=%v", complete, err)
+	}
+	if rejected.Schema.Name != "" {
+		t.Fatalf("over-limit package inventory returned a publishable artifact: %#v", rejected)
+	}
+
+	visited := 0
+	inventorySyntaxNodeTestHook = func() { visited++ }
+	t.Cleanup(func() { inventorySyntaxNodeTestHook = nil })
+	profile.Limits.MaxRecords = 16
+	if _, _, err := analyze(t.Context(), root, t.TempDir(), profile); err == nil {
+		t.Fatal("small record limit was accepted")
+	}
+	if visited == 0 || visited >= 100 {
+		t.Fatalf("record producer visited %d syntax nodes after reaching a limit of 16", visited)
+	}
+}
+
+func TestValidateAnalysisRejectsSourceRootIdentityMutation(t *testing.T) {
+	analysis := validIncompleteAnalysis()
+	analysis.Profile.SourceRootIdentity = stableID("source", "forged")
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "source root identity") {
+		t.Fatalf("forged source root identity was accepted: %v", err)
+	}
+}
+
+func TestValidateAnalysisRejectsUTF8FlagMutation(t *testing.T) {
+	root := copyFixture(t, "complete")
+	appendInvalidUTF8(t, filepath.Join(root, "ignored_windows.go"))
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("fixture analysis failed: complete=%v err=%v", complete, err)
+	}
+	for _, valid := range []bool{true, false} {
+		index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.ValidUTF8 == valid })
+		if index < 0 {
+			t.Fatalf("fixture has no validUtf8=%t file", valid)
+		}
+		mutated := analysis
+		mutated.Files = append([]FileRecord{}, analysis.Files...)
+		mutated.Files[index].ValidUTF8 = !valid
+		if err := validateAnalysis(mutated); err == nil || !strings.Contains(err.Error(), "content identity") {
+			t.Fatalf("validUtf8=%t mutation was accepted: %v", valid, err)
+		}
+	}
+}
+
+func TestValidateAnalysisRejectsStalePayloadDerivedRecordIDs(t *testing.T) {
+	complete, loaded, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !loaded {
+		t.Fatalf("build complete identity fixture: loaded=%v err=%v", loaded, err)
+	}
+	incomplete, loaded, err := analyze(t.Context(), copyFixture(t, "invalid"), t.TempDir(), testProfile())
+	if err != nil || loaded || len(incomplete.Diagnostics) == 0 {
+		t.Fatalf("build diagnostic identity fixture: loaded=%v diagnostics=%d err=%v",
+			loaded, len(incomplete.Diagnostics), err)
+	}
+	clone := func(value Analysis) Analysis {
+		data, marshalErr := json.Marshal(value)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var result Analysis
+		if unmarshalErr := json.Unmarshal(data, &result); unmarshalErr != nil {
+			t.Fatal(unmarshalErr)
+		}
+		return result
+	}
+	differentNodeID := func(value *Analysis, current string) string {
+		for _, node := range value.Nodes {
+			if node.ID != current {
+				return node.ID
+			}
+		}
+		t.Fatal("identity fixture has no alternate node")
+		return ""
+	}
+	tests := []struct {
+		name   string
+		kind   string
+		base   Analysis
+		mutate func(*Analysis)
+	}{
+		{"module", "module", complete, func(value *Analysis) {
+			value.Modules[0].Path += "/stale"
+		}},
+		{"package", "package", complete, func(value *Analysis) {
+			value.Packages[0].ImportPath += "/stale"
+		}},
+		{"file-content-and-hash", "file", complete, func(value *Analysis) {
+			data, decodeErr := base64.StdEncoding.DecodeString(value.Files[0].ContentBase64)
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			data = append(data, '\n')
+			value.Files[0].ContentBase64 = base64.StdEncoding.EncodeToString(data)
+			value.Files[0].SHA256 = hashBytes(data)
+			value.Files[0].Bytes = int64(len(data))
+			value.Files[0].ValidUTF8 = utf8.Valid(data)
+		}},
+		{"type", "type", complete, func(value *Analysis) {
+			value.Types[0].Canonical += "\x00stale"
+		}},
+		{"node", "node", complete, func(value *Analysis) {
+			value.Nodes[0].Kind += "Mutant"
+		}},
+		{"constant", "constant", complete, func(value *Analysis) {
+			value.Constants[0].Exact += "/1"
+		}},
+		{"scope", "scope", complete, func(value *Analysis) {
+			value.Scopes[0].Span.EndByte++
+		}},
+		{"selection", "selection", complete, func(value *Analysis) {
+			value.Selections[0].NodeID = differentNodeID(value, value.Selections[0].NodeID)
+		}},
+		{"call", "call", complete, func(value *Analysis) {
+			value.Calls[0].NodeID = differentNodeID(value, value.Calls[0].NodeID)
+		}},
+		{"method-set", "methodSet", complete, func(value *Analysis) {
+			value.MethodSets[0].Pointer = !value.MethodSets[0].Pointer
+		}},
+		{"instance", "instance", complete, func(value *Analysis) {
+			value.Instances[0].NodeID = differentNodeID(value, value.Instances[0].NodeID)
+		}},
+		{"embed", "embed", complete, func(value *Analysis) {
+			value.Embeds[0].Pattern += "/stale"
+		}},
+		{"generate", "generate", complete, func(value *Analysis) {
+			for _, node := range value.Nodes {
+				if node.FileID != value.GenerateDirectives[0].FileID {
+					value.GenerateDirectives[0].FileID = node.FileID
+					value.GenerateDirectives[0].Span = node.Span
+					return
+				}
+			}
+			t.Fatal("identity fixture has no alternate generated-directive file")
+		}},
+		{"dependency", "dependency", complete, func(value *Analysis) {
+			value.Dependencies[0].ImportPath += "/stale"
+		}},
+		{"feature", "feature", complete, func(value *Analysis) {
+			value.FeatureSites[0].Feature += "-stale"
+		}},
+		{"diagnostic", "diagnostic", incomplete, func(value *Analysis) {
+			value.Diagnostics[0].Message += " stale"
+		}},
+		{"diagnostic-category", "diagnostic", incomplete, func(value *Analysis) {
+			if value.Diagnostics[0].Category == "loader" {
+				value.Diagnostics[0].Category = "parser"
+			} else {
+				value.Diagnostics[0].Category = "loader"
+			}
+		}},
+		{"blocker", "blocker", complete, func(value *Analysis) {
+			value.Blockers[0].Message += " stale"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := clone(test.base)
+			test.mutate(&mutated)
+			err := validateAnalysis(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.kind+" record id") ||
+				!strings.Contains(err.Error(), "payload-derived identity") {
+				t.Fatalf("stale %s identity was accepted: %v", test.kind, err)
+			}
+		})
+	}
+}
+
+func TestSemanticProfileAndReplacementIdentitySeparatePackagesAndTypes(t *testing.T) {
+	analyzeTarget := func(goarch string) Analysis {
+		t.Helper()
+		profile := testProfile()
+		profile.GOOS = "linux"
+		profile.GOARCH = goarch
+		profile.ArchitectureFeatures = []string{}
+		analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile)
+		if err != nil || !complete {
+			t.Fatalf("analyze linux/%s: complete=%v err=%v blockers=%#v", goarch, complete, err, analysis.Blockers)
+		}
+		return analysis
+	}
+	findPackage := func(analysis Analysis, importPath string) PackageRecord {
+		t.Helper()
+		for _, pkg := range analysis.Packages {
+			if pkg.ImportPath == importPath && pkg.Variant == "ordinary" {
+				return pkg
+			}
+		}
+		t.Fatalf("package %q not found", importPath)
+		return PackageRecord{}
+	}
+	findType := func(analysis Analysis, canonical string) TypeRecord {
+		t.Helper()
+		var matches []TypeRecord
+		for _, record := range analysis.Types {
+			if record.Canonical == canonical {
+				matches = append(matches, record)
+			}
+		}
+		if len(matches) != 1 {
+			t.Fatalf("canonical type %q has %d records, want one cross-package record", canonical, len(matches))
+		}
+		return matches[0]
+	}
+
+	linux386 := analyzeTarget("386")
+	linuxAMD64 := analyzeTarget("amd64")
+	taggedProfile := testProfile()
+	taggedProfile.GOOS = "linux"
+	taggedProfile.GOARCH = "amd64"
+	taggedProfile.ArchitectureFeatures = []string{}
+	taggedProfile.BuildTags = append(taggedProfile.BuildTags, "identity_tag")
+	tagged, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), taggedProfile)
+	if err != nil || !complete {
+		t.Fatalf("analyze tagged profile: complete=%v err=%v blockers=%#v", complete, err, tagged.Blockers)
+	}
+	package386 := findPackage(linux386, "example.com/go2gsfixture")
+	packageAMD64 := findPackage(linuxAMD64, "example.com/go2gsfixture")
+	taggedPackage := findPackage(tagged, "example.com/go2gsfixture")
+	int386 := findType(linux386, "int")
+	intAMD64 := findType(linuxAMD64, "int")
+	taggedInt := findType(tagged, "int")
+	types386 := make(map[string]TypeRecord, len(linux386.Types))
+	for _, record := range linux386.Types {
+		types386[record.Canonical] = record
+	}
+	t.Run("semantic-profile-package", func(t *testing.T) {
+		if package386.ID == packageAMD64.ID {
+			t.Fatalf("package identity ignored semantic profile: %q", package386.ID)
+		}
+	})
+	t.Run("semantic-profile-type", func(t *testing.T) {
+		if int386.ID == intAMD64.ID {
+			t.Fatalf("type identity ignored target-dependent payload: %q", int386.ID)
+		}
+		var targetDependentCanonical string
+		for _, record := range linuxAMD64.Types {
+			other, ok := types386[record.Canonical]
+			if ok && (other.Size != record.Size || other.Align != record.Align) {
+				targetDependentCanonical = record.Canonical
+				if other.ID == record.ID {
+					t.Fatalf("target-dependent type %q reused id %q: 386=%d/%d amd64=%d/%d",
+						record.Canonical, record.ID, other.Size, other.Align, record.Size, record.Align)
+				}
+				break
+			}
+		}
+		if targetDependentCanonical == "" {
+			t.Fatal("fixture has no target-dependent type size/alignment witness")
+		}
+	})
+	t.Run("semantic-tag-profile", func(t *testing.T) {
+		if packageAMD64.ID == taggedPackage.ID {
+			t.Fatalf("package identity ignored build-tag profile: %q", packageAMD64.ID)
+		}
+		if intAMD64.ID == taggedInt.ID {
+			t.Fatalf("type identity ignored build-tag profile: %q", intAMD64.ID)
+		}
+	})
+
+	firstRoot := copyFixture(t, "replacement")
+	secondRoot := copyFixture(t, "replacement")
+	replacementPath := filepath.Join(secondRoot, "dep", "value.go")
+	if err := os.WriteFile(replacementPath, []byte("package replacement\n\nconst Value = 43\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, complete, err := analyze(t.Context(), firstRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("first replacement analysis: complete=%v err=%v blockers=%#v", complete, err, first.Blockers)
+	}
+	second, complete, err := analyze(t.Context(), secondRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("second replacement analysis: complete=%v err=%v blockers=%#v", complete, err, second.Blockers)
+	}
+	firstPackage := findPackage(first, "example.com/replacement")
+	secondPackage := findPackage(second, "example.com/replacement")
+	t.Run("local-replacement-package", func(t *testing.T) {
+		if firstPackage.ModuleID == secondPackage.ModuleID {
+			t.Fatalf("local replacement module identity ignored content: %q", firstPackage.ModuleID)
+		}
+		if firstPackage.ID == secondPackage.ID {
+			t.Fatalf("package identity ignored local replacement content: %q", firstPackage.ID)
+		}
+	})
+}
+
+func TestValidateAnalysisRejectsTypeIDFromAnotherSemanticProfile(t *testing.T) {
+	analysis := validIncompleteAnalysis()
+	analysis.Profile.GOOS = "linux"
+	analysis.Profile.GOARCH = "amd64"
+	record := TypeRecord{
+		Kind: "basic", Canonical: "int", Display: "int", TypeArgs: []string{}, Fields: []StructFieldRecord{},
+		Comparable: true, Size: 8, Align: 8,
+	}
+	record.ID = typeRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+	analysis.Types = []TypeRecord{record}
+	analysis.RecordCounts.Types = 1
+	analysis.RecordCounts.Total++
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("baseline semantic-profile type artifact is invalid: %v", err)
+	}
+	analysis.Profile.GOARCH = "386"
+	if err := validateAnalysis(analysis); err == nil ||
+		!strings.Contains(err.Error(), "type record id") ||
+		!strings.Contains(err.Error(), "payload-derived identity") {
+		t.Fatalf("type identity from another semantic profile was accepted: %v", err)
+	}
+}
+
+func TestValidateAnalysisRejectsTypeIDFromAnotherToolchainIdentity(t *testing.T) {
+	analysis := validIncompleteAnalysis()
+	record := TypeRecord{
+		Kind: "basic", Canonical: "int", Display: "int", TypeArgs: []string{}, Fields: []StructFieldRecord{},
+		Comparable: true, Size: 8, Align: 8,
+	}
+	record.ID = typeRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+	analysis.Types = []TypeRecord{record}
+	analysis.RecordCounts.Types = 1
+	analysis.RecordCounts.Total++
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("baseline toolchain-profile type artifact is invalid: %v", err)
+	}
+
+	analysis.Toolchain.ExecutableSHA256 = strings.Repeat("b", 64)
+	analysis.Toolchain.GOROOTIdentity = stableID("goroot",
+		analysis.Toolchain.ActualVersion+"\x00"+analysis.Toolchain.GOROOTVersion+"\x00"+
+			analysis.Toolchain.HelperSemanticVersion+"\x00"+analysis.Toolchain.ExecutableSHA256+"\x00"+
+			analysis.Toolchain.GOROOTVersionSHA256)
+	if err := validateAnalysis(analysis); err == nil ||
+		!strings.Contains(err.Error(), "type record id") ||
+		!strings.Contains(err.Error(), "payload-derived identity") {
+		t.Fatalf("type identity from another authoritative toolchain was accepted: %v", err)
+	}
+}
+
+func TestValidateAnalysisRejectsSemanticVersionProvenanceMutation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*Analysis)
+	}{
+		{"helper", func(analysis *Analysis) { analysis.Toolchain.HelperSemanticVersion = "1.1" }},
+		{"goroot", func(analysis *Analysis) { analysis.Toolchain.GOROOTVersion = "1.1" }},
+		{"prerelease", func(analysis *Analysis) {
+			analysis.Toolchain.ActualVersion = "1.0rc1"
+			analysis.Toolchain.HelperSemanticVersion = "1.0rc1"
+			analysis.Toolchain.GOROOTVersion = "1.0rc1"
+		}},
+		{"coordinated-version-forgery", func(analysis *Analysis) {
+			analysis.Toolchain.RequestedVersion = "1.1"
+			analysis.Toolchain.ActualVersion = "1.1"
+			analysis.Toolchain.HelperSemanticVersion = "1.1"
+			analysis.Toolchain.GOROOTVersion = "1.1"
+		}},
+		{"goexperiment", func(analysis *Analysis) { analysis.Profile.GOEXPERIMENT = "boringcrypto" }},
+		{"godebug", func(analysis *Analysis) { analysis.Profile.GODEBUG = map[string]string{"gotypesalias": "0"} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			analysis := validIncompleteAnalysis()
+			test.mutate(&analysis)
+			if err := validateAnalysis(analysis); err == nil {
+				t.Fatal("semantic provenance mutation was accepted")
+			}
+		})
+	}
+}
+
+func TestValidateAnalysisRequiresCompleteLoadedOwnershipGraph(t *testing.T) {
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("build complete artifact: complete=%v err=%v", complete, err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Analysis)
+		want   string
+	}{
+		{"modules", func(value *Analysis) {
+			value.Modules = []ModuleRecord{}
+			value.RecordCounts.Total -= value.RecordCounts.Modules
+			value.RecordCounts.Modules = 0
+		}, ""},
+		{"packages", func(value *Analysis) {
+			value.Packages = []PackageRecord{}
+			value.RecordCounts.Total -= value.RecordCounts.Packages
+			value.RecordCounts.Packages = 0
+		}, ""},
+		{"files", func(value *Analysis) {
+			value.Files = []FileRecord{}
+			value.RecordCounts.Total -= value.RecordCounts.Files
+			value.RecordCounts.Files = 0
+		}, ""},
+		{"main-module", func(value *Analysis) {
+			value.Modules = append([]ModuleRecord{}, value.Modules...)
+			for index := range value.Modules {
+				value.Modules[index].Main = false
+			}
+		}, "main module"},
+		{"compiled-ownership", func(value *Analysis) {
+			mainModules := map[string]bool{}
+			for _, module := range value.Modules {
+				if module.Main {
+					mainModules[module.ID] = true
+				}
+			}
+			value.Packages = append([]PackageRecord{}, value.Packages...)
+			for index := range value.Packages {
+				if mainModules[value.Packages[index].ModuleID] {
+					value.Packages[index].CompiledFileIDs = []string{}
+				}
+			}
+		}, "belongs to noncompiled file"},
+		{"typed-file-root", func(value *Analysis) {
+			for index := range value.Packages {
+				value.Packages[index].InitializationOrder = []InitializationRecord{}
+			}
+			value.RecordCounts.Total -= value.RecordCounts.Types + value.RecordCounts.Symbols +
+				value.RecordCounts.Nodes + value.RecordCounts.Constants + value.RecordCounts.Scopes +
+				value.RecordCounts.Selections + value.RecordCounts.Calls + value.RecordCounts.MethodSets +
+				value.RecordCounts.Instances + value.RecordCounts.FeatureSites
+			value.RecordCounts.Types = 0
+			value.RecordCounts.Symbols = 0
+			value.RecordCounts.Nodes = 0
+			value.RecordCounts.Constants = 0
+			value.RecordCounts.Scopes = 0
+			value.RecordCounts.Selections = 0
+			value.RecordCounts.Calls = 0
+			value.RecordCounts.MethodSets = 0
+			value.RecordCounts.Instances = 0
+			value.RecordCounts.FeatureSites = 0
+			value.Types = []TypeRecord{}
+			value.Symbols = []SymbolRecord{}
+			value.Nodes = []NodeRecord{}
+			value.Constants = []ConstantRecord{}
+			value.Scopes = []ScopeRecord{}
+			value.Selections = []SelectionRecord{}
+			value.Calls = []CallRecord{}
+			value.MethodSets = []MethodSetRecord{}
+			value.Instances = []InstanceRecord{}
+			value.FeatureSites = []FeatureSite{}
+		}, "*ast.File node"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := analysis
+			test.mutate(&mutated)
+			if err := validateAnalysis(mutated); err == nil ||
+				(test.want != "" && !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("invalid complete artifact was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateAnalysisRejectsInvalidFileRolesAndNodeTrees(t *testing.T) {
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("build complete validation fixture: complete=%v err=%v", complete, err)
+	}
+	clone := func(value Analysis) Analysis {
+		data, marshalErr := json.Marshal(value)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var result Analysis
+		if unmarshalErr := json.Unmarshal(data, &result); unmarshalErr != nil {
+			t.Fatal(unmarshalErr)
+		}
+		return result
+	}
+	nonRootNodes := func(value *Analysis) []int {
+		var indexes []int
+		for index, node := range value.Nodes {
+			if node.Kind != "*ast.File" {
+				indexes = append(indexes, index)
+			}
+		}
+		return indexes
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Analysis)
+		want   string
+	}{
+		{"unknown-file-role", func(value *Analysis) {
+			value.Files[0].Role = "future"
+		}, "unsupported schema-v1 role"},
+		{"native-role-flag", func(value *Analysis) {
+			value.Files[0].Native = !value.Files[0].Native
+		}, "disagrees with native/embed flags"},
+		{"embed-role-flag", func(value *Analysis) {
+			value.Files[0].Embed = !value.Files[0].Embed
+		}, "disagrees with native/embed flags"},
+		{"tree-on-noncompiled-file", func(value *Analysis) {
+			for packageIndex := range value.Packages {
+				if len(value.Packages[packageIndex].CompiledFileIDs) < 2 {
+					continue
+				}
+				fileID := value.Packages[packageIndex].CompiledFileIDs[0]
+				value.Packages[packageIndex].CompiledFileIDs = value.Packages[packageIndex].CompiledFileIDs[1:]
+				for fileIndex := range value.Files {
+					if value.Files[fileIndex].ID == fileID {
+						value.Files[fileIndex].Role = "ignored"
+						value.Files[fileIndex].Native = false
+						value.Files[fileIndex].Embed = false
+						return
+					}
+				}
+			}
+			t.Fatal("validation fixture has no package with multiple compiled files")
+		}, "belongs to noncompiled file"},
+		{"detached-parentless-node", func(value *Analysis) {
+			indexes := nonRootNodes(value)
+			if len(indexes) == 0 {
+				t.Fatal("validation fixture has no non-root node")
+			}
+			value.Nodes[indexes[0]].ParentID = ""
+		}, "detached parentless non-*ast.File node"},
+		{"self-cycle", func(value *Analysis) {
+			indexes := nonRootNodes(value)
+			if len(indexes) == 0 {
+				t.Fatal("validation fixture has no non-root node")
+			}
+			value.Nodes[indexes[0]].ParentID = value.Nodes[indexes[0]].ID
+		}, "self-cycle"},
+		{"multi-node-cycle", func(value *Analysis) {
+			indexes := nonRootNodes(value)
+			for _, first := range indexes {
+				for _, second := range indexes {
+					if first != second && value.Nodes[first].FileID == value.Nodes[second].FileID {
+						value.Nodes[first].ParentID = value.Nodes[second].ID
+						value.Nodes[second].ParentID = value.Nodes[first].ID
+						return
+					}
+				}
+			}
+			t.Fatal("validation fixture has no two non-root nodes in one file")
+		}, "parent cycle"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := clone(analysis)
+			test.mutate(&mutated)
+			err := validateAnalysis(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("schema-v1 mutation was accepted, want %q: %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestValidateAnalysisAllowsMinimalLoadedEmptyPackage(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/empty\n\ngo 1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "empty.go"), []byte("package empty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("minimal empty package did not load: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("minimal empty package artifact was rejected: %v", err)
+	}
+}
+
+func TestScopeIndexReturnsInnermostContainingScope(t *testing.T) {
+	index := newScopeIndex([]scopeRange{
+		{start: 1, end: 100, id: "outer"},
+		{start: 10, end: 90, id: "middle"},
+		{start: 20, end: 30, id: "inner"},
+		{start: 25, end: 60, id: "overlap"},
+		{start: 110, end: 120, id: "separate"},
+	})
+	for _, test := range []struct {
+		pos  token.Pos
+		want string
+	}{
+		{0, ""},
+		{1, "outer"},
+		{15, "middle"},
+		{20, "inner"},
+		{25, "inner"},
+		{45, "overlap"},
+		{95, "outer"},
+		{110, "separate"},
+		{120, "separate"},
+		{121, ""},
+	} {
+		if got := index.lookup(test.pos, nil).id; got != test.want {
+			t.Errorf("scope at %d = %q, want %q", test.pos, got, test.want)
+		}
+	}
+}
+
+func TestScopeIndexLookupWorkIsSublinear(t *testing.T) {
+	const count = 16_384
+	ranges := make([]scopeRange, count)
+	for index := range ranges {
+		start := token.Pos(index*4 + 1)
+		ranges[index] = scopeRange{start: start, end: start + 1, id: strconv.Itoa(index)}
+	}
+	index := newScopeIndex(ranges)
+	steps := 0
+	for expected, candidate := range ranges {
+		if got := index.lookup(candidate.start, &steps).id; got != strconv.Itoa(expected) {
+			t.Fatalf("scope lookup %d returned %q", expected, got)
+		}
+	}
+	if steps >= count*40 {
+		t.Fatalf("scope lookup performed %d indexed comparisons for %d scopes", steps, count)
+	}
+}
+
+func TestScopeParentValidationCompletesLargeChainWithinLinearBudget(t *testing.T) {
+	const count = 100_000
+	scopes := make([]ScopeRecord, count)
+	byID := make(map[string]ScopeRecord, count)
+	for index := range scopes {
+		scopes[index] = ScopeRecord{ID: strconv.Itoa(index), PackageID: "package:test"}
+		if index > 0 {
+			scopes[index].ParentID = strconv.Itoa(index - 1)
+		}
+		byID[scopes[index].ID] = scopes[index]
+	}
+	start := time.Now()
+	if err := validateScopeParents(scopes, byID); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("scope parent validation took %s for %d scopes; indexed validation must remain near-linear", elapsed, count)
+	}
+}
+
+func TestScopeParentValidationRejectsInvalidGraphs(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		scopes []ScopeRecord
+		want   string
+	}{
+		{
+			name:   "self-cycle",
+			scopes: []ScopeRecord{{ID: "a", ParentID: "a", PackageID: "package:one"}},
+			want:   "cycle",
+		},
+		{
+			name: "two-node-cycle",
+			scopes: []ScopeRecord{
+				{ID: "a", ParentID: "b", PackageID: "package:one"},
+				{ID: "b", ParentID: "a", PackageID: "package:one"},
+			},
+			want: "cycle",
+		},
+		{
+			name: "disconnected-longer-cycle",
+			scopes: []ScopeRecord{
+				{ID: "root", PackageID: "package:one"},
+				{ID: "child", ParentID: "root", PackageID: "package:one"},
+				{ID: "a", ParentID: "b", PackageID: "package:one"},
+				{ID: "b", ParentID: "c", PackageID: "package:one"},
+				{ID: "c", ParentID: "a", PackageID: "package:one"},
+			},
+			want: "cycle",
+		},
+		{
+			name:   "missing-parent",
+			scopes: []ScopeRecord{{ID: "a", ParentID: "missing", PackageID: "package:one"}},
+			want:   "ownership",
+		},
+		{
+			name: "cross-package-parent",
+			scopes: []ScopeRecord{
+				{ID: "a", ParentID: "b", PackageID: "package:one"},
+				{ID: "b", PackageID: "package:two"},
+			},
+			want: "ownership",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			byID := make(map[string]ScopeRecord, len(test.scopes))
+			for _, scope := range test.scopes {
+				byID[scope.ID] = scope
+			}
+			if err := validateScopeParents(test.scopes, byID); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("invalid scope graph was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestScopeLabelsRequireConsistentSymbolRelationship(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod": "module example.com/labels\n\ngo 1.27.0\n",
+		"a/a.go": `package a
+func F() {
+	value := 0
+First:
+	for value < 1 { value++; break First }
+	_ = func() { Nested: for { break Nested } }
+}
+`,
+		"b/b.go": `package b
+func F() { value := 0; Second: for value < 1 { value++; break Second } }
+`,
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("label fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("analyzer emitted inconsistent label relationships: %v", err)
+	}
+	symbols := map[string]SymbolRecord{}
+	for _, symbol := range analysis.Symbols {
+		symbols[symbol.ID] = symbol
+	}
+	firstScope, secondScope := -1, -1
+	nonLabelID := ""
+	for index, scope := range analysis.Scopes {
+		if len(scope.Labels) == 0 {
+			continue
+		}
+		for _, symbolID := range scope.SymbolIDs {
+			if symbols[symbolID].Kind != "label" {
+				firstScope = index
+				nonLabelID = symbolID
+				break
+			}
+		}
+		if firstScope >= 0 {
+			break
+		}
+	}
+	if firstScope >= 0 {
+		for index, scope := range analysis.Scopes {
+			if len(scope.Labels) > 0 && scope.PackageID != analysis.Scopes[firstScope].PackageID {
+				secondScope = index
+				break
+			}
+		}
+	}
+	if firstScope < 0 || secondScope < 0 {
+		t.Fatalf("fixture did not produce a mixed-symbol label scope and another package: scopes=%#v symbols=%#v",
+			analysis.Scopes, analysis.Symbols)
+	}
+	labelID := analysis.Scopes[firstScope].Labels[0]
+	if nonLabelID == "" {
+		t.Fatal("fixture mixed-symbol label scope has no non-label symbol")
+	}
+	crossPackageLabelID := analysis.Scopes[secondScope].Labels[0]
+	tests := []struct {
+		name   string
+		mutate func(*ScopeRecord)
+	}{
+		{"dangling", func(scope *ScopeRecord) { scope.Labels[0] = "symbol:missing" }},
+		{"non-label", func(scope *ScopeRecord) { scope.Labels[0] = nonLabelID }},
+		{"unlisted", func(scope *ScopeRecord) {
+			scope.SymbolIDs = slices.DeleteFunc(scope.SymbolIDs, func(id string) bool { return id == labelID })
+		}},
+		{"duplicate-label", func(scope *ScopeRecord) { scope.Labels = append(scope.Labels, labelID) }},
+		{"duplicate-symbol", func(scope *ScopeRecord) { scope.SymbolIDs = append(scope.SymbolIDs, labelID) }},
+		{"missing-label", func(scope *ScopeRecord) { scope.Labels = []string{} }},
+		{"orphan-label", func(scope *ScopeRecord) {
+			scope.SymbolIDs = slices.DeleteFunc(scope.SymbolIDs, func(id string) bool { return id == labelID })
+			scope.Labels = []string{}
+		}},
+		{"cross-package", func(scope *ScopeRecord) {
+			scope.SymbolIDs = append(scope.SymbolIDs, crossPackageLabelID)
+			scope.Labels[0] = crossPackageLabelID
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := analysis
+			mutated.Scopes = append([]ScopeRecord{}, analysis.Scopes...)
+			scope := &mutated.Scopes[firstScope]
+			scope.SymbolIDs = append([]string{}, scope.SymbolIDs...)
+			scope.Labels = append([]string{}, scope.Labels...)
+			test.mutate(scope)
+			if err := validateAnalysis(mutated); err == nil {
+				t.Fatal("inconsistent scope label relationship was accepted")
+			}
+		})
+	}
+}
+
+func TestModuleRecordCountsRejectAddedAndRemovedRecords(t *testing.T) {
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("fixture analysis failed: complete=%v err=%v", complete, err)
+	}
+	added := analysis
+	addedModule := ModuleRecord{Path: "example.com/added"}
+	addedModule.ID = moduleRecordID(addedModule)
+	added.Modules = append(append([]ModuleRecord{}, analysis.Modules...), addedModule)
+	if err := validateAnalysis(added); err == nil || !strings.Contains(err.Error(), "recordCounts") {
+		t.Fatalf("adding a module without updating counts was accepted: %v", err)
+	}
+	removed := analysis
+	removed.Modules = append(append([]ModuleRecord{}, analysis.Modules...), addedModule)
+	removed.RecordCounts.Modules++
+	removed.RecordCounts.Total++
+	if err := validateAnalysis(removed); err != nil {
+		t.Fatalf("baseline with unreferenced module is invalid: %v", err)
+	}
+	removed.Modules = removed.Modules[:len(removed.Modules)-1]
+	if err := validateAnalysis(removed); err == nil || !strings.Contains(err.Error(), "recordCounts") {
+		t.Fatalf("removing a module without updating counts was accepted: %v", err)
+	}
+}
+
+func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete {
+		t.Fatal("fixture inventory incomplete")
+	}
+	valid, err := marshalCanonical(analysis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(map[string]any) bool
+	}{
+		{"struct-field-type", func(root map[string]any) bool {
+			for _, item := range root["types"].([]any) {
+				fields := item.(map[string]any)["fields"].([]any)
+				if len(fields) > 0 {
+					delete(fields[0].(map[string]any), "typeId")
+					return true
+				}
+			}
+			return false
+		}},
+		{"partial-node-span", func(root map[string]any) bool {
+			nodes := root["nodes"].([]any)
+			nodes[0].(map[string]any)["span"] = map[string]any{"path": "source://main.go"}
+			return true
+		}},
+		{"init-function-location", func(root map[string]any) bool {
+			for _, item := range root["packages"].([]any) {
+				for _, raw := range item.(map[string]any)["initializationOrder"].([]any) {
+					initialization := raw.(map[string]any)
+					if initialization["kind"] == "init-function" {
+						delete(initialization, "fileId")
+						delete(initialization, "nodeId")
+						return true
+					}
+				}
+			}
+			return false
+		}},
+		{"struct-field-export-metadata", func(root map[string]any) bool {
+			for _, item := range root["types"].([]any) {
+				fields := item.(map[string]any)["fields"].([]any)
+				if len(fields) > 0 {
+					delete(fields[0].(map[string]any), "exported")
+					return true
+				}
+			}
+			return false
+		}},
+		{"declared-constant-symbol-link", func(root map[string]any) bool {
+			for _, item := range root["constants"].([]any) {
+				constant := item.(map[string]any)
+				if _, ok := constant["symbolId"]; ok {
+					delete(constant, "symbolId")
+					return true
+				}
+			}
+			return false
+		}},
+		{"node-span-outside-file", func(root map[string]any) bool {
+			root["nodes"].([]any)[0].(map[string]any)["span"].(map[string]any)["endByte"] = 1_000_000_000
+			return true
+		}},
+		{"node-span-wrong-file", func(root map[string]any) bool {
+			node := root["nodes"].([]any)[0].(map[string]any)
+			fileID := node["fileId"].(string)
+			current := node["span"].(map[string]any)["path"].(string)
+			for _, raw := range root["files"].([]any) {
+				file := raw.(map[string]any)
+				if file["id"] != fileID && strings.HasPrefix(file["path"].(string), "source://") &&
+					file["path"].(string) != current {
+					node["span"].(map[string]any)["path"] = file["path"]
+					return true
+				}
+			}
+			return false
+		}},
+		{"file-package-owner", func(root map[string]any) bool {
+			file := root["files"].([]any)[0].(map[string]any)
+			owner := file["packageId"].(string)
+			for _, raw := range root["packages"].([]any) {
+				pkg := raw.(map[string]any)
+				if pkg["id"].(string) != owner {
+					file["packageId"] = pkg["id"]
+					return true
+				}
+			}
+			return false
+		}},
+		{"absolute-scheme-payload", func(root map[string]any) bool {
+			root["nodes"].([]any)[0].(map[string]any)["span"].(map[string]any)["path"] = "source:///etc/passwd"
+			return true
+		}},
+		{"raw-line-coordinate", func(root map[string]any) bool {
+			span := root["nodes"].([]any)[0].(map[string]any)["span"].(map[string]any)
+			span["startLine"] = span["startLine"].(float64) + 1
+			return true
+		}},
+		{"line-directive-display-path", func(root map[string]any) bool {
+			span := directiveSpan(root)
+			if span == nil {
+				return false
+			}
+			span["displayPath"] = "line://forged.go"
+			return true
+		}},
+		{"line-directive-display-line", func(root map[string]any) bool {
+			span := directiveSpan(root)
+			if span == nil {
+				return false
+			}
+			span["displayLine"] = span["displayLine"].(float64) + 1
+			return true
+		}},
+		{"line-directive-display-column", func(root map[string]any) bool {
+			span := directiveSpan(root)
+			if span == nil {
+				return false
+			}
+			span["displayColumn"] = span["displayColumn"].(float64) + 1
+			return true
+		}},
+		{"module-count-add", func(root map[string]any) bool {
+			root["modules"] = append(root["modules"].([]any), map[string]any{
+				"id": "module:added", "path": "example.com/added", "main": false,
+			})
+			return true
+		}},
+		{"module-count-remove", func(root map[string]any) bool {
+			modules := root["modules"].([]any)
+			if len(modules) == 0 {
+				return false
+			}
+			removedID := modules[0].(map[string]any)["id"]
+			root["modules"] = modules[1:]
+			for _, raw := range root["packages"].([]any) {
+				pkg := raw.(map[string]any)
+				if pkg["moduleId"] == removedID {
+					delete(pkg, "moduleId")
+				}
+			}
+			for _, raw := range root["modules"].([]any) {
+				module := raw.(map[string]any)
+				if module["replacementId"] == removedID {
+					delete(module, "replacementId")
+				}
+			}
+			return true
+		}},
+		{"initialization-package-owner", func(root map[string]any) bool {
+			files := root["files"].([]any)
+			for _, packageValue := range root["packages"].([]any) {
+				pkg := packageValue.(map[string]any)
+				for _, raw := range pkg["initializationOrder"].([]any) {
+					initialization := raw.(map[string]any)
+					if initialization["kind"] != "init-function" {
+						continue
+					}
+					for _, fileValue := range files {
+						file := fileValue.(map[string]any)
+						if file["packageId"] != pkg["id"] {
+							initialization["fileId"] = file["id"]
+							return true
+						}
+					}
+				}
+			}
+			return false
+		}},
+		{"package-lists-foreign-file", func(root map[string]any) bool {
+			packages := root["packages"].([]any)
+			for _, leftValue := range packages {
+				left := leftValue.(map[string]any)
+				leftFiles := left["fileIds"].([]any)
+				if len(leftFiles) == 0 {
+					continue
+				}
+				for _, rightValue := range packages {
+					right := rightValue.(map[string]any)
+					rightFiles := right["fileIds"].([]any)
+					if right["id"] != left["id"] && len(rightFiles) > 0 {
+						left["fileIds"] = append(leftFiles, rightFiles[0])
+						return true
+					}
+				}
+			}
+			return false
+		}},
+		{"complete-with-incomplete-package", func(root map[string]any) bool {
+			root["packages"].([]any)[0].(map[string]any)["inventoryComplete"] = false
+			return true
+		}},
+		{"module-mode-invalid", func(root map[string]any) bool {
+			root["profile"].(map[string]any)["moduleMode"] = "mod"
+			return true
+		}},
+		{"module-mode-empty", func(root map[string]any) bool {
+			root["profile"].(map[string]any)["moduleMode"] = ""
+			return true
+		}},
+		{"module-mode-vendor-mismatch", func(root map[string]any) bool {
+			profile := root["profile"].(map[string]any)
+			profile["moduleMode"] = "readonly"
+			profile["vendorMode"] = true
+			return true
+		}},
+		{"complete-toolchain-version-mismatch", func(root map[string]any) bool {
+			root["toolchain"].(map[string]any)["actualVersion"] = "different"
+			return true
+		}},
+		{"manifest-absolute-path", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = "/etc/passwd"
+			return true
+		}},
+		{"manifest-traversal-path", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = "source://../go.mod"
+			return true
+		}},
+		{"manifest-drive-path", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = "source://C:/go.mod"
+			return true
+		}},
+		{"manifest-unc-path", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = `source://server\share`
+			return true
+		}},
+		{"manifest-scheme-abuse", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = "unknown://go.mod"
+			return true
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var root map[string]any
+			if err := json.Unmarshal(valid, &root); err != nil {
+				t.Fatal(err)
+			}
+			if !test.mutate(root) {
+				t.Fatal("fixture did not contain target nested record")
+			}
+			data, err := json.Marshal(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "analysis.json")
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err = runValidate([]string{"--analysis", path})
+			var exitErr *exitError
+			if !errors.As(err, &exitErr) || exitErr.code != 2 {
+				t.Fatalf("malformed nested artifact should exit 2, got %v", err)
+			}
+		})
+	}
+}
+
+func TestPortableLocationsRejectEscapesAndMalformedPaths(t *testing.T) {
+	for _, value := range []string{
+		"source://", "source://.", "source://../escape", "source://a/../escape",
+		"source:///etc/passwd", `source://C:/Windows/system.ini`, `source://server\share`,
+		"unknown://file.go",
+	} {
+		if validPortableLocation(value) {
+			t.Errorf("unsafe portable location accepted: %q", value)
+		}
+	}
+	for _, value := range []string{"source://dir/file.go", "goroot://src/fmt/print.go", "module://example.com/m@v1.0.0/file.go"} {
+		if !validPortableLocation(value) {
+			t.Errorf("valid portable location rejected: %q", value)
+		}
+	}
+}
+
+func TestGeneratedFileUsesGoPlacementRules(t *testing.T) {
+	parse := func(source string) *ast.File {
+		t.Helper()
+		file, err := parser.ParseFile(token.NewFileSet(), "generated.go", source, parser.ParseComments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return file
+	}
+	if !generatedFile(parse("// Code generated by fixture. DO NOT EDIT.\npackage fixture\n")) {
+		t.Fatal("valid generated marker was not recognized")
+	}
+	for _, source := range []string{
+		"package fixture\n// Code generated by fixture. DO NOT EDIT.\n",
+		"// mentions Code generated but omits the required suffix\npackage fixture\n",
+	} {
+		if generatedFile(parse(source)) {
+			t.Fatalf("misplaced or malformed generated marker accepted: %q", source)
+		}
+	}
+}
+
+func TestEmbedInventoryMatchesGoRuntime(t *testing.T) {
+	root := copyFixture(t, "complete")
+	goExecutable := filepath.Join(runtime.GOROOT(), "bin", "go")
+	env, err := sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), filepath.Dir(goExecutable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runProcess(t.Context(), 60*time.Second, 1<<20, root, goExecutable, []string{"test", "."}, env)
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("runtime embed fixture failed: err=%v result=%#v", err, result)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("embed inventory failed: complete=%v err=%v", complete, err)
+	}
+	assertEmbedMatches(t, analysis)
+	for _, test := range []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		{"assets/*", "other/file.txt", false},
+		{"[", "assets/visible.txt", false},
+		{"assets/sub", "assets/sub/.nestedhidden.txt", false},
+		{"all:assets/sub", "assets/sub/.nestedhidden.txt", true},
+	} {
+		if got := embedPatternMatches(test.pattern, test.path); got != test.want {
+			t.Errorf("embedPatternMatches(%q, %q)=%v, want %v", test.pattern, test.path, got, test.want)
+		}
+	}
+}
+
+func TestLocalReplacementInventoryIsRootIndependent(t *testing.T) {
+	firstRoot := copyFixture(t, "replacement")
+	secondRoot := filepath.Join(t.TempDir(), "other-root")
+	copyTree(t, firstRoot, secondRoot)
+	first, complete, err := analyze(t.Context(), firstRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("first replacement inventory failed: complete=%v err=%v", complete, err)
+	}
+	second, complete, err := analyze(t.Context(), secondRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("second replacement inventory failed: complete=%v err=%v", complete, err)
+	}
+	left, _ := marshalCanonical(first)
+	right, _ := marshalCanonical(second)
+	if string(left) != string(right) {
+		t.Fatalf("local replacement inventory differs by root near: %s", firstDifference(string(left), string(right)))
+	}
+	if bytes.Contains(left, []byte(firstRoot)) || bytes.Contains(left, []byte(secondRoot)) {
+		t.Fatal("local replacement artifact contains an absolute checkout root")
+	}
+	if !slices.ContainsFunc(first.Modules, func(module ModuleRecord) bool {
+		return module.Path == "example.com/replacement" && module.LocalContentSHA256 != ""
+	}) {
+		t.Fatalf("portable local replacement identity missing: %#v", first.Modules)
+	}
+	for name, absolute := range map[string]bool{"relative": false, "absolute": true} {
+		t.Run("operational-"+name, func(t *testing.T) {
+			root := copyFixture(t, "replacement")
+			if absolute {
+				modPath := filepath.Join(root, "go.mod")
+				data, err := os.ReadFile(modPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data = bytes.Replace(data, []byte("./dep"), []byte(filepath.ToSlash(filepath.Join(root, "dep"))), 1)
+				if err := os.WriteFile(modPath, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out := t.TempDir()
+			work := filepath.Join(out, "work")
+			if err := os.Mkdir(work, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			mirror, err := createSourceMirror(root, out, work, testProfile().Limits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			operational, err := os.ReadFile(filepath.Join(mirror.root, "go.mod"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(operational, []byte(root)) ||
+				!bytes.Contains(operational, []byte(filepath.ToSlash(filepath.Join(mirror.root, "dep")))) {
+				t.Fatalf("%s in-tree replacement was not rebound to mirror: %s", name, operational)
+			}
+			analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+			if err != nil || !complete {
+				t.Fatalf("%s in-tree replacement failed: complete=%v err=%v blockers=%#v", name, complete, err, analysis.Blockers)
+			}
+		})
+	}
+	for _, root := range []string{firstRoot, secondRoot} {
+		parent := filepath.Dir(root)
+		dependency := filepath.Join(parent, "dep-external")
+		if err := os.Rename(filepath.Join(root, "dep"), dependency); err != nil {
+			t.Fatal(err)
+		}
+		modPath := filepath.Join(root, "go.mod")
+		data, err := os.ReadFile(modPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = bytes.Replace(data, []byte("=> ./dep"), []byte("=> ../dep-external"), 1)
+		if err := os.WriteFile(modPath, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	externalFirst, complete, err := analyze(t.Context(), firstRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("external replacement inventory failed: complete=%v err=%v blockers=%#v", complete, err, externalFirst.Blockers)
+	}
+	externalSecond, complete, err := analyze(t.Context(), secondRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("second external replacement inventory failed: complete=%v err=%v", complete, err)
+	}
+	externalLeft, _ := marshalCanonical(externalFirst)
+	externalRight, _ := marshalCanonical(externalSecond)
+	if !bytes.Equal(externalLeft, externalRight) || bytes.Contains(externalLeft, []byte(".go2gs-work-")) {
+		t.Fatalf("external replacement mirror affected deterministic output near: %s", firstDifference(string(externalLeft), string(externalRight)))
+	}
+	profile := testProfile()
+	profile.Limits.MaxRecords = first.RecordCounts.Total - first.RecordCounts.Modules
+	if _, _, err := analyze(t.Context(), firstRoot, t.TempDir(), profile); err == nil ||
+		!strings.Contains(err.Error(), "record count") {
+		t.Fatalf("module records were not included in MaxRecords enforcement: %v", err)
+	}
+}
+
+func TestOperationalMirrorMakesOnlyRewrittenGoModOwnerWritable(t *testing.T) {
+	root := copyFixture(t, "replacement")
+	goMod := filepath.Join(root, "go.mod")
+	other := filepath.Join(root, "main.go")
+	if err := os.Chmod(goMod, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(other, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(t.TempDir(), "work")
+	if err := os.Mkdir(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mirror, err := createSourceMirror(root, t.TempDir(), work, testProfile().Limits)
+	if err != nil {
+		t.Fatalf("read-only source go.mod could not be rewritten operationally: %v", err)
+	}
+	assertMode := func(path string, wantWrite bool) {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotWrite := info.Mode().Perm()&0o200 != 0; gotWrite != wantWrite {
+			t.Fatalf("%s owner-writable = %v, want %v (mode %o)", path, gotWrite, wantWrite, info.Mode().Perm())
+		}
+	}
+	assertMode(goMod, false)
+	assertMode(other, false)
+	assertMode(filepath.Join(mirror.root, "go.mod"), true)
+	assertMode(filepath.Join(mirror.root, "main.go"), false)
+}
+
+func TestSourceOutputRootRelationships(t *testing.T) {
+	parent := t.TempDir()
+	source := filepath.Join(parent, "source")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "go.mod"), []byte("module example.com/roots\n\ngo 1.27.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, out := range map[string]string{
+		"equal":    source,
+		"ancestor": parent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateOutputSourceRoots(source, out); err == nil {
+				t.Fatal("invalid source/output relationship was accepted")
+			}
+		})
+	}
+	nested := filepath.Join(source, ".artifacts")
+	if err := validateOutputSourceRoots(source, nested); err != nil {
+		t.Fatalf("nested output was rejected: %v", err)
+	}
+	disjoint := t.TempDir()
+	if err := validateOutputSourceRoots(source, disjoint); err != nil {
+		t.Fatalf("disjoint output was rejected: %v", err)
+	}
+	if err := os.Mkdir(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mirror, err := createSourceMirror(source, nested, t.TempDir(), testProfile().Limits)
+	if err != nil {
+		t.Fatalf("nested output mirror failed: %v", err)
+	}
+	if _, ok := mirror.trees[0].files[filepath.Join(mirror.trees[0].sourceRoot, "go.mod")]; !ok {
+		t.Fatal("nested output exclusion dropped unrelated source files")
+	}
+	if _, err := createSourceMirror(source, parent, t.TempDir(), testProfile().Limits); err == nil {
+		t.Fatal("mirror accepted output ancestor of source")
+	}
+	if runtime.GOOS == "darwin" {
+		aliasSource, err := os.MkdirTemp("/tmp", "go2gs-root-alias-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(aliasSource) })
+		resolvedSource, err := secureRoot(aliasSource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		aliasOutput := filepath.Join(aliasSource, ".artifacts")
+		if normalized := normalizeSystemPathAliases(aliasOutput); normalized != filepath.Join(resolvedSource, ".artifacts") {
+			t.Fatalf("Darwin /tmp alias normalized to %q", normalized)
+		}
+		if err := validateOutputSourceRoots(resolvedSource, aliasOutput); err != nil {
+			t.Fatalf("nested output through Darwin /tmp alias was rejected: %v", err)
+		}
+	}
+}
+
+func TestExternalReplacementCgoOnlyPackageUsesMirrorOverlay(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
+	}
+	root, dependency := externalReplacementFixture(t)
+	if err := os.Remove(filepath.Join(dependency, "value.go")); err != nil {
+		t.Fatal(err)
+	}
+	source := "package replacement\n\n/* int replacement_value = 42; */\nimport \"C\"\n\nconst Value = 42\n"
+	if err := os.WriteFile(filepath.Join(dependency, "value_cgo.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependency, "native.c"), []byte("int replacement_native = 42;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainSource := "package replacementroot\n\nimport _ \"example.com/replacement\"\n\nvar Value = 42\n"
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(mainSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "cgo") ||
+		!hasBlockerCategory(analysis, "native") {
+		t.Fatalf("CGo-only replacement did not fail closed for native migration: blockers=%#v diagnostics=%#v", analysis.Blockers, analysis.Diagnostics)
+	}
+	if hasBlockerCategory(analysis, "package-load") || hasBlockerCategory(analysis, "loader") {
+		t.Fatalf("CGo-only replacement caused a metadata loader blocker: blockers=%#v diagnostics=%#v", analysis.Blockers, analysis.Diagnostics)
+	}
+	if !slices.ContainsFunc(analysis.Packages, func(pkg PackageRecord) bool {
+		return pkg.ImportPath == "example.com/replacement" && pkg.Variant == "ordinary"
+	}) {
+		t.Fatalf("CGo-only external replacement package was lost: %#v", analysis.Packages)
+	}
+	if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+		return file.Path == "module://example.com/replacement@local/value_cgo.go" && file.Role == "active"
+	}) {
+		t.Fatalf("CGo-only external replacement source was not captured: %#v", analysis.Files)
+	}
+}
+
+func TestSourceCoordinateCountsBytes(t *testing.T) {
+	positions, err := newSourcePositionMap("source://main.go", []byte("é\nx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _, _, _, _, _ := positions.span(len("é"), len("é"))
+	if raw.Line != 1 || raw.Column != 3 {
+		t.Fatalf("UTF-8 byte coordinate mismatch: line=%d column=%d", raw.Line, raw.Column)
+	}
+}
+
+func TestSourcePositionMapHandlesLineDirectiveGrammar(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    string
+		marker    string
+		path      string
+		line      int
+		column    int
+		directive bool
+	}{
+		{
+			name: "line-crlf", source: "package p\r\n//line logical/generated.go:40\r\nvar X int\r\n",
+			marker: "var X", path: "line://dir/logical/generated.go", line: 40, column: 0, directive: true,
+		},
+		{
+			name: "block-column", source: "package p\nvar _ = /*line block.go:7:9*/ 1\n",
+			marker: " 1", path: "line://dir/block.go", line: 7, column: 9, directive: true,
+		},
+		{
+			name: "default", source: "package p\nvar X int\n",
+			marker: "var X", path: "source://dir/main.go", line: 2, column: 1, directive: false,
+		},
+		{
+			name: "module-relative", source: "package p\n//line logical/generated.go:12\nvar X int\n",
+			marker: "var X", path: "line://dir/logical/generated.go", line: 12, column: 0, directive: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			portable := "source://dir/main.go"
+			if test.name == "module-relative" {
+				portable = "module://example.com/replacement@local/dir/main.go"
+			}
+			positions, err := newSourcePositionMap(portable, []byte(test.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			offset := strings.Index(test.source, test.marker)
+			if offset < 0 {
+				t.Fatal("marker not found")
+			}
+			_, _, path, line, column, directive := positions.span(offset, offset)
+			if path != test.path || line != test.line || column != test.column || directive != test.directive {
+				t.Fatalf("display position = %s:%d:%d directive=%v", path, line, column, directive)
+			}
+		})
+	}
+}
+
+func TestArchitectureFeatureTagsMatchGoCommand(t *testing.T) {
+	tests := []struct {
+		name, goos, goarch string
+		features           []string
+		tag                string
+		selected           bool
+	}{
+		{"amd64-cumulative", "linux", "amd64", []string{"v3"}, "amd64.v2", true},
+		{"amd64-future", "linux", "amd64", []string{"v3"}, "amd64.v4", false},
+		{"arm-cumulative", "linux", "arm", []string{"7"}, "arm.6", true},
+		{"arm64-v9-correspondence", "linux", "arm64", []string{"v9.1"}, "arm64.v8.6", true},
+		{"arm64-too-new", "linux", "arm64", []string{"v9.1"}, "arm64.v8.7", false},
+		{"ppc64-cumulative", "linux", "ppc64le", []string{"power10"}, "ppc64le.power9", true},
+		{"riscv64-cumulative", "linux", "riscv64", []string{"rva23u64"}, "riscv64.rva22u64", true},
+		{"386-exact", "linux", "386", []string{"softfloat"}, "386.sse2", false},
+		// Go 1.27.1 accepts legacy GOWASM values but always enables both legacy features.
+		{"wasm-default-satconv", "js", "wasm", nil, "wasm.satconv", true},
+		{"wasm-default-signext", "js", "wasm", nil, "wasm.signext", true},
+		{"wasm-satconv-included", "js", "wasm", []string{"satconv"}, "wasm.satconv", true},
+		{"wasm-satconv-retains-signext", "js", "wasm", []string{"satconv"}, "wasm.signext", true},
+		{"wasm-signext-included", "js", "wasm", []string{"signext"}, "wasm.signext", true},
+		{"wasm-signext-retains-satconv", "js", "wasm", []string{"signext"}, "wasm.satconv", true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			settings, err := resolveArchitectureSettings(test.goarch, test.features)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/featuretest\n\ngo 1.27.0\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "base.go"), []byte("package featuretest\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			const featureFile = "feature.go"
+			source := "//go:build " + test.tag + "\n\npackage featuretest\n"
+			if err := os.WriteFile(filepath.Join(root, featureFile), []byte(source), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			context := build.Default
+			context.GOOS, context.GOARCH = test.goos, test.goarch
+			context.ToolTags = settings.toolTags
+			matched, err := context.MatchFile(root, featureFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", selectedGoName()), "list", "-json", ".")
+			cmd.Dir = root
+			cmd.Env = os.Environ()
+			for _, setting := range [][2]string{
+				{"GOOS", test.goos},
+				{"GOARCH", test.goarch},
+				{"CGO_ENABLED", "0"},
+				{"GOTOOLCHAIN", "local"},
+				{settings.variable, settings.value},
+			} {
+				cmd.Env = replaceEnvironment(cmd.Env, setting[0], setting[1])
+			}
+			output, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("go list: %v", err)
+			}
+			var listed struct {
+				GoFiles []string
+			}
+			if err := json.Unmarshal(output, &listed); err != nil {
+				t.Fatal(err)
+			}
+			commandSelected := slices.Contains(listed.GoFiles, featureFile)
+			if matched != test.selected || commandSelected != test.selected {
+				t.Fatalf("selection: go/build=%v cmd/go=%v want=%v tags=%v", matched, commandSelected, test.selected, settings.toolTags)
+			}
+		})
+	}
+}
+
+func TestArchitectureFeatureValidationRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		goarch   string
+		features []string
+	}{
+		{"amd64", []string{"v5"}},
+		{"amd64", []string{"v2", "v3"}},
+		{"arm64", []string{"v9.6"}},
+		{"arm64", []string{"v8.1", "v9.0"}},
+		{"arm", []string{"8"}},
+		{"ppc64", []string{"power11"}},
+		{"wasm", []string{"simd"}},
+		{"wasm", []string{"satconv", "satconv"}},
+		{"wasm", []string{"signext", "signext"}},
+		{"loong64", []string{"v1"}},
+	}
+	for _, test := range tests {
+		if _, err := resolveArchitectureSettings(test.goarch, test.features); err == nil {
+			t.Errorf("accepted GOARCH=%s features=%v", test.goarch, test.features)
+		}
+	}
+}
+
+func TestWASMArchitectureProfileCanonicalization(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		features []string
+		want     []string
+		value    string
+		toolTags []string
+	}{
+		{"empty", nil, []string{}, "", []string{"wasm.satconv", "wasm.signext"}},
+		{"satconv", []string{"satconv"}, []string{"satconv"}, "satconv", []string{"wasm.satconv", "wasm.signext"}},
+		{"signext", []string{"signext"}, []string{"signext"}, "signext", []string{"wasm.satconv", "wasm.signext"}},
+		{"both-forward", []string{"satconv", "signext"}, []string{"satconv", "signext"}, "satconv,signext", []string{"wasm.satconv", "wasm.signext"}},
+		{"both-reverse", []string{"signext", "satconv"}, []string{"satconv", "signext"}, "satconv,signext", []string{"wasm.satconv", "wasm.signext"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profile := testProfile()
+			profile.GOOS = "js"
+			profile.GOARCH = "wasm"
+			profile.ArchitectureFeatures = test.features
+			loaded, err := readProfile(writeTestProfile(t, profile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(loaded.ArchitectureFeatures, test.want) {
+				t.Fatalf("canonical features = %v, want %v", loaded.ArchitectureFeatures, test.want)
+			}
+			settings, err := resolveArchitectureSettings(loaded.GOARCH, loaded.ArchitectureFeatures)
+			if err != nil || settings.value != test.value || !slices.Equal(settings.toolTags, test.toolTags) {
+				t.Fatalf("canonical GOWASM = %q tags=%v, %v; want %q tags=%v",
+					settings.value, settings.toolTags, err, test.value, test.toolTags)
+			}
+		})
+	}
+	for _, features := range [][]string{
+		{"satconv", "satconv"},
+		{"signext", "signext"},
+		{"simd"},
+	} {
+		profile := testProfile()
+		profile.GOOS = "js"
+		profile.GOARCH = "wasm"
+		profile.ArchitectureFeatures = features
+		if _, err := readProfile(writeTestProfile(t, profile)); err == nil {
+			t.Fatalf("invalid GOWASM profile was accepted: %v", features)
+		}
+	}
+}
+
+func TestValidateAnalysisRechecksArchitectureFeatures(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		goarch   string
+		features []string
+		valid    bool
+	}{
+		{"valid-amd64-cumulative", "amd64", []string{"v3"}, true},
+		{"valid-arm64-cumulative", "arm64", []string{"v9.1"}, true},
+		{"invalid-amd64-level", "amd64", []string{"v5"}, false},
+		{"mismatched-feature-family", "arm64", []string{"v3"}, false},
+		{"duplicate-level", "amd64", []string{"v2", "v2"}, false},
+		{"wasm-empty", "wasm", []string{}, true},
+		{"wasm-satconv", "wasm", []string{"satconv"}, true},
+		{"wasm-signext", "wasm", []string{"signext"}, true},
+		{"wasm-both-forward", "wasm", []string{"satconv", "signext"}, true},
+		{"wasm-both-reverse", "wasm", []string{"signext", "satconv"}, true},
+		{"wasm-duplicate-satconv", "wasm", []string{"satconv", "satconv"}, false},
+		{"wasm-duplicate-signext", "wasm", []string{"signext", "signext"}, false},
+		{"wasm-unsupported", "wasm", []string{"simd"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			analysis := validIncompleteAnalysis()
+			analysis.Profile.GOARCH = test.goarch
+			if test.goarch == "wasm" {
+				analysis.Profile.GOOS = "js"
+			}
+			analysis.Profile.ArchitectureFeatures = test.features
+			err := validateAnalysis(analysis)
+			if test.valid && err != nil {
+				t.Fatalf("valid architecture profile was rejected: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("invalid architecture profile was accepted")
+			}
+		})
+	}
+}
+
+func TestGoTargetValidationIsClosed(t *testing.T) {
+	for _, target := range []struct {
+		goos, goarch string
+	}{
+		{"linux", "amd64"},
+		{"windows", "arm64"},
+		{"freebsd", "arm64"},
+		{"js", "wasm"},
+		{"wasip1", "wasm"},
+	} {
+		profile := testProfile()
+		profile.GOOS, profile.GOARCH = target.goos, target.goarch
+		if _, err := readProfile(writeTestProfile(t, profile)); err != nil {
+			t.Errorf("valid target %s/%s rejected: %v", target.goos, target.goarch, err)
+		}
+		analysis := validIncompleteAnalysis()
+		analysis.Profile.GOOS, analysis.Profile.GOARCH = target.goos, target.goarch
+		if err := validateAnalysis(analysis); err != nil {
+			t.Errorf("valid artifact target %s/%s rejected: %v", target.goos, target.goarch, err)
+		}
+	}
+
+	for _, target := range []struct {
+		goos, goarch string
+	}{
+		{"linuz", "amd64"},
+		{"linux", "amd65"},
+		{"darwin", "386"},
+	} {
+		profile := testProfile()
+		profile.GOOS, profile.GOARCH = target.goos, target.goarch
+		if _, err := readProfile(writeTestProfile(t, profile)); err == nil {
+			t.Errorf("invalid profile target %s/%s accepted", target.goos, target.goarch)
+		}
+		if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile); err == nil {
+			t.Errorf("invalid direct target %s/%s accepted", target.goos, target.goarch)
+		}
+		analysis := validIncompleteAnalysis()
+		analysis.Profile.GOOS, analysis.Profile.GOARCH = target.goos, target.goarch
+		if err := validateAnalysis(analysis); err == nil {
+			t.Errorf("invalid artifact target %s/%s accepted", target.goos, target.goarch)
+		}
+	}
+}
+
+func TestPackageVariantsAreClosed(t *testing.T) {
+	for _, variant := range []string{"ordinary", "in-package-test", "external-test", "synthetic-test-main"} {
+		analysis := validIncompleteAnalysis()
+		record := PackageRecord{
+			ImportPath: "example.com/test", Name: "test", Variant: variant,
+			FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{},
+			InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
+		}
+		record.ID = packageRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+		analysis.Packages = []PackageRecord{record}
+		analysis.RecordCounts.Packages = 1
+		analysis.RecordCounts.Total++
+		if err := validateAnalysis(analysis); err != nil {
+			t.Errorf("valid package variant %q rejected: %v", variant, err)
+		}
+	}
+	for _, variant := range []string{"", "benchmark", "ordinary-test"} {
+		analysis := validIncompleteAnalysis()
+		record := PackageRecord{
+			ImportPath: "example.com/test", Name: "test", Variant: variant,
+			FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{},
+			InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
+		}
+		record.ID = packageRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+		analysis.Packages = []PackageRecord{record}
+		analysis.RecordCounts.Packages = 1
+		analysis.RecordCounts.Total++
+		if err := validateAnalysis(analysis); err == nil {
+			t.Errorf("invalid package variant %q accepted", variant)
+		}
+	}
+}
+
+func TestGOFLAGSAllowlistRejectsExecutionAndPathOverrides(t *testing.T) {
+	accepted := [][]string{
+		{"-trimpath"}, {"-trimpath=false"}, {"-buildvcs=false"}, {"-buildvcs", "false"},
+		{"-tags=safe_tag,go1.27"}, {"-tags", "safe_tag"},
+	}
+	for _, flags := range accepted {
+		if err := validateGOFLAGS(flags); err != nil {
+			t.Errorf("safe flags %v rejected: %v", flags, err)
+		}
+	}
+	rejected := [][]string{
+		{"-toolexec=payload"}, {"-toolexec", "payload"}, {"-overlay=overlay.json"},
+		{"-overlay", "overlay.json"}, {"-modfile=other.mod"}, {"-modfile", "other.mod"},
+		{"-tags=-toolexec=payload"}, {"-ldflags=-extld=payload"}, {"-buildvcs=true"},
+	}
+	for _, flags := range rejected {
+		if err := validateGOFLAGS(flags); err == nil {
+			t.Errorf("unsafe flags %v accepted", flags)
+		}
+	}
+
+	root := copyFixture(t, "complete")
+	marker := filepath.Join(t.TempDir(), "executed")
+	payload := filepath.Join(t.TempDir(), "payload")
+	if err := os.WriteFile(payload, []byte("#!/bin/sh\n: > "+strconv.Quote(marker)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.GOFLAGS = []string{"-toolexec=" + payload}
+	profilePath := filepath.Join(t.TempDir(), "profile.json")
+	data, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = runAnalyze(t.Context(), []string{"--source", root, "--profile", profilePath, "--out", t.TempDir()})
+	var profileErr *exitError
+	if !errors.As(err, &profileErr) || profileErr.code != 2 {
+		t.Fatalf("unsafe GOFLAGS should fail profile validation: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("toolexec payload ran or marker check failed: %v", err)
+	}
+}
+
+func TestEffectiveBuildTagsMergeProfileAndGOFLAGS(t *testing.T) {
+	profile := testProfile()
+	profile.BuildTags = []string{"profile_tag", "duplicate"}
+	profile.GOFLAGS = []string{"-tags=flag_tag,duplicate", "-trimpath", "-tags", "second_flag"}
+	tags, err := effectiveBuildTags(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"duplicate", "flag_tag", "profile_tag", "second_flag"}; !slices.Equal(tags, want) {
+		t.Fatalf("effective tags = %v, want %v", tags, want)
+	}
+	remaining, _, err := splitGOFLAGS(profile.GOFLAGS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"-trimpath"}; !slices.Equal(remaining, want) {
+		t.Fatalf("non-tag GOFLAGS = %v, want %v", remaining, want)
+	}
+	for _, flags := range [][]string{{"-tags", "two words"}, {"-tags=x,,y"}, {"-tags="}, {"-tags"}} {
+		if _, _, err := splitGOFLAGS(flags); err == nil {
+			t.Fatalf("malformed tag flags accepted: %v", flags)
+		}
+	}
+}
+
+func TestGOFLAGSTagsSelectPackagesAndInProcessSyntaxConsistently(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":     "module example.com/tags\n\ngo 1.27\n",
+		"base.go":    "package tags\n",
+		"profile.go": "//go:build profile_tag\n\npackage tags\n\nvar Profile = 1\n",
+		"flag.go":    "//go:build flag_tag\n\npackage tags\n\nvar Flag = 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := testProfile()
+	profile.BuildTags = []string{"profile_tag"}
+	profile.GOFLAGS = []string{"-tags", "flag_tag,profile_tag"}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil || !complete {
+		t.Fatalf("tagged analysis failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	for _, name := range []string{"profile.go", "flag.go"} {
+		path := "source://" + name
+		fileIndex := slices.IndexFunc(analysis.Files, func(file FileRecord) bool {
+			return file.Path == path && file.Role == "compiled"
+		})
+		if fileIndex < 0 {
+			t.Fatalf("effective tag did not compile %s: %#v", path, analysis.Files)
+		}
+		fileID := analysis.Files[fileIndex].ID
+		if !slices.ContainsFunc(analysis.Nodes, func(node NodeRecord) bool {
+			return node.FileID == fileID && node.Kind == "*ast.File"
+		}) {
+			t.Fatalf("compiled tagged file %s lacks typed syntax", path)
+		}
+	}
+}
+
+func TestFileInventoryUsesEffectiveTypeCheckerLanguageVersion(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":     "module example.com/fileversion\n\ngo 1.27.0\n",
+		"current.go": "package fileversion\n\nvar Current = 1\n",
+		"legacy.go":  "//go:build go1.26\n\npackage fileversion\n\nvar Legacy = 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("file-version analysis failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	versions := map[string]string{}
+	for _, file := range analysis.Files {
+		if file.Role == "compiled" {
+			versions[file.Path] = file.LanguageVersion
+		}
+	}
+	if versions["source://legacy.go"] != "1.26" {
+		t.Fatalf("legacy.go language version = %q, want 1.26", versions["source://legacy.go"])
+	}
+	if versions["source://current.go"] != "1.27.0" {
+		t.Fatalf("current.go language version = %q, want module version 1.27.0", versions["source://current.go"])
+	}
+}
+
+func TestIncompleteDiagnosticsAreRootIndependent(t *testing.T) {
+	firstRoot := copyFixture(t, "invalid")
+	secondRoot := filepath.Join(t.TempDir(), "other-root")
+	copyTree(t, firstRoot, secondRoot)
+	first, complete, err := analyze(t.Context(), firstRoot, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete {
+		t.Fatal("invalid fixture unexpectedly completed")
+	}
+	second, complete, err := analyze(t.Context(), secondRoot, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete {
+		t.Fatal("second invalid fixture unexpectedly completed")
+	}
+	left, _ := marshalCanonical(first)
+	right, _ := marshalCanonical(second)
+	if string(left) != string(right) {
+		t.Fatalf("incomplete inventory differs by root near: %s", firstDifference(string(left), string(right)))
+	}
+	for _, diagnostic := range first.Diagnostics {
+		if strings.Contains(diagnostic.Position, firstRoot) || strings.Contains(diagnostic.ID, firstRoot) {
+			t.Fatalf("diagnostic retained absolute root: %#v", diagnostic)
+		}
+	}
+}
+
+func copyFixture(t *testing.T, name string) string {
+	t.Helper()
+	source := filepath.Join("testdata", name)
+	target := filepath.Join(t.TempDir(), name)
+	copyTree(t, source, target)
+	return target
+}
+
+func externalReplacementFixture(t *testing.T) (string, string) {
+	t.Helper()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "source")
+	copyTree(t, filepath.Join("testdata", "replacement"), root)
+	dependency := filepath.Join(parent, "dep")
+	if err := os.Rename(filepath.Join(root, "dep"), dependency); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependency, "go.sum"), []byte("example.com/test v1.0.0 h1:test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dependency, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependency, "vendor", "modules.txt"), []byte("# captured\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	modPath := filepath.Join(root, "go.mod")
+	data, err := os.ReadFile(modPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("=> ./dep"), []byte("=> ../dep"), 1)
+	if err := os.WriteFile(modPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root, dependency
+}
+
+func copyTree(t *testing.T, source, target string) {
+	t.Helper()
+	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(target, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destination, data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendInvalidUTF8(t *testing.T, path string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.Write([]byte{'\n', '/', '/', ' ', 0xff, '\n'}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func hasInvalidUTF8(analysis Analysis) bool {
+	for _, file := range analysis.Files {
+		if !file.ValidUTF8 {
+			data, err := base64.StdEncoding.DecodeString(file.ContentBase64)
+			return err == nil && slices.Contains(data, byte(0xff))
+		}
+	}
+	return false
+}
+
+func hasLineDirective(analysis Analysis) bool {
+	for _, node := range analysis.Nodes {
+		if node.Span.LineDirective && strings.HasPrefix(node.Span.DisplayPath, "line://logical/generated.go") {
+			return true
+		}
+	}
+	return false
+}
+
+func directiveSpan(root map[string]any) map[string]any {
+	for _, raw := range root["nodes"].([]any) {
+		span := raw.(map[string]any)["span"].(map[string]any)
+		if directive, _ := span["lineDirective"].(bool); directive {
+			return span
+		}
+	}
+	return nil
+}
+
+func hasBlockerCategory(analysis Analysis, category string) bool {
+	for _, blocker := range analysis.Blockers {
+		if blocker.Category == category {
+			return true
+		}
+	}
+	return false
+}
+
+func assertInitializationOrder(t *testing.T, analysis Analysis) {
+	t.Helper()
+	files := map[string]string{}
+	for _, file := range analysis.Files {
+		files[file.ID] = strings.TrimPrefix(file.Path, "source://")
+	}
+	symbols := map[string]string{}
+	for _, symbol := range analysis.Symbols {
+		symbols[symbol.ID] = symbol.Name
+	}
+	for _, pkg := range analysis.Packages {
+		if pkg.ImportPath != "example.com/go2gsfixture" || pkg.Variant != "ordinary" {
+			continue
+		}
+		var compiled []string
+		for _, id := range pkg.CompiledFileIDs {
+			compiled = append(compiled, files[id])
+		}
+		a := slices.Index(compiled, "a_init.go")
+		main := slices.Index(compiled, "main.go")
+		z := slices.Index(compiled, "z_init.go")
+		if a < 0 || main < 0 || z < 0 || !(a < main && main < z) {
+			t.Fatalf("compiled file order was not preserved: %v", compiled)
+		}
+		firstVariable, lastVariable := -1, -1
+		var initFiles []string
+		for _, initialization := range pkg.InitializationOrder {
+			for _, id := range initialization.SymbolIDs {
+				switch symbols[id] {
+				case "FirstInitialized":
+					firstVariable = initialization.Order
+				case "LastInitialized":
+					lastVariable = initialization.Order
+				}
+			}
+			if initialization.Kind == "init-function" {
+				initFiles = append(initFiles, files[initialization.FileID])
+			}
+		}
+		if firstVariable < 0 || lastVariable < 0 || firstVariable >= lastVariable {
+			t.Fatalf("variable initialization order missing or wrong: %#v", pkg.InitializationOrder)
+		}
+		if !slices.Equal(initFiles, []string{"a_init.go", "z_init.go"}) {
+			t.Fatalf("init function order was not preserved: %v", initFiles)
+		}
+		return
+	}
+	t.Fatal("ordinary fixture package not found")
+}
+
+func assertEmbedMatches(t *testing.T, analysis Analysis) {
+	t.Helper()
+	packageID := ""
+	for _, pkg := range analysis.Packages {
+		if pkg.ImportPath == "example.com/go2gsfixture" && pkg.Variant == "ordinary" {
+			packageID = pkg.ID
+			break
+		}
+	}
+	matches := map[string][]string{}
+	for _, record := range analysis.Embeds {
+		if record.PackageID != packageID {
+			continue
+		}
+		matches[record.Pattern] = append(matches[record.Pattern], record.LogicalName)
+	}
+	for pattern := range matches {
+		sort.Strings(matches[pattern])
+	}
+	want := map[string][]string{
+		"assets/*": {
+			"assets/.hidden.txt", "assets/_hidden.txt", "assets/sub/nested.txt", "assets/visible.txt",
+		},
+		"all:assets/*": {
+			"assets/.hidden.txt", "assets/_hidden.txt", "assets/sub/.nestedhidden.txt",
+			"assets/sub/nested.txt", "assets/visible.txt",
+		},
+		"assets/sub": {"assets/sub/nested.txt"},
+	}
+	if !reflect.DeepEqual(matches, want) {
+		t.Fatalf("embed pattern matches are incorrect: got %#v want %#v", matches, want)
+	}
+}
+
+func TestCanonicalJSONUsesStringConstants(t *testing.T) {
+	value := ConstantRecord{Exact: "123456789012345678901234567890"}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"exact":"123456789012345678901234567890"`) {
+		t.Fatalf("constant did not remain a JSON string: %s", data)
+	}
+}
+
+func TestProcessRunnerDrainsAndBoundsBothStreams(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runProcess(t.Context(), 5*time.Second, 4096, "", executable,
+		[]string{"-test.run=TestProcessHelper"}, []string{"GO2GS_PROCESS_HELPER=output"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode != 0 || !result.StdoutTruncated || !result.StderrTruncated ||
+		len(result.Stdout) != 4096 || len(result.Stderr) != 4096 {
+		t.Fatalf("unexpected bounded process result: %#v", result)
+	}
+}
+
+func TestAnalysisWorkerRunnerBoundsLogsAndKillsDescendants(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runProcessWithMode(t.Context(), 5*time.Second, 1024, "", executable,
+		[]string{"-test.run=TestProcessHelper"}, []string{"GO2GS_PROCESS_HELPER=output"}, processGroupOwn)
+	if err != nil || !result.StdoutTruncated || !result.StderrTruncated {
+		t.Fatalf("worker logs were not bounded: result=%#v err=%v", result, err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	stateDir := t.TempDir()
+	marker := filepath.Join(stateDir, "descendant-survived")
+	_, err = runProcessWithMode(t.Context(), 50*time.Millisecond, 1024, "", executable,
+		[]string{"-test.run=TestProcessHelper"}, []string{
+			"GO2GS_PROCESS_HELPER=tree",
+			"GO2GS_CHILD_MARKER=" + marker,
+			"GO2GS_CHILD_PID=" + filepath.Join(stateDir, "child.pid"),
+		}, processGroupOwn)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("worker tree was not cancelled: %v", err)
+	}
+	time.Sleep(700 * time.Millisecond)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("worker descendant survived cancellation: %v", err)
+	}
+}
+
+func TestProcessRunnerCancels(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runProcess(t.Context(), 20*time.Millisecond, 4096, "", executable,
+		[]string{"-test.run=TestProcessHelper"}, []string{"GO2GS_PROCESS_HELPER=sleep"})
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout, got %v", err)
+	}
+}
+
+func TestSanitizedEnvironmentDoesNotExposeAmbientPATH(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	maliciousDir := t.TempDir()
+	name := "go2gs-malicious-helper"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(maliciousDir, name), []byte("not executable content"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", maliciousDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	env, err := sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), filepath.Dir(executable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env = append(env, "GO2GS_PROCESS_HELPER=path", "GO2GS_BAD_NAME="+name)
+	result, err := runProcess(t.Context(), 5*time.Second, 4096, "", executable,
+		[]string{"-test.run=TestProcessHelper"}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode != 0 || !strings.HasPrefix(result.Stdout, "missing") {
+		t.Fatalf("ambient PATH helper was exposed: %#v", result)
+	}
+}
+
+func TestOfflineGoEnvironmentCannotSelectDirectResolution(t *testing.T) {
+	builders := map[string]func() ([]string, error){
+		"bootstrap": func() ([]string, error) { return bootstrapEnvironment(t.TempDir()), nil },
+		"worker": func() ([]string, error) {
+			return analysisWorkerEnvironment(t.TempDir(), "go", strings.Repeat("0", 64), runtime.GOROOT()), nil
+		},
+		"packages": func() ([]string, error) {
+			return sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), filepath.Dir(runtime.GOROOT()))
+		},
+	}
+	expected := map[string]string{
+		"GOAUTH": "off", "GOENV": "off", "GOINSECURE": "", "GONOPROXY": "none",
+		"GONOSUMDB": "none", "GOPRIVATE": "", "GOPROXY": "off", "GOSUMDB": "off",
+		"GOVCS": "*:off",
+	}
+	for name, build := range builders {
+		t.Run(name, func(t *testing.T) {
+			environment, err := build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			values := map[string]string{}
+			for _, entry := range environment {
+				key, value, _ := strings.Cut(entry, "=")
+				values[key] = value
+			}
+			for key, want := range expected {
+				if values[key] != want {
+					t.Errorf("%s=%q, want %q", key, values[key], want)
+				}
+			}
+		})
+	}
+}
+
+func TestOfflineGoEnvironmentMakesNoVanityNetworkAttempt(t *testing.T) {
+	requests := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		select {
+		case requests <- request.Method + " " + request.Host:
+		default:
+		}
+	}))
+	defer proxy.Close()
+	goExecutable := filepath.Join(runtime.GOROOT(), "bin", selectedGoName())
+	cacheRoot, err := os.MkdirTemp("", "go2gs-offline-network-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = os.RemoveAll(cacheRoot)
+	}()
+	env, err := sanitizedEnvironment(testProfile(), cacheRoot, runtime.GOROOT(), filepath.Dir(goExecutable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env = append(env,
+		"HTTPS_PROXY="+proxy.URL,
+		"HTTP_PROXY="+proxy.URL,
+		"NO_PROXY=",
+	)
+	result, err := runProcess(t.Context(), 10*time.Second, 1<<20, t.TempDir(), goExecutable,
+		[]string{"list", "-m", "vanity.invalid/missing@v0.0.0"}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode == 0 {
+		t.Fatal("missing vanity module unexpectedly resolved")
+	}
+	select {
+	case request := <-requests:
+		t.Fatalf("offline Go environment attempted network access: %s", request)
+	default:
+	}
+}
+
+func TestAnalyzeDeadlineCoversExecutableCapture(t *testing.T) {
+	profile := testProfile()
+	profile.Limits.MaxDurationSeconds = 1
+	out := t.TempDir()
+	captureSelectedExecutableTestHook = func(ctx context.Context) { <-ctx.Done() }
+	t.Cleanup(func() { captureSelectedExecutableTestHook = nil })
+	started := time.Now()
+	err := runAnalyze(t.Context(), []string{
+		"--source", copyFixture(t, "complete"),
+		"--profile", writeTestProfile(t, profile),
+		"--out", out,
+	})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline did not stop executable capture: %v", err)
+	}
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("deadline returned public exit %#v, want 2", exitErr)
+	}
+	if time.Since(started) > 3*time.Second {
+		t.Fatal("deadline-bound capture returned too slowly")
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, statErr := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("timed-out analysis retained %s: %v", name, statErr)
+		}
+	}
+}
+
+func TestAnalyzeCancellationCoversPostLoadVerification(t *testing.T) {
+	for _, test := range []struct {
+		phase, operation, point string
+	}{
+		{"capsule-verify", "capsule-verify", "entry"},
+		{"typed-source-capture", "typed-source-capture", "file"},
+		{"typed-source-verify", "typed-source-verify", "file"},
+		{"package-input-verify", "package-input-verify", "package"},
+		{"original-input-verify", "original-input-verify", "file"},
+		{"manifest-verify", "manifest-verify", "manifest"},
+	} {
+		t.Run(test.phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			hit := false
+			completed := false
+			armed := false
+			analysisOperationTestHook = func(operation, point string) {
+				if armed && operation == test.operation && point == test.point && !hit {
+					hit = true
+					cancel()
+				}
+			}
+			t.Cleanup(func() { analysisOperationTestHook = nil })
+			postLoadContextTestHook = func(phase string) {
+				if phase == test.phase {
+					armed = true
+				}
+				if phase == test.phase+"-complete" {
+					completed = true
+				}
+			}
+			t.Cleanup(func() { postLoadContextTestHook = nil })
+			_, _, err := analyze(ctx, copyFixture(t, "complete"), t.TempDir(), testProfile())
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation in %s returned %v", test.phase, err)
+			}
+			if !hit {
+				t.Fatalf("%s operation hook was not reached", test.phase)
+			}
+			if completed {
+				t.Fatalf("%s completed after in-operation cancellation", test.phase)
+			}
+		})
+	}
+}
+
+func TestCgoDiscoveryCancellationStopsCurrentProductionScan(t *testing.T) {
+	for _, test := range []struct {
+		name, operation, point, forbiddenLoad string
+	}{
+		{"overlay-traversal", "cgo-overlay", "walk", "preflight-before"},
+		{"overlay-import", "cgo-overlay", "import-before", "preflight-before"},
+		{"overlay-import-after", "cgo-overlay", "import-after", "preflight-before"},
+		{"directory-classification", "package-input-classification", "go-file", "typed-before"},
+		{"import-parse", "cgo-import-parse", "before", "typed-before"},
+		{"native-include", "native-include-scan", "after-parse", "typed-before"},
+		{"snapshot-native-include", "snapshot-native-include", "after", "typed-before"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			hit := false
+			localAdvanced := false
+			forbiddenEntered := false
+			analysisOperationTestHook = func(operation, point string) {
+				if operation == test.operation && point == test.point && !hit {
+					hit = true
+					cancel()
+				} else if hit && operation == test.operation {
+					localAdvanced = true
+				}
+			}
+			t.Cleanup(func() { analysisOperationTestHook = nil })
+			packageLoadTestHook = func(phase string) {
+				if phase == test.forbiddenLoad {
+					forbiddenEntered = true
+				}
+			}
+			t.Cleanup(func() { packageLoadTestHook = nil })
+			profile := testProfile()
+			profile.CGOEnabled = true
+			_, _, err := analyze(ctx, copyFixture(t, "cgo"), t.TempDir(), profile)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation in %s returned %v", test.name, err)
+			}
+			if !hit {
+				t.Fatalf("%s operation hook was not reached", test.name)
+			}
+			if localAdvanced {
+				t.Fatalf("%s operation advanced after cancellation", test.name)
+			}
+			if forbiddenEntered {
+				t.Fatalf("%s entered later load phase %s", test.name, test.forbiddenLoad)
+			}
+		})
+	}
+}
+
+func TestTypeCheckParserCancellationStopsBeforeTypeChecking(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	hit := false
+	typeCheckEntered := false
+	analysisOperationTestHook = func(operation, point string) {
+		switch {
+		case operation == "type-check-parse" && point == "after" && !hit:
+			hit = true
+			cancel()
+		case hit && operation == "type-check":
+			typeCheckEntered = true
+		}
+	}
+	t.Cleanup(func() { analysisOperationTestHook = nil })
+	_, _, err := analyze(ctx, copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("type-check parser cancellation returned %v", err)
+	}
+	if !hit {
+		t.Fatal("type-check parser hook was not reached")
+	}
+	if typeCheckEntered {
+		t.Fatal("type checking started after parser cancellation")
+	}
+}
+
+func TestSourcePositionParserCancellationStopsBeforePositionUse(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	armed := false
+	hit := false
+	positionUsed := false
+	postLoadContextTestHook = func(phase string) {
+		if phase == "inventory" {
+			armed = true
+		}
+	}
+	t.Cleanup(func() { postLoadContextTestHook = nil })
+	analysisOperationTestHook = func(operation, point string) {
+		switch {
+		case armed && operation == "source-position-parse" && point == "after" && !hit:
+			hit = true
+			cancel()
+		case hit && operation == "source-position-parse" && point == "use":
+			positionUsed = true
+		}
+	}
+	t.Cleanup(func() { analysisOperationTestHook = nil })
+	_, _, err := analyze(ctx, copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("source-position parser cancellation returned %v", err)
+	}
+	if !hit {
+		t.Fatal("source-position parser hook was not reached")
+	}
+	if positionUsed {
+		t.Fatal("source positions were used after parser cancellation")
+	}
+}
+
+func TestPkgConfigFallbackCancellationStopsInsideProductionParse(t *testing.T) {
+	for _, point := range []string{"parse-before", "parse-after"} {
+		t.Run(point, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			hit := false
+			resultConsumed := false
+			completed := false
+			selectedPkgConfigSnapshotTestHook = func(snapshot *packageInputSnapshot) {
+				snapshot.pkgConfig = false
+			}
+			t.Cleanup(func() { selectedPkgConfigSnapshotTestHook = nil })
+			analysisOperationTestHook = func(operation, actualPoint string) {
+				if operation != "pkg-config-scan" {
+					return
+				}
+				if actualPoint == point && !hit {
+					hit = true
+					cancel()
+				} else if hit && actualPoint == "parse-result" {
+					resultConsumed = true
+				}
+			}
+			t.Cleanup(func() { analysisOperationTestHook = nil })
+			postLoadContextTestHook = func(phase string) {
+				if phase == "pkg-config-scan-complete" {
+					completed = true
+				}
+			}
+			t.Cleanup(func() { postLoadContextTestHook = nil })
+			profile := testProfile()
+			profile.CGOEnabled = true
+			_, _, err := analyze(ctx, copyFixture(t, "cgo"), t.TempDir(), profile)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("pkg-config %s cancellation returned %v", point, err)
+			}
+			if !hit {
+				t.Fatalf("pkg-config %s hook was not reached", point)
+			}
+			if resultConsumed {
+				t.Fatalf("pkg-config parse result was consumed after %s cancellation", point)
+			}
+			if completed {
+				t.Fatalf("pkg-config fallback completed after %s cancellation", point)
+			}
+		})
+	}
+}
+
+func TestAnalyzePreloadCancellationBeforeEncodingOrPublication(t *testing.T) {
+	if publicAnalysisBindingSupported() == nil {
+		t.Skip("preload publication is used only when secure public execution binding is unavailable")
+	}
+	for _, phase := range []string{"encoding", "publication"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			profile := testProfile()
+			profile.RequestedGoVersion = "1.26.6"
+			if profile.RequestedGoVersion == strings.TrimPrefix(runtime.Version(), "go") {
+				profile.RequestedGoVersion = "1.26.7"
+			}
+			switch phase {
+			case "encoding":
+				publicationEntered := false
+				artifactEncodingTestHook = func(stage string) {
+					if stage == "start" {
+						cancel()
+					}
+				}
+				t.Cleanup(func() { artifactEncodingTestHook = nil })
+				publicationBoundaryTestHook = func(string) { publicationEntered = true }
+				t.Cleanup(func() { publicationBoundaryTestHook = nil })
+				t.Cleanup(func() {
+					if publicationEntered {
+						t.Error("preload publication entered after encoding cancellation")
+					}
+				})
+			case "publication":
+				publicationBoundaryTestHook = func(stage string) {
+					if stage == "preload" {
+						cancel()
+					}
+				}
+				t.Cleanup(func() { publicationBoundaryTestHook = nil })
+			}
+			out := t.TempDir()
+			err := runAnalyze(ctx, []string{
+				"--source", copyFixture(t, "complete"),
+				"--profile", writeTestProfile(t, profile),
+				"--out", out,
+			})
+			var exitErr *exitError
+			if !errors.As(err, &exitErr) || exitErr.code != 2 || !errors.Is(err, context.Canceled) {
+				t.Fatalf("%s cancellation returned %v", phase, err)
+			}
+			for _, name := range []string{"analysis.json", "run.json"} {
+				if _, statErr := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(statErr) {
+					t.Fatalf("%s cancellation retained %s: %v", phase, name, statErr)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkerArtifactReadStopsOnCancellation(t *testing.T) {
+	root := t.TempDir()
+	analysis := validIncompleteAnalysis()
+	run := RunMetadata{SchemaVersion: schemaVersion}
+	analysisBytes, runBytes, err := encodeAnalysisArtifacts(analysis, run, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "analysis.json"), analysisBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run.json"), runBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []string{"analysis-read", "run-read"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			chunks := 0
+			boundedReadChunkHook = func() { chunks++ }
+			t.Cleanup(func() { boundedReadChunkHook = nil })
+			workerArtifactReadTestHook = func(stage string) {
+				if stage == phase {
+					cancel()
+				}
+			}
+			t.Cleanup(func() { workerArtifactReadTestHook = nil })
+			if _, _, _, err := readWorkerArtifactsContext(ctx, root, 1<<20); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled %s returned %v", phase, err)
+			}
+			wantChunks := 0
+			if phase == "run-read" {
+				wantChunks = 2
+			}
+			if chunks != wantChunks {
+				t.Fatalf("%s processed %d chunks, want %d", phase, chunks, wantChunks)
+			}
+		})
+	}
+}
+
+func TestWorkerArtifactReadStopsDuringEachRead(t *testing.T) {
+	root := t.TempDir()
+	analysis := validIncompleteAnalysis()
+	run := RunMetadata{SchemaVersion: schemaVersion}
+	analysisBytes, runBytes, err := encodeAnalysisArtifacts(analysis, run, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "analysis.json"), analysisBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run.json"), runBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []string{"analysis-read", "run-read"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			armed := false
+			chunks := 0
+			workerArtifactReadTestHook = func(stage string) {
+				if stage == phase {
+					armed = true
+				}
+			}
+			t.Cleanup(func() { workerArtifactReadTestHook = nil })
+			boundedReadChunkHook = func() {
+				chunks++
+				if armed {
+					armed = false
+					cancel()
+				}
+			}
+			t.Cleanup(func() { boundedReadChunkHook = nil })
+			if _, _, _, err := readWorkerArtifactsContext(ctx, root, 1<<20); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled %s returned %v", phase, err)
+			}
+			wantChunks := 1
+			if phase == "run-read" {
+				wantChunks = 3
+			}
+			if chunks != wantChunks {
+				t.Fatalf("%s processed %d chunks, want %d", phase, chunks, wantChunks)
+			}
+		})
+	}
+}
+
+func TestPublicationBoundariesRejectCancellationWithoutArtifacts(t *testing.T) {
+	for _, stage := range []string{"preload", "worker", "parent"} {
+		t.Run(stage, func(t *testing.T) {
+			root := t.TempDir()
+			output, err := lockAndInvalidateOutput(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := output.release(); err != nil {
+					t.Error(err)
+				}
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			advanced := false
+			publicationBoundaryTestHook = func(actual string) {
+				if actual == stage {
+					cancel()
+				}
+			}
+			t.Cleanup(func() { publicationBoundaryTestHook = nil })
+			publicationAfterBoundaryTestHook = func(actual string) {
+				if actual == stage {
+					advanced = true
+				}
+			}
+			t.Cleanup(func() { publicationAfterBoundaryTestHook = nil })
+			err = publishWorkerArtifactsAtBoundary(
+				ctx, stage, output, []byte("analysis"), []byte("run"))
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled %s publication returned %v", stage, err)
+			}
+			if advanced {
+				t.Fatalf("%s publication advanced after boundary cancellation", stage)
+			}
+			for _, name := range []string{"analysis.json", "run.json"} {
+				if _, statErr := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(statErr) {
+					t.Fatalf("cancelled %s publication retained %s: %v", stage, name, statErr)
+				}
+			}
+		})
+	}
+}
+
+func TestPublicationCancellationCleansPartialPair(t *testing.T) {
+	root := t.TempDir()
+	output, err := lockAndInvalidateOutput(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := output.release(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	err = publishWorkerArtifactsContext(
+		ctx, output, []byte("analysis"), []byte("run"), cancel)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("mid-publication cancellation returned %v", err)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, statErr := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("mid-publication cancellation retained %s: %v", name, statErr)
+		}
+	}
+}
+
+func TestBoundedReadStopsOnCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	chunks := 0
+	boundedReadChunkHook = func() {
+		chunks++
+		cancel()
+	}
+	t.Cleanup(func() { boundedReadChunkHook = nil })
+	if _, err := readBoundedRegularFileContext(ctx, path, 2<<20); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled bounded read returned %v", err)
+	}
+	if chunks != 1 {
+		t.Fatalf("cancelled bounded read processed %d chunks", chunks)
+	}
+}
+
+func TestExecutableCapsuleVerificationStopsOnCancellation(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "tool")
+	if err := os.WriteFile(source, bytes.Repeat([]byte("x"), 1<<20), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	captured, _, err := captureSelectedExecutable("tool", source, "", 2<<20, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	boundedReadChunkHook = cancel
+	t.Cleanup(func() { boundedReadChunkHook = nil })
+	if _, err := createExecutableCapsuleContext(ctx, t.TempDir(), []capturedExecutable{captured}, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled executable verification returned %v", err)
+	}
+}
+
+func TestProcessRunnerRepeatedShortCommands(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		result, err := runProcess(t.Context(), 5*time.Second, 4096, "", executable,
+			[]string{"-test.run=TestProcessHelper"}, []string{"GO2GS_PROCESS_HELPER=short"})
+		if err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
+		if result.ExitCode != 0 || !strings.HasPrefix(result.Stdout, "stdout") || result.Stderr != "stderr" {
+			t.Fatalf("iteration %d: unexpected result %#v", i, result)
+		}
+	}
+}
+
+func TestProcessHelper(t *testing.T) {
+	switch os.Getenv("GO2GS_PROCESS_HELPER") {
+	case "output":
+		chunk := strings.Repeat("x", 10000)
+		_, _ = os.Stdout.WriteString(chunk)
+		_, _ = os.Stderr.WriteString(chunk)
+	case "sleep":
+		time.Sleep(10 * time.Second)
+	case "short":
+		_, _ = os.Stdout.WriteString("stdout")
+		_, _ = os.Stderr.WriteString("stderr")
+	case "path":
+		if _, err := exec.LookPath(os.Getenv("GO2GS_BAD_NAME")); err == nil {
+			_, _ = os.Stdout.WriteString("found")
+		} else {
+			_, _ = os.Stdout.WriteString("missing")
+		}
+	case "tree":
+		child := exec.Command(os.Args[0], "-test.run=TestProcessHelper")
+		child.Env = []string{
+			"GO2GS_PROCESS_HELPER=child-marker",
+			"GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER"),
+			"GO2GS_CHILD_DELAY=" + os.Getenv("GO2GS_CHILD_DELAY"),
+		}
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(os.Getenv("GO2GS_CHILD_PID"), []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Second)
+	case "nested-timeout-worker":
+		_, _ = runProcess(inheritProcessGroup(t.Context()), 50*time.Millisecond, 1024, "", os.Args[0],
+			[]string{"-test.run=TestProcessHelper"}, []string{
+				"GO2GS_PROCESS_HELPER=tree",
+				"GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER"),
+				"GO2GS_CHILD_PID=" + os.Getenv("GO2GS_CHILD_PID"),
+				"GO2GS_CHILD_DELAY=" + os.Getenv("GO2GS_CHILD_DELAY"),
+			})
+	case "nested-early-failure-worker":
+		child := exec.Command(os.Args[0], "-test.run=TestProcessHelper")
+		child.Env = []string{
+			"GO2GS_PROCESS_HELPER=tree",
+			"GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER"),
+			"GO2GS_CHILD_PID=" + os.Getenv("GO2GS_CHILD_PID"),
+			"GO2GS_CHILD_DELAY=" + os.Getenv("GO2GS_CHILD_DELAY"),
+		}
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			if _, err := os.Stat(os.Getenv("GO2GS_CHILD_PID")); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("nested child did not start")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		os.Exit(7)
+	case "child-marker":
+		delay := 500 * time.Millisecond
+		if value := os.Getenv("GO2GS_CHILD_DELAY"); value != "" {
+			if parsed, err := time.ParseDuration(value); err == nil {
+				delay = parsed
+			}
+		}
+		time.Sleep(delay)
+		_ = os.WriteFile(os.Getenv("GO2GS_CHILD_MARKER"), []byte("survived"), 0o600)
+	case "child-sleep":
+		time.Sleep(10 * time.Second)
+	default:
+		t.Skip("helper only")
+	}
+}
+
+func firstDifference(left, right string) string {
+	limit := min(len(left), len(right))
+	for i := 0; i < limit; i++ {
+		if left[i] != right[i] {
+			start := max(0, i-80)
+			endLeft := min(len(left), i+160)
+			endRight := min(len(right), i+160)
+			return "left=" + strconv.Quote(left[start:endLeft]) + " right=" + strconv.Quote(right[start:endRight])
+		}
+	}
+	return fmt.Sprintf("lengths %d and %d", len(left), len(right))
+}
