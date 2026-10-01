@@ -55,7 +55,11 @@ M0 also records migration blockers without making a complete inventory fail.
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
 value arrays, and concurrency sites are linked to typed syntax nodes and
 marked as explicit M1 prerequisites. M0 chooses no G# representation or
-runtime API for them.
+runtime API for them. Every blocker message is path-redacted, normalized to
+valid UTF-8, and bounded by `maxStringBytes` before its stable ID,
+deduplication, record count, ordering, and publication. The ID therefore
+identifies the exact published message rather than an unbounded private
+diagnostic.
 
 The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,

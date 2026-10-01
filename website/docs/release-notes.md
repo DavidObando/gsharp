@@ -136,7 +136,10 @@ Before moving an application to a different compiler version, pin the intended S
   and all traversed entry types before sorting, and share a deterministic
   traversal budget with local replacements. Profile bootstrap now requires a
   stable regular file no larger than 256 KiB before decoding or applying the
-  configured timeout. Profile and `goFlags`
+  configured timeout. Blocker messages now redact private filesystem roots and
+  are UTF-8-normalized and bounded before stable-ID derivation, so incomplete
+  inventories remain checkout-independent and each ID names the exact
+  published message. Profile and `goFlags`
   tags share one canonical selection set, architecture feature levels expand
   to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
   typed `*ast.File` root for every compiled file. Output locking, invalidation,

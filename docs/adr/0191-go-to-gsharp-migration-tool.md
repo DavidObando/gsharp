@@ -225,6 +225,10 @@ invalid UTF-8 string values, through an explicit byte encoding. Reject unknown
 required record kinds and dangling IDs; diagnostics cannot masquerade as
 missing optional type information. Deterministic output IDs come from
 canonical declarations/types, not dictionary traversal or absolute cache paths.
+Blocker messages redact machine-local source, mirror, replacement, temporary,
+and output roots, normalize invalid UTF-8, and apply the profile string limit
+before stable-ID derivation, deduplication, counting, sorting, or publication.
+The blocker ID uses the exact bounded message present in the artifact.
 The final record bound applies equally to preload-only failure inventories.
 Validation recomputes source-manifest identity and byte-validity claims, and
 indexes record ownership rather than repeatedly scanning record collections.

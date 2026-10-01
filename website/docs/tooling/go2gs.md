@@ -26,6 +26,9 @@ ignored inputs, source bytes and positions, stable symbol/type/node
 identities, exact constants, scopes, selections, calls, method sets, generic
 instances, embeds, `go:generate` directives, dependencies, diagnostics, and
 blockers. `run.json` separately records non-deterministic measurements.
+Blocker messages redact private source, mirror, replacement, temporary, and
+output roots and are normalized and bounded before their stable IDs are
+derived. The published bounded message is therefore the message the ID names.
 
 Analysis is offline and fail-closed. It disables automatic Go toolchain
 downloads, network module resolution, ambient workspaces, unapproved package
