@@ -748,6 +748,10 @@ introduce a narrow bounded driver/PTY boundary only for that later milestone.
 Do not inherit shell interpolation, unbounded output capture, or stdin behavior
 incompatible with the specified fixture. Cap logs/artifacts and report
 truncation; it is not a successful comparison.
+Schema-v1 producers and `validate-analysis` share a deterministic 512 MiB
+artifact ceiling. Validation verifies regular-file identity and size before a
+bounded read, rejects initially oversized inputs before decoding, and rejects
+growth that crosses the ceiling while reading.
 
 Canonicalize output paths under declared roots, reject traversal and symlink
 escapes, and distinguish display/source-map names from paths authorized for

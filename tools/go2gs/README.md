@@ -162,6 +162,10 @@ artifacts/go2gs/go2gs validate-analysis \
 
 Validation rejects unknown schema versions, unknown required record kinds,
 duplicate IDs, dangling references, and inconsistent complete/ready states.
+It accepts only a regular file whose opened identity and pre-read size are
+verified beneath a 512 MiB (536870912 byte) ceiling; growth beyond that bound
+is also rejected while reading. Profiles cannot configure `maxOutputBytes`
+above the same deterministic validation ceiling.
 
 ## cliamp smoke
 

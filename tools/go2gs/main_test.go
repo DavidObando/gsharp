@@ -1641,6 +1641,113 @@ func TestAnalysisJSONRoundTripRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestReadAnalysisEnforcesBoundedRegularInput(t *testing.T) {
+	base, err := marshalCanonical(validIncompleteAnalysis())
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := int64(len(base) + 32)
+	exact := append(append([]byte{}, base...), bytes.Repeat([]byte(" "), int(limit)-len(base))...)
+
+	t.Run("exact-bound", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "analysis.json")
+		if err := os.WriteFile(path, exact, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readAnalysisBounded(path, limit); err != nil {
+			t.Fatalf("exact-bound analysis rejected: %v", err)
+		}
+	})
+
+	t.Run("one-byte-over", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "analysis.json")
+		if err := os.WriteFile(path, append(exact, ' '), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		chunks := 0
+		boundedReadChunkHook = func() { chunks++ }
+		t.Cleanup(func() { boundedReadChunkHook = nil })
+		if _, err := readAnalysisBounded(path, limit); err == nil {
+			t.Fatal("one-byte-oversized analysis accepted")
+		}
+		if chunks != 0 {
+			t.Fatalf("oversized analysis was read in %d chunks", chunks)
+		}
+	})
+
+	t.Run("growth-during-read", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "analysis.json")
+		if err := os.WriteFile(path, base, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		grew := false
+		boundedReadChunkHook = func() {
+			if grew {
+				return
+			}
+			grew = true
+			file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := file.Write(bytes.Repeat([]byte(" "), 64)); err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() { boundedReadChunkHook = nil })
+		if _, err := readAnalysisBounded(path, int64(len(base)+32)); err == nil {
+			t.Fatal("analysis growth beyond the bound was accepted")
+		}
+	})
+
+	t.Run("non-regular", func(t *testing.T) {
+		if _, err := readAnalysisBounded(t.TempDir(), limit); err == nil {
+			t.Fatal("directory accepted as an analysis artifact")
+		}
+	})
+}
+
+func TestReadAnalysisRejectsHardCapBeforeReading(t *testing.T) {
+	base, err := marshalCanonical(validIncompleteAnalysis())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "analysis.json")
+	if err := os.WriteFile(path, append(base, ' '), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	analysisValidationLimitTestHook = func() int64 { return int64(len(base)) }
+	t.Cleanup(func() { analysisValidationLimitTestHook = nil })
+	chunks := 0
+	boundedReadChunkHook = func() { chunks++ }
+	t.Cleanup(func() { boundedReadChunkHook = nil })
+	err = runValidate([]string{"--analysis", path})
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 ||
+		!strings.Contains(err.Error(), "not a bounded regular file") {
+		t.Fatalf("validate-analysis above the production limit returned %v", err)
+	}
+	if chunks != 0 {
+		t.Fatalf("hard-cap rejection read %d chunks", chunks)
+	}
+}
+
+func TestValidateLimitsRejectsUnvalidatableOutputSize(t *testing.T) {
+	limits := testProfile().Limits
+	limits.MaxOutputBytes = maxValidatedAnalysisBytes
+	if err := validateLimits(limits); err != nil {
+		t.Fatalf("exact validation cap rejected: %v", err)
+	}
+	limits.MaxOutputBytes++
+	if err := validateLimits(limits); err == nil {
+		t.Fatal("output limit above the validator hard cap accepted")
+	}
+}
+
 func TestProfileRejectsTrailingJSONValues(t *testing.T) {
 	profile, err := json.Marshal(testProfile())
 	if err != nil {
