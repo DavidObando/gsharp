@@ -169,7 +169,12 @@ Before moving an application to a different compiler version, pin the intended S
   line-directive-adjusted paths, lines, and columns. Diagnostics
   are path-stable, initialization order is explicit, and schema validation
   rejects missing fields, count mismatches, stale payload-derived deterministic
-  record IDs, unknown file roles, native/embed role-flag disagreement,
+  record IDs, including package IDs derived from semantic-profile plus
+  authoritative GOROOT/toolchain and actual module/replacement identities, and
+  type IDs scoped to that semantic profile.
+  This separates GOOS/GOARCH/tag and local-replacement-content inventories
+  without losing within-profile canonical type deduplication. Validation also
+  rejects unknown file roles, native/embed role-flag disagreement,
   noncompiled-file syntax trees, detached nodes, parent cycles, and complete
   artifacts without a loaded main-module package/source ownership graph. Each
   node-bearing file must be one `*ast.File`-rooted tree. These checks reuse

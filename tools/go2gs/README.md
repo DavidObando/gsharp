@@ -206,9 +206,14 @@ record counts, valid references, and loaded main-module package/file ownership
 before `inventoryComplete` may be true. `validate-analysis` checks structural
 and relational consistency, including recomputing every deterministic record
 ID whose schema-v1 derivation is fully represented by the serialized payload
-(module, file, type, node, constant, scope, selection, call, method set,
+(module, package, file, type, node, constant, scope, selection, call, method set,
 instance, embed, generate directive, dependency, feature, diagnostic, and
-blocker). Package and symbol IDs retain canonical loader/type ownership inputs
+blocker). Package IDs bind the stable semantic profile, including the
+authoritative GOROOT/toolchain identity, to the actual serialized
+module/replacement record identity, import path, and test variant. Type IDs bind
+that profile discriminator to the canonical Go identity, so equal types still
+deduplicate across packages within one profile but target-dependent records do
+not alias across profiles. Symbol IDs retain canonical type-ownership inputs
 that are not duplicated into their records and remain covered by uniqueness,
 reference, and ownership checks. File roles are closed to `compiled`, `active`,
 `test`, `ignored`, `native`, and `embed`, with exact native/embed flag

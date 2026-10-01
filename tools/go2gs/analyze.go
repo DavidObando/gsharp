@@ -492,7 +492,9 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if len(all) > profile.Limits.MaxPackages {
 		return Analysis{}, false, fmt.Errorf("loaded package count %d exceeds limit %d", len(all), profile.Limits.MaxPackages)
 	}
-	builder.indexPackages(all)
+	if err := builder.indexPackages(all); err != nil {
+		return Analysis{}, false, err
+	}
 	for _, pkg := range all {
 		if err := ctx.Err(); err != nil {
 			return Analysis{}, false, err
@@ -2013,7 +2015,7 @@ func collectPackagesContext(ctx context.Context, roots []*packages.Package) ([]*
 		return nil, err
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return packageCanonical(result[i]) < packageCanonical(result[j])
+		return packageSortKey(result[i]) < packageSortKey(result[j])
 	})
 	return result, ctx.Err()
 }
@@ -2254,7 +2256,7 @@ func validateHelperBuildSettings(settings []debug.BuildSetting) error {
 	return nil
 }
 
-func packageCanonical(pkg *packages.Package) string {
+func packageSortKey(pkg *packages.Package) string {
 	files := append([]string{}, pkg.GoFiles...)
 	for i := range files {
 		files[i] = filepath.Base(files[i])

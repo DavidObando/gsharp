@@ -3,11 +3,43 @@
 package main
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
+
+func semanticProfileIdentity(profile ProfileSnapshot, toolchain ToolchainProvenance) string {
+	payload, _ := json.Marshal(struct {
+		ActualGoVersion      string
+		HelperGoVersion      string
+		GOROOTGoVersion      string
+		GOROOTIdentity       string
+		LoadTests            bool
+		GOOS                 string
+		GOARCH               string
+		ArchitectureFeatures []string
+		BuildTags            []string
+		CGOEnabled           bool
+		GOFLAGS              []string
+		GOEXPERIMENT         string
+		GODEBUG              map[string]string
+		ModuleMode           string
+		VendorMode           bool
+		WorkspaceMode        string
+	}{
+		ActualGoVersion: toolchain.ActualVersion, HelperGoVersion: toolchain.HelperSemanticVersion,
+		GOROOTGoVersion: toolchain.GOROOTVersion, GOROOTIdentity: toolchain.GOROOTIdentity,
+		LoadTests: profile.LoadTests,
+		GOOS:      profile.GOOS, GOARCH: profile.GOARCH,
+		ArchitectureFeatures: profile.ArchitectureFeatures, BuildTags: profile.BuildTags,
+		CGOEnabled: profile.CGOEnabled, GOFLAGS: profile.GOFLAGS,
+		GOEXPERIMENT: profile.GOEXPERIMENT, GODEBUG: profile.GODEBUG,
+		ModuleMode: profile.ModuleMode, VendorMode: profile.VendorMode, WorkspaceMode: profile.WorkspaceMode,
+	})
+	return stableID("semanticProfile", string(payload))
+}
 
 func moduleRecordID(value ModuleRecord) string {
 	if value.LocalContentSHA256 != "" {
@@ -16,12 +48,17 @@ func moduleRecordID(value ModuleRecord) string {
 	return stableID("module", value.Path+"\x00"+value.Version+"\x00replace\x00"+value.ReplacementID)
 }
 
+func packageRecordID(semanticProfileID string, value PackageRecord) string {
+	return stableID("package", semanticProfileID+"\x00"+value.ModuleID+"\x00"+
+		value.ImportPath+"\x00"+value.Variant)
+}
+
 func fileRecordID(value FileRecord) string {
 	return stableID("file", value.PackageID+"\x00"+value.Path+"\x00"+value.SHA256)
 }
 
-func typeRecordID(value TypeRecord) string {
-	return stableID("type", value.Canonical)
+func typeRecordID(semanticProfileID string, value TypeRecord) string {
+	return stableID("type", semanticProfileID+"\x00"+value.Canonical)
 }
 
 func nodeRecordID(value NodeRecord) string {
