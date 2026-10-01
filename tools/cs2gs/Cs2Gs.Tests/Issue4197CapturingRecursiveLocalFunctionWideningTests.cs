@@ -547,6 +547,33 @@ namespace Demo
     }
 
     [Fact]
+    public void MixedRecursiveGroupSplitAcrossSwitchSections_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                static int First(int n) => n == 0 ? 0 : Second<int>(n - 1);
+                                return First(value);
+                            case 1:
+                                static int Second<T>(int n) => n == 0 ? 0 : First(n - 1);
+                                return Second<int>(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        Assert.Contains("// lifted static local function Second", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void CapturingRecursiveLocalUsedAsDelegateFromSiblingSwitchSection_RemainsALoudGap()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
