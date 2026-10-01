@@ -76,14 +76,109 @@ jobs:
           if ($relevantTests.Count -ne 10 -or $selectedTests.Count -ne 10) {
             throw "Windows security filter selected $($selectedTests.Count)/$($relevantTests.Count) relevant tests"
           }
+          function Get-SecurityTestResult {
+            param(
+              [object[]]$Events,
+              [string[]]$SelectedTests
+            )
+            foreach ($test in $SelectedTests) {
+              $topLevelEvents = @($Events | Where-Object { $_.Test -eq $test })
+              if ($topLevelEvents | Where-Object { $_.Action -eq 'skip' }) {
+                return [pscustomobject]@{ ExitCode = 1; Message = "Windows security test skipped: $test" }
+              }
+              $terminalEvents = @($topLevelEvents | Where-Object { $_.Action -in @('pass', 'fail', 'skip') })
+              if ($terminalEvents.Count -eq 0 -or $terminalEvents[-1].Action -ne 'pass') {
+                return [pscustomobject]@{ ExitCode = 1; Message = "Windows security test did not finish with pass: $test" }
+              }
+              $skippedSubtests = @($Events | Where-Object {
+                $_.Action -eq 'skip' -and
+                -not [string]::IsNullOrEmpty($_.Test) -and
+                $_.Test.StartsWith($test + '/', [System.StringComparison]::Ordinal)
+              })
+              if ($skippedSubtests.Count -ne 0) {
+                return [pscustomobject]@{
+                  ExitCode = 1
+                  Message = "Windows security test has skipped subtests: $($skippedSubtests.Test -join ', ')"
+                }
+              }
+            }
+            return [pscustomobject]@{ ExitCode = 0; Message = '' }
+          }
+          function Get-GoTestSecurityResult {
+            param(
+              [string[]]$RawEvents,
+              [string[]]$SelectedTests,
+              [int]$ExitCode
+            )
+            if ($ExitCode -ne 0) {
+              return [pscustomobject]@{ ExitCode = $ExitCode; Message = "go test exited with code $ExitCode" }
+            }
+            try {
+              $parsedEvents = @($RawEvents | ForEach-Object { $_ | ConvertFrom-Json -ErrorAction Stop })
+            }
+            catch {
+              return [pscustomobject]@{ ExitCode = 1; Message = "invalid go test JSON event: $_" }
+            }
+            return Get-SecurityTestResult $parsedEvents $SelectedTests
+          }
+          function Assert-SimulatedResult {
+            param([string]$Name, [object]$Result, [int]$ExpectedExitCode)
+            if ($Result.ExitCode -ne $ExpectedExitCode) {
+              throw "$Name simulation returned $($Result.ExitCode), expected $ExpectedExitCode`: $($Result.Message)"
+            }
+          }
+          function ConvertTo-SimulatedJson {
+            param([object[]]$Events)
+            return @($Events | ForEach-Object { $_ | ConvertTo-Json -Compress })
+          }
+          $passingEvents = @(
+            foreach ($test in $selectedTests) {
+              [pscustomobject]@{ Action = 'run'; Test = $test }
+              [pscustomobject]@{ Action = 'pass'; Test = $test }
+            }
+          )
+          $runThenSkipEvents = @($passingEvents)
+          $runThenSkipEvents += [pscustomobject]@{ Action = 'skip'; Test = $selectedTests[0] }
+          Assert-SimulatedResult 'run+skip' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $runThenSkipEvents) $selectedTests 0) 1
+          $subtestSkipEvents = @(
+            foreach ($test in $selectedTests) {
+              [pscustomobject]@{ Action = 'run'; Test = $test }
+              if ($test -eq $selectedTests[0]) {
+                [pscustomobject]@{ Action = 'run'; Test = "$test/skipped" }
+                [pscustomobject]@{ Action = 'skip'; Test = "$test/skipped" }
+              }
+              [pscustomobject]@{ Action = 'pass'; Test = $test }
+            }
+          )
+          Assert-SimulatedResult 'subtest skip' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $subtestSkipEvents) $selectedTests 0) 1
+          Assert-SimulatedResult 'all pass' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $passingEvents) $selectedTests 0) 0
+          $interleavedEvents = @(
+            [pscustomobject]@{ Action = 'start'; Package = 'go2gs' }
+            foreach ($test in $selectedTests) {
+              [pscustomobject]@{ Action = 'run'; Test = $test }
+              [pscustomobject]@{ Action = 'run'; Test = $test }
+            }
+            [pscustomobject]@{ Action = 'output'; Package = 'go2gs' }
+            for ($index = $selectedTests.Count - 1; $index -ge 0; $index--) {
+              [pscustomobject]@{ Action = 'pass'; Test = $selectedTests[$index] }
+            }
+            [pscustomobject]@{ Action = 'pass'; Package = 'go2gs' }
+          )
+          Assert-SimulatedResult 'interleaved duplicate events' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $interleavedEvents) $selectedTests 0) 0
+          $missingPassEvents = @($passingEvents | Where-Object {
+            -not ($_.Test -eq $selectedTests[-1] -and $_.Action -eq 'pass')
+          })
+          Assert-SimulatedResult 'missing pass' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $missingPassEvents) $selectedTests 0) 1
+          Assert-SimulatedResult 'exit propagation' (Get-GoTestSecurityResult @('not JSON') $selectedTests 23) 23
           $events = @(go test -json -count=1 -run $filter .)
           $testExitCode = $LASTEXITCODE
+          $result = Get-GoTestSecurityResult $events $selectedTests $testExitCode
           $events | ForEach-Object { Write-Output $_ }
-          if ($testExitCode -ne 0) { exit $testExitCode }
-          $ranTests = @($events | ConvertFrom-Json | Where-Object { $_.Action -eq 'run' } | ForEach-Object { $_.Test } | Sort-Object -Unique)
-          $missingTests = @($selectedTests | Where-Object { $_ -notin $ranTests })
-          if ($missingTests.Count -ne 0) {
-            throw "Windows security tests were selected but did not execute: $($missingTests -join ', ')"
+          if ($result.ExitCode -ne 0) {
+            if ($result.ExitCode -eq $testExitCode -and $testExitCode -ne 0) {
+              exit $testExitCode
+            }
+            throw $result.Message
           }
           go vet ./...
 
