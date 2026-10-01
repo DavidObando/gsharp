@@ -1786,6 +1786,10 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
+            // Issue #4593: re-listing an interface the imported base already
+            // implements leaves every slot satisfied by the inherited mapping.
+            var satisfiedByImportedBase = ImportedBaseImplementsClrInterface(structSymbol, ifaceSym);
+
             // Methods excluding property/event accessors (those are validated
             // through their owning property / event below).
             foreach (var clrMethod in clrIface.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
@@ -1796,7 +1800,7 @@ internal sealed partial class DeclarationBinder
                 }
 
                 VerifyClrInterfaceMember(
-                    isRequired: clrMethod.IsAbstract,
+                    isRequired: clrMethod.IsAbstract && !satisfiedByImportedBase,
                     findImplementation: () => FindClrInterfaceMethodImplementation(
                         structSymbol,
                         ifaceSym,
@@ -1819,7 +1823,7 @@ internal sealed partial class DeclarationBinder
             {
                 bool requiresGetter = clrProp.GetMethod?.IsAbstract == true;
                 bool requiresSetter = clrProp.SetMethod?.IsAbstract == true;
-                var isRequired = requiresGetter || requiresSetter;
+                var isRequired = (requiresGetter || requiresSetter) && !satisfiedByImportedBase;
                 VerifyClrInterfaceMember(
                     isRequired,
                     findImplementation: () => FindClrInterfacePropertyImplementationOrField(
@@ -1926,7 +1930,8 @@ internal sealed partial class DeclarationBinder
                     ? "interface"
                     : SymbolDisplay.ToTypeDisplayString(declaringType);
                 VerifyClrInterfaceMember(
-                    isRequired: slot.Method.IsAbstract,
+                    isRequired: slot.Method.IsAbstract
+                        && !ImportedBaseImplementsClrInterface(structSymbol, slot.SlotOwner),
                     findImplementation: () => FindClrInterfaceMethodImplementation(structSymbol, slot),
                     validateImplementation: implementation => ValidateUnscopedRefContract(
                         implementation,
@@ -1964,8 +1969,10 @@ internal sealed partial class DeclarationBinder
                     + "::" + (property.SetMethod == null ? string.Empty : MemberLookup.FormatClrSlotSignature(property.SetMethod));
                 bool requiresGetter = property.GetMethod?.IsAbstract == true;
                 bool requiresSetter = property.SetMethod?.IsAbstract == true;
+                var isRequired = (requiresGetter || requiresSetter)
+                    && !ImportedBaseImplementsClrInterface(structSymbol, slot.SlotOwner);
                 VerifyClrInterfaceMember(
-                    isRequired: requiresGetter || requiresSetter,
+                    isRequired,
                     findImplementation: () => FindClrInterfacePropertyImplementationOrField(
                         structSymbol,
                         slot.SlotOwner,
@@ -1974,7 +1981,7 @@ internal sealed partial class DeclarationBinder
                         property.SetMethod,
                         slot.SymbolicArgs,
                         requiresSetter,
-                        requiresGetter || requiresSetter),
+                        isRequired),
                     validateImplementation: implementation =>
                     {
                         ValidateUnscopedRefPropertyContract(
@@ -2187,6 +2194,31 @@ internal sealed partial class DeclarationBinder
                     interfaceName,
                     openProp.Name));
         }
+    }
+
+    /// <summary>
+    /// Issue #4593: decides whether a CLR interface slot owner is already
+    /// implemented by the nearest imported base class. Re-listing such an
+    /// interface (C# interface re-implementation) needs no new member: the CLR
+    /// falls back to the base's interface mapping for every slot the derived
+    /// type does not re-map. Erased symbolic generics (an interface or base
+    /// closed over a G# type) cannot be compared through their CLR shape, so
+    /// they answer <see langword="false"/> and keep the full member check.
+    /// </summary>
+    /// <param name="structSymbol">The implementing source type.</param>
+    /// <param name="slotOwner">The CLR interface that owns the slot.</param>
+    /// <returns><see langword="true"/> when the imported base implements it.</returns>
+    private static bool ImportedBaseImplementsClrInterface(StructSymbol structSymbol, TypeSymbol slotOwner)
+    {
+        if (slotOwner.ClrType is not { IsInterface: true } slotInterface
+            || MemberLookup.IsSymbolicTypeArgument(slotOwner)
+            || TypeMemberModel.GetNearestImportedBase(structSymbol) is not { ClrType: { } importedBaseClr } importedBase
+            || MemberLookup.IsSymbolicTypeArgument(importedBase))
+        {
+            return false;
+        }
+
+        return ClrTypeUtilities.ImplementsInterfaceByName(importedBaseClr, slotInterface);
     }
 
     private static void VerifyClrInterfaceMember<TMember>(
