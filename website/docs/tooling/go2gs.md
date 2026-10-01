@@ -46,7 +46,10 @@ ambiguous bytes collapse the complete URI to `file:<private-path>`. Path
 components otherwise allow ASCII letters, digits, `-._~`, and ordinary
 Unicode letters/numbers. Recognized wrappers end the URI so an adjacent path
 is sanitized independently; malformed unwrapped tails are consumed and fail
-closed. The published bounded message is therefore the message the ID names.
+closed. A drive after `localhost` is accepted only when `localhost` is the
+actual authority of an exactly two-separator `file://localhost/...` form, not
+an ordinary path component. The published bounded message is therefore the
+message the ID names.
 
 Analysis is offline and fail-closed. It disables automatic Go toolchain
 downloads, network module resolution, ambient workspaces, unapproved package

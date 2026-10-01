@@ -548,11 +548,21 @@ func redactFileURI(
 	if path == "" || !isBenignFileURISuffix(suffix) {
 		return privateFileURI
 	}
-	if hasUnsafeFileURIPathComponent(path) {
+
+	leadingSeparators := countLeadingSeparators(path)
+	authorityEnd := -1
+	authority := ""
+	if leadingSeparators == 2 {
+		if end := strings.IndexAny(path[2:], `/\`); end >= 0 {
+			authorityEnd = end + 2
+			authority = path[2:authorityEnd]
+		}
+	}
+	localhostAuthority := authorityEnd >= 0 && strings.EqualFold(authority, "localhost")
+	if hasUnsafeFileURIPathComponent(path, localhostAuthority) {
 		return privateFileURI
 	}
 
-	leadingSeparators := countLeadingSeparators(path)
 	if hasRepeatedPathSeparators(path[leadingSeparators:]) {
 		return privateFileURI
 	}
@@ -579,13 +589,10 @@ func redactFileURI(
 		return uri
 	}
 	if leadingSeparators == 2 {
-		authorityEnd := strings.IndexAny(path[2:], `/\`)
 		if authorityEnd < 0 {
 			return privateFileURI
 		}
-		authorityEnd += 2
-		authority := path[2:authorityEnd]
-		if strings.EqualFold(authority, "localhost") {
+		if localhostAuthority {
 			if authorityEnd+1 >= len(path) || isPathSeparator(rune(path[authorityEnd+1])) {
 				return privateFileURI
 			}
@@ -668,7 +675,7 @@ func hasRepeatedPathSeparators(value string) bool {
 	return false
 }
 
-func hasUnsafeFileURIPathComponent(value string) bool {
+func hasUnsafeFileURIPathComponent(value string, localhostAuthority bool) bool {
 	componentStart := 0
 	nonEmptyComponents := 0
 	firstComponent := ""
@@ -680,7 +687,8 @@ func hasUnsafeFileURIPathComponent(value string) bool {
 		if component != "" {
 			if isWindowsDriveAuthority(component) {
 				if nonEmptyComponents != 0 &&
-					(nonEmptyComponents != 1 || !strings.EqualFold(firstComponent, "localhost")) {
+					(nonEmptyComponents != 1 || !localhostAuthority ||
+						!strings.EqualFold(firstComponent, "localhost")) {
 					return true
 				}
 			} else if !isStrictFileURIPathComponent(component) {

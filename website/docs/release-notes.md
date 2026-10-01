@@ -146,7 +146,8 @@ Before moving an application to a different compiler version, pin the intended S
   are redacted, while unknown or encoded authority forms, unmatched drive
   paths, dot-segment aliases, and malformed or path-bearing query/fragment
   text fail closed. Strict path components also reject malformed whitespace,
-  punctuation, and embedded drive tails. Profile and `goFlags`
+  punctuation, and embedded drive tails, including `localhost` text outside
+  the actual file authority. Profile and `goFlags`
   tags share one canonical selection set, architecture feature levels expand
   to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
   typed `*ast.File` root for every compiled file. Output locking, invalidation,
