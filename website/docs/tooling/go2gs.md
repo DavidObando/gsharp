@@ -33,8 +33,13 @@ recognizes Windows drive/UNC case and separator aliases. Remote URIs remain
 unchanged; absolute, `localhost`, drive-authority, and configured UNC `file:`
 URI paths are redacted. Unknown authorities, encoded or relative forms, and
 ambiguous noncanonical separator counts fail closed rather than being decoded
-or guessed. The published bounded message is therefore the message the ID
-names.
+or guessed; unmatched drive-shaped paths also fail closed. Absolute drive
+paths redact with zero, one, or three separators after `file:`. Query and
+fragment text is retained only for nonempty components containing ASCII
+letters, digits, or `-._~=&`, with one ordered `?` and `#`. Path separators,
+drive colons, percent encoding, empty components, repeated delimiters, and
+other suffix bytes collapse the complete URI to `file:<private-path>`. The
+published bounded message is therefore the message the ID names.
 
 Analysis is offline and fail-closed. It disables automatic Go toolchain
 downloads, network module resolution, ambient workspaces, unapproved package

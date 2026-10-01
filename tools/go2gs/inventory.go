@@ -525,7 +525,7 @@ func redactFileURI(
 	const privateFileURI = "file:<private-path>"
 
 	if schemeEnd > len(uri) {
-		return uri
+		return privateFileURI
 	}
 	prefix := uri[:schemeEnd]
 	remainder := uri[schemeEnd:]
@@ -537,7 +537,7 @@ func redactFileURI(
 		pathEnd = index
 	}
 	path, suffix := remainder[:pathEnd], remainder[pathEnd:]
-	if path == "" {
+	if path == "" || !isBenignFileURISuffix(suffix) {
 		return privateFileURI
 	}
 
@@ -546,10 +546,16 @@ func redactFileURI(
 		return privateFileURI
 	}
 	if leadingSeparators >= 3 {
+		if leadingSeparators > 3 && isWindowsAbsolutePath(path[leadingSeparators:]) {
+			return privateFileURI
+		}
 		if redacted, ok := redactFileURIPath(path, leadingSeparators, path[:leadingSeparators], redactions, func(value compiledMessagePathRedaction) bool {
 			return value.drive
 		}); ok {
 			return prefix + redacted + suffix
+		}
+		if leadingSeparators == 3 && isWindowsAbsolutePath(path[leadingSeparators:]) {
+			return privateFileURI
 		}
 		if redacted, ok := redactFileURIPath(path, leadingSeparators-1, path[:leadingSeparators-1], redactions, func(value compiledMessagePathRedaction) bool {
 			return !value.windows
@@ -579,7 +585,7 @@ func redactFileURI(
 				}); ok {
 					return prefix + redacted + suffix
 				}
-				return uri
+				return privateFileURI
 			}
 			if redacted, ok := redactFileURIPath(path, authorityEnd, path[:authorityEnd+1], redactions, func(value compiledMessagePathRedaction) bool {
 				return !value.windows
@@ -599,13 +605,29 @@ func redactFileURI(
 			}); ok {
 				return prefix + redacted + suffix
 			}
-			return uri
+			return privateFileURI
 		}
 		if strings.ContainsAny(authority, ":@[]") {
 			return privateFileURI
 		}
 		if redacted, ok := redactFileURIPath(path, 0, path[:2], redactions, func(value compiledMessagePathRedaction) bool {
 			return value.unc
+		}); ok {
+			return prefix + redacted + suffix
+		}
+		return privateFileURI
+	}
+	if leadingSeparators == 0 && isWindowsAbsolutePath(path) {
+		if redacted, ok := redactFileURIPath(path, 0, "", redactions, func(value compiledMessagePathRedaction) bool {
+			return value.drive
+		}); ok {
+			return prefix + redacted + suffix
+		}
+		return privateFileURI
+	}
+	if leadingSeparators == 1 && isWindowsAbsolutePath(path[1:]) {
+		if redacted, ok := redactFileURIPath(path, 1, path[:1], redactions, func(value compiledMessagePathRedaction) bool {
+			return value.drive
 		}); ok {
 			return prefix + redacted + suffix
 		}
@@ -633,6 +655,40 @@ func hasRepeatedPathSeparators(value string) bool {
 		}
 	}
 	return false
+}
+
+func isBenignFileURISuffix(value string) bool {
+	if value == "" {
+		return true
+	}
+	if value[0] != '?' && value[0] != '#' {
+		return false
+	}
+	segmentStart := 1
+	seenFragment := value[0] == '#'
+	for index := 1; index < len(value); index++ {
+		switch value[index] {
+		case '?':
+			return false
+		case '#':
+			if seenFragment || index == segmentStart {
+				return false
+			}
+			seenFragment = true
+			segmentStart = index + 1
+		default:
+			if !isBenignFileURISuffixByte(value[index]) {
+				return false
+			}
+		}
+	}
+	return segmentStart < len(value)
+}
+
+func isBenignFileURISuffixByte(value byte) bool {
+	return isASCIIAlpha(value) ||
+		value >= '0' && value <= '9' ||
+		strings.ContainsRune("-._~=&", rune(value))
 }
 
 func redactFileURIPath(

@@ -143,7 +143,8 @@ Before moving an application to a different compiler version, pin the intended S
   nested roots before their parents, and recognizes Windows drive/UNC case and
   separator aliases without over-redacting lookalike prefixes or remote URIs;
   absolute, `localhost`, drive-authority, and configured UNC `file:` URI paths
-  are redacted, while unknown or encoded authority forms fail closed. Profile and `goFlags`
+  are redacted, while unknown or encoded authority forms, unmatched drive
+  paths, and path-bearing query or fragment text fail closed. Profile and `goFlags`
   tags share one canonical selection set, architecture feature levels expand
   to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
   typed `*ast.File` root for every compiled file. Output locking, invalidation,

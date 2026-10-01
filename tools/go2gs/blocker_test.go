@@ -387,6 +387,84 @@ func TestRecordedMessageURIPathRedaction(t *testing.T) {
 			want:       "FiLe://<source>/file.go?mode=read#location",
 		},
 		{
+			name:       "unmatched drive authority fails closed",
+			message:    "file://D:/Public/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "wrapped unmatched drive authority alias fails closed",
+			message:    "`FiLe://d:\\Public\\file.go?mode=read#location`",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "`file:<private-path>`",
+		},
+		{
+			name:       "localhost unmatched drive path fails closed",
+			message:    "file://localhost/D:/Public/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "local unmatched drive path fails closed",
+			message:    "file:///D:/Public/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "single separator matching drive path",
+			message:    "file:/C:/Work/Source/file.go",
+			redactions: []messagePathRedaction{{`c:\work\source`, "<source>"}},
+			want:       "file:/<source>/file.go",
+		},
+		{
+			name:       "single backslash matching drive path",
+			message:    `FiLe:\c:\WORK\source\file.go`,
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       `FiLe:\<source>\file.go`,
+		},
+		{
+			name:       "single separator unmatched drive path fails closed",
+			message:    "file:/D:/Public/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "single backslash unmatched drive path fails closed",
+			message:    "`file:\\D:\\Public\\file.go?mode=read#location`",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "`file:<private-path>`",
+		},
+		{
+			name:       "direct matching drive path",
+			message:    "file:C:/Work/Source/file.go?mode=read#location",
+			redactions: []messagePathRedaction{{`c:\work\source`, "<source>"}},
+			want:       "file:<source>/file.go?mode=read#location",
+		},
+		{
+			name:       "wrapped direct matching drive alias",
+			message:    "`FiLe:c:\\WORK\\source\\file.go`",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "`FiLe:<source>\\file.go`",
+		},
+		{
+			name:       "direct unmatched drive path fails closed",
+			message:    "file:D:/Public/file.go?mode=read#location",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "four separator matching drive path fails closed",
+			message:    "file:////C:/Work/Source/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "five separator matching drive path fails closed",
+			message:    `FiLe:\\\\\c:\WORK\source\file.go`,
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
 			name:       "localhost unrelated path unchanged",
 			message:    "file://localhost/public/source/file.go",
 			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
@@ -471,6 +549,60 @@ func TestRecordedMessageURIPathRedaction(t *testing.T) {
 			want:       "`file://<source>/file.go?mode=read#location`",
 		},
 		{
+			name:       "benign file URI suffix grammar",
+			message:    "file:///private/source/file.go?mode=read&kind=inventory#location-1",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file://<source>/file.go?mode=read&kind=inventory#location-1",
+		},
+		{
+			name:    "matching path query and fragment roots fail closed",
+			message: "file:///private/source/file.go?other=/private/source/secret#C:/Work/Source",
+			redactions: []messagePathRedaction{
+				{"/private/source", "<source>"},
+				{"C:/Work/Source", "<private-path>"},
+			},
+			want: "file:<private-path>",
+		},
+		{
+			name:    "public path query and fragment roots fail closed",
+			message: "file:///public/file.go?source=/private/source#drive=C:/Work/Source",
+			redactions: []messagePathRedaction{
+				{"/private/source", "<source>"},
+				{"C:/Work/Source", "<private-path>"},
+			},
+			want: "file:<private-path>",
+		},
+		{
+			name:       "localhost fragment root fails closed",
+			message:    "file://localhost/public/file.go#/private/source/secret",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "suffix backslash fails closed",
+			message:    `file:///public/file.go?path=C:\Work\Source`,
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "encoded suffix fails closed",
+			message:    "file:///public/file.go?path=%2Fprivate%2Fsource",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "ambiguous suffix delimiter fails closed",
+			message:    "file:///public/file.go?mode=read?path",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "empty suffix component fails closed",
+			message:    "file:///public/file.go?mode=read#",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
 			name:       "unrelated file URI unchanged",
 			message:    "file:///public/source/file.go",
 			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
@@ -493,6 +625,15 @@ func TestRecordedMessageURIPathRedaction(t *testing.T) {
 			message:    "https://example.test/private%2Fsource/file.go",
 			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
 			want:       "https://example.test/private%2Fsource/file.go",
+		},
+		{
+			name:    "remote path-bearing suffix unchanged",
+			message: "https://example.test/file?source=/private/source#drive=C:/Work/Source",
+			redactions: []messagePathRedaction{
+				{"/private/source", "<source>"},
+				{"C:/Work/Source", "<private-path>"},
+			},
+			want: "https://example.test/file?source=/private/source#drive=C:/Work/Source",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -540,6 +681,21 @@ func TestBlockerPathAliasesPublishOneStableIdentity(t *testing.T) {
 	unknownAlias := build("/different/source", "file://unknown/different/source/.git/HEAD")
 	if unknown.Message != "file:<private-path>" || unknown.ID != unknownAlias.ID {
 		t.Fatalf("ambiguous file URI aliases produced unstable blocker identities: %#v != %#v", unknown, unknownAlias)
+	}
+	suffix := build("/private/source", "file:///public/file.go?source=/private/source")
+	suffixAlias := build("/different/source", "file:///public/file.go?source=/different/source")
+	if suffix.Message != "file:<private-path>" || suffix.ID != suffixAlias.ID {
+		t.Fatalf("file URI suffix aliases produced unstable blocker identities: %#v != %#v", suffix, suffixAlias)
+	}
+	directDrive := build(`C:\Work\Source`, "file:C:/Work/Source/file.go")
+	directDriveAlias := build("c:/work/source", `file:c:\WORK\source/file.go`)
+	if directDrive.ID != directDriveAlias.ID || directDrive.Message != directDriveAlias.Message {
+		t.Fatalf("direct drive file URI aliases changed blocker identity: %#v != %#v", directDrive, directDriveAlias)
+	}
+	ambiguousDrive := build(`C:\Work\Source`, "file:////C:/Work/Source/file.go")
+	ambiguousDriveAlias := build("c:/work/source", `FiLe:\\\\\c:\WORK\source\file.go`)
+	if ambiguousDrive.Message != "file:<private-path>" || ambiguousDrive.ID != ambiguousDriveAlias.ID {
+		t.Fatalf("ambiguous drive file URI aliases produced unstable blocker identities: %#v != %#v", ambiguousDrive, ambiguousDriveAlias)
 	}
 }
 
