@@ -6,9 +6,11 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -97,6 +99,35 @@ public class Issue4611BranchValueSequenceTests
 
         // "a" has no branch value and contributes [a]; "bc" contributes [bc, bc].
         Assert.Equal("3", CompileAndRun(printed, "Probe.Run()").Trim());
+    }
+
+    /// <summary>
+    /// The discriminating witness (ADR-0154): translate the translator's own
+    /// <c>CSharpToGSharpTranslator.Statements.cs</c>, exactly as the
+    /// self-migration does, and reject any fail-fast bridge on a block's branch
+    /// value. The #4550 shape migrated to <c>.Append(block.BranchValue!!)</c>,
+    /// which threw on the first block without a branch value.
+    /// </summary>
+    [Fact]
+    public async Task TranslatorSelfMigration_NeverAssertsABlockBranchValue()
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
+            Path.Combine(repoRoot, "tools", "cs2gs", "Cs2Gs.Translator", "Cs2Gs.Translator.csproj"));
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Translator should bind with no C# errors: "
+                + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(
+            project.Documents,
+            candidate => Path.GetFileName(candidate.FilePath) == "CSharpToGSharpTranslator.Statements.cs");
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(document, context));
+
+        Assert.Contains("BlockOperationsAndBranchValue", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("BranchValue!!", printed, StringComparison.Ordinal);
     }
 
     private static string TranslateUnit(string source)
