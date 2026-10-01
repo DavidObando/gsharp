@@ -15,6 +15,7 @@ import (
 )
 
 func TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding(t *testing.T) {
+	configurePreloadGoFixture(t)
 	root := copyFixture(t, "complete")
 	out := secureTestRoot(t)
 	keep := filepath.Join(out, "keep.txt")
@@ -55,6 +56,7 @@ func TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding(t *test
 }
 
 func TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts(t *testing.T) {
+	configurePreloadGoFixture(t)
 	root := copyFixture(t, "complete")
 	profile := testProfile()
 	profile.RequestedGoVersion = "1.26.6"
@@ -74,6 +76,7 @@ func TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts(t *t
 }
 
 func TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker(t *testing.T) {
+	configurePreloadGoFixture(t)
 	root := copyFixture(t, "complete")
 	actual := strings.Repeat("a", 40)
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
@@ -93,24 +96,10 @@ func TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker(t *testing.T) {
 }
 
 func TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages(t *testing.T) {
+	configurePreloadGoFixture(t)
 	root := copyFixture(t, "complete")
 	marker := filepath.Join(secureTestRoot(t), "native-ran")
 	toolDir := secureTestRoot(t)
-	sourceGo := filepath.Join(runtime.GOROOT(), "bin", selectedGoName())
-	selectedGo := filepath.Join(toolDir, selectedGoName())
-	var stageErr error
-	if runtime.GOOS == "windows" {
-		var data []byte
-		data, stageErr = os.ReadFile(sourceGo)
-		if stageErr == nil {
-			stageErr = os.WriteFile(selectedGo, data, 0o755)
-		}
-	} else {
-		stageErr = os.Symlink(sourceGo, selectedGo)
-	}
-	if stageErr != nil {
-		t.Fatal(stageErr)
-	}
 	for _, name := range []string{"cc", "gcc", "clang", "pkg-config", "as", "ld"} {
 		if err := os.WriteFile(filepath.Join(toolDir, name), []byte("#!/bin/sh\n: > \""+marker+"\"\nexit 99\n"), 0o755); err != nil {
 			t.Fatal(err)

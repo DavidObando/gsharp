@@ -81,7 +81,8 @@ func captureSelectedExecutableContext(ctx context.Context, name, path string, ex
 	if err != nil {
 		return capturedExecutable{}, "", err
 	}
-	if !initialInfo.Mode().IsRegular() || initialInfo.Mode().Perm()&0o111 == 0 {
+	if !initialInfo.Mode().IsRegular() ||
+		(runtime.GOOS != "windows" && initialInfo.Mode().Perm()&0o111 == 0) {
 		return capturedExecutable{}, "", errors.New("not a regular executable")
 	}
 	data, err := readBoundedRegularFileContext(ctx, path, limit)

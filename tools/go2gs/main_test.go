@@ -2056,17 +2056,20 @@ func TestBoundOutputRootResistsAncestorReplacement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var replacementErr error
 	outputRootBoundHook = func() {
 		outputRootBoundHook = nil
-		if err := os.Rename(ancestor, displaced); err != nil {
-			t.Fatal(err)
+		if replacementErr = os.Rename(ancestor, displaced); replacementErr != nil {
+			return
 		}
 		if err := os.MkdirAll(out, 0o700); err != nil {
-			t.Fatal(err)
+			replacementErr = err
+			return
 		}
 		for _, name := range []string{"analysis.json", "run.json"} {
 			if err := os.WriteFile(filepath.Join(out, name), []byte("attacker"), 0o644); err != nil {
-				t.Fatal(err)
+				replacementErr = err
+				return
 			}
 		}
 	}
@@ -2074,6 +2077,39 @@ func TestBoundOutputRootResistsAncestorReplacement(t *testing.T) {
 	output, err := lockAndInvalidateOutput(out)
 	if err != nil {
 		t.Fatal(err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			_ = output.release()
+		}
+	}()
+	if runtime.GOOS == "windows" {
+		if replacementErr == nil {
+			t.Fatal("Windows allowed replacing an ancestor of the bound output root")
+		}
+		if err := publishWorkerArtifacts(output, []byte("bound analysis"), []byte("bound run"), nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := output.release(); err != nil {
+			t.Fatal(err)
+		}
+		released = true
+		if err := os.Rename(ancestor, displaced); err != nil {
+			t.Fatalf("bound output handle remained open after release: %v", err)
+		}
+		for name, want := range map[string]string{
+			"analysis.json": "bound analysis",
+			"run.json":      "bound run",
+		} {
+			if data, err := os.ReadFile(filepath.Join(displaced, "out", name)); err != nil || string(data) != want {
+				t.Fatalf("bound output %s = %q, %v", name, data, err)
+			}
+		}
+		return
+	}
+	if replacementErr != nil {
+		t.Fatal(replacementErr)
 	}
 	original := filepath.Join(displaced, "out")
 	for _, name := range []string{"analysis.json", "run.json"} {
@@ -2090,6 +2126,7 @@ func TestBoundOutputRootResistsAncestorReplacement(t *testing.T) {
 	if err := output.release(); err != nil {
 		t.Fatal(err)
 	}
+	released = true
 	for name, want := range map[string]string{
 		"analysis.json": "bound analysis",
 		"run.json":      "bound run",

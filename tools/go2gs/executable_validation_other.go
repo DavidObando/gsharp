@@ -1,6 +1,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 
-//go:build !linux
+//go:build !linux && !windows
 
 package main
 
