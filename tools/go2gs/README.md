@@ -61,7 +61,10 @@ The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,
 `GOSUMDB=off`, `GOWORK=off` unless a later version adds an explicit workspace,
 and disables `GOPACKAGESDRIVER`. The child environment is allowlisted rather
-than inherited wholesale. Profile `entryPatterns` are restricted to `.`,
+than inherited wholesale. Before profile decoding and before its configured
+timeout exists, the profile must be a stable regular file of at most 256 KiB;
+symlinks, replacement, growth, and larger inputs fail bootstrap without an
+artifact. Profile `entryPatterns` are restricted to `.`,
 `./...`, or canonical module-relative `./segment[/segment]` patterns,
 optionally ending in `/...` for recursion.
 Segments use ASCII letters, digits, `.`, `_`, or `-`; no normalization is
@@ -83,9 +86,13 @@ empty because the in-process parser and type checker cannot authoritatively
 apply selected-toolchain semantic overrides.
 Before loading, source inputs and authorized local replacements are copied
 with bounded, descriptor-relative reads that reject symlinks in every path
-component into a private mirror. The same rooted reads verify the originals
-after loading. The loader sees only those captured bytes; emitted manifest
-hashes remain those of the originals.
+component into a private mirror. Directory enumeration reads at most 128
+entries per batch and fails before sorting above 10,000 entries in one
+directory or 100,000 traversed entries total across the source and selected
+local replacements. Every file, directory, symlink, and other entry consumes
+that traversal budget independently of the captured-file limit. The same
+rooted reads verify the originals after loading. The loader sees only those
+captured bytes; emitted manifest hashes remain those of the originals.
 Output locking, stale-artifact invalidation, and atomic publication stay
 relative to one held directory descriptor/handle, so replacing an output-root
 ancestor cannot redirect owned output operations. The selected output directory

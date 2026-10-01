@@ -5,10 +5,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"unsafe"
 
@@ -42,21 +42,28 @@ func openRootedMetadataFile(root, relative string) (*os.File, error) {
 }
 
 func walkRootedMetadataTree(root string, visit func(string, os.DirEntry) (bool, error)) error {
+	budget := newMetadataTraversalBudget()
+	return walkRootedMetadataTreeContext(context.Background(), root, &budget, visit)
+}
+
+func walkRootedMetadataTreeContext(ctx context.Context, root string, budget *metadataTraversalBudget, visit func(string, os.DirEntry) (bool, error)) error {
 	directory, err := openAbsoluteWindowsMetadataPath(root, true)
 	if err != nil {
 		return err
 	}
-	return walkRootedWindowsMetadataDirectory(directory, root, "", visit)
+	return walkRootedWindowsMetadataDirectory(ctx, directory, root, "", budget, visit)
 }
 
-func walkRootedWindowsMetadataDirectory(directory *os.File, root, relative string, visit func(string, os.DirEntry) (bool, error)) error {
+func walkRootedWindowsMetadataDirectory(ctx context.Context, directory *os.File, root, relative string, budget *metadataTraversalBudget, visit func(string, os.DirEntry) (bool, error)) error {
 	defer directory.Close()
-	entries, err := directory.ReadDir(-1)
+	entries, err := readMetadataDirectoryEntriesContext(ctx, directory, budget)
 	if err != nil {
 		return err
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		childRelative := filepath.Join(relative, entry.Name())
 		descend, err := visit(childRelative, entry)
 		if err != nil {
@@ -86,7 +93,7 @@ func walkRootedWindowsMetadataDirectory(directory *os.File, root, relative strin
 			_ = child.Close()
 			return errors.New("rooted metadata directory changed during traversal")
 		}
-		if err := walkRootedWindowsMetadataDirectory(child, root, childRelative, visit); err != nil {
+		if err := walkRootedWindowsMetadataDirectory(ctx, child, root, childRelative, budget, visit); err != nil {
 			return err
 		}
 	}
@@ -94,6 +101,10 @@ func walkRootedWindowsMetadataDirectory(directory *os.File, root, relative strin
 }
 
 func readRootedMetadataDirectory(path string) ([]os.DirEntry, error) {
+	return readRootedMetadataDirectoryContext(context.Background(), path)
+}
+
+func readRootedMetadataDirectoryContext(ctx context.Context, path string) ([]os.DirEntry, error) {
 	if rootedDirectoryBeforeOpenHook != nil {
 		rootedDirectoryBeforeOpenHook(path)
 	}
@@ -102,12 +113,8 @@ func readRootedMetadataDirectory(path string) ([]os.DirEntry, error) {
 		return nil, err
 	}
 	defer directory.Close()
-	entries, err := directory.ReadDir(-1)
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	return entries, nil
+	budget := newMetadataTraversalBudget()
+	return readMetadataDirectoryEntriesContext(ctx, directory, &budget)
 }
 
 func openAbsoluteWindowsMetadataPath(path string, directory bool) (*os.File, error) {

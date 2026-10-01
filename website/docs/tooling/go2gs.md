@@ -41,6 +41,9 @@ Architecture feature values are validated per GOARCH and expanded to cmd/go's
 cumulative tool tags.
 `goExperiment` and `goDebug` must be empty because the in-process semantic
 engine cannot authoritatively apply selected-toolchain overrides.
+Before decoding and before the configured timeout exists, the profile must be
+a stable regular file of at most 256 KiB. Oversized, growing, replaced,
+symlink, and non-regular profile inputs fail bootstrap without an artifact.
 Profile, output, and toolchain bootstrap failures—including a missing `go`
 executable, unusable GOROOT, or dynamically linked Linux `cmd/go`—exit 2 and
 may produce no artifact. Exact-version or source-commit mismatches produce an
@@ -51,7 +54,11 @@ definitive toolchain/source mismatch publishes a deterministic exit-1 artifact
 without `go/packages`; a matching preload exits 2 without an artifact because
 the required descriptor-bound launch cannot be provided securely.
 Source and local-replacement capture and verification use descriptor-relative
-reads that reject symlinks in every path component.
+reads that reject symlinks in every path component. Enumeration uses
+128-entry batches and fails before sorting above 10,000 entries in one
+directory or 100,000 traversed entries total across the source and selected
+local replacements. Files, directories, links, and other entries all consume
+that traversal budget separately from the captured-file limit.
 Output locking, stale-artifact invalidation, and atomic publication remain
 relative to one held directory descriptor/handle, so replacing an output-root
 ancestor cannot redirect them. Keep the selected output directory exclusively

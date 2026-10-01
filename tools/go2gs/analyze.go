@@ -43,6 +43,7 @@ var rootedReadAfterOpenHook func(string, string)
 var rootedWalkBeforeDescendHook func(string)
 var rootedDirectoryBeforeOpenHook func(string)
 var boundedReadChunkHook func()
+var boundedRegularFileBeforeFinalStatTestHook func()
 var postLoadContextTestHook func(string)
 var analysisOperationTestHook func(string, string)
 var selectedPkgConfigSnapshotTestHook func(*packageInputSnapshot)
@@ -615,8 +616,9 @@ func verifyManifestSnapshotContext(ctx context.Context, snapshot manifestSnapsho
 }
 
 type mirrorBudget struct {
-	files int
-	bytes int64
+	files   int
+	bytes   int64
+	entries metadataTraversalBudget
 }
 
 type mirroredTree struct {
@@ -663,7 +665,7 @@ func createSourceMirrorContext(ctx context.Context, sourceRoot, outRoot, workRoo
 	}
 	mirrorBase := filepath.Join(workRoot, "source-mirror")
 	root := filepath.Join(mirrorBase, "source")
-	budget := &mirrorBudget{}
+	budget := &mirrorBudget{entries: newMetadataTraversalBudget()}
 	tree, err := captureTreeContext(ctx, sourceRoot, root, []string{outRoot, workRoot}, limits, budget)
 	if err != nil {
 		return sourceMirror{}, fmt.Errorf("create immutable source mirror: %w", err)
@@ -773,8 +775,11 @@ func captureTreeContext(ctx context.Context, sourceRoot, mirrorRoot string, excl
 	if err := os.MkdirAll(mirrorRoot, 0o700); err != nil {
 		return mirroredTree{}, err
 	}
+	if budget.entries.limit == 0 {
+		budget.entries = newMetadataTraversalBudget()
+	}
 	result := mirroredTree{sourceRoot: sourceRoot, mirrorRoot: mirrorRoot, files: map[string]snapshottedInput{}}
-	err := walkRootedMetadataTree(sourceRoot, func(relative string, entry os.DirEntry) (bool, error) {
+	err := walkRootedMetadataTreeContext(ctx, sourceRoot, &budget.entries, func(relative string, entry os.DirEntry) (bool, error) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
@@ -986,14 +991,14 @@ func samePackageFileSetContext(ctx context.Context, originalDirectory, mirrorDir
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	originalEntries, err := readRootedMetadataDirectory(originalDirectory)
+	originalEntries, err := readRootedMetadataDirectoryContext(ctx, originalDirectory)
 	if err != nil {
 		return false, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	mirrorEntries, err := readRootedMetadataDirectory(mirrorDirectory)
+	mirrorEntries, err := readRootedMetadataDirectoryContext(ctx, mirrorDirectory)
 	if err != nil {
 		return false, nil
 	}
@@ -2570,6 +2575,24 @@ func readBoundedRegularFileWithHooksContext(ctx context.Context, path string, li
 	data, err = readBoundedContext(ctx, file, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read metadata file: %w", err)
+	}
+	if boundedRegularFileBeforeFinalStatTestHook != nil {
+		boundedRegularFileBeforeFinalStatTestHook()
+	}
+	finalOpenedInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("reinspect opened metadata file: %w", err)
+	}
+	finalPathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("reinspect metadata path: %w", err)
+	}
+	if !finalOpenedInfo.Mode().IsRegular() || !finalPathInfo.Mode().IsRegular() ||
+		!os.SameFile(openedInfo, finalOpenedInfo) ||
+		!os.SameFile(finalOpenedInfo, finalPathInfo) ||
+		finalOpenedInfo.Size() != openedInfo.Size() ||
+		finalOpenedInfo.Size() != int64(len(data)) {
+		return nil, errors.New("bounded regular file changed while reading")
 	}
 	return data, nil
 }
