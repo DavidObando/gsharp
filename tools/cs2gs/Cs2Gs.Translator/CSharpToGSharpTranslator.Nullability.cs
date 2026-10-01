@@ -550,10 +550,22 @@ public sealed partial class CSharpToGSharpTranslator
                 return type;
             }
 
+            return this.AwaitedReturnIsTainted(awaitedType, symbol)
+                ? MakeNullable(type)
+                : type;
+        }
+
+        // The promote/not-promote answer PromoteAwaitedReturnIfTainted applies
+        // to an unwrapped return element (an awaited `Task<T>` result, or an
+        // iterator's `sequence[T]` element). Issue #4578: a `foreach` over a
+        // source iterator call asks this same question, so the loop binding and
+        // the iterator's rendered element cannot disagree.
+        private bool AwaitedReturnIsTainted(ITypeSymbol awaitedType, IMethodSymbol symbol)
+        {
             if (awaitedType is not { IsReferenceType: true }
                 || awaitedType.NullableAnnotation == NullableAnnotation.Annotated)
             {
-                return type;
+                return false;
             }
 
             // Issue #4262 follow-up: unlike `ShouldPromoteToNullableReference`
@@ -573,9 +585,43 @@ public sealed partial class CSharpToGSharpTranslator
             // the same condition the ordinary declaration path already requires.
             return awaitedType.NullableAnnotation == NullableAnnotation.None
                 && ObliviousNullabilityAnalyzer.IsTainted(
-                    this.context.Compilation, symbol, this.context.SiblingCompilations)
-                ? MakeNullable(type)
-                : type;
+                    this.context.Compilation, symbol, this.context.SiblingCompilations);
+        }
+
+        // Issue #4578: whether `foreach` iterates a direct call to a source
+        // iterator method whose `sequence[T]` element MapReturnType rendered
+        // `T?`. G# infers the loop binding from that element, so the binding is
+        // nullable even though the C# loop type is a plain oblivious `T`; the
+        // body's member accesses and arguments then need the `!!` that
+        // NullableForEachBindings supplies (C# would throw at the same
+        // dereference). Mirrors MapReturnType's iterator test and asks the same
+        // AwaitedReturnIsTainted question, never a separate computation.
+        private bool ForEachIteratesPromotedSourceIteratorElement(
+            ForEachStatementSyntax forEach,
+            ForEachStatementInfo forEachInfo)
+        {
+            if (!forEachInfo.ElementConversion.IsIdentity
+                || !forEach.AwaitKeyword.IsKind(SyntaxKind.None)
+                || Unparenthesize(forEach.Expression) is not InvocationExpressionSyntax invocation
+                || this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol invoked)
+            {
+                return false;
+            }
+
+            IMethodSymbol method = invoked.OriginalDefinition;
+            if (method.ReturnType is not INamedTypeSymbol { IsGenericType: true, Name: "IEnumerable" } enumerable)
+            {
+                return false;
+            }
+
+            // ADR-0192: a partial method takes the iterator fact from its
+            // implementation part's body, exactly as MapReturnType does.
+            IMethodSymbol bodySource = method.PartialImplementationPart ?? method;
+            bool isIterator = bodySource.DeclaringSyntaxReferences.Any(reference =>
+                reference.GetSyntax() is MethodDeclarationSyntax declaration
+                    && IsIteratorBody(declaration));
+            return isIterator
+                && this.AwaitedReturnIsTainted(enumerable.TypeArguments[0], method);
         }
 
         // Issue #2423: mirrors PromoteAwaitedReturnIfTainted's decision for a
