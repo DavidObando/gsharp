@@ -671,7 +671,7 @@ func lockAndInvalidateOutput(outRoot string) (*boundOutputRoot, error) {
 		if err := output.verifyLock(); err != nil {
 			return nil, errors.Join(err, output.release())
 		}
-		info, statErr := output.root.Lstat(name)
+		info, statErr := rootEntryStableInfo(output.root, name)
 		if os.IsNotExist(statErr) {
 			continue
 		}
@@ -1057,16 +1057,20 @@ func atomicWriteRoot(output *boundOutputRoot, name string, data []byte, mode os.
 	if err := file.Sync(); err != nil {
 		return err
 	}
-	if beforeRename != nil {
-		beforeRename(filepath.Join(output.path, staged))
-	}
 	openedInfo, err = file.Stat()
 	if err != nil {
 		return err
 	}
-	stagedInfo, err := output.root.Lstat(staged)
-	if err != nil || !openedInfo.Mode().IsRegular() || !stagedInfo.Mode().IsRegular() ||
-		!os.SameFile(openedInfo, stagedInfo) {
+	if err := file.Close(); err != nil {
+		file = nil
+		return err
+	}
+	file = nil
+	if beforeRename != nil {
+		beforeRename(filepath.Join(output.path, staged))
+	}
+	same, err := rootEntryMatches(output.root, staged, openedInfo)
+	if err != nil || !openedInfo.Mode().IsRegular() || !same {
 		return errors.New("staged output path changed before rename")
 	}
 	if err := output.root.Rename(staged, name); err != nil {
@@ -1076,26 +1080,13 @@ func atomicWriteRoot(output *boundOutputRoot, name string, data []byte, mode os.
 	if afterRename != nil {
 		afterRename(filepath.Join(output.path, name))
 	}
-	finalInfo, err := output.root.Lstat(name)
-	if err != nil || !finalInfo.Mode().IsRegular() || !os.SameFile(openedInfo, finalInfo) {
+	same, err = rootEntryMatches(output.root, name, openedInfo)
+	if err != nil || !same {
 		return errors.New("final output path does not identify the staged file")
 	}
-	directory, err := output.root.Open(".")
-	if err != nil {
+	if err := syncRootPublication(output.root, name, openedInfo); err != nil {
 		return err
 	}
-	if err := directory.Sync(); err != nil {
-		_ = directory.Close()
-		return err
-	}
-	if err := directory.Close(); err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		file = nil
-		return err
-	}
-	file = nil
 	committed = true
 	return nil
 }
@@ -1119,17 +1110,30 @@ func createRootTempFile(root *os.Root, prefix string) (*os.File, string, error) 
 }
 
 func rootEntryMatches(root *os.Root, name string, expected os.FileInfo) (bool, error) {
-	current, err := root.Lstat(name)
+	current, err := rootEntryStableInfo(root, name)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	if current.Mode().Type() != expected.Mode().Type() {
+		return false, nil
+	}
 	return os.SameFile(expected, current), nil
 }
 
 func rootEntryStableInfo(root *os.Root, name string) (_ os.FileInfo, err error) {
+	pathInfo, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("root entry is a symlink")
+	}
+	if !pathInfo.Mode().IsRegular() && !pathInfo.IsDir() {
+		return nil, errors.New("root entry is not a regular file or directory")
+	}
 	file, err := root.Open(name)
 	if err != nil {
 		return nil, err
@@ -1137,7 +1141,14 @@ func rootEntryStableInfo(root *os.Root, name string) (_ os.FileInfo, err error) 
 	defer func() {
 		err = errors.Join(err, file.Close())
 	}()
-	return file.Stat()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if pathInfo.Mode().Type() != openedInfo.Mode().Type() || !os.SameFile(pathInfo, openedInfo) {
+		return nil, errors.New("root entry identity changed while opening")
+	}
+	return openedInfo, nil
 }
 
 func removeRootEntryIfSame(root *os.Root, name string, expected os.FileInfo) (bool, error) {
@@ -1196,15 +1207,20 @@ func atomicWriteWithHooks(path string, data []byte, mode os.FileMode, beforeRena
 	if err := file.Sync(); err != nil {
 		return err
 	}
-	if beforeRename != nil {
-		beforeRename(staged)
-	}
 	openedInfo, err = file.Stat()
 	if err != nil {
 		return err
 	}
-	stagedInfo, err := os.Lstat(staged)
-	if err != nil || !openedInfo.Mode().IsRegular() || !stagedInfo.Mode().IsRegular() || !os.SameFile(openedInfo, stagedInfo) {
+	if err := file.Close(); err != nil {
+		file = nil
+		return err
+	}
+	file = nil
+	if beforeRename != nil {
+		beforeRename(staged)
+	}
+	same, err := pathEntryMatches(staged, openedInfo)
+	if err != nil || !openedInfo.Mode().IsRegular() || !same {
 		return errors.New("staged output path changed before rename")
 	}
 	if err := os.Rename(staged, path); err != nil {
@@ -1214,36 +1230,65 @@ func atomicWriteWithHooks(path string, data []byte, mode os.FileMode, beforeRena
 	if afterRename != nil {
 		afterRename(path)
 	}
-	finalInfo, err := os.Lstat(path)
-	if err != nil || !finalInfo.Mode().IsRegular() || !os.SameFile(openedInfo, finalInfo) {
+	same, err = pathEntryMatches(path, openedInfo)
+	if err != nil || !same {
 		return errors.New("final output path does not identify the staged file")
 	}
-	directory, err := os.Open(dir)
-	if err != nil {
+	if err := syncPathPublication(dir, path, openedInfo); err != nil {
 		return err
 	}
-	if err := directory.Sync(); err != nil {
-		_ = directory.Close()
-		return err
-	}
-	if err := directory.Close(); err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		file = nil
-		return err
-	}
-	file = nil
 	committed = true
 	return nil
+}
+
+func pathEntryStableInfo(path string) (_ os.FileInfo, err error) {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("path entry is a symlink")
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return nil, errors.New("path entry is not a regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if pathInfo.Mode().Type() != openedInfo.Mode().Type() || !os.SameFile(pathInfo, openedInfo) {
+		return nil, errors.New("path entry identity changed while opening")
+	}
+	return openedInfo, nil
+}
+
+func pathEntryMatches(path string, expected os.FileInfo) (bool, error) {
+	current, err := pathEntryStableInfo(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if current.Mode().Type() != expected.Mode().Type() {
+		return false, nil
+	}
+	return os.SameFile(expected, current), nil
 }
 
 func removeIfSameFile(path string, expected os.FileInfo) {
 	if expected == nil {
 		return
 	}
-	current, err := os.Lstat(path)
-	if err == nil && current.Mode().IsRegular() && os.SameFile(expected, current) {
+	same, err := pathEntryMatches(path, expected)
+	if err == nil && same {
 		_ = os.Remove(path)
 	}
 }

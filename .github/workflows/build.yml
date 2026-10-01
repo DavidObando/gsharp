@@ -67,7 +67,7 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           go mod verify
-          $filter = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestWindowsSelectedGoPlatformValidation|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$'
+          $filter = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestWindowsSelectedGoPlatformValidation|TestWindowsAtomicWrite.*|TestWindowsRootEntryIdentity.*|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$'
           $securityTests = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe)$'
           $topLevelTests = @(go test -list '^Test' .)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

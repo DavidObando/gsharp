@@ -43,6 +43,27 @@ func TestReadBoundedRegularFileRejectsFIFOPromptly(t *testing.T) {
 	})
 }
 
+func TestStableEntryIdentityRejectsFIFOPromptly(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "analysis.json")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	assertMetadataReadFailsPromptly(t, func() error {
+		_, err := rootEntryStableInfo(root, "analysis.json")
+		return err
+	})
+	assertMetadataReadFailsPromptly(t, func() error {
+		_, err := pathEntryStableInfo(path)
+		return err
+	})
+}
+
 func TestRootedReadRejectsAncestorSymlinkAndReplacement(t *testing.T) {
 	root := t.TempDir()
 	inside := filepath.Join(root, "inside")
