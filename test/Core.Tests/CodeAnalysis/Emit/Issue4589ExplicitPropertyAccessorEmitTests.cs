@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -67,7 +68,20 @@ struct ValueProbe {
             .GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
             .Single(p => p.Name == propertyName);
 
-        var accessors = new[] { property.GetMethod, property.SetMethod }.OfType<MethodInfo>().ToArray();
+        // Issue #4628: collect only the accessors that exist. A get-only
+        // property has no SetMethod; storing that null in an array and
+        // filtering it afterwards migrates to a fail-fast `!!` on the element.
+        var accessors = new List<MethodInfo>();
+        if (property.GetMethod is { } getter)
+        {
+            accessors.Add(getter);
+        }
+
+        if (property.SetMethod is { } setter)
+        {
+            accessors.Add(setter);
+        }
+
         Assert.NotEmpty(accessors);
         foreach (var accessor in accessors)
         {
