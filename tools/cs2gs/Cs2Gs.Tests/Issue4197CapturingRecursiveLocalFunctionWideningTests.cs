@@ -578,6 +578,33 @@ namespace Demo
     }
 
     [Fact]
+    public void HomogeneousGenericGroupCalledFromEarlierSwitchSection_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                return First<int>(value);
+                            case 1:
+                                static int First<T>(int n) => n == 0 ? 0 : Second<T>(n - 1);
+                                static int Second<U>(int n) => n == 0 ? 0 : First<U>(n - 1);
+                                return First<int>(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        Assert.Contains("// lifted static local function Second", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void MixedRecursiveGroupSplitAcrossSwitchSections_UsesMemberFallback()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
@@ -628,6 +655,107 @@ namespace Demo
         Assert.Contains("var First", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("// lifted recursive local function First", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void CapturingGenericGroupReferencingEnclosingTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        int offset = 1;
+                        int First<U>(U item, int n) =>
+                            n == 0 ? offset + value.GetHashCode() : Second<U>(item, n - 1);
+                        int Second<V>(V item, int n) =>
+                            n == 0 ? offset : First<V>(item, n - 1);
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """, "capturing generic recursive local function");
+
+        Assert.Contains(
+            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SelfRecursiveCapturingGenericReferencingEnclosingTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        int First<U>(U item, int n) =>
+                            n == 0 ? value.GetHashCode() : First<U>(item, n - 1);
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """, "capturing generic recursive local function");
+
+        Assert.Contains(
+            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericRecursiveGroupWithTransitivelyCapturedEnclosingTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        int Capture() => value.GetHashCode();
+                        int First<U>(U item, int n) =>
+                            n == 0 ? Capture() : Second<U>(item, n - 1);
+                        int Second<V>(V item, int n) =>
+                            n == 0 ? Capture() : First<V>(item, n - 1);
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """, "capturing generic recursive local function");
+
+        Assert.Contains(
+            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MixedRecursiveGroupAcrossSwitchSectionsWithEnclosingTypeParameterCapture_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth, int mode) {
+                        switch (mode) {
+                            case 0:
+                                int First<U>(U item, int n) =>
+                                    n == 0 ? value.GetHashCode() : Second<U>(item, n - 1);
+                                int Second<V>(V item, int n) =>
+                                    n == 0 ? value.GetHashCode() : Third(n - 1);
+                                return First<T>(value, depth);
+                            case 1:
+                                int Third(int n) =>
+                                    n == 0 ? value.GetHashCode() : First<T>(value, n - 1);
+                                return Third(depth);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "capturing generic recursive local function");
+
+        Assert.Contains(
+            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
     }
 
     [Fact]

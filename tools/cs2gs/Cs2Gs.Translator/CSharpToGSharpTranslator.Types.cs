@@ -1059,6 +1059,8 @@ public sealed partial class CSharpToGSharpTranslator
             var cases = new List<SwitchStatementCase>();
             var sectionByLocalFunction = new Dictionary<IMethodSymbol, SwitchSectionSyntax>(
                 SymbolEqualityComparer.Default);
+            var declarationByLocalFunction = new Dictionary<IMethodSymbol, LocalFunctionStatementSyntax>(
+                SymbolEqualityComparer.Default);
             foreach (SwitchSectionSyntax section in node.Sections)
             {
                 foreach (LocalFunctionStatementSyntax localFunction in section.Statements
@@ -1068,6 +1070,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol symbol)
                     {
                         sectionByLocalFunction[symbol] = section;
+                        declarationByLocalFunction[symbol] = localFunction;
                     }
                 }
             }
@@ -1078,7 +1081,11 @@ public sealed partial class CSharpToGSharpTranslator
                     .Select(symbol => sectionByLocalFunction[symbol])
                     .Distinct()
                     .Skip(1)
-                    .Any(),
+                    .Any()
+                    || component.Any(symbol =>
+                        this.IsLocalFunctionReferencedFromAnotherSwitchSection(
+                            symbol,
+                            declarationByLocalFunction[symbol])),
                 processOnlyForcedGroups: true);
             foreach (SwitchSectionSyntax section in node.Sections)
             {

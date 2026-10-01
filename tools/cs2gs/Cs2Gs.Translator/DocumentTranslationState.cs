@@ -373,6 +373,9 @@ internal sealed class DocumentTranslationState
     public HashSet<IMethodSymbol> UnsupportedTopLevelRecursiveLocalFunctions { get; } =
         new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
 
+    public HashSet<IMethodSymbol> UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
     // Issue #3399: local functions participating (directly or transitively) in
     // recursion/mutual recursion that cannot be lifted as static helpers
     // (they capture sibling locals), so G#'s non-recursive `let name = func …`
