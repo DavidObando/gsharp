@@ -11,7 +11,7 @@ namespace Cs2Gs.Translator;
 internal sealed class LiftedLocalFunctionNameAllocator
 {
     private readonly object gate = new();
-    private readonly Dictionary<IMethodSymbol, string> assigned =
+    private readonly Dictionary<ISymbol, string> assigned =
         new(SymbolEqualityComparer.Default);
 
     private readonly Dictionary<ISymbol, HashSet<string>> usedByType =
@@ -47,6 +47,39 @@ internal sealed class LiftedLocalFunctionNameAllocator
 
             used.Add(candidate);
             this.assigned.Add(localFunction, candidate);
+            return candidate;
+        }
+    }
+
+    public string AllocateBackingField(
+        IPropertySymbol property,
+        IReadOnlyCollection<string> occupied,
+        string baseName)
+    {
+        lock (this.gate)
+        {
+            if (this.assigned.TryGetValue(property, out string assignedName))
+            {
+                return assignedName;
+            }
+
+            ISymbol owner = property.ContainingType ?? (ISymbol)property.ContainingAssembly;
+            if (!this.usedByType.TryGetValue(owner, out HashSet<string> used))
+            {
+                used = new HashSet<string>(StringComparer.Ordinal);
+                this.usedByType.Add(owner, used);
+            }
+
+            string candidate = baseName;
+            for (int suffix = 2;
+                occupied.Contains(candidate) || used.Contains(candidate);
+                suffix++)
+            {
+                candidate = baseName + suffix;
+            }
+
+            used.Add(candidate);
+            this.assigned.Add(property, candidate);
             return candidate;
         }
     }

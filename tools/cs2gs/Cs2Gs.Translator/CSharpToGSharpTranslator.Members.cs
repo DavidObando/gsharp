@@ -3070,11 +3070,11 @@ public sealed partial class CSharpToGSharpTranslator
             taken.UnionWith(this.state.PendingInstanceSynthHelpers?.Select(helper => helper.Name)
                 ?? Enumerable.Empty<string>());
 
-            string candidate = baseName;
-            for (int suffix = 2; taken.Contains(candidate); suffix++)
-            {
-                candidate = baseName + suffix;
-            }
+            string candidate = LiftedLocalFunctionNames
+                .GetValue(
+                    this.context.Compilation,
+                    static _ => new LiftedLocalFunctionNameAllocator())
+                .AllocateBackingField(symbol, taken, baseName);
 
             this.state.SynthesizedPropertyBackingFieldNames[symbol] = candidate;
             return candidate;

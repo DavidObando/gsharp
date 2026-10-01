@@ -1996,6 +1996,16 @@ public sealed partial class CSharpToGSharpTranslator
                     .Select(member => this.EmittedName(member, member.Name)));
             }
 
+            foreach (INamedTypeSymbol staticUsingTarget in
+                GetOrCollectAllStaticUsingTargets(this.context.Compilation))
+            {
+                for (INamedTypeSymbol type = staticUsingTarget; type != null; type = type.BaseType)
+                {
+                    occupied.UnionWith(type.GetMembers()
+                        .Select(member => this.EmittedName(member, member.Name)));
+                }
+            }
+
             occupied.UnionWith(this.state.PendingInstanceSynthHelpers?.Select(helper => helper.Name)
                 ?? Enumerable.Empty<string>());
             occupied.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
@@ -2565,6 +2575,7 @@ public sealed partial class CSharpToGSharpTranslator
                         || (candidate.Syntax.TypeParameterList != null) != generic
                         || candidate.Symbol.ReturnsByRef != refReturn)
                     || (generic && refReturn)
+                    || component.Any(candidate => candidate.Syntax.ConstraintClauses.Count > 0)
                     || (refReturn && component.Any(candidate => !candidate.Symbol.IsStatic))
                     || component.Any(candidate =>
                         this.IsLocalFunctionReferencedAsValue(candidate.Symbol, statementList)))
@@ -2712,6 +2723,9 @@ public sealed partial class CSharpToGSharpTranslator
                             pair.Symbol,
                             dependency,
                             new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { dependency }));
+                bool selfRecursive = ownDependencies.Any(dependency =>
+                    SymbolEqualityComparer.Default.Equals(dependency, pair.Symbol));
+                bool recursive = recursiveThroughOthers || selfRecursive;
 
                 List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> component =
                     GetRecursiveComponent(pair.Symbol);
@@ -2730,9 +2744,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // Include the callee closure because calling a capturing local captures
                 // that binding even when the recursive SCC does not name the value itself.
                 bool unsupportedCapturingGeneric =
-                    (component.Count > 1
-                        || ownDependencies.Any(dependency =>
-                            SymbolEqualityComparer.Default.Equals(dependency, pair.Symbol)))
+                    recursive
                     && component.Any(candidate => candidate.Syntax.TypeParameterList != null)
                     && dependencyClosure.Any(candidate => CapturesOuterValue(candidate))
                     && dependencyClosure.Any(candidate =>
@@ -2740,8 +2752,11 @@ public sealed partial class CSharpToGSharpTranslator
                             candidate,
                             includeContainingTypeParameters: true));
                 bool unsupportedFallbackMethodTypeParameter =
-                    recursiveThroughOthers
-                    && (forceLift || !canUseNativeGroup)
+                    recursive
+                    && (forceLift
+                        || (recursiveThroughOthers
+                            && !IsCapturingRecursiveGroupMember(pair.Symbol)
+                            && !canUseNativeGroup))
                     && dependencyClosure.Any(candidate =>
                         ReferencesEnclosingTypeParameter(
                             candidate,
@@ -2759,10 +2774,10 @@ public sealed partial class CSharpToGSharpTranslator
                 // forces a lift — only a recursion cycle through ANOTHER local
                 // function does (the partner would be forward-referenced
                 // before its `let` declaration).
-                if (recursiveThroughOthers
-                    && (forceLift
-                        || IsCapturingRecursiveGroupMember(pair.Symbol)
-                        || !canUseNativeGroup))
+                if ((forceLift && recursive)
+                    || (recursiveThroughOthers
+                        && (IsCapturingRecursiveGroupMember(pair.Symbol)
+                            || !canUseNativeGroup)))
                 {
                     toLift.Add(pair.Symbol);
                 }
