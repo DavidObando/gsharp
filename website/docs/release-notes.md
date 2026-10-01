@@ -112,7 +112,11 @@ Before moving an application to a different compiler version, pin the intended S
   The captured executable must identify as native `cmd/go`; on Linux it must
   also be static ELF (including an internally linked static PIE) with no
   interpreter, dynamic imports, RPATH, or RUNPATH. Scripts and wrappers are
-  rejected, and child PATH contains only its private stage. Non-Linux preload
+  rejected, and child PATH contains only its private stage. The Linux analysis
+  worker applies a 2 GiB `RLIMIT_DATA` ceiling before package loading so
+  x/tools' internal command buffers remain process-bounded. Darwin preload now
+  requires a native executable Mach-O with the matching CPU and executable file
+  type. Non-Linux preload
   checks can publish deterministic toolchain/source mismatch blockers without
   loading packages; a matching profile still fails closed before publication.
   M0 now uses `go/packages` only for metadata with `CGO_ENABLED=0`, then parses
@@ -147,7 +151,12 @@ Before moving an application to a different compiler version, pin the intended S
   paths, dot-segment aliases, and malformed or path-bearing query/fragment
   text fail closed. Strict path components also reject malformed whitespace,
   punctuation, and embedded drive tails, including `localhost` text outside
-  the actual file authority. Profile and `goFlags`
+  the actual file authority. Operational local-replacement rewriting makes
+  only the mirrored `go.mod` owner-writable; persistent descriptor-relative
+  temporary-file open failures now abort cleanup instead of being retried.
+  Structural type identities include positional ownership for unexported
+  anonymous fields and interface methods, and compiled-file records publish
+  `go/types`' effective per-file language version. Profile and `goFlags`
   tags share one canonical selection set, architecture feature levels expand
   to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
   typed `*ast.File` root for every compiled file. Output locking, invalidation,

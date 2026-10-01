@@ -118,6 +118,9 @@ local replacements. Every file, directory, symlink, and other entry consumes
 that traversal budget independently of the captured-file limit. The same
 rooted reads verify the originals after loading. The loader sees only those
 captured bytes; emitted manifest hashes remain those of the originals.
+Only an operational mirrored `go.mod` that needs local-replacement rebinding is
+made owner-writable; the source manifest and unrelated mirrored files retain
+their captured permissions.
 Output locking, stale-artifact invalidation, and atomic publication stay
 relative to one held directory descriptor/handle, so replacing an output-root
 ancestor cannot redirect owned output operations. The selected output directory
@@ -134,7 +137,9 @@ published identity rather than treating a denied directory-handle sync as
 success.
 On Linux and macOS, private temporary trees are removed recursively through
 verified directory descriptors and atomic name exchanges without following
-links; an exchange failure or retained entry makes the command fail. Windows
+links; disappearance and changed-to-symlink races are tolerated, while
+permission and other persistent open failures, an exchange failure, or a
+retained entry make the command fail. Windows
 uses held-root, handle-relative renaming and recursive removal without
 following reparse points. Platforms without a secure cleanup implementation
 reject private temporary-directory creation before copying executables or
@@ -155,6 +160,7 @@ for handoff. On Linux the captured bytes must be a supported ELF executable or
 static PIE with no `PT_INTERP`, imported libraries or dynamic symbols,
 `DT_RPATH`, or `DT_RUNPATH`; this check completes before any execution. Every
 analysis worker runs in a private user and mount namespace,
+applies a 2 GiB `RLIMIT_DATA` ceiling before either package load,
 captures that handoff by expected SHA-256, and copies only `go` into a read-only
 tmpfs. The worker holds the tmpfs directory descriptor and gives both process
 `PATH` and `packages.Config.Env` the descriptor path
@@ -162,6 +168,8 @@ tmpfs. The worker holds the tmpfs directory descriptor and gives both process
 worker's immutable object, not the original selected path or parent bootstrap
 pathname. Scripts, wrappers, ambient sibling tools, and pathname replacement
 are rejected or unreachable.
+Darwin preload likewise requires a native executable Mach-O with the matching
+CPU; foreign formats and non-executable Mach-O files are rejected.
 
 M0 uses `go/packages` only for metadata with `CGO_ENABLED=0` and without
 compiled-file or export requests. It parses the captured source and runs the
@@ -198,6 +206,11 @@ record counts, valid references, and loaded main-module package/file ownership
 before `inventoryComplete` may be true. `validate-analysis` checks structural
 and relational consistency; it does not authenticate the recorded binaries or
 captured content.
+Compiled Go file records use the type checker's effective
+`types.Info.FileVersions` value, including a selected `go1.N` build constraint;
+non-syntax inputs retain the module language-version fallback. Structural type
+identities include the positional package ownership of unexported anonymous
+struct fields and interface methods.
 
 ## Validate an inventory
 

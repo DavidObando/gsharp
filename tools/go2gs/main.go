@@ -265,6 +265,9 @@ func runAnalyzeWorker(parent context.Context, args []string) (err error) {
 		os.Getenv("GO2GS_EXEC_NAMESPACE") != "1" {
 		return &exitError{2, errors.New("analysis worker requires the private descriptor-bound selected Go handoff")}
 	}
+	if err := constrainAnalysisWorkerMemory(); err != nil {
+		return &exitError{2, fmt.Errorf("constrain analysis worker memory: %w", err)}
+	}
 	source, profilePath, out, err := parseAnalyzeArgs(args)
 	if err != nil {
 		return &exitError{2, err}

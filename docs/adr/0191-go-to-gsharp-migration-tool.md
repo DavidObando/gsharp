@@ -174,7 +174,12 @@ command can obtain exports, invoke build tooling, write caches, and process
 CGo; native compilers and configured package drivers are executable trust
 boundaries. Disable unapproved `GOPACKAGESDRIVER`, automatic toolchain
 downloads, generators, and network access. Load in a bounded disposable
-environment with a read-only source snapshot and isolated caches. A
+environment with a read-only source snapshot and isolated caches. Before
+either `packages.Load` call, the Linux analysis worker applies a 2 GiB
+`RLIMIT_DATA` ceiling. This also bounds x/tools' internal `cmd/go`
+stdout/stderr buffers before package-count validation can run. Failure to
+apply the ceiling is a bootstrap failure, not permission to continue
+unbounded. A
 metadata-only/source-scan fallback is labeled untyped and incomplete.
 Neither `analyze` nor `translate` runs the target, `init` functions, tests,
 `go generate`, module-provided scripts, or arbitrary MSBuild imports.
@@ -212,12 +217,12 @@ from identifier strings:
 
 | Interchange fact | Why it crosses the boundary |
 | --- | --- |
-| Stable package/symbol/type identities | Include module/replacement identity, import path, profile/test variant, declaration identity, and instantiated type arguments. Preserve named versus alias versus unnamed types and package-qualified unexported member identity. Go-identical unnamed types must canonicalize even across packages. Do not persist process pointers or assume `packages.Package.ID` alone is a portable semantic ID. |
+| Stable package/symbol/type identities | Include module/replacement identity, import path, profile/test variant, declaration identity, and instantiated type arguments. Preserve named versus alias versus unnamed types and package-qualified unexported member identity. Structural identities encode unexported field and interface-method ownership at its exact nested position; an unordered package set is insufficient. Go-identical unnamed types must canonicalize even across packages. Do not persist process pointers or assume `packages.Package.ID` alone is a portable semantic ID. |
 | Typed syntax and source coordinates | Node kinds, original and effective types, addressability, assignability, conversions, tuple/comma-ok forms, declaration/use links, lexical scopes, labels, and source comments/directives. Source byte spans and displayed positions are both needed; retain `//line` provenance rather than trusting it as a filesystem path. |
 | Constants and sizes | Exact integer/rational/complex constant components, untyped category, final contextual conversions, iota values, array lengths, and target `int`/`uint`/`uintptr` sizes. Do not round through JSON floating-point numbers. |
 | Calls and methods | Resolved builtin versus user call, signatures, variadic expansion, method values versus expressions, receiver type/mode, selections and embedded-field index paths, implicit address/dereference adjustments, and complete relevant method sets for `T` and `*T`. |
 | Generic/interface facts | Type parameters, constraint/type-set terms, substitutions/instances, relevant satisfaction checks, comparability, embedded obligations, and struct field tags/export flags. Interface type sets are not inferred from CLR reflection. |
-| Initialization/build provenance | Dependency graph, `types.Info.InitOrder`, ordered init functions and compiler input-file order, blank imports, resolved embedded assets, language versions, and source/content hashes. |
+| Initialization/build provenance | Dependency graph, `types.Info.InitOrder`, ordered init functions and compiler input-file order, blank imports, resolved embedded assets, effective per-file language versions from `types.Info.FileVersions` with module fallback for non-syntax inputs, and source/content hashes. |
 
 Use a bounded versioned JSON record stream with interned IDs and explicit
 length/count limits. Preserve raw string/constant bytes losslessly, including
@@ -814,7 +819,10 @@ authenticate or mediate such a peer.
 Use typed failures, not broad catch-and-default fallback. On cancellation or
 failure, close pipes, cancel owned subprocesses, release native handles and
 temporary storage, and leave a failed/incomplete manifest. Resource cleanup
-must not delete user files or mask the primary diagnostic. Go compatibility
+must not delete user files or mask the primary diagnostic. Descriptor-relative
+temporary-file opens ignore only disappearance and changed-to-symlink races;
+permission and other persistent failures abort cleanup rather than spin.
+Go compatibility
 panic handling catches the explicitly modeled Go carrier/faults; arbitrary
 CLR/native failures remain unexpected failures, not recovered nil results.
 
