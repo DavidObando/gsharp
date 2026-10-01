@@ -327,6 +327,20 @@ public sealed class TupleTypeSymbol : TypeSymbol
     /// <param name="elementTypes">The element CLR types, in order.</param>
     /// <returns>The closed CLR type, or <see langword="null"/> when it cannot be built in one load context.</returns>
     internal static Type? BuildClrType(Type[] elementTypes)
+        => BuildClrType(elementTypes, new bool[elementTypes.Length]);
+
+    /// <summary>
+    /// Issue #4591: <see cref="BuildClrType(Type[])"/> with nullable value-type
+    /// elements passed as their UNDERLYING type plus a flag. A pre-built
+    /// <c>Nullable&lt;T&gt;</c> over a <c>MetadataLoadContext</c> struct would
+    /// itself be a host <c>TypeBuilderInstantiation</c> (the #4035 trap), so
+    /// the wrapper is built only once the context is known, from that
+    /// context's own <c>Nullable&lt;&gt;</c>.
+    /// </summary>
+    /// <param name="elementTypes">The element CLR types, nullable value types unwrapped.</param>
+    /// <param name="liftToNullable">Per element, whether to wrap it in <c>Nullable&lt;&gt;</c>.</param>
+    /// <returns>The closed CLR type, or <see langword="null"/> when it cannot be built in one load context.</returns>
+    private static Type? BuildClrType(Type[] elementTypes, bool[] liftToNullable)
     {
         var contextObject = ResolveLoadContextObject(elementTypes);
         if (contextObject == null)
@@ -334,14 +348,28 @@ public sealed class TupleTypeSymbol : TypeSymbol
             return null;
         }
 
-        var arguments = new Type[elementTypes.Length];
-        for (var i = 0; i < elementTypes.Length; i++)
-        {
-            arguments[i] = ClrTypeUtilities.RemapHostCoreTypeToContext(elementTypes[i], contextObject);
-        }
-
         try
         {
+            var arguments = new Type[elementTypes.Length];
+            for (var i = 0; i < elementTypes.Length; i++)
+            {
+                var argument = ClrTypeUtilities.RemapHostCoreTypeToContext(elementTypes[i], contextObject);
+                if (liftToNullable[i])
+                {
+                    var nullableOpen = ReferenceEquals(contextObject.Assembly, typeof(object).Assembly)
+                        ? typeof(Nullable<>)
+                        : contextObject.Assembly.GetType("System.Nullable`1", throwOnError: false);
+                    if (nullableOpen == null)
+                    {
+                        return null;
+                    }
+
+                    argument = nullableOpen.MakeGenericType(argument);
+                }
+
+                arguments[i] = argument;
+            }
+
             return BuildClrType(arguments, 0, arguments.Length, contextObject);
         }
         catch (ArgumentException)
@@ -393,12 +421,27 @@ public sealed class TupleTypeSymbol : TypeSymbol
             return null;
         }
 
-        var clrTypes = elementTypes
-            .Select(t => Invariant.Required(
-                NullableTypeSymbol.GetEffectiveClrType(t),
-                "a CLR-backed tuple element has a CLR type"))
-            .ToArray();
-        return BuildClrType(clrTypes);
+        // Issue #4591: a nullable value type is handed down as its underlying
+        // type plus a flag, never as `GetEffectiveClrType`'s host-built
+        // `Nullable<T>`; see BuildClrType(Type[], bool[]).
+        var clrTypes = new Type[elementTypes.Length];
+        var liftToNullable = new bool[elementTypes.Length];
+        for (var i = 0; i < elementTypes.Length; i++)
+        {
+            if (elementTypes[i] is NullableTypeSymbol { UnderlyingType.ClrType: { IsValueType: true } underlying })
+            {
+                clrTypes[i] = underlying;
+                liftToNullable[i] = true;
+            }
+            else
+            {
+                clrTypes[i] = Invariant.Required(
+                    NullableTypeSymbol.GetEffectiveClrType(elementTypes[i]),
+                    "a CLR-backed tuple element has a CLR type");
+            }
+        }
+
+        return BuildClrType(clrTypes, liftToNullable);
     }
 
     private static Type? BuildClrType(Type[] elementTypes, int start, int count, Type contextObject)
@@ -429,7 +472,7 @@ public sealed class TupleTypeSymbol : TypeSymbol
     /// a <c>MetadataLoadContext</c>, in which case it is that context's.
     /// </summary>
     /// <param name="elementTypes">The element CLR types.</param>
-    /// <returns>The context's <c>System.Object</c>, or <see langword="null"/> when an element's context is unknown or two elements disagree.</returns>
+    /// <returns>The context's <c>System.Object</c>, or <see langword="null"/> when an element's context is unknown, is already a poisoned host instantiation, or two elements disagree.</returns>
     private static Type? ResolveLoadContextObject(Type[] elementTypes)
     {
         var hostObject = typeof(object);
@@ -441,14 +484,18 @@ public sealed class TupleTypeSymbol : TypeSymbol
                 continue;
             }
 
+            // A non-RuntimeType element that nonetheless answers the HOST
+            // context is a host generic already closed over a
+            // MetadataLoadContext type (a TypeBuilderInstantiation). It cannot
+            // be rebuilt from here, so the fail-safe is a symbolic tuple, never
+            // another instantiation over it.
             var elementObject = FindLoadContextObject(element);
-            if (elementObject == null)
+            if (elementObject == null || ReferenceEquals(elementObject.Assembly, hostObject.Assembly))
             {
                 return null;
             }
 
-            if (ReferenceEquals(elementObject.Assembly, hostObject.Assembly)
-                || ReferenceEquals(elementObject, contextObject))
+            if (ReferenceEquals(elementObject, contextObject))
             {
                 continue;
             }

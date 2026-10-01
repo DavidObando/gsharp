@@ -80,6 +80,13 @@ public class Issue4591TupleOverNonRuntimeElementTests
             public string Name { get; set; } = "base";
         }
 
+        public struct ImportedPoint
+        {
+            public int X { get; set; }
+
+            public int Y { get; set; }
+        }
+
         public interface IImportedShape
         {
             string Shape { get; }
@@ -215,6 +222,43 @@ public class Issue4591TupleOverNonRuntimeElementTests
             Console.WriteLine(pair.Item2.Shape)
             """,
             new[] { "1", "square" },
+        };
+
+        // A NULLABLE imported value type. Its `Nullable<T>` used to be built
+        // from the host `typeof(Nullable<>)` before the tuple ever saw it, an
+        // instantiation that is already poisoned (the #4035 trap), so the
+        // wrapper has to be built in the context too.
+        yield return new object[]
+        {
+            "nullable-bcl-struct-element-to-ienumerable",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            let xs = [](int32, DateTime?){(1, DateTime(2020, 1, 2)), (2, nil)}
+            let e IEnumerable[(int32, DateTime?)] = xs
+            Console.WriteLine(e.Count())
+            Console.WriteLine(e.Last().Item2.HasValue)
+            """,
+            new[] { "2", "False" },
+        };
+
+        yield return new object[]
+        {
+            "nullable-library-struct-element-inference",
+            """
+            package P
+            import System
+            import HelperLib
+
+            let pairs = [](int32, ImportedPoint?){(6, ImportedPoint{X: 3, Y: 4})}
+            let pair = Picker.Single(pairs)
+            Console.WriteLine(pair.Item1)
+            Console.WriteLine(pair.Item2!!.X)
+            """,
+            new[] { "6", "3" },
         };
     }
 
