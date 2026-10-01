@@ -30,10 +30,11 @@ Blocker messages redact private source, mirror, replacement, temporary, and
 output roots and are normalized and bounded before their stable IDs are
 derived. Redaction observes complete path boundaries, prefers nested roots, and
 recognizes Windows drive/UNC case and separator aliases. Remote URIs remain
-unchanged; absolute `file:` URI paths are redacted, while encoded or relative
-forms and ambiguous noncanonical separator counts fail closed rather than being
-decoded or guessed. The published bounded message is therefore the message the
-ID names.
+unchanged; absolute, `localhost`, drive-authority, and configured UNC `file:`
+URI paths are redacted. Unknown authorities, encoded or relative forms, and
+ambiguous noncanonical separator counts fail closed rather than being decoded
+or guessed. The published bounded message is therefore the message the ID
+names.
 
 Analysis is offline and fail-closed. It disables automatic Go toolchain
 downloads, network module resolution, ambient workspaces, unapproved package

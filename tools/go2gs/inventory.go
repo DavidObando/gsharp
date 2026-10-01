@@ -522,13 +522,15 @@ func redactFileURI(
 	schemeEnd int,
 	redactions []compiledMessagePathRedaction,
 ) string {
-	if schemeEnd >= len(uri) {
+	const privateFileURI = "file:<private-path>"
+
+	if schemeEnd > len(uri) {
 		return uri
 	}
 	prefix := uri[:schemeEnd]
 	remainder := uri[schemeEnd:]
 	if strings.Contains(remainder, "%") {
-		return prefix + "<private-path>"
+		return privateFileURI
 	}
 	pathEnd := len(remainder)
 	if index := strings.IndexAny(remainder, "?#"); index >= 0 {
@@ -536,10 +538,13 @@ func redactFileURI(
 	}
 	path, suffix := remainder[:pathEnd], remainder[pathEnd:]
 	if path == "" {
-		return uri
+		return privateFileURI
 	}
 
 	leadingSeparators := countLeadingSeparators(path)
+	if hasRepeatedPathSeparators(path[leadingSeparators:]) {
+		return privateFileURI
+	}
 	if leadingSeparators >= 3 {
 		if redacted, ok := redactFileURIPath(path, leadingSeparators, path[:leadingSeparators], redactions, func(value compiledMessagePathRedaction) bool {
 			return value.drive
@@ -552,17 +557,59 @@ func redactFileURI(
 			return prefix + redacted + suffix
 		}
 		if leadingSeparators > 3 {
-			return prefix + "<private-path>"
+			return privateFileURI
 		}
 		return uri
 	}
 	if leadingSeparators == 2 {
+		authorityEnd := strings.IndexAny(path[2:], `/\`)
+		if authorityEnd < 0 {
+			return privateFileURI
+		}
+		authorityEnd += 2
+		authority := path[2:authorityEnd]
+		if strings.EqualFold(authority, "localhost") {
+			if authorityEnd+1 >= len(path) || isPathSeparator(rune(path[authorityEnd+1])) {
+				return privateFileURI
+			}
+			localPath := path[authorityEnd+1:]
+			if isWindowsAbsolutePath(localPath) {
+				if redacted, ok := redactFileURIPath(path, authorityEnd+1, path[:authorityEnd+1], redactions, func(value compiledMessagePathRedaction) bool {
+					return value.drive
+				}); ok {
+					return prefix + redacted + suffix
+				}
+				return uri
+			}
+			if redacted, ok := redactFileURIPath(path, authorityEnd, path[:authorityEnd+1], redactions, func(value compiledMessagePathRedaction) bool {
+				return !value.windows
+			}); ok {
+				return prefix + redacted + suffix
+			}
+			if redacted, ok := redactFileURIPath(path, 0, path[:2], redactions, func(value compiledMessagePathRedaction) bool {
+				return value.unc
+			}); ok {
+				return prefix + redacted + suffix
+			}
+			return uri
+		}
+		if isWindowsDriveAuthority(authority) {
+			if redacted, ok := redactFileURIPath(path, 2, path[:2], redactions, func(value compiledMessagePathRedaction) bool {
+				return value.drive
+			}); ok {
+				return prefix + redacted + suffix
+			}
+			return uri
+		}
+		if strings.ContainsAny(authority, ":@[]") {
+			return privateFileURI
+		}
 		if redacted, ok := redactFileURIPath(path, 0, path[:2], redactions, func(value compiledMessagePathRedaction) bool {
 			return value.unc
 		}); ok {
 			return prefix + redacted + suffix
 		}
-		return uri
+		return privateFileURI
 	}
 	if isPathSeparator(rune(path[0])) {
 		if redacted, ok := redactFileURIPath(path, 0, "", redactions, func(value compiledMessagePathRedaction) bool {
@@ -572,7 +619,20 @@ func redactFileURI(
 		}
 		return uri
 	}
-	return prefix + "<private-path>"
+	return privateFileURI
+}
+
+func isWindowsDriveAuthority(value string) bool {
+	return len(value) == 2 && isASCIIAlpha(value[0]) && value[1] == ':'
+}
+
+func hasRepeatedPathSeparators(value string) bool {
+	for index := 1; index < len(value); index++ {
+		if isPathSeparator(rune(value[index-1])) && isPathSeparator(rune(value[index])) {
+			return true
+		}
+	}
+	return false
 }
 
 func redactFileURIPath(

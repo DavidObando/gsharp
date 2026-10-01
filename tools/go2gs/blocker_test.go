@@ -351,6 +351,108 @@ func TestRecordedMessageURIPathRedaction(t *testing.T) {
 			want:       "file://<source>/file.go",
 		},
 		{
+			name:       "localhost Unix file URI",
+			message:    "file://localhost/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file://localhost/<source>/file.go",
+		},
+		{
+			name:       "localhost Unix case alias",
+			message:    "FiLe://LOCALHOST/private/source/file.go?mode=read#location",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "FiLe://LOCALHOST/<source>/file.go?mode=read#location",
+		},
+		{
+			name:       "localhost Windows file URI",
+			message:    `file://LOCALHOST/C:/Work/Source/file.go`,
+			redactions: []messagePathRedaction{{`c:\work\source`, "<source>"}},
+			want:       "file://LOCALHOST/<source>/file.go",
+		},
+		{
+			name:       "localhost Windows separator alias",
+			message:    "`file://localhost\\c:\\WORK\\source\\file.go`",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "`file://localhost\\<source>\\file.go`",
+		},
+		{
+			name:       "drive authority file URI",
+			message:    "file://C:/Work/Source/file.go",
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "file://<source>/file.go",
+		},
+		{
+			name:       "drive authority case alias",
+			message:    "FiLe://c:/WORK/source/file.go?mode=read#location",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "FiLe://<source>/file.go?mode=read#location",
+		},
+		{
+			name:       "localhost unrelated path unchanged",
+			message:    "file://localhost/public/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file://localhost/public/source/file.go",
+		},
+		{
+			name:       "localhost configured UNC file URI",
+			message:    "file://localhost/share/source/file.go",
+			redactions: []messagePathRedaction{{`\\LOCALHOST\share\source`, "<source>"}},
+			want:       "file://<source>/file.go",
+		},
+		{
+			name:       "localhost port authority fails closed",
+			message:    "FiLe://localhost:8080/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unknown authority fails closed",
+			message:    "file://unknown/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unmatched UNC authority fails closed",
+			message:    "file://server/public/source/file.go",
+			redactions: []messagePathRedaction{{`\\other\share\source`, "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "encoded authority fails closed",
+			message:    "file://local%68ost/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "localhost missing path fails closed",
+			message:    "(file://localhost)",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "(file:<private-path>)",
+		},
+		{
+			name:       "localhost repeated Unix separator fails closed",
+			message:    "file://localhost/private//source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "localhost repeated drive separator fails closed",
+			message:    "file://localhost/C://Work/Source/file.go",
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "drive authority repeated separator fails closed",
+			message:    "file://C://Work/Source/file.go",
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "empty file URI fails closed",
+			message:    "[FiLe:]",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "[file:<private-path>]",
+		},
+		{
 			name:       "extra local file separators",
 			message:    "file:////private/source/file.go",
 			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
@@ -425,6 +527,19 @@ func TestBlockerPathAliasesPublishOneStableIdentity(t *testing.T) {
 		"/tmp/work-123", "/tmp/work-123/capsule-456/go")
 	if nested.Message != "<private-path>" {
 		t.Fatalf("nested private suffix leaked into blocker identity: %#v", nested)
+	}
+	uri := build("/private/source", "file://localhost/private/source/.git/HEAD")
+	if uri.Message != "file://localhost/<source>/.git/HEAD" {
+		t.Fatalf("local file URI leaked into blocker identity: %#v", uri)
+	}
+	otherURI := build("/different/source", "file://localhost/different/source/.git/HEAD")
+	if uri.ID != otherURI.ID {
+		t.Fatalf("local file URI root aliases produced different blocker identities: %#v != %#v", uri, otherURI)
+	}
+	unknown := build("/private/source", "FiLe://unknown/private/source/.git/HEAD")
+	unknownAlias := build("/different/source", "file://unknown/different/source/.git/HEAD")
+	if unknown.Message != "file:<private-path>" || unknown.ID != unknownAlias.ID {
+		t.Fatalf("ambiguous file URI aliases produced unstable blocker identities: %#v != %#v", unknown, unknownAlias)
 	}
 }
 
