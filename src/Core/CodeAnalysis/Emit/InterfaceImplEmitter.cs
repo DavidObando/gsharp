@@ -1080,7 +1080,9 @@ internal sealed class InterfaceImplEmitter
     {
         if (structSymbol == null
             || structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty
-            || (structSymbol.StaticMethods.IsDefaultOrEmpty && structSymbol.StaticProperties.IsDefaultOrEmpty)
+            || (structSymbol.StaticMethods.IsDefaultOrEmpty
+                && structSymbol.StaticProperties.IsDefaultOrEmpty
+                && structSymbol.StaticEvents.IsDefaultOrEmpty)
             || !this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef))
         {
             return;
@@ -1123,6 +1125,13 @@ internal sealed class InterfaceImplEmitter
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, declaration);
             }
 
+            var slotOwnerSymbol = symbolicIface
+                ?? TypeSymbol.FromClrTypeWithoutNullability(slotOwner, NullabilityFreeReason.TypeStructure);
+
+            // Static-virtual event slots bind through their accessors, to the
+            // implementer's static event of the same name and handler type.
+            this.EmitClrStaticVirtualEventMethodImpls(structSymbol, implTypeDef, slotOwner, slotOwnerSymbol, symbolicIface);
+
             // Static-virtual property slots bind through their accessors, to
             // the implementer's static property of the same name and type.
             if (structSymbol.StaticProperties.IsDefaultOrEmpty)
@@ -1130,8 +1139,6 @@ internal sealed class InterfaceImplEmitter
                 continue;
             }
 
-            var slotOwnerSymbol = symbolicIface
-                ?? TypeSymbol.FromClrTypeWithoutNullability(slotOwner, NullabilityFreeReason.TypeStructure);
             foreach (var slotProperty in ClrTypeUtilities.SafeGetProperties(
                 slotOwner,
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
@@ -1183,6 +1190,77 @@ internal sealed class InterfaceImplEmitter
     }
 
     /// <summary>
+    /// Issue #4614: binds the static-virtual event slots of one imported
+    /// interface (<c>static abstract event Action Changed;</c>) to the
+    /// implementer's own static event of the same name and handler type,
+    /// accessor by accessor.
+    /// </summary>
+    /// <param name="structSymbol">The implementing G# type.</param>
+    /// <param name="implTypeDef">Its TypeDef.</param>
+    /// <param name="slotOwner">The (possibly erased) closed interface.</param>
+    /// <param name="slotOwnerSymbol">The interface's symbol, for the handler-type reader.</param>
+    /// <param name="symbolicIface">The symbolic interface, or <see langword="null"/> for a concrete one.</param>
+    private void EmitClrStaticVirtualEventMethodImpls(
+        StructSymbol structSymbol,
+        TypeDefinitionHandle implTypeDef,
+        Type slotOwner,
+        TypeSymbol slotOwnerSymbol,
+        TypeSymbol? symbolicIface)
+    {
+        if (structSymbol.StaticEvents.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var slotEvent in ClrTypeUtilities.SafeGetEvents(
+            slotOwner,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
+        {
+            var slotAdd = slotEvent.AddMethod is { IsVirtual: true } virtualAdd ? virtualAdd : null;
+            var slotRemove = slotEvent.RemoveMethod is { IsVirtual: true } virtualRemove ? virtualRemove : null;
+            if (slotAdd == null && slotRemove == null)
+            {
+                continue;
+            }
+
+            var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(slotOwnerSymbol, slotEvent);
+            EventSymbol? implementation = null;
+            foreach (var candidate in structSymbol.StaticEvents)
+            {
+                if (candidate.Name == slotEvent.Name
+                    && IsImplicitStaticImplementationCandidate(candidate)
+                    && DeclarationBinder.ConformanceSignaturesEquivalent(slotType, candidate.Type))
+                {
+                    implementation = candidate;
+                    break;
+                }
+            }
+
+            if (implementation == null
+                || !this.cache.EventAccessorHandles.TryGetValue(implementation, out var implAccessors))
+            {
+                continue;
+            }
+
+            if (slotAdd != null)
+            {
+                this.emitCtx.Metadata.AddMethodImplementation(
+                    implTypeDef,
+                    implAccessors.Add,
+                    this.outer.memberRefs.GetMethodEntityHandle(slotAdd, symbolicIface));
+            }
+
+            if (slotRemove != null)
+            {
+                this.emitCtx.Metadata.AddMethodImplementation(
+                    implTypeDef,
+                    implAccessors.Remove,
+                    this.outer.memberRefs.GetMethodEntityHandle(slotRemove, symbolicIface));
+            }
+        }
+    }
+
+    /// <summary>
     /// Issue #4614: whether a static method may implement an interface slot
     /// IMPLICITLY, by name. An explicit-interface-clause member
     /// (<c>func (IMine) Z()</c>) keeps the plain symbol name <c>Z</c>, but it
@@ -1204,6 +1282,15 @@ internal sealed class InterfaceImplEmitter
     /// <param name="candidate">The candidate static property.</param>
     /// <returns><see langword="true"/> when it may match by name.</returns>
     private static bool IsImplicitStaticImplementationCandidate(PropertySymbol candidate)
+        => !candidate.HasExplicitInterfaceClause;
+
+    /// <summary>
+    /// Issue #4614: the event counterpart of
+    /// <see cref="IsImplicitStaticImplementationCandidate(FunctionSymbol)"/>.
+    /// </summary>
+    /// <param name="candidate">The candidate static event.</param>
+    /// <returns><see langword="true"/> when it may match by name.</returns>
+    private static bool IsImplicitStaticImplementationCandidate(EventSymbol candidate)
         => !candidate.HasExplicitInterfaceClause;
 
     /// <summary>

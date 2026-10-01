@@ -31,7 +31,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// silently ran the base's member. The inherited shape the issue reports is
 /// the one that failed silently; the gap covered every imported slot.</para>
 /// <para><b>The fix.</b> <c>InterfaceImplEmitter.EmitClrStaticVirtualMethodImpls</c>
-/// binds every static-virtual method and property-accessor slot of the
+/// binds every static-virtual method, property-accessor and event-accessor slot of the
 /// type's imported interface closure (the same <c>ClrInterfaceClosure</c> its
 /// <c>InterfaceImpl</c> rows come from, #4601) to the type's own static
 /// member of the same name and signature. A slot the type does not implement
@@ -65,12 +65,16 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
         public interface IH<T> { static abstract int H(T x); }
         public interface IH2<T> : IH<T> { }
 
+        public interface IEv { static abstract event System.Action Changed; }
+        public interface IEv2 : IEv { }
+
         public static class Probe
         {
             public static int Z<T>() where T : IS => T.Z();
             public static int V<T>() where T : ISV => T.V();
             public static int P<T>() where T : IP => T.P;
             public static int Count<T>() where T : IGen => T.Count<string>("abc");
+            public static void Hook<T>(System.Action a) where T : IEv => T.Changed += a;
         }
         """;
 
@@ -223,6 +227,39 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
             Console.WriteLine(Probe.P[PP2]())
             """,
             new[] { "9", "10" },
+        };
+
+        // A static abstract event binds through its accessors: custom accessors
+        // through a base interface, and a field-like event directly.
+        yield return new object[]
+        {
+            "static-abstract-event",
+            """
+            package P
+            import System
+            import Clib
+
+            struct EV : IEv2 {
+                shared {
+                    var hooked int32 = 0
+                    event Changed Action? {
+                        add { hooked = hooked + 1 }
+                        remove { }
+                    }
+                }
+            }
+            struct EF : IEv {
+                shared {
+                    event Changed Action?
+                }
+            }
+
+            Probe.Hook[EV](() -> {})
+            Console.WriteLine(EV.hooked)
+            Probe.Hook[EF](() -> {})
+            Console.WriteLine("hooked")
+            """,
+            new[] { "1", "hooked" },
         };
 
         // A generic interface closed over a G# type: the slot's declaration is
