@@ -67,7 +67,7 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           go mod verify
-          go test -count=1 -run '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$' .
+          go test -count=1 -run '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$' .
           go vet ./...
 
   go2gs-macos:

@@ -88,16 +88,21 @@ M0's portable threat boundary. Hashes and schema validation detect provenance
 drift but do not authenticate or mediate that peer.
 On Linux and macOS, private temporary trees are removed recursively through
 verified directory descriptors and atomic name exchanges without following
-links; an exchange failure or retained entry makes the command fail. Other
-platforms intentionally leave non-empty private trees behind rather than risk
-deleting a path that another process replaced.
+links; an exchange failure or retained entry makes the command fail. Windows
+uses held-root, handle-relative renaming and recursive removal without
+following reparse points. Platforms without a secure cleanup implementation
+reject private temporary-directory creation before copying executables or
+source snapshots.
 
-Complete public `analyze` is supported only on Linux. Other platforms still
+Complete public `analyze` is supported only on Linux. Windows and macOS still
 secure and lock the output, invalidate stale owned artifacts, capture native
 `cmd/go` without executing it, mirror source/manifests, and publish deterministic
 exit-1 artifacts for definitive toolchain or source-provenance mismatches. A
 matching preload reaches the unsupported secure-execution binding and exits 2
-without an artifact. It never calls `go/packages`.
+without an artifact. It never calls `go/packages`. Targets without secure
+temporary cleanup reject private temporary-tree creation before copying into
+it; non-Unix/non-Windows fallback targets also reject output-root creation
+before mutation.
 
 The parent captures the selected native `cmd/go` into a bootstrap capsule only
 for handoff. On Linux the captured bytes must be a supported ELF executable or
