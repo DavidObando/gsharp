@@ -400,10 +400,79 @@ internal sealed class ConversionClassifier
         bool allowExplicit = false,
         ParameterSymbol? callParameter = null)
     {
+        if (binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType)
+            && path.HasMembers
+            && TryRecoverDeclaredMemberPathConversion(expression, path, type, out var declaredRead))
+        {
+            expression = declaredRead;
+        }
+        else if (binderCtx.TryGetBackwardGotoNarrowingPath(expression, out path, out narrowedType)
+            && (Invariant.Required(path, "a narrowed conversion has an access path").HasMembers
+                || !BinderContext.NarrowedReadChangesRuntimeType(
+                    path.Root.Type,
+                    Invariant.Required(narrowedType, "a narrowed conversion has a narrowed type")))
+            && type is not NullableTypeSymbol
+            && type is not PlatformTypeSymbol)
+        {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                path,
+                diagnosticLocation,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                type);
+        }
+
         if (NativeSliceTypes.HaveIncompatibleElements(expression.Type, type) || ManagedReferenceTypes.HaveIncompatibleElements(expression.Type, type))
         {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
             return new BoundErrorExpression(expression.Syntax);
+        }
+
+        static bool TryRecoverDeclaredMemberPathConversion(
+            BoundExpression expression,
+            AccessPath path,
+            TypeSymbol target,
+            [NotNullWhen(true)] out BoundExpression? declaredRead)
+        {
+            var declaredType = MemberLookup.GetDeclaredAccessPathType(path, expression.Type);
+            if (declaredType is NullableTypeSymbol
+                || declaredType is PlatformTypeSymbol
+                || !Conversion.IsRepresentationPreservingImplicit(declaredType, target))
+            {
+                declaredRead = null;
+                return false;
+            }
+
+            declaredRead = expression switch
+            {
+                BoundFieldAccessExpression field => new BoundFieldAccessExpression(
+                    field.Syntax,
+                    field.Receiver,
+                    field.StructType,
+                    field.Field,
+                    field.SubstitutedType,
+                    narrowedType: null),
+                BoundPropertyAccessExpression property => new BoundPropertyAccessExpression(
+                    property.Syntax,
+                    property.Receiver,
+                    property.StructType,
+                    property.Property,
+                    property.SubstitutedType,
+                    narrowedType: null,
+                    property.InterfaceType),
+                BoundClrPropertyAccessExpression property => new BoundClrPropertyAccessExpression(
+                    property.Syntax,
+                    property.Receiver,
+                    property.Member,
+                    declaredType,
+                    property.StaticContainerType,
+                    property.ConstrainedReceiverTypeParameter,
+                    property.ConstrainedInterfaceType,
+                    property.IsAddressableStaticField,
+                    property.IsReadOnlySubmissionGlobal),
+                _ => null,
+            };
+            return declaredRead != null;
         }
 
         // Issue #1238: a deferred target-typed conditional/if/switch argument
@@ -3408,13 +3477,36 @@ internal sealed class ConversionClassifier
         for (var i = 0; i < arguments.Length; i++)
         {
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            var location = !parameterArgumentLocations.IsDefault
+                && paramIndex < parameterArgumentLocations.Length
+                && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                    ? mappedLocation
+                    : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+            var parameterType = paramIndex < parameters.Length
+                && parameters[paramIndex].ParameterType is { IsByRef: false }
+                && method != null
+                && receiverType != null
+                    ? MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex)
+                    : null;
+            if (parameterType != null
+                && binderCtx.TryGetBackwardGotoNarrowingPath(arguments[i], out var path, out var narrowedType)
+                && (Invariant.Required(path, "a narrowed constrained-call argument has an access path").HasMembers
+                    || !BinderContext.NarrowedReadChangesRuntimeType(
+                        path.Root.Type,
+                        Invariant.Required(narrowedType, "a narrowed constrained-call argument has a narrowed type")))
+                && parameterType is not NullableTypeSymbol
+                && parameterType is not PlatformTypeSymbol)
+            {
+                binderCtx.TrackBackwardGotoNarrowingUse(
+                    path,
+                    location,
+                    string.Empty,
+                    BackwardGotoNarrowingUseKind.Conversion,
+                    parameterType);
+            }
+
             if (paramIndex < parameters.Length && IsImplicitInClrArgument(arguments[i], parameters[paramIndex]))
             {
-                var location = !parameterArgumentLocations.IsDefault
-                    && paramIndex < parameterArgumentLocations.Length
-                    && parameterArgumentLocations[paramIndex] is { } mappedLocation
-                        ? mappedLocation
-                        : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
                 var pointeeType = GetImplicitInClrPointeeType(
                     parameters[paramIndex],
                     paramIndex,
@@ -3435,22 +3527,15 @@ internal sealed class ConversionClassifier
             else if (paramIndex < parameters.Length
                 && (Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
                     || TypeSymbol.ContainsNullLiteralType(arguments[i].Type))
-                && parameters[paramIndex].ParameterType is { IsByRef: false }
-                && method != null
-                && receiverType != null
-                && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType)
+                && parameterType != null)
             {
-                var location = !parameterArgumentLocations.IsDefault
-                    && paramIndex < parameterArgumentLocations.Length
-                    && parameterArgumentLocations[paramIndex] is { } mappedLocation
-                        ? mappedLocation
-                        : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
-                if (TryRejectClrPlatformContainerArgument(
-                    arguments[i],
-                    parameters[paramIndex],
-                    parameterType,
-                    location,
-                    out var rejectedArgument))
+                if (Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
+                    && TryRejectClrPlatformContainerArgument(
+                        arguments[i],
+                        parameters[paramIndex],
+                        parameterType,
+                        location,
+                        out var rejectedArgument))
                 {
                     builder ??= arguments.ToBuilder();
                     builder[i] = rejectedArgument;

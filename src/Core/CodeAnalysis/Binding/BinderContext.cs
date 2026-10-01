@@ -104,6 +104,12 @@ internal sealed class BinderContext
 
 #pragma warning restore SA1401
 
+    private readonly Dictionary<IReadOnlyDictionary<AccessPath, TypeSymbol>, (int Generation, int Depth)>
+        narrowingProofGenerations =
+        new(ReferenceEqualityComparer.Instance);
+
+    private int narrowingProofGeneration;
+
     /// <summary>
     /// Issue #1201: cached set of user-defined types brought into unqualified
     /// static-member scope via a non-alias type import (<c>import Ns.Type</c>,
@@ -120,6 +126,10 @@ internal sealed class BinderContext
     private SyntaxTree? cachedStaticImportSyntaxTree;
 
     private ChannelRuntimeBinder? channelRuntime;
+
+    private HashSet<string>? closureAssignedNames;
+
+    private bool closureAssignedNamesComputed;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BinderContext"/> class.
@@ -284,6 +294,45 @@ internal sealed class BinderContext
     /// </summary>
     public Dictionary<string, TextLocation> UnresolvedGotoLabels { get; }
         = new Dictionary<string, TextLocation>();
+
+    /// <summary>
+    /// Gets the assignment-narrowing generation at which each unresolved
+    /// forward-goto target was first encountered.
+    /// </summary>
+    public Dictionary<string, int> PendingGotoAssignmentStarts { get; }
+        = new Dictionary<string, int>();
+
+    /// <summary>
+    /// Gets the latest assignment-narrowing generation for each variable.
+    /// </summary>
+    public Dictionary<VariableSymbol, int> AssignmentNarrowingGenerations { get; }
+        = new Dictionary<VariableSymbol, int>();
+
+    /// <summary>
+    /// Gets or sets the current assignment-narrowing generation.
+    /// </summary>
+    public int AssignmentNarrowingGeneration { get; set; }
+
+    /// <summary>
+    /// Gets the variables known non-null at each forward <c>goto</c> source,
+    /// grouped by target label. Label joins retain a later assignment
+    /// narrowing when every incoming jump already carried that proof.
+    /// </summary>
+    public Dictionary<string, List<GotoNarrowingSnapshot>> PendingGotoNarrowingSnapshots { get; }
+        = new Dictionary<string, List<GotoNarrowingSnapshot>>();
+
+    /// <summary>
+    /// Gets the label-entry narrowing state, narrowing-dependent member reads,
+    /// and incoming snapshots for backward user gotos.
+    /// </summary>
+    public Dictionary<string, BackwardGotoNarrowingState> BackwardGotoNarrowingStates { get; }
+        = new Dictionary<string, BackwardGotoNarrowingState>();
+
+    public HashSet<string> ReachableUserLabels { get; } = new(StringComparer.Ordinal);
+
+    public List<(string? SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)> DeferredUnreachableGotoEdges { get; } = [];
+
+    public string? PotentialReachabilityLabel { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the CURRENT function/lambda/
@@ -717,6 +766,317 @@ internal sealed class BinderContext
         }
 
         return new UnsafeContextScope(this, active);
+    }
+
+    public void BeginNarrowingProof(IReadOnlyDictionary<AccessPath, TypeSymbol> frame)
+    {
+        if (narrowingProofGenerations.TryGetValue(frame, out var state))
+        {
+            narrowingProofGenerations[frame] =
+                (++narrowingProofGeneration, state.Depth + 1);
+            return;
+        }
+
+        narrowingProofGenerations.Add(frame, (++narrowingProofGeneration, 1));
+    }
+
+    public void EndNarrowingProof()
+    {
+        var index = NarrowedVariables.Count - 1;
+        var frame = NarrowedVariables[index];
+        NarrowedVariables.RemoveAt(index);
+        var state = narrowingProofGenerations[frame];
+        if (state.Depth == 1)
+        {
+            narrowingProofGenerations.Remove(frame);
+        }
+        else
+        {
+            narrowingProofGenerations[frame] = (state.Generation, state.Depth - 1);
+        }
+    }
+
+    public int GetNarrowingProofGeneration(IReadOnlyDictionary<AccessPath, TypeSymbol> frame)
+        => narrowingProofGenerations.TryGetValue(frame, out var state) ? state.Generation : 0;
+
+    /// <summary>
+    /// Gets a value indicating whether a local or parameter named
+    /// <paramref name="variable"/> may be assigned by a closure of the
+    /// enclosing function. The set is name based (a superset under shadowing)
+    /// and computed once from the whole function syntax, so a closure bound
+    /// later (reached through a backward edge) is still counted. Until it is
+    /// computed the answer is <see langword="true"/> (fail-safe).
+    /// </summary>
+    /// <param name="variable">The root variable.</param>
+    /// <returns><see langword="true"/> when a closure may assign it.</returns>
+    public bool MayBeAssignedByClosure(VariableSymbol variable)
+        => !closureAssignedNamesComputed
+            || closureAssignedNames == null
+            || closureAssignedNames.Contains(variable.Name);
+
+    /// <summary>
+    /// Records the names assigned inside any function literal or local function
+    /// of the enclosing function, once, from <paramref name="computeNames"/>.
+    /// </summary>
+    /// <param name="computeNames">Computes the assigned-name set.</param>
+    public void EnsureClosureAssignedNames(Func<HashSet<string>?> computeNames)
+    {
+        if (closureAssignedNamesComputed)
+        {
+            return;
+        }
+
+        // A null set means any name may be assigned (fail-safe).
+        closureAssignedNames = computeNames();
+        closureAssignedNamesComputed = true;
+    }
+
+    public void TrackBackwardGotoNarrowingUse(
+        VariableSymbol variable,
+        TextLocation location,
+        string memberName,
+        BackwardGotoNarrowingUseKind kind,
+        TypeSymbol? targetType = null)
+        => TrackBackwardGotoNarrowingUse(
+            AccessPath.ForVariable(variable),
+            location,
+            memberName,
+            kind,
+            targetType);
+
+    public void TrackBackwardGotoNarrowingUse(
+        AccessPath path,
+        TextLocation location,
+        string memberName,
+        BackwardGotoNarrowingUseKind kind,
+        TypeSymbol? targetType = null,
+        TypeSymbol? requiredType = null)
+    {
+        var frameIndex = -1;
+        for (var i = NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (NarrowedVariables[i].ContainsKey(path))
+            {
+                frameIndex = i;
+                break;
+            }
+        }
+
+        if (frameIndex < 0)
+        {
+            return;
+        }
+
+        var variable = path.Root;
+        var narrowedType = NarrowedVariables[frameIndex][path];
+        var operationRequiredType = requiredType ?? narrowedType;
+        var access = new BackwardGotoNarrowingAccess(
+            path,
+            location,
+            memberName,
+            kind,
+            operationRequiredType,
+            MemberLookup.GetDeclaredAccessPathType(path, narrowedType),
+            targetType);
+        foreach (var entry in BackwardGotoNarrowingStates)
+        {
+            var state = entry.Value;
+            if (!state.TargetSnapshot.NarrowingFrameIndices.TryGetValue(
+                    path,
+                    out var targetFrameIndex)
+                || frameIndex != targetFrameIndex
+                || !state.TargetSnapshot.NarrowingProofGenerations.TryGetValue(path, out var targetProof)
+                || GetNarrowingProofGeneration(NarrowedVariables[frameIndex]) != targetProof
+                || (!path.HasMembers
+                    && AssignmentNarrowingGenerations.TryGetValue(
+                        variable,
+                        out var assignmentGeneration)
+                    && (!state.TargetSnapshot.AssignmentGenerations.TryGetValue(
+                            variable,
+                            out var targetAssignmentGeneration)
+                        || assignmentGeneration > targetAssignmentGeneration)))
+            {
+                continue;
+            }
+
+            state.Accesses.Add(access);
+            foreach (var edge in state.Edges)
+            {
+                edge.Accesses.Add(access);
+            }
+
+            if (state.UpstreamLabels.TryGetValue(path, out var upstreamLabels))
+            {
+                foreach (var upstreamLabel in upstreamLabels)
+                {
+                    var upstreamState = BackwardGotoNarrowingStates[upstreamLabel];
+                    upstreamState.Accesses.Add(access);
+                    foreach (var edge in upstreamState.Edges)
+                    {
+                        edge.Accesses.Add(access);
+                    }
+                }
+            }
+        }
+    }
+
+    public void TrackBackwardGotoNarrowingRead(VariableSymbol variable, TextLocation location)
+    {
+        TypeSymbol? narrowedType = null;
+        for (var i = NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (NarrowedVariables[i].TryGetValue(variable, out narrowedType))
+            {
+                break;
+            }
+        }
+
+        if (narrowedType == null
+            || !NarrowedReadChangesRuntimeType(variable.Type, narrowedType))
+        {
+            return;
+        }
+
+        TrackBackwardGotoNarrowingUse(
+            variable,
+            location,
+            string.Empty,
+            BackwardGotoNarrowingUseKind.Conversion,
+            narrowedType);
+    }
+
+    public void UntrackBackwardGotoNarrowingIndex(VariableSymbol variable, TextLocation location)
+        => UntrackBackwardGotoNarrowingUse(
+            AccessPath.ForVariable(variable),
+            location,
+            BackwardGotoNarrowingUseKind.Conversion,
+            BackwardGotoNarrowingUseKind.Index);
+
+    public void UntrackBackwardGotoNarrowingIndexUse(VariableSymbol variable, TextLocation location)
+        => UntrackBackwardGotoNarrowingUse(
+            AccessPath.ForVariable(variable),
+            location,
+            BackwardGotoNarrowingUseKind.Index);
+
+    public void UntrackBackwardGotoNarrowingMemberUse(AccessPath path, TextLocation location)
+        => UntrackBackwardGotoNarrowingUse(
+            path,
+            location,
+            BackwardGotoNarrowingUseKind.Member);
+
+    public void UntrackBackwardGotoNarrowingConversion(AccessPath path, TextLocation location)
+        => UntrackBackwardGotoNarrowingUse(
+            path,
+            location,
+            BackwardGotoNarrowingUseKind.Conversion);
+
+    public void UntrackBackwardGotoNarrowingUse(
+        AccessPath path,
+        TextLocation location,
+        params BackwardGotoNarrowingUseKind[] kinds)
+    {
+        foreach (var state in BackwardGotoNarrowingStates.Values)
+        {
+            state.Accesses.RemoveAll(access =>
+                access.Path.Equals(path)
+                && IsWithin(access.Location, location)
+                && kinds.Contains(access.Kind));
+            foreach (var edge in state.Edges)
+            {
+                edge.Accesses.RemoveAll(access =>
+                    access.Path.Equals(path)
+                    && IsWithin(access.Location, location)
+                    && kinds.Contains(access.Kind));
+            }
+        }
+
+        static bool IsWithin(TextLocation candidate, TextLocation container)
+            => ReferenceEquals(candidate.Text, container.Text)
+                && candidate.Span.Start >= container.Span.Start
+                && candidate.Span.End <= container.Span.End;
+    }
+
+    public static bool NarrowedReadChangesRuntimeType(TypeSymbol declaredType, TypeSymbol narrowedType)
+    {
+        if (declaredType == narrowedType)
+        {
+            return false;
+        }
+
+        if (declaredType is NullableTypeSymbol nullable
+            && nullable.UnderlyingType == narrowedType)
+        {
+            return NullableLifting.IsValueTypeNullable(nullable)
+                || NullableLifting.IsUserValueTypeNullable(nullable);
+        }
+
+        return declaredType.ClrType == null
+            || narrowedType.ClrType == null
+            || declaredType.ClrType != narrowedType.ClrType;
+    }
+
+    public bool TryGetBackwardGotoNarrowingPath(
+        BoundExpression expression,
+        [NotNullWhen(true)] out AccessPath? path,
+        [NotNullWhen(true)] out TypeSymbol? narrowedType)
+    {
+        if (expression is BoundVariableExpression { NarrowedType: { } variableNarrowed } variableRead)
+        {
+            path = AccessPath.ForVariable(variableRead.Variable);
+            narrowedType = variableNarrowed;
+            return true;
+        }
+
+        if (!SmartCastStability.TryGetStableMemberPath(expression, out path, out _)
+            || path == null)
+        {
+            narrowedType = null;
+            return false;
+        }
+
+        for (var i = NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (NarrowedVariables[i].TryGetValue(path, out narrowedType))
+            {
+                return true;
+            }
+        }
+
+        narrowedType = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Records a narrowed variable consumed at a non-null boundary, then
+    /// applies the ordinary platform-type coercion.
+    /// </summary>
+    /// <param name="expression">The value crossing the boundary.</param>
+    /// <param name="location">The source location of the use.</param>
+    /// <param name="boundary">The platform-check boundary description.</param>
+    /// <param name="suppressible">Whether platform-check suppression applies.</param>
+    /// <returns>The checked or unchanged expression.</returns>
+    public BoundExpression InsertPlatformCheck(
+        BoundExpression expression,
+        TextLocation? location,
+        string boundary,
+        bool suppressible = true)
+    {
+        if (location is { } useLocation
+            && TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType)
+            && (Invariant.Required(path, "a narrowed boundary has an access path").HasMembers
+                || !NarrowedReadChangesRuntimeType(path.Root.Type, Invariant.Required(
+                    narrowedType,
+                    "a narrowed boundary has a narrowed type"))))
+        {
+            TrackBackwardGotoNarrowingUse(
+                path,
+                useLocation,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.NonNullUse,
+                expression.Type);
+        }
+
+        return PlatformCoercion.InsertCheck(expression, location, boundary, suppressible);
     }
 
     /// <summary>Enters a base or delegating-constructor argument context.</summary>

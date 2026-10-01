@@ -99,7 +99,7 @@ internal sealed partial class ExpressionBinder
         if (syntax.OperatorToken.Kind == SyntaxKind.BangBangToken
             && boundOperand.Type is PlatformTypeSymbol)
         {
-            return PlatformCoercion.InsertCheck(
+            return binderCtx.InsertPlatformCheck(
                 boundOperand,
                 syntax.OperatorToken.Location,
                 "an explicit '!!'",
@@ -1088,6 +1088,7 @@ internal sealed partial class ExpressionBinder
             return bind();
         }
 
+        binderCtx.BeginNarrowingProof(narrowing);
         binderCtx.NarrowedVariables.Add(narrowing);
         try
         {
@@ -1095,7 +1096,7 @@ internal sealed partial class ExpressionBinder
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            binderCtx.EndNarrowingProof();
         }
     }
 
@@ -1725,7 +1726,7 @@ internal sealed partial class ExpressionBinder
 
         // ADR-0186 §4: a receive requires a non-null channel, so a platform
         // operand is checked (and unwrapped) here, like any other receiver.
-        operand = PlatformCoercion.InsertCheck(operand, syntax.Operand.Location, "a channel receive operand");
+        operand = binderCtx.InsertPlatformCheck(operand, syntax.Operand.Location, "a channel receive operand");
 
         if (!ChannelTypeSymbol.TryGetChannelShape(operand.Type, out var elementType, out var direction, out _))
         {

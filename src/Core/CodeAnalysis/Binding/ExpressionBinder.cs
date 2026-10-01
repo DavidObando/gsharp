@@ -234,6 +234,7 @@ internal sealed partial class ExpressionBinder
                 : BindExpression(syntax, targetType);
         }
 
+        binderCtx.BeginNarrowingProof(frame);
         binderCtx.NarrowedVariables.Add(frame);
         try
         {
@@ -243,7 +244,7 @@ internal sealed partial class ExpressionBinder
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            binderCtx.EndNarrowingProof();
         }
     }
 
@@ -258,6 +259,7 @@ internal sealed partial class ExpressionBinder
             return BindExpression(syntax, TypeSymbol.Bool);
         }
 
+        binderCtx.BeginNarrowingProof(frame);
         binderCtx.NarrowedVariables.Add(frame);
         try
         {
@@ -265,7 +267,7 @@ internal sealed partial class ExpressionBinder
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            binderCtx.EndNarrowingProof();
         }
     }
 
@@ -872,11 +874,18 @@ internal sealed partial class ExpressionBinder
                 implicitProp.Property);
         }
 
-        return BuildNarrowedVariableRead(variable);
+        return BuildNarrowedVariableRead(variable, syntax.IdentifierToken.Location);
     }
 
-    private BoundExpression BuildNarrowedVariableRead(VariableSymbol variable)
+    private BoundExpression BuildNarrowedVariableRead(
+        VariableSymbol variable,
+        TextLocation? location = null)
     {
+        if (location is { } useLocation)
+        {
+            binderCtx.TrackBackwardGotoNarrowingRead(variable, useLocation);
+        }
+
         Func<TypeSymbol, BoundExpression> makeNarrowedVariable =
             narrowedType => new BoundVariableExpression(null, variable, narrowedType);
         return BuildNarrowedRead(

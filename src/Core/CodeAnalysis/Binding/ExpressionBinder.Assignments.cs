@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -1108,7 +1109,18 @@ internal sealed partial class ExpressionBinder
         // receiver view used by reads. The symbol retains its declared nullable
         // storage type, while the bound receiver carries the effective type
         // proven by the active if-let/null-guard frame.
-        var assignmentReceiver = implicitFieldReceiverExpr ?? BuildNarrowedVariableRead(variable);
+        var assignmentReceiver = implicitFieldReceiverExpr
+            ?? BuildNarrowedVariableRead(variable, syntax.FieldIdentifier.Location);
+        if (assignmentReceiver is BoundVariableExpression variableRead
+            && variableRead.NarrowedType != null)
+        {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                variableRead.Variable,
+                syntax.FieldIdentifier.Location,
+                syntax.FieldIdentifier.ValueText,
+                BackwardGotoNarrowingUseKind.Member);
+        }
+
         var assignmentReceiverType = assignmentReceiver.Type;
 
         // Stream B: instance-CLR receiver → property/field write via reflection.
@@ -1140,6 +1152,10 @@ internal sealed partial class ExpressionBinder
 
             _ = instWritable;
             _ = instTargetType;
+            (assignmentReceiver, instanceMember) = RecoverDeclaredClrMemberWriteReceiver(
+                assignmentReceiver,
+                syntax.FieldIdentifier.Location,
+                instanceMember);
             var instConverted = conversions.BindConversion(syntax.Value.Location, BindValue(instTargetSymbol), instTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, assignmentReceiver, instanceMember, instConverted, instTargetSymbol, staticContainerType: null);
         }
@@ -1178,6 +1194,10 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propertyType = effectiveInterface.SubstituteMemberType(ifaceProp.Type);
+                assignmentReceiver = RecoverDeclaredPropertyWriteReceiver(
+                    assignmentReceiver,
+                    syntax.FieldIdentifier.Location,
+                    ifaceProp);
                 var ifaceConverted = conversions.BindConversion(
                     syntax.Value.Location,
                     BindValue(propertyType),
@@ -1340,7 +1360,12 @@ internal sealed partial class ExpressionBinder
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
                 EnforceInitOnlyAssignment(prop, assignmentReceiver, syntax.EqualsToken.Location);
-                return new BoundPropertyAssignmentExpression(null, assignmentReceiver, structSymbol, prop, propConverted);
+                return BindPropertyAssignmentWithDeclaredReceiver(
+                    assignmentReceiver,
+                    syntax.FieldIdentifier.Location,
+                    propDeclaringType,
+                    prop,
+                    propConverted);
             }
 
             // Issue #319 / #1582: a GSharp class inheriting an imported CLR base
@@ -1373,6 +1398,10 @@ internal sealed partial class ExpressionBinder
 
                     _ = inhWritable;
                     _ = inhTargetType;
+                    (assignmentReceiver, clrMember) = RecoverDeclaredClrMemberWriteReceiver(
+                        assignmentReceiver,
+                        syntax.FieldIdentifier.Location,
+                        clrMember);
                     var inhConverted = conversions.BindConversion(syntax.Value.Location, BindValue(inhTargetSymbol), inhTargetSymbol);
                     return new BoundClrPropertyAssignmentExpression(null, assignmentReceiver, clrMember, inhConverted, inhTargetSymbol, staticContainerType: null);
                 }
@@ -1382,6 +1411,10 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        assignmentReceiver = RecoverDeclaredMemberWriteReceiver(
+            assignmentReceiver,
+            syntax.FieldIdentifier.Location,
+            fieldDeclaringType);
         var receiverIsThisField = ReceiverVariableIsThis(variable);
 
         // Issue #950 / #2044: enforce `protected`/`private` field assignment
@@ -3622,10 +3655,11 @@ internal sealed partial class ExpressionBinder
                 break;
 
             default:
-                target = BuildNarrowedVariableRead(variable);
+                target = BuildNarrowedVariableRead(variable, diagnosticLocation);
                 break;
         }
 
+        TrackBackwardGotoIndexUse(target, diagnosticLocation);
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
 
         // ADR-0187 / issue #4350: a multi-parameter user indexer write.
@@ -3799,6 +3833,15 @@ internal sealed partial class ExpressionBinder
             return receiver;
         }
 
+        if (binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var path, out _))
+        {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                path,
+                syntax.FieldIdentifier.Location,
+                syntax.FieldIdentifier.ValueText,
+                BackwardGotoNarrowingUseKind.Member);
+        }
+
         // ADR-0186 §4/§5: the WRITE side of a member access has its own
         // receiver path, and failure mode 1 of ADR-0186's catalogue is
         // literally "the read and call paths drifted". Checking and
@@ -3855,6 +3898,11 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(syntax);
                 }
 
+                receiver = RecoverDeclaredMemberWriteReceiver(
+                    receiver,
+                    syntax.FieldIdentifier.Location,
+                    declaringType,
+                    syntax.Receiver.Location);
                 return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiver, declaringType, field, converted);
             }
 
@@ -3896,7 +3944,13 @@ internal sealed partial class ExpressionBinder
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
                 EnforceInitOnlyAssignment(prop, receiver, syntax.EqualsToken.Location);
-                return new BoundPropertyAssignmentExpression(null, receiver, structSym, prop, propConverted);
+                return BindPropertyAssignmentWithDeclaredReceiver(
+                    receiver,
+                    syntax.FieldIdentifier.Location,
+                    propDeclaringType,
+                    prop,
+                    propConverted,
+                    syntax.Receiver.Location);
             }
 
             // Inherited CLR base member fallback (issue #1582: walk the user
@@ -3925,6 +3979,11 @@ internal sealed partial class ExpressionBinder
 
                     _ = inhWritable;
                     _ = inhTargetType;
+                    (receiver, clrMember) = RecoverDeclaredClrMemberWriteReceiver(
+                        receiver,
+                        syntax.FieldIdentifier.Location,
+                        clrMember,
+                        syntax.Receiver.Location);
                     var inhConverted = conversions.BindConversion(syntax.Value.Location, BindValue(inhTargetSymbol), inhTargetSymbol);
                     return new BoundClrPropertyAssignmentExpression(null, receiver, clrMember, inhConverted, inhTargetSymbol, staticContainerType: null);
                 }
@@ -3968,6 +4027,11 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propertyType = effectiveInterface.SubstituteMemberType(ifaceProp.Type);
+                receiver = RecoverDeclaredPropertyWriteReceiver(
+                    receiver,
+                    syntax.FieldIdentifier.Location,
+                    ifaceProp,
+                    syntax.Receiver.Location);
                 var ifaceConverted = conversions.BindConversion(
                     syntax.Value.Location,
                     BindValue(propertyType),
@@ -4055,6 +4119,11 @@ internal sealed partial class ExpressionBinder
 
             _ = instWritable;
             _ = instTargetType;
+            (receiver, instanceMember) = RecoverDeclaredClrMemberWriteReceiver(
+                receiver,
+                syntax.FieldIdentifier.Location,
+                instanceMember,
+                syntax.Receiver.Location);
 
             // ADR-0156 Phase 2 (issue #3185): a chained write through a
             // prior-cell submission global (`a.B.C = v`) enforces the
@@ -4071,6 +4140,213 @@ internal sealed partial class ExpressionBinder
 
         Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
         return new BoundErrorExpression(null);
+    }
+
+    private BoundExpression RecoverDeclaredMemberWriteReceiver(
+        BoundExpression receiver,
+        TextLocation location,
+        TypeSymbol requiredType,
+        TextLocation? receiverLocation = null)
+    {
+        if (!binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var path, out _)
+            || path.HasMembers
+            || path.Root.Type is NullableTypeSymbol
+            || !CanRecoverDeclaredMemberWriteReceiver(path.Root.Type, requiredType))
+        {
+            return receiver;
+        }
+
+        UntrackDeclaredWriteReceiver(path, location, receiverLocation);
+        return DeclaredReceiver(path.Root, receiver.Syntax);
+    }
+
+    // The receiver read (and its runtime-changing conversion) is recorded at
+    // the receiver expression's span, while the member use is recorded at the
+    // member token; a parenthesized or otherwise explicit receiver makes those
+    // two spans differ, so untrack the conversion at both.
+    private void UntrackDeclaredWriteReceiver(
+        AccessPath path,
+        TextLocation memberLocation,
+        TextLocation? receiverLocation)
+    {
+        binderCtx.UntrackBackwardGotoNarrowingConversion(path, memberLocation);
+        if (receiverLocation is { } receiverSpan)
+        {
+            binderCtx.UntrackBackwardGotoNarrowingConversion(path, receiverSpan);
+        }
+
+        binderCtx.UntrackBackwardGotoNarrowingMemberUse(path, memberLocation);
+    }
+
+    internal static bool CanRecoverDeclaredMemberWriteReceiver(TypeSymbol declaredType, TypeSymbol requiredType)
+        => Conversion.IsRepresentationPreservingImplicit(declaredType, requiredType);
+
+    private BoundPropertyAssignmentExpression BindPropertyAssignmentWithDeclaredReceiver(
+        BoundExpression receiver,
+        TextLocation location,
+        StructSymbol selectedOwner,
+        PropertySymbol selectedProperty,
+        BoundExpression value,
+        TextLocation? receiverLocation = null)
+    {
+        if (!TryGetDeclaredWriteReceiver(receiver, out var path))
+        {
+            return new BoundPropertyAssignmentExpression(
+                null,
+                receiver,
+                selectedOwner,
+                selectedProperty,
+                value);
+        }
+
+        if (TryResolveDeclaredPropertyWriteSlot(
+            path.Root.Type,
+            receiver.Type,
+            selectedProperty,
+            out var declaredProperty,
+            out var declaredStructOwner,
+            out var declaredInterfaceOwner))
+        {
+            var recoveredReceiver = RecoverDeclaredWriteReceiver(receiver, path, location, receiverLocation);
+            if (declaredInterfaceOwner != null)
+            {
+                var substitutedType = declaredInterfaceOwner.SubstituteMemberType(declaredProperty.Type);
+                return new BoundPropertyAssignmentExpression(
+                    null,
+                    recoveredReceiver,
+                    null,
+                    declaredProperty,
+                    value,
+                    ReferenceEquals(substitutedType, declaredProperty.Type) ? null : substitutedType,
+                    declaredInterfaceOwner);
+            }
+
+            return new BoundPropertyAssignmentExpression(
+                null,
+                recoveredReceiver,
+                declaredStructOwner,
+                declaredProperty,
+                value);
+        }
+
+        return new BoundPropertyAssignmentExpression(
+            null,
+            receiver,
+            selectedOwner,
+            selectedProperty,
+            value);
+    }
+
+    private BoundExpression RecoverDeclaredPropertyWriteReceiver(
+        BoundExpression receiver,
+        TextLocation location,
+        PropertySymbol selectedProperty,
+        TextLocation? receiverLocation = null)
+    {
+        if (!TryGetDeclaredWriteReceiver(receiver, out var path)
+            || !TryResolveDeclaredPropertyWriteSlot(
+                path.Root.Type,
+                receiver.Type,
+                selectedProperty,
+                out _,
+                out _,
+                out _))
+        {
+            return receiver;
+        }
+
+        return RecoverDeclaredWriteReceiver(receiver, path, location, receiverLocation);
+    }
+
+    private bool TryResolveDeclaredPropertyWriteSlot(
+        TypeSymbol declaredType,
+        TypeSymbol receiverType,
+        PropertySymbol selectedProperty,
+        [NotNullWhen(true)] out PropertySymbol? declaredProperty,
+        out StructSymbol? declaredStructOwner,
+        out InterfaceSymbol? declaredInterfaceOwner)
+    {
+        if (declaredType is StructSymbol structType
+            && TypeMemberModel.TryGetProperty(
+                structType,
+                selectedProperty.Name,
+                out declaredProperty,
+                out declaredStructOwner)
+            && SamePropertySlot(selectedProperty, declaredProperty, MemberOperation.Write, receiverType)
+            && Equals(declaredProperty.Type, selectedProperty.Type))
+        {
+            declaredInterfaceOwner = null;
+            return true;
+        }
+
+        if (declaredType is InterfaceSymbol interfaceType
+            && TypeMemberModel.TryGetPropertyWithOwner(
+                interfaceType,
+                selectedProperty.Name,
+                out declaredProperty,
+                out var declaredOwner)
+            && declaredOwner is InterfaceSymbol interfaceOwner
+            && SamePropertySlot(
+                selectedProperty,
+                declaredProperty,
+                MemberOperation.Write,
+                receiverType,
+                interfaceOwner))
+        {
+            declaredStructOwner = null;
+            declaredInterfaceOwner = interfaceOwner;
+            return true;
+        }
+
+        declaredProperty = null;
+        declaredStructOwner = null;
+        declaredInterfaceOwner = null;
+        return false;
+    }
+
+    private (BoundExpression Receiver, MemberInfo Member) RecoverDeclaredClrMemberWriteReceiver(
+        BoundExpression receiver,
+        TextLocation location,
+        MemberInfo selectedMember,
+        TextLocation? receiverLocation = null)
+    {
+        if (!TryGetDeclaredWriteReceiver(receiver, out var path))
+        {
+            return (receiver, selectedMember);
+        }
+
+        var declaredType = path.Root.Type;
+        var clrType = declaredType.ClrType
+            ?? (declaredType is StructSymbol structType ? GetInheritedClrBaseType(structType) : null);
+        if (clrType == null)
+        {
+            return (receiver, selectedMember);
+        }
+
+        MemberInfo? declaredMember = selectedMember is PropertyInfo
+            ? SafeGetVisibleInstanceProperty(clrType, selectedMember.Name)
+            : SafeGetVisibleInstanceField(clrType, selectedMember.Name);
+        return declaredMember != null
+            && SameClrMemberSlot(selectedMember, declaredMember, MemberOperation.Write)
+            ? (RecoverDeclaredWriteReceiver(receiver, path, location, receiverLocation), declaredMember)
+            : (receiver, selectedMember);
+    }
+
+    private bool TryGetDeclaredWriteReceiver(
+        BoundExpression receiver,
+        [NotNullWhen(true)] out AccessPath? path)
+        => binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out path, out _)
+            && !path.HasMembers
+            && path.Root.Type is not NullableTypeSymbol;
+
+    private BoundExpression RecoverDeclaredWriteReceiver(
+        BoundExpression receiver,
+        AccessPath path,
+        TextLocation location,
+        TextLocation? receiverLocation = null)
+    {
+        UntrackDeclaredWriteReceiver(path, location, receiverLocation);
+        return DeclaredReceiver(path.Root, receiver.Syntax);
     }
 
     /// <summary>

@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
@@ -23,6 +24,79 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class StatementBinder
 {
+    private readonly HashSet<VariableSymbol> externalCallableAliases = new();
+
+    private readonly List<(AccessPath Path, TypeSymbol Type)> lastEarlyExitLifts = new();
+
+    internal HashSet<VariableSymbol> IsolateExternalCallableAliases()
+    {
+        var saved = new HashSet<VariableSymbol>(externalCallableAliases);
+        externalCallableAliases.Clear();
+        return saved;
+    }
+
+    internal void RestoreExternalCallableAliases(HashSet<VariableSymbol> saved)
+    {
+        externalCallableAliases.Clear();
+        externalCallableAliases.UnionWith(saved);
+    }
+
+    private HashSet<VariableSymbol> CaptureExternalCallableAliases()
+        => new(externalCallableAliases);
+
+    private void RestoreJoinedExternalCallableAliases(
+        HashSet<VariableSymbol> left,
+        IReadOnlyCollection<VariableSymbol> right)
+    {
+        left.IntersectWith(right);
+        RestoreExternalCallableAliases(left);
+    }
+
+    private static HashSet<VariableSymbol> JoinExternalCallableAliases(
+        HashSet<VariableSymbol>? joined,
+        IReadOnlyCollection<VariableSymbol> next)
+    {
+        if (joined == null)
+        {
+            return new HashSet<VariableSymbol>(next);
+        }
+
+        joined.IntersectWith(next);
+        return joined;
+    }
+
+    private HashSet<VariableSymbol> ComputeLoopEntryExternalCallableAliases(
+        BoundStatement body,
+        BoundStatement? backEdgeTail,
+        BoundLabel breakLabel,
+        BoundLabel continueLabel,
+        IReadOnlyCollection<VariableSymbol> entryAliases,
+        BoundExpression? backEdgeCondition = null)
+    {
+        var iteration = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (backEdgeCondition != null)
+        {
+            iteration.Add(new BoundExpressionStatement(null, backEdgeCondition));
+        }
+
+        iteration.Add(body);
+        iteration.Add(new BoundLabelStatement(null, continueLabel));
+        if (backEdgeTail != null)
+        {
+            iteration.Add(backEdgeTail);
+        }
+
+        iteration.Add(new BoundLabelStatement(null, breakLabel));
+        var loop = new BoundForInfiniteStatement(
+            null,
+            new BoundBlockStatement(null, iteration.ToImmutable()),
+            breakLabel,
+            continueLabel);
+        var collector = new AssignedRootsCollector(null, entryAliases);
+        collector.Visit(loop);
+        return collector.DefinitelyExternalFunctionValues.ToHashSet();
+    }
+
     /// <summary>
     /// If <paramref name="statement"/> is a call expression statement whose
     /// called function carries <c>[MemberNotNull("_f", …)]</c>, narrows each
@@ -31,6 +105,14 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyMemberNotNullNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> frame)
     {
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
         BoundExpression? callExpr = null;
         if (statement is BoundExpressionStatement exprStmt)
         {
@@ -98,7 +180,94 @@ internal sealed partial class StatementBinder
         if (scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar
             && fieldVar.Type is NullableTypeSymbol nullable)
         {
-            frame[fieldVar] = nullable.UnderlyingType;
+            SetPersistentNarrowing(frame, fieldVar, nullable.UnderlyingType);
+        }
+    }
+
+    private void SetPersistentNarrowing(
+        Dictionary<AccessPath, TypeSymbol> frame,
+        AccessPath path,
+        TypeSymbol narrowedType)
+    {
+        frame[path] = narrowedType;
+        if (!path.HasMembers)
+        {
+            binderCtx.AssignmentNarrowingGeneration++;
+            binderCtx.AssignmentNarrowingGenerations[path.Root] =
+                binderCtx.AssignmentNarrowingGeneration;
+        }
+    }
+
+    // `if !TryGet(out var v) || v == nil { return }` tests `v` AFTER the
+    // condition wrote it through the out argument, so the narrowing it lifts is
+    // about the new value. The post-statement invalidation drops every root the
+    // statement writes, which discarded that lift; put back the lifted
+    // narrowing of a bare variable that only the condition wrote through a
+    // writable reference and that no branch or plain assignment touches.
+    private void RestoreEarlyExitLiftsWrittenOnlyByCondition(
+        BoundStatement? statement,
+        Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    {
+        if (lastEarlyExitLifts.Count == 0)
+        {
+            return;
+        }
+
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
+        if (statement is not BoundIfStatement ifStatement)
+        {
+            return;
+        }
+
+        var condition = new AssignedRootsCollector(null, externalCallableAliases);
+        condition.VisitExpression(ifStatement.Condition);
+        if (condition.WritableReferenceRoots.Count == 0
+            || condition.MayMutateAnyRoot
+            || condition.MayMutateWritableReferenceRoots)
+        {
+            return;
+        }
+
+        var branches = new AssignedRootsCollector(null, externalCallableAliases);
+        branches.VisitStatement(ifStatement.ThenStatement);
+        if (ifStatement.ElseStatement != null)
+        {
+            branches.VisitStatement(ifStatement.ElseStatement);
+        }
+
+        var plainTargets = new PlainAssignmentTargetCollector();
+        plainTargets.VisitExpression(ifStatement.Condition);
+        foreach (var (path, narrowedType) in lastEarlyExitLifts)
+        {
+            if (!path.HasMembers
+                && condition.WritableReferenceRoots.Contains(path.Root)
+                && !plainTargets.Targets.Contains(path.Root)
+                && !branches.Roots.Contains(path.Root))
+            {
+                SetPersistentNarrowing(persistentFrame, path, narrowedType);
+            }
+        }
+    }
+
+    private sealed class PlainAssignmentTargetCollector : BoundTreeWalker
+    {
+        public HashSet<VariableSymbol> Targets { get; } = new HashSet<VariableSymbol>();
+
+        protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
+        {
+            if (node.Variable != null)
+            {
+                Targets.Add(node.Variable);
+            }
+
+            base.VisitAssignmentExpression(node);
         }
     }
 
@@ -106,6 +275,8 @@ internal sealed partial class StatementBinder
         SyntaxNode statementSyntax,
         BoundStatement? boundStatement = null)
     {
+        EnsureClosureAssignedNames(statementSyntax);
+
         // Issue #1639: `NarrowedVariables.Count == 0` never fires in practice —
         // `BindBlockStatements` pushes a (usually empty) memberNotNullFrame for
         // every block, so the list always has at least one entry once binding
@@ -140,11 +311,17 @@ internal sealed partial class StatementBinder
         // that invalidate before producing one bound statement retain the
         // syntax-name fallback.
         HashSet<VariableSymbol> assignedRoots;
+        var dropAllRoots = false;
+        var dropGlobalRoots = false;
+        AssignedRootsCollector? statementCollector = null;
         if (boundStatement != null)
         {
-            var collector = new AssignedRootsCollector(null);
+            var collector = new AssignedRootsCollector(null, externalCallableAliases);
             collector.Visit(boundStatement);
+            statementCollector = collector;
             assignedRoots = collector.Roots;
+            dropAllRoots = collector.MayMutateAnyRoot;
+            dropGlobalRoots = collector.MayMutateGlobalRoots;
             foreach (var frame in binderCtx.NarrowedVariables)
             {
                 foreach (var path in frame.Keys)
@@ -168,7 +345,7 @@ internal sealed partial class StatementBinder
             }
         }
 
-        if (assignedRoots.Count == 0 && !dropAllMemberPaths)
+        if (assignedRoots.Count == 0 && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots)
         {
             return;
         }
@@ -187,7 +364,9 @@ internal sealed partial class StatementBinder
             List<AccessPath>? toRemove = null;
             foreach (var key in frame.Keys)
             {
-                var drop = assignedRoots.Contains(key.Root)
+                var drop = (statementCollector != null && MayBeMutatedByUnknownWrite(statementCollector, key))
+                    || (dropGlobalRoots && key.Root is GlobalVariableSymbol)
+                    || assignedRoots.Contains(key.Root)
                     || (key.HasMembers && dropAllMemberPaths);
                 if (drop)
                 {
@@ -204,6 +383,80 @@ internal sealed partial class StatementBinder
             }
         }
     }
+
+    private void UpdateExternalCallableAliases(
+        BoundStatement statement,
+        IReadOnlyCollection<VariableSymbol> aliasesAtEntry)
+    {
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
+        var collector = new AssignedRootsCollector(null, aliasesAtEntry);
+        collector.Visit(statement);
+        ApplyCallableAliasExitState(
+            externalCallableAliases,
+            statement,
+            aliasesAtEntry,
+            collector);
+    }
+
+    private void ApplyCallableAliasExitState(
+        HashSet<VariableSymbol> aliases,
+        BoundStatement statement,
+        IReadOnlyCollection<VariableSymbol> aliasesAtEntry,
+        AssignedRootsCollector collector)
+    {
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
+        var directAssignment = (statement as BoundExpressionStatement)?.Expression
+            as BoundAssignmentExpression;
+        var assignsExternalCallable = directAssignment != null
+            && IsExternalCallableSource(directAssignment.Expression, aliasesAtEntry);
+
+        if (UsesJoinedCallableExitState(statement))
+        {
+            aliases.Clear();
+            aliases.UnionWith(collector.DefinitelyExternalFunctionValues);
+        }
+        else
+        {
+            aliases.ExceptWith(collector.Roots);
+        }
+
+        if (assignsExternalCallable)
+        {
+            aliases.Add(
+                Invariant.Required(directAssignment, "an external callable assignment has a target").Variable);
+        }
+
+        if (statement is BoundVariableDeclaration declaration
+            && collector.DefinitelyExternalFunctionValues.Contains(declaration.Variable))
+        {
+            aliases.Add(declaration.Variable);
+        }
+    }
+
+    private bool UsesJoinedCallableExitState(BoundStatement statement)
+        => statement switch
+        {
+            BoundBlockStatement block =>
+                block.Syntax != null && !ContainsUserGotoOrLabel(block.Syntax),
+            BoundIfStatement or BoundTryStatement or BoundPatternSwitchStatement
+                or BoundForInfiniteStatement or BoundForEllipsisStatement
+                or BoundForRangeStatement or BoundAwaitForRangeStatement => true,
+            _ => false,
+        };
 
     /// <summary>
     /// Issue #1639: returns whether any currently active narrowing frame holds
@@ -233,7 +486,7 @@ internal sealed partial class StatementBinder
         return false;
     }
 
-    private static List<(int FrameIndex, AccessPath Path)> CollectInheritedNarrowingInvalidations(
+    private List<(int FrameIndex, AccessPath Path)> CollectInheritedNarrowingInvalidations(
         AssignedRootsCollector mutations,
         bool mayMutateMemberPaths,
         int frameCount,
@@ -244,7 +497,9 @@ internal sealed partial class StatementBinder
         {
             foreach (var path in frames[i].Keys)
             {
-                if (mutations.InvalidatesNarrowing(path.Root, frames[i][path])
+                if (MayBeMutatedByUnknownWrite(mutations, path)
+                    || mutations.MayMutateGlobalRoot(path.Root, frames[i][path])
+                    || mutations.InvalidatesNarrowing(path.Root, frames[i][path])
                     || (path.HasMembers && mayMutateMemberPaths))
                 {
                     invalidations.Add((i, path));
@@ -415,34 +670,25 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyEarlyExitNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
-        // Issue #4285: a user-written `goto` anywhere in this function can
-        // jump directly into the region an early-exit or post-switch
-        // narrowing lift assumes is dominated by the guard's implicit exit,
-        // bypassing the guard entirely and invalidating the narrowing's
-        // soundness proof. Minimal repro: `if this.name == nil { goto Skip }
-        // Skip: return this.name.ToUpper()` — the then-branch structurally
-        // "ends in an unconditional exit" (EndsInUnconditionalExit sees the
-        // goto), so the lift fired and let `this.name` read as non-nil after
-        // `Skip:`, even though the goto never actually left the guarded
-        // region — it landed immediately past it, guard untaken.
-        //
-        // EndsInUnconditionalExit is a purely structural, single-statement
-        // check; it cannot see whether some OTHER goto elsewhere in the
-        // function targets a label inside the narrowed region. Rather than
-        // build the CFG-based, goto-source-vs-label-position reachability
-        // analysis needed to pinpoint exactly which lift sites a given goto
-        // can reach — a much larger change, since the bound tree (and every
-        // NarrowedType baked into it) is already fully constructed by the
-        // time FinalizeUserLabels runs outside this type in Binder.cs — this
-        // conservatively suppresses BOTH lifts for the WHOLE function
-        // whenever it contains any goto/label at all. That is strictly
-        // sound: it only ever REDUCES narrowing power (some `!!` sites that
-        // could in principle be proven redundant stay required), so it can
-        // never introduce a new accept-when-it-should-reject bug, and it is
-        // no worse than if the narrowing lift had never been added for any
-        // function containing a label. A precise, narrower suppression is a
-        // valid future refinement, not required for this fix.
-        if (binderCtx.FunctionContainsUserGotoOrLabel)
+        lastEarlyExitLifts.Clear();
+        var isLabeledStatement = false;
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            isLabeledStatement = true;
+            statement = labeledBlock.Statements[1];
+        }
+
+        // Issue #4285: suppress lifts that a user goto can bypass. A guard
+        // attached directly to its target label is different: every entry
+        // executes the guard. Limit that exception to bare variables, whose
+        // proof generations the goto join can track.
+        if (binderCtx.FunctionContainsUserGotoOrLabel
+            && !(isLabeledStatement
+                && statement is BoundIfStatement
+                && !ContainsUserLabel(statement.Syntax)))
         {
             return;
         }
@@ -467,7 +713,14 @@ internal sealed partial class StatementBinder
 
             foreach (var kv in elseFrame)
             {
-                persistentFrame[kv.Key] = kv.Value;
+                if (binderCtx.FunctionContainsUserGotoOrLabel
+                    && !kv.Key.Members.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value);
+                lastEarlyExitLifts.Add((kv.Key, kv.Value));
             }
 
             return;
@@ -483,7 +736,7 @@ internal sealed partial class StatementBinder
 
             foreach (var kv in switchFrame)
             {
-                persistentFrame[kv.Key] = kv.Value;
+                SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value);
             }
         }
     }
@@ -503,12 +756,543 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyAssignmentNarrowing(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
         if (statement is BoundExpressionStatement { Expression: BoundAssignmentExpression assign }
             && TryClassifyNonNullAssignment(assign, out var variable, out var underlying))
         {
-            persistentFrame[Invariant.Required(variable, "a successful assignment narrowing has a variable")]
-                = Invariant.Required(underlying, "a successful assignment narrowing has an underlying type");
+            var narrowedVariable = Invariant.Required(variable, "a successful assignment narrowing has a variable");
+            SetPersistentNarrowing(
+                persistentFrame,
+                narrowedVariable,
+                Invariant.Required(underlying, "a successful assignment narrowing has an underlying type"));
         }
+    }
+
+    /// <summary>
+    /// Issue #4519: joins the current narrowing state with forward jumps that
+    /// can reach <paramref name="labelName"/>. Only assignment narrowings
+    /// created after such a jump are removed; narrowings established before
+    /// every jump, unrelated variables, and assignments after the label remain.
+    /// </summary>
+    private IReadOnlyList<GotoNarrowingSnapshot>? InvalidateAssignmentNarrowingsBypassedByGoto(
+        string labelName,
+        bool fallthroughReachesLabel)
+    {
+        if (!binderCtx.PendingGotoAssignmentStarts.Remove(labelName, out _))
+        {
+            return null;
+        }
+
+        binderCtx.PendingGotoNarrowingSnapshots.Remove(labelName, out var incomingSnapshots);
+        if (incomingSnapshots != null)
+        {
+            var activeFinallySet = new HashSet<FinallyClauseSyntax>(activeFinallyClauses);
+            var activeCleanupSet = new HashSet<BoundStatement>(activeCleanupStatements);
+            for (var i = incomingSnapshots.Count - 1; i >= 0; i--)
+            {
+                if (!ApplyExitedFinallyEffects(
+                        incomingSnapshots[i],
+                        activeFinallySet,
+                        activeCleanupSet))
+                {
+                    incomingSnapshots.RemoveAt(i);
+                }
+            }
+
+            if (incomingSnapshots.Count == 0)
+            {
+                return incomingSnapshots;
+            }
+        }
+
+        if (incomingSnapshots is not { Count: > 0 })
+        {
+            return incomingSnapshots;
+        }
+
+        JoinExternalCallableAliases(incomingSnapshots, fallthroughReachesLabel);
+
+        if (!fallthroughReachesLabel)
+        {
+            var commonIncoming = new Dictionary<AccessPath, TypeSymbol>();
+            var commonFrameIndices = new Dictionary<AccessPath, int>();
+            foreach (var entry in incomingSnapshots[0].NarrowedVariables)
+            {
+                var incomingTypes = new List<TypeSymbol> { entry.Value };
+                for (var i = 1; i < incomingSnapshots.Count; i++)
+                {
+                    if (!incomingSnapshots[i].NarrowedVariables.TryGetValue(
+                            entry.Key,
+                            out var incomingType))
+                    {
+                        incomingTypes.Clear();
+                        break;
+                    }
+
+                    incomingTypes.Add(incomingType);
+                }
+
+                var commonType = FindCommonImplicitSupertype(entry.Key, incomingTypes);
+                if (commonType != null)
+                {
+                    commonIncoming.Add(entry.Key, commonType);
+                    if (incomingSnapshots[0].NarrowingFrameIndices.TryGetValue(
+                            entry.Key,
+                            out var frameIndex)
+                        && incomingSnapshots.All(snapshot =>
+                            snapshot.NarrowingFrameIndices.TryGetValue(entry.Key, out var incomingFrame)
+                            && incomingFrame == frameIndex))
+                    {
+                        commonFrameIndices.Add(entry.Key, frameIndex);
+                    }
+                }
+            }
+
+            foreach (var frame in binderCtx.NarrowedVariables)
+            {
+                frame.Clear();
+            }
+
+            binderCtx.AssignmentNarrowingGenerations.Clear();
+            foreach (var entry in commonIncoming)
+            {
+                var targetFrame = commonFrameIndices.TryGetValue(entry.Key, out var frameIndex)
+                    && frameIndex < binderCtx.NarrowedVariables.Count
+                    ? binderCtx.NarrowedVariables[frameIndex]
+                    : binderCtx.NarrowedVariables[^1];
+                targetFrame.Add(entry.Key, entry.Value);
+                if (!entry.Key.HasMembers
+                    && incomingSnapshots[0].AssignmentGenerations.TryGetValue(
+                        entry.Key.Root,
+                        out var generation)
+                    && incomingSnapshots.All(snapshot =>
+                        snapshot.AssignmentGenerations.TryGetValue(entry.Key.Root, out var incomingGeneration)
+                        && incomingGeneration == generation))
+                {
+                    binderCtx.AssignmentNarrowingGenerations.Add(entry.Key.Root, generation);
+                }
+            }
+
+            return incomingSnapshots;
+        }
+
+        var targetNarrowings = new Dictionary<AccessPath, TypeSymbol>();
+        foreach (var frame in binderCtx.NarrowedVariables)
+        {
+            foreach (var entry in frame)
+            {
+                targetNarrowings[entry.Key] = entry.Value;
+            }
+        }
+
+        var joinedTypes = new Dictionary<AccessPath, TypeSymbol>();
+        foreach (var entry in targetNarrowings)
+        {
+            var types = new List<TypeSymbol> { entry.Value };
+            foreach (var snapshot in incomingSnapshots)
+            {
+                if (!snapshot.NarrowedVariables.TryGetValue(entry.Key, out var sourceType))
+                {
+                    types.Clear();
+                    break;
+                }
+
+                types.Add(sourceType);
+            }
+
+            var commonType = FindCommonImplicitSupertype(entry.Key, types);
+            if (commonType != null)
+            {
+                joinedTypes.Add(entry.Key, commonType);
+            }
+        }
+
+        foreach (var path in targetNarrowings.Keys)
+        {
+            var targetFrameIndex = -1;
+            for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
+            {
+                var frame = binderCtx.NarrowedVariables[i];
+                if (frame.ContainsKey(path) && targetFrameIndex < 0)
+                {
+                    targetFrameIndex = i;
+                }
+
+                frame.Remove(path);
+            }
+
+            if (targetFrameIndex >= 0
+                && joinedTypes.TryGetValue(path, out var joinedType))
+            {
+                binderCtx.NarrowedVariables[targetFrameIndex].Add(path, joinedType);
+            }
+        }
+
+        return incomingSnapshots;
+    }
+
+    private void JoinExternalCallableAliases(
+        IReadOnlyList<GotoNarrowingSnapshot> incomingSnapshots,
+        bool fallthroughReachesLabel)
+    {
+        if (!fallthroughReachesLabel)
+        {
+            externalCallableAliases.Clear();
+            externalCallableAliases.UnionWith(incomingSnapshots[0].ExternalCallableAliases);
+        }
+
+        foreach (var snapshot in incomingSnapshots)
+        {
+            externalCallableAliases.IntersectWith(snapshot.ExternalCallableAliases);
+        }
+    }
+
+    private static TypeSymbol? FindCommonImplicitSupertype(
+        AccessPath path,
+        IReadOnlyList<TypeSymbol> sourceTypes)
+    {
+        if (sourceTypes.Count == 0)
+        {
+            return null;
+        }
+
+        var commonType = sourceTypes.FirstOrDefault(candidate =>
+            sourceTypes.All(source => IsRepresentationPreservingJoin(source, candidate)));
+        if (commonType != null)
+        {
+            return commonType;
+        }
+
+        if (path.HasMembers)
+        {
+            return null;
+        }
+
+        var declaredType = path.Root.Type is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : path.Root.Type;
+        return sourceTypes.All(source => IsRepresentationPreservingJoin(source, declaredType))
+            ? declaredType
+            : null;
+    }
+
+    private static bool IsRepresentationPreservingJoin(TypeSymbol source, TypeSymbol target)
+    {
+        return Conversion.IsRepresentationPreservingImplicit(source, target);
+    }
+
+    internal void ReportUnsafeBackwardGotoNarrowings()
+    {
+        var reported = new HashSet<BackwardGotoNarrowingAccess>();
+        foreach (var state in binderCtx.BackwardGotoNarrowingStates.Values)
+        {
+            var targetFinallySet = new HashSet<FinallyClauseSyntax>(
+                state.TargetSnapshot.ActiveFinallyClauses);
+            var targetCleanupSet = new HashSet<BoundStatement>(
+                state.TargetSnapshot.ActiveCleanupStatements);
+            foreach (var edge in state.Edges)
+            {
+                var sourceSnapshot = edge.SourceSnapshot.Clone();
+                if (!ApplyExitedFinallyEffects(
+                        sourceSnapshot,
+                        targetFinallySet,
+                        targetCleanupSet))
+                {
+                    continue;
+                }
+
+                foreach (var access in edge.Accesses)
+                {
+                    var sourceType = sourceSnapshot.NarrowedVariables.TryGetValue(
+                        access.Path,
+                        out var narrowedSourceType)
+                        ? narrowedSourceType
+                        : access.Path.HasMembers
+                            || access.DeclaredType is NullableTypeSymbol
+                            ? null
+                            : access.DeclaredType;
+                    if ((sourceType == null
+                            || !IsRepresentationPreservingJoin(sourceType, access.RequiredType))
+                        && reported.Add(access))
+                    {
+                        switch (access.Kind)
+                        {
+                            case BackwardGotoNarrowingUseKind.Function:
+                                Diagnostics.ReportUnableToFindFunction(access.Location, access.MemberName);
+                                break;
+                            case BackwardGotoNarrowingUseKind.Conversion:
+                                Diagnostics.ReportCannotConvert(
+                                    access.Location,
+                                    access.DeclaredType,
+                                    Invariant.Required(access.TargetType, "a deferred conversion has a target type"));
+                                break;
+                            case BackwardGotoNarrowingUseKind.Index:
+                                Diagnostics.ReportTypeNotIndexable(access.Location, access.DeclaredType);
+                                break;
+                            case BackwardGotoNarrowingUseKind.NonNullUse:
+                                Diagnostics.ReportCannotConvert(
+                                    access.Location,
+                                    access.DeclaredType,
+                                    Invariant.Required(access.TargetType, "a deferred non-null use has a target type"));
+                                break;
+                            default:
+                                Diagnostics.ReportUnableToFindMember(access.Location, access.MemberName);
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private bool ApplyExitedFinallyEffects(
+        GotoNarrowingSnapshot snapshot,
+        HashSet<FinallyClauseSyntax> activeFinallySet,
+        HashSet<BoundStatement> activeCleanupSet)
+    {
+        foreach (var region in snapshot.ActiveCleanupRegions)
+        {
+            FinallyFlowSummary summary;
+            if (region.FinallyClause is { } finallyClause)
+            {
+                if (activeFinallySet.Contains(finallyClause)
+                    || !boundFinallyBlocks.TryGetValue(finallyClause, out var finallyBlock))
+                {
+                    continue;
+                }
+
+                summary = CreateFinallyFlowSummary(
+                    finallyClause,
+                    finallyBlock,
+                    snapshot.ExternalCallableAliases);
+            }
+            else if (region.CleanupStatement is { } cleanup)
+            {
+                if (activeCleanupSet.Contains(cleanup))
+                {
+                    continue;
+                }
+
+                var mutations = new AssignedRootsCollector(
+                    AssignmentPreservesNarrowing,
+                    snapshot.ExternalCallableAliases,
+                    trackSourceCallGlobalMutations: true);
+                mutations.Visit(cleanup);
+                summary = new FinallyFlowSummary(
+                    mutations,
+                    ComputeCleanupFallthroughNonNull(
+                        cleanup,
+                        snapshot.ExternalCallableAliases));
+            }
+            else
+            {
+                continue;
+            }
+
+            if (summary.NonNullOnNormalExit == null)
+            {
+                return false;
+            }
+
+            ApplyFlowSummary(snapshot, summary);
+        }
+
+        return true;
+    }
+
+    private FinallyFlowSummary GetFinallyFlowSummary(
+        FinallyClauseSyntax finallyClause,
+        BoundStatement finallyBlock)
+    {
+        if (finallyFlowSummaries.TryGetValue(finallyBlock, out var summary))
+        {
+            return summary;
+        }
+
+        summary = CreateFinallyFlowSummary(
+            finallyClause,
+            finallyBlock,
+            finallyEntryExternalCallableAliases[finallyClause]);
+        finallyFlowSummaries.Add(finallyBlock, summary);
+        return summary;
+    }
+
+    private FinallyFlowSummary CreateFinallyFlowSummary(
+        FinallyClauseSyntax finallyClause,
+        BoundStatement finallyBlock,
+        IReadOnlyCollection<VariableSymbol> callableAliases)
+    {
+        var mutations = new AssignedRootsCollector(
+            AssignmentPreservesNarrowing,
+            callableAliases,
+            trackSourceCallGlobalMutations: true);
+        mutations.Visit(finallyBlock);
+        var nonNullOnNormalExit = !CanCompleteNormally(finallyBlock)
+            ? null
+            : ContainsUserGotoOrLabel(finallyClause.Body)
+                ? new Dictionary<AccessPath, TypeSymbol>()
+                : ComputeCleanupFallthroughNonNull(finallyBlock, callableAliases);
+        return new FinallyFlowSummary(mutations, nonNullOnNormalExit);
+    }
+
+    private bool CanCompleteNormally(BoundStatement statement)
+        => statement switch
+        {
+            BoundBlockStatement block => CanStatementListCompleteNormally(block.Statements),
+            BoundTryStatement { FinallyBlock: { } finallyBlock }
+                when !CanCompleteNormally(finallyBlock) => false,
+            BoundForInfiniteStatement infiniteLoop when IsSyntacticallyInfiniteLoop(infiniteLoop) =>
+                internallyReachableLoopExits.Contains(infiniteLoop.BreakLabel),
+            _ => !EndsInUnconditionalExit(statement),
+        };
+
+    // Callable-alias flow must also join a path that leaves through a goto
+    // (a switch's own `break` reaches code after the switch), so a statement
+    // that ends only in a goto still contributes its state; return/throw do
+    // not (fail-safe).
+    private bool CanReachCallableJoin(BoundStatement statement)
+        => CanCompleteNormally(statement)
+            || (EndsInUnconditionalExit(statement)
+                && !EndsInUnconditionalExit(statement, gotoExits: false));
+
+    private bool CanStatementListCompleteNormally(ImmutableArray<BoundStatement> statements)
+    {
+        var fallsThrough = true;
+        foreach (var statement in statements)
+        {
+            fallsThrough =
+                (fallsThrough || HasInternallyReachableFallthrough(statement))
+                && CanCompleteNormally(statement);
+        }
+
+        return fallsThrough;
+    }
+
+    private Dictionary<AccessPath, TypeSymbol>? ComputeCleanupFallthroughNonNull(
+        BoundStatement cleanup,
+        IReadOnlyCollection<VariableSymbol> callableAliases)
+    {
+        var state = new Dictionary<AccessPath, TypeSymbol>();
+        var aliases = new HashSet<VariableSymbol>(callableAliases);
+        var statements = cleanup is BoundBlockStatement block
+            ? block.Statements
+            : ImmutableArray.Create(cleanup);
+        foreach (var statement in statements)
+        {
+            if (!ProcessBranchStatement(statement, state, aliases))
+            {
+                return null;
+            }
+
+            var aliasesAtEntry = aliases.ToArray();
+            var mutations = new AssignedRootsCollector(
+                AssignmentPreservesNarrowing,
+                aliasesAtEntry,
+                trackSourceCallGlobalMutations: true);
+            mutations.Visit(statement);
+            ApplyMutationsToState(state, mutations);
+            ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, mutations);
+        }
+
+        return state;
+    }
+
+    private void ApplyMutationsToState(
+        Dictionary<AccessPath, TypeSymbol> state,
+        AssignedRootsCollector mutations)
+    {
+        foreach (var entry in state.ToArray())
+        {
+            if (MayBeMutatedByUnknownWrite(mutations, entry.Key)
+                || mutations.MayMutateGlobalRoot(entry.Key.Root, entry.Value)
+                || (entry.Key.HasMembers && mutations.MayMutateMemberPaths)
+                || mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
+            {
+                state.Remove(entry.Key);
+            }
+        }
+    }
+
+    private void ApplyTryFinallyFallthroughNarrowings(
+        BoundStatement statement,
+        Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    {
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
+        if (statement is not BoundTryStatement { FinallyBlock: { } finallyBlock }
+            || statement.Syntax is not TryStatementSyntax { FinallyClause: { } finallyClause })
+        {
+            return;
+        }
+
+        var summary = GetFinallyFlowSummary(finallyClause, finallyBlock);
+        if (summary.NonNullOnNormalExit == null)
+        {
+            return;
+        }
+
+        foreach (var frame in binderCtx.NarrowedVariables)
+        {
+            foreach (var entry in frame.ToArray())
+            {
+                if (MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key)
+                    || summary.Mutations.MayMutateGlobalRoot(entry.Key.Root, entry.Value)
+                    || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
+                    || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
+                {
+                    frame.Remove(entry.Key);
+                }
+            }
+        }
+
+        foreach (var entry in summary.NonNullOnNormalExit)
+        {
+            if (!entry.Key.HasMembers)
+            {
+                SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value);
+            }
+        }
+    }
+
+    private void ApplyFlowSummary(
+        GotoNarrowingSnapshot snapshot,
+        FinallyFlowSummary summary)
+    {
+        foreach (var entry in snapshot.NarrowedVariables.ToArray())
+        {
+            if (MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key)
+                || summary.Mutations.MayMutateGlobalRoot(entry.Key.Root, entry.Value)
+                || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
+                || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
+            {
+                snapshot.RemoveNarrowing(entry.Key);
+            }
+        }
+
+        foreach (var entry in Invariant.Required(
+                     summary.NonNullOnNormalExit,
+                     "a completing cleanup summary has normal-exit facts"))
+        {
+            if (!entry.Key.HasMembers)
+            {
+                snapshot.SetNarrowing(entry.Key, entry.Value);
+            }
+        }
+
+        snapshot.ReplaceExternalCallableAliases(summary.Mutations.DefinitelyExternalFunctionValues);
     }
 
     /// <summary>
@@ -820,7 +1604,7 @@ internal sealed partial class StatementBinder
                 continue;
             }
 
-            persistentFrame[path] = nullable.UnderlyingType;
+            SetPersistentNarrowing(persistentFrame, path, nullable.UnderlyingType);
         }
     }
 
@@ -834,18 +1618,25 @@ internal sealed partial class StatementBinder
     /// </summary>
     private Dictionary<AccessPath, TypeSymbol>? ComputeIfJoinNonNull(
         BoundIfStatement ifStmt,
-        Dictionary<AccessPath, TypeSymbol>? entry)
+        Dictionary<AccessPath, TypeSymbol>? entry,
+        IReadOnlyCollection<VariableSymbol>? callableAliases = null)
     {
         var (thenNarrow, elseNarrow) = ComputeConditionNarrowing(ifStmt.Condition);
 
-        var thenState = ComputeBranchFallthroughNonNull(ifStmt.ThenStatement, MergeLocalNonNull(entry, thenNarrow));
+        var thenState = ComputeBranchFallthroughNonNull(
+            ifStmt.ThenStatement,
+            MergeLocalNonNull(entry, thenNarrow),
+            callableAliases);
 
         var elseState = ifStmt.ElseStatement == null
 
             // Implicit else: no statements run, so the only non-null facts are
             // the entry set plus whatever the negated condition narrows.
             ? MergeLocalNonNull(entry, elseNarrow)
-            : ComputeBranchFallthroughNonNull(ifStmt.ElseStatement, MergeLocalNonNull(entry, elseNarrow));
+            : ComputeBranchFallthroughNonNull(
+                ifStmt.ElseStatement,
+                MergeLocalNonNull(entry, elseNarrow),
+                callableAliases);
 
         if (thenState == null && elseState == null)
         {
@@ -875,7 +1666,8 @@ internal sealed partial class StatementBinder
     /// </summary>
     private Dictionary<AccessPath, TypeSymbol>? ComputeBranchFallthroughNonNull(
         BoundStatement branch,
-        Dictionary<AccessPath, TypeSymbol>? entry)
+        Dictionary<AccessPath, TypeSymbol>? entry,
+        IReadOnlyCollection<VariableSymbol>? callableAliases = null)
     {
         switch (branch)
         {
@@ -886,7 +1678,7 @@ internal sealed partial class StatementBinder
                 return null;
 
             case BoundIfStatement nested:
-                return ComputeIfJoinNonNull(nested, entry);
+                return ComputeIfJoinNonNull(nested, entry, callableAliases);
 
             case BoundBlockStatement block:
                 {
@@ -898,7 +1690,7 @@ internal sealed partial class StatementBinder
 
                     foreach (var s in block.Statements)
                     {
-                        if (!ProcessBranchStatement(s, state))
+                        if (!ProcessBranchStatement(s, state, callableAliases))
                         {
                             return null;
                         }
@@ -910,7 +1702,7 @@ internal sealed partial class StatementBinder
             default:
                 {
                     var state = entry ?? new Dictionary<AccessPath, TypeSymbol>();
-                    return ProcessBranchStatement(branch, state) ? state : null;
+                    return ProcessBranchStatement(branch, state, callableAliases) ? state : null;
                 }
         }
     }
@@ -921,7 +1713,10 @@ internal sealed partial class StatementBinder
     /// statement unconditionally exits the branch (so later statements are
     /// unreachable).
     /// </summary>
-    private bool ProcessBranchStatement(BoundStatement stmt, Dictionary<AccessPath, TypeSymbol> state)
+    private bool ProcessBranchStatement(
+        BoundStatement stmt,
+        Dictionary<AccessPath, TypeSymbol> state,
+        IReadOnlyCollection<VariableSymbol>? callableAliases = null)
     {
         switch (stmt)
         {
@@ -952,7 +1747,10 @@ internal sealed partial class StatementBinder
                     // The nested join is the exact post-if non-null set given the
                     // current state as entry, so it fully replaces the tracked
                     // state (it carries surviving entry facts through).
-                    var nestedResult = ComputeIfJoinNonNull(nested, new Dictionary<AccessPath, TypeSymbol>(state));
+                    var nestedResult = ComputeIfJoinNonNull(
+                        nested,
+                        new Dictionary<AccessPath, TypeSymbol>(state),
+                        callableAliases);
                     if (nestedResult == null)
                     {
                         return false;
@@ -970,10 +1768,42 @@ internal sealed partial class StatementBinder
             case BoundBlockStatement inner:
                 foreach (var s in inner.Statements)
                 {
-                    if (!ProcessBranchStatement(s, state))
+                    if (!ProcessBranchStatement(s, state, callableAliases))
                     {
                         return false;
                     }
+                }
+
+                return true;
+
+            case BoundTryStatement tryStatement:
+                if (EndsInUnconditionalExit(tryStatement))
+                {
+                    return false;
+                }
+
+                ClearAssignedRoots(tryStatement, state, callableAliases);
+                if (tryStatement.FinallyBlock == null)
+                {
+                    return true;
+                }
+
+                var finallyState = ContainsUserGotoOrLabel(tryStatement.FinallyBlock.Syntax)
+                    ? EndsInUnconditionalExit(tryStatement.FinallyBlock)
+                        ? null
+                        : new Dictionary<AccessPath, TypeSymbol>()
+                    : ComputeBranchFallthroughNonNull(
+                        tryStatement.FinallyBlock,
+                        entry: null,
+                        callableAliases);
+                if (finallyState == null)
+                {
+                    return false;
+                }
+
+                foreach (var entry in finallyState)
+                {
+                    state[entry.Key] = entry.Value;
                 }
 
                 return true;
@@ -982,7 +1812,7 @@ internal sealed partial class StatementBinder
                 // Loops, switches, and any other construct that could reassign a
                 // tracked local: conservatively drop every narrowing on a local
                 // the statement's subtree assigns anywhere.
-                ClearAssignedRoots(stmt, state);
+                ClearAssignedRoots(stmt, state, callableAliases);
                 return true;
         }
     }
@@ -1081,19 +1911,247 @@ internal sealed partial class StatementBinder
         }
     }
 
+    private static void RemoveByRoots(
+        Dictionary<AccessPath, TypeSymbol> state,
+        HashSet<VariableSymbol> roots)
+    {
+        List<AccessPath>? toRemove = null;
+        foreach (var key in state.Keys)
+        {
+            if (roots.Contains(key.Root))
+            {
+                (toRemove ??= new List<AccessPath>()).Add(key);
+            }
+        }
+
+        if (toRemove != null)
+        {
+            foreach (var key in toRemove)
+            {
+                state.Remove(key);
+            }
+        }
+    }
+
+    // An unknown callable can reach a member path, a global or an implicit
+    // member, a by-reference parameter or local, and a plain local or
+    // parameter only when some closure of the enclosing function assigns it.
+    // Treating every mutable local as mutable dropped the narrowing of
+    // unrelated locals after any call to a local lambda.
+    private bool MayBeMutatedByUnknownCallable(AccessPath path)
+        => path.HasMembers
+            || (!path.Root.IsReadOnly
+                && (path.Root is not (LocalVariableSymbol or ParameterSymbol)
+                    || IsByReferenceRoot(path.Root)
+                    || binderCtx.MayBeAssignedByClosure(path.Root)));
+
+    private static bool IsByReferenceRoot(VariableSymbol root)
+        => root is LocalVariableSymbol local
+            && (local.RefKind != RefKind.None || local.ManagedReferenceOrigin != null);
+
+    private bool MayBeMutatedByUnknownWrite(AssignedRootsCollector mutations, AccessPath path)
+        => (mutations.MayMutateAnyRootViaPointer
+                && (path.HasMembers || !path.Root.IsReadOnly))
+            || (mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path));
+
+    // Binding a header expression (an `if` condition, a switch discriminant or
+    // guard, a catch filter) never runs the post-statement alias update, but
+    // the expression can create or invoke a closure that reassigns a callable
+    // alias before the nested bodies are bound. Fold its effects into the alias
+    // state now: an alias the header assigns, or that an unknown callable in the
+    // header can assign, is no longer known to be external (fail-safe).
+    private HashSet<VariableSymbol>? ApplyHeaderCallableEffects(BoundExpression? header)
+    {
+        if (header == null || externalCallableAliases.Count == 0)
+        {
+            return null;
+        }
+
+        var before = new HashSet<VariableSymbol>(externalCallableAliases);
+        var collector = new AssignedRootsCollector(null, externalCallableAliases);
+        collector.VisitExpression(header);
+        if (collector.MayMutateAnyRootViaPointer)
+        {
+            externalCallableAliases.Clear();
+        }
+
+        externalCallableAliases.ExceptWith(collector.Roots);
+        if (collector.MayMutateAnyRoot)
+        {
+            externalCallableAliases.RemoveWhere(binderCtx.MayBeAssignedByClosure);
+        }
+
+        before.ExceptWith(externalCallableAliases);
+        return before;
+    }
+
+    private void EnsureClosureAssignedNames(SyntaxNode anchor)
+        => binderCtx.EnsureClosureAssignedNames(() => ComputeClosureAssignedNames(anchor));
+
+    // Returns null (any name may be assigned) when the anchor is not inside a
+    // function: a binder that spans several syntax trees (top-level code,
+    // merged static initializers) cannot be scanned from one anchor.
+    private static HashSet<string>? ComputeClosureAssignedNames(SyntaxNode anchor)
+    {
+        SyntaxNode? root = null;
+        for (var current = (SyntaxNode?)anchor; current != null; current = current.Parent)
+        {
+            if (current is FunctionDeclarationSyntax
+                or ConstructorDeclarationSyntax
+                or PropertyAccessorSyntax
+                or EventAccessorSyntax
+                or DeinitDeclarationSyntax)
+            {
+                root = current;
+            }
+        }
+
+        if (root == null)
+        {
+            return null;
+        }
+
+        var names = new HashSet<string>();
+        CollectClosureAssignedNames(root, root, names);
+        CollectAddressTakenNames(root, names);
+        return names;
+    }
+
+    private static void CollectClosureAssignedNames(SyntaxNode node, SyntaxNode root, HashSet<string> names)
+    {
+        if (node is FunctionLiteralExpressionSyntax
+            or LambdaExpressionSyntax
+            or AnonymousClassExpressionSyntax
+            || (node is FunctionDeclarationSyntax && !ReferenceEquals(node, root)))
+        {
+            CollectAssignedNamesAndMemberMutation(node, names);
+            CollectNullCoalescingTargetNames(node, names);
+            CollectRefArgumentNames(node, names);
+            CollectAddressOfNames(node, names);
+            return;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectClosureAssignedNames(child, root, names);
+        }
+    }
+
+    // `x ??= v` is a write the shared assigned-name walker does not model.
+    private static void CollectNullCoalescingTargetNames(SyntaxNode node, HashSet<string> names)
+    {
+        if (node is NullCoalescingAssignmentStatementSyntax coalescing)
+        {
+            CollectAllNames(coalescing.Target, names);
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectNullCoalescingTargetNames(child, names);
+        }
+    }
+
+    // `out x` / `ref x` inside a closure lets the callee write the local.
+    private static void CollectRefArgumentNames(SyntaxNode node, HashSet<string> names)
+    {
+        if (node is RefArgumentExpressionSyntax)
+        {
+            CollectAllNames(node, names);
+            return;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectRefArgumentNames(child, names);
+        }
+    }
+
+    // Inside a closure every `&x` (including a by-reference call argument) lets
+    // the callee write the local while the closure runs.
+    private static void CollectAddressOfNames(SyntaxNode node, HashSet<string> names)
+    {
+        if (node is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.AmpersandToken } addressOf)
+        {
+            CollectAllNames(addressOf.Operand, names);
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectAddressOfNames(child, names);
+        }
+    }
+
+    // An address that is stored (`let p = &x`, `ref y = x`) outlives the
+    // statement and lets an unknown callable write the local, wherever in the
+    // function it appears. An `&x` passed directly as a call argument is a
+    // by-reference argument that cannot outlive the call, so it is not
+    // collected: the call itself is analyzed for the write.
+    private static void CollectAddressTakenNames(SyntaxNode node, HashSet<string> names)
+    {
+        switch (node)
+        {
+            case UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.AmpersandToken } addressOf
+                when addressOf.Parent is not CallExpressionSyntax:
+                CollectAllNames(addressOf.Operand, names);
+                break;
+            case VariableDeclarationSyntax { HasRefKindModifier: true, Initializer: { } initializer }:
+                CollectAllNames(initializer, names);
+                break;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectAddressTakenNames(child, names);
+        }
+    }
+
+    private static void CollectAllNames(SyntaxNode node, HashSet<string> names)
+    {
+        if (node is NameExpressionSyntax name)
+        {
+            names.Add(name.IdentifierToken.ValueText);
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectAllNames(child, names);
+        }
+    }
+
     /// <summary>
     /// Issue #2159: conservatively drops every narrowing on a local that
     /// <paramref name="node"/>'s bound subtree assigns anywhere.
     /// </summary>
-    private void ClearAssignedRoots(BoundNode node, Dictionary<AccessPath, TypeSymbol> state)
+    private void ClearAssignedRoots(
+        BoundNode node,
+        Dictionary<AccessPath, TypeSymbol> state,
+        IReadOnlyCollection<VariableSymbol>? callableAliases = null)
     {
         if (state.Count == 0)
         {
             return;
         }
 
-        var collector = new AssignedRootsCollector(null);
+        var collector = new AssignedRootsCollector(
+            null,
+            callableAliases ?? externalCallableAliases);
         collector.Visit(node);
+        if (collector.MayMutateAnyRoot)
+        {
+            foreach (var path in state.Keys.Where(path => MayBeMutatedByUnknownWrite(collector, path)).ToArray())
+            {
+                state.Remove(path);
+            }
+        }
+
+        if (collector.MayMutateGlobalRoots)
+        {
+            foreach (var path in state.Keys.Where(path => path.Root is GlobalVariableSymbol).ToArray())
+            {
+                state.Remove(path);
+            }
+        }
+
         foreach (var root in collector.Roots)
         {
             RemoveByRoot(state, root);
@@ -1108,16 +2166,183 @@ internal sealed partial class StatementBinder
     private class AssignedRootsCollector : BoundTreeWalker
     {
         private readonly Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing;
+        private readonly bool trackSourceCallGlobalMutations;
         private readonly HashSet<AssignedField> assignedFields = new();
         private readonly HashSet<AssignedProperty> assignedProperties = new();
         private readonly Dictionary<VariableSymbol, List<BoundAssignmentExpression>> assignments = new();
+        private readonly Dictionary<VariableSymbol, BoundExpression> writableReferenceAliases = new();
+        private readonly Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> functionLiterals = new();
+        private readonly HashSet<VariableSymbol> unknownFunctionValues = new();
+        private readonly HashSet<VariableSymbol> externalFunctionValues = new();
+        private readonly HashSet<BoundFunctionLiteralExpression> visitedFunctionLiterals = new();
+        private readonly HashSet<BoundLabel> pendingConditionalTargets = new();
+        private readonly HashSet<BoundLabel> visitedLabels = new();
+        private readonly Dictionary<BoundLabel, int> callableInvocationCountsAtLabel = new();
+        private readonly List<VariableSymbol> callableInvocations = new();
+        private readonly Stack<VariableSymbol> enclosingGlobalAssignments = new();
+        private HashSet<VariableSymbol>? globalMutationProtectedRoots;
+        private HashSet<VariableSymbol>? tryAssignedVariables;
 
-        public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing)
+        public AssignedRootsCollector(
+            Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing,
+            IEnumerable<VariableSymbol>? externalFunctionValues = null,
+            bool trackSourceCallGlobalMutations = false)
         {
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing;
+            this.trackSourceCallGlobalMutations = trackSourceCallGlobalMutations;
+            if (externalFunctionValues != null)
+            {
+                this.externalFunctionValues.UnionWith(externalFunctionValues);
+            }
         }
 
         public HashSet<VariableSymbol> Roots { get; } = new HashSet<VariableSymbol>();
+
+        // Roots written through an out/ref argument or an address-of operand;
+        // always also present in Roots.
+        public HashSet<VariableSymbol> WritableReferenceRoots { get; } = new HashSet<VariableSymbol>();
+
+        public bool MayMutateMemberPaths { get; private set; }
+
+        public bool MayMutateAnyRoot { get; private set; }
+
+        // Subset of MayMutateAnyRoot: a write through a pointer or reference of
+        // unknown origin can reach ANY address-taken local, not just locals a
+        // closure assigns.
+        public bool MayMutateAnyRootViaPointer { get; private set; }
+
+        public bool MayMutateGlobalRoots { get; private set; }
+
+        public bool MayMutateWritableReferenceRoots { get; private set; }
+
+        // A variable with a known local target on any branch is a mixed alias;
+        // the exported alias set forgets local bodies, so treat it as unknown
+        // rather than external-only (fail-safe).
+        public IEnumerable<VariableSymbol> DefinitelyExternalFunctionValues
+            => externalFunctionValues
+                .Except(unknownFunctionValues)
+                .Where(variable => !functionLiterals.ContainsKey(variable));
+
+        protected override void VisitIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
+        {
+            BoundExpression pointer = node.Pointer;
+            while (pointer is BoundConversionExpression conversion)
+            {
+                pointer = conversion.Expression;
+            }
+
+            while (pointer is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+            {
+                pointer = assertion.Operand;
+            }
+
+            if (pointer is BoundAddressOfExpression address)
+            {
+                RecordWritableReference(address.Operand);
+            }
+            else if (pointer is BoundVariableExpression variable
+                && writableReferenceAliases.TryGetValue(variable.Variable, out var operand))
+            {
+                RecordWritableReference(operand);
+            }
+            else
+            {
+                MayMutateAnyRoot = true;
+                MayMutateAnyRootViaPointer = true;
+            }
+
+            base.VisitIndirectAssignmentExpression(node);
+        }
+
+        public override void VisitStatement(BoundStatement? node)
+        {
+            if (node is BoundLabelStatement label)
+            {
+                visitedLabels.Add(label.Label);
+                pendingConditionalTargets.Remove(label.Label);
+                callableInvocationCountsAtLabel[label.Label] = callableInvocations.Count;
+            }
+            else if (node is BoundGotoStatement gotoStatement)
+            {
+                if (!visitedLabels.Contains(gotoStatement.Label))
+                {
+                    pendingConditionalTargets.Add(gotoStatement.Label);
+                }
+                else if (callableInvocationCountsAtLabel.TryGetValue(
+                             gotoStatement.Label,
+                             out var invocationStart))
+                {
+                    for (var i = invocationStart; i < callableInvocations.Count; i++)
+                    {
+                        AnalyzeCallableVariable(callableInvocations[i]);
+                    }
+                }
+            }
+
+            base.VisitStatement(node);
+        }
+
+        public override void VisitExpression(BoundExpression? node)
+        {
+            if (node == null)
+            {
+                return;
+            }
+
+            if (IsPotentiallyMutatingMemberPathExpression(node.Kind))
+            {
+                MayMutateMemberPaths = true;
+            }
+
+            if (node is BoundPropertyAccessExpression { Property.IsAutoProperty: false })
+            {
+                MayMutateMemberPaths = true;
+            }
+
+            var sourceConstructionRunsUserCode = node is BoundConstructorCallExpression construction
+                && (construction.SelectedConstructor != null
+                    || !construction.StructType.InstanceFieldInitializers.IsEmpty);
+            var sourcePropertyRunsUserCode = node is BoundPropertyAccessExpression { Property.IsAutoProperty: false }
+                or BoundPropertyAssignmentExpression { Property.IsAutoProperty: false };
+            if (trackSourceCallGlobalMutations
+                && (sourcePropertyRunsUserCode || sourceConstructionRunsUserCode))
+            {
+                MarkMayMutateGlobalRoots();
+            }
+
+            if (node is BoundCallOperationExpression
+                {
+                    CalledFunction: FunctionSymbol function,
+                    Arguments: var arguments,
+                })
+            {
+                if (trackSourceCallGlobalMutations)
+                {
+                    MarkMayMutateGlobalRoots();
+                }
+
+                if (function.HasCaptures)
+                {
+                    MayMutateAnyRoot = true;
+                }
+
+                var count = Math.Min(arguments.Length, function.Parameters.Length);
+                for (var i = 0; i < count; i++)
+                {
+                    if (function.Parameters[i].RefKind is RefKind.Ref or RefKind.Out)
+                    {
+                        RecordWritableReference(arguments[i]);
+                    }
+                }
+            }
+
+            if (node is BoundCallOperationExpression call)
+            {
+                AnalyzeCallableArguments(call.Arguments);
+            }
+
+            base.VisitExpression(node);
+        }
 
         public bool AssignsRoot(VariableSymbol root)
         {
@@ -1134,6 +2359,12 @@ internal sealed partial class StatementBinder
 
         public bool InvalidatesNarrowing(VariableSymbol root, TypeSymbol narrowedType)
         {
+            if (MayMutateWritableReferenceRoots
+                && root is ParameterSymbol { RefKind: RefKind.Ref or RefKind.Out })
+            {
+                return true;
+            }
+
             if (!Roots.Contains(root))
             {
                 return AssignsRoot(root);
@@ -1145,25 +2376,609 @@ internal sealed partial class StatementBinder
                 || rootAssignments.Any(assignment => !assignmentPreservesNarrowing(assignment, narrowedType));
         }
 
-        public override void VisitExpression(BoundExpression? node)
+        public bool MayMutateGlobalRoot(VariableSymbol root, TypeSymbol narrowedType)
+            => MayMutateGlobalRoots
+                && root is GlobalVariableSymbol
+                && (globalMutationProtectedRoots == null
+                    || !globalMutationProtectedRoots.Contains(root)
+                    || InvalidatesNarrowing(root, narrowedType));
+
+        protected override void VisitIndirectCallExpression(BoundIndirectCallExpression node)
         {
-            if (node == null)
+            AnalyzeCallableInvocation(node.Target);
+            AnalyzeCallableArguments(node.Arguments);
+            base.VisitIndirectCallExpression(node);
+        }
+
+        protected override void VisitBaseClassCallExpression(BoundBaseClassCallExpression node)
+        {
+            AnalyzeCallableArguments(node.Arguments);
+            base.VisitBaseClassCallExpression(node);
+        }
+
+        protected override void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+        {
+            if (string.Equals(node.Method.Name, "Invoke", StringComparison.Ordinal)
+                && IsCallableType(node.Receiver.Type))
+            {
+                AnalyzeCallableInvocation(node.Receiver);
+            }
+
+            base.VisitImportedInstanceCallExpression(node);
+        }
+
+        protected override void VisitFunctionPointerInvocationExpression(BoundFunctionPointerInvocationExpression node)
+        {
+            AnalyzeCallableArguments(node.Arguments);
+            base.VisitFunctionPointerInvocationExpression(node);
+        }
+
+        protected override void VisitConstructorCallExpression(BoundConstructorCallExpression node)
+        {
+            AnalyzeCallableArguments(node.Arguments);
+            base.VisitConstructorCallExpression(node);
+        }
+
+        protected override void VisitClrConstructorCallExpression(BoundClrConstructorCallExpression node)
+        {
+            AnalyzeCallableArguments(node.Arguments);
+            base.VisitClrConstructorCallExpression(node);
+        }
+
+        private void AnalyzeCallableArguments(ImmutableArray<BoundExpression> arguments)
+        {
+            foreach (var argument in arguments)
+            {
+                if (!IsCallableType(argument.Type))
+                {
+                    continue;
+                }
+
+                var hasKnownTargets = TryGetFunctionLiterals(argument, out var literals);
+                if (literals != null)
+                {
+                    foreach (var literal in literals)
+                    {
+                        VisitFunctionLiteralBody(literal);
+                    }
+                }
+
+                var isExternal = IsExternalCallable(argument);
+                if (isExternal)
+                {
+                    MarkMayMutateGlobalRoots();
+                }
+
+                if (IsUnknownCallable(argument) || (!hasKnownTargets && !isExternal))
+                {
+                    MayMutateAnyRoot = true;
+                }
+            }
+        }
+
+        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
+        {
+            if (node.Initializer != null
+                && TryGetWritableReferenceOperand(node.Initializer, out var operand))
+            {
+                writableReferenceAliases[node.Variable] = operand;
+            }
+
+            var externalCallable = node.Initializer != null
+                && IsExternalCallable(node.Initializer);
+            if (node.Initializer != null
+                && TryGetFunctionLiterals(node.Initializer, out var literals))
+            {
+                functionLiterals[node.Variable] = new HashSet<BoundFunctionLiteralExpression>(literals);
+                if (UnwrapCallable(node.Initializer) is BoundVariableExpression source
+                    && unknownFunctionValues.Contains(source.Variable))
+                {
+                    unknownFunctionValues.Add(node.Variable);
+                }
+
+                if (externalCallable)
+                {
+                    externalFunctionValues.Add(node.Variable);
+                }
+            }
+            else if (externalCallable)
+            {
+                externalFunctionValues.Add(node.Variable);
+            }
+            else if (node.Initializer != null)
+            {
+                unknownFunctionValues.Add(node.Variable);
+            }
+
+            base.VisitVariableDeclaration(node);
+        }
+
+        private static bool TryGetWritableReferenceOperand(
+            BoundExpression expression,
+            [NotNullWhen(true)] out BoundExpression? operand)
+        {
+            while (expression is BoundConversionExpression conversion)
+            {
+                expression = conversion.Expression;
+            }
+
+            while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+            {
+                expression = assertion.Operand;
+            }
+
+            operand = (expression as BoundAddressOfExpression)?.Operand;
+            return operand != null;
+        }
+
+        protected override void VisitIfStatement(BoundIfStatement node)
+        {
+            VisitExpression(node.Condition);
+            var branchStart = CaptureCallableState();
+
+            VisitStatement(node.ThenStatement);
+            var thenState = CaptureCallableState();
+
+            RestoreCallableState(branchStart);
+            VisitStatement(node.ElseStatement);
+            var elseState = CaptureCallableState();
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined = null;
+            if (!EndsInUnconditionalExit(node.ThenStatement, gotoExits: false))
+            {
+                joined = JoinCallableStates(joined, thenState);
+            }
+
+            if (node.ElseStatement == null || !EndsInUnconditionalExit(node.ElseStatement, gotoExits: false))
+            {
+                joined = JoinCallableStates(joined, elseState);
+            }
+
+            RestoreCallableState(joined ?? branchStart);
+        }
+
+        protected override void VisitConditionalGotoStatement(BoundConditionalGotoStatement node)
+        {
+            VisitExpression(node.Condition);
+            if (!visitedLabels.Contains(node.Label))
+            {
+                pendingConditionalTargets.Add(node.Label);
+            }
+        }
+
+        protected override void VisitForInfiniteStatement(BoundForInfiniteStatement node)
+            => VisitPossiblySkippedBody(node.Body);
+
+        protected override void VisitForEllipsisStatement(BoundForEllipsisStatement node)
+        {
+            VisitExpression(node.LowerBound);
+            VisitExpression(node.UpperBound);
+            VisitPossiblySkippedBody(node.Body);
+        }
+
+        protected override void VisitForRangeStatement(BoundForRangeStatement node)
+        {
+            VisitExpression(node.Collection);
+            VisitPossiblySkippedBody(node.Body);
+        }
+
+        protected override void VisitAwaitForRangeStatement(BoundAwaitForRangeStatement node)
+        {
+            VisitExpression(node.Stream);
+            VisitPossiblySkippedBody(node.Body);
+        }
+
+        protected override void VisitPatternSwitchStatement(BoundPatternSwitchStatement node)
+        {
+            VisitExpression(node.Discriminant);
+            var branchStart = CaptureCallableState();
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined =
+                node.IsExhaustive ? null : CloneCallableState(branchStart);
+
+            foreach (var arm in node.Arms)
+            {
+                RestoreCallableState(branchStart);
+                VisitPattern(arm.Pattern);
+                VisitExpression(arm.Guard);
+                VisitStatement(arm.Body);
+                if (!EndsInUnconditionalExit(arm.Body, gotoExits: false))
+                {
+                    joined = JoinCallableStates(joined, CaptureCallableState());
+                }
+            }
+
+            RestoreCallableState(joined ?? branchStart);
+        }
+
+        protected override void VisitSwitchExpression(BoundSwitchExpression node)
+        {
+            VisitExpression(node.Discriminant);
+            var branchStart = CaptureCallableState();
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined = null;
+
+            foreach (var arm in node.Arms)
+            {
+                RestoreCallableState(branchStart);
+                VisitPattern(arm.Pattern);
+                VisitExpression(arm.Guard);
+                VisitExpression(arm.Result);
+                joined = JoinCallableStates(joined, CaptureCallableState());
+            }
+
+            RestoreCallableState(joined ?? branchStart);
+        }
+
+        protected override void VisitTryStatement(BoundTryStatement node)
+        {
+            var branchStart = CaptureCallableState();
+            var outerTryAssignments = tryAssignedVariables;
+            var assignedInTry = new HashSet<VariableSymbol>();
+            tryAssignedVariables = assignedInTry;
+            VisitStatement(node.TryBlock);
+            tryAssignedVariables = outerTryAssignments;
+            outerTryAssignments?.UnionWith(assignedInTry);
+            var tryState = CaptureCallableState();
+            var exceptionalState = CloneCallableState(branchStart);
+            foreach (var variable in assignedInTry)
+            {
+                exceptionalState.Literals.Remove(variable);
+                exceptionalState.External.Remove(variable);
+                exceptionalState.Unknown.Add(variable);
+            }
+
+            var finallyEntries = JoinCallableStates(
+                CloneCallableState(tryState),
+                exceptionalState);
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined =
+                EndsInUnconditionalExit(node.TryBlock, gotoExits: false) ? null : tryState;
+
+            foreach (var clause in node.CatchClauses)
+            {
+                RestoreCallableState(exceptionalState);
+                VisitExpression(clause.Filter);
+                VisitStatement(clause.Body);
+                var catchState = CaptureCallableState();
+                finallyEntries = JoinCallableStates(finallyEntries, catchState);
+                if (!EndsInUnconditionalExit(clause.Body, gotoExits: false))
+                {
+                    joined = JoinCallableStates(joined, catchState);
+                }
+            }
+
+            if (node.FinallyBlock != null)
+            {
+                RestoreCallableState(finallyEntries);
+                VisitStatement(node.FinallyBlock);
+            }
+            else
+            {
+                RestoreCallableState(joined ?? branchStart);
+            }
+        }
+
+        // An assignment reached only on some paths (pendingConditionalTargets
+        // is non-empty: a conditional goto to a later label is still pending) leaves the other paths with whatever
+        // the variable held before. Only a variable already known external
+        // stays external; anything else becomes unknown (fail-safe).
+        private void MarkExternalAssignment(VariableSymbol variable)
+        {
+            if (pendingConditionalTargets.Count > 0 && !externalFunctionValues.Contains(variable))
+            {
+                unknownFunctionValues.Add(variable);
+                return;
+            }
+
+            externalFunctionValues.Add(variable);
+        }
+
+        private void VisitPossiblySkippedBody(BoundStatement body)
+        {
+            var entry = CaptureCallableState();
+            var previous = entry;
+            while (true)
+            {
+                RestoreCallableState(previous);
+                VisitStatement(body);
+                MergeCallableState(previous);
+                var joined = CaptureCallableState();
+                if (CallableStatesEqual(previous, joined))
+                {
+                    RestoreCallableState(joined);
+                    return;
+                }
+
+                previous = joined;
+            }
+        }
+
+        private static bool CallableStatesEqual(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) left,
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) right)
+        {
+            return left.Unknown.SetEquals(right.Unknown)
+                && left.External.SetEquals(right.External)
+                && left.Literals.Count == right.Literals.Count
+                && left.Literals.All(entry =>
+                    right.Literals.TryGetValue(entry.Key, out var literals)
+                    && entry.Value.SetEquals(literals));
+        }
+
+        private (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) CaptureCallableState()
+            => (
+                functionLiterals.ToDictionary(
+                    entry => entry.Key,
+                    entry => new HashSet<BoundFunctionLiteralExpression>(entry.Value)),
+                new HashSet<VariableSymbol>(unknownFunctionValues),
+                new HashSet<VariableSymbol>(externalFunctionValues));
+
+        private static (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) CloneCallableState(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) state)
+            => (
+                state.Literals.ToDictionary(
+                    entry => entry.Key,
+                    entry => new HashSet<BoundFunctionLiteralExpression>(entry.Value)),
+                new HashSet<VariableSymbol>(state.Unknown),
+                new HashSet<VariableSymbol>(state.External));
+
+        private void RestoreCallableState(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) state)
+        {
+            functionLiterals.Clear();
+            unknownFunctionValues.Clear();
+            externalFunctionValues.Clear();
+            MergeCallableState(state);
+        }
+
+        private void MergeCallableState(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) state)
+        {
+            foreach (var entry in state.Literals)
+            {
+                if (!functionLiterals.TryGetValue(entry.Key, out var literals))
+                {
+                    literals = new HashSet<BoundFunctionLiteralExpression>();
+                    functionLiterals.Add(entry.Key, literals);
+                }
+
+                literals.UnionWith(entry.Value);
+            }
+
+            unknownFunctionValues.UnionWith(state.Unknown);
+            externalFunctionValues.UnionWith(state.External);
+        }
+
+        private static (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) JoinCallableStates(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? left,
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) right)
+        {
+            if (left == null)
+            {
+                return right;
+            }
+
+            var variables = left.Value.Literals.Keys
+                .Concat(left.Value.Unknown)
+                .Concat(left.Value.External)
+                .Concat(right.Literals.Keys)
+                .Concat(right.Unknown)
+                .Concat(right.External)
+                .ToHashSet();
+            foreach (var variable in variables)
+            {
+                var hasLeft = left.Value.Literals.ContainsKey(variable)
+                    || left.Value.Unknown.Contains(variable)
+                    || left.Value.External.Contains(variable);
+                var hasRight = right.Literals.ContainsKey(variable)
+                    || right.Unknown.Contains(variable)
+                    || right.External.Contains(variable);
+                if (!hasLeft || !hasRight)
+                {
+                    left.Value.Unknown.Add(variable);
+                }
+            }
+
+            foreach (var entry in right.Literals)
+            {
+                if (!left.Value.Literals.TryGetValue(entry.Key, out var literals))
+                {
+                    literals = new HashSet<BoundFunctionLiteralExpression>();
+                    left.Value.Literals.Add(entry.Key, literals);
+                }
+
+                literals.UnionWith(entry.Value);
+            }
+
+            left.Value.Unknown.UnionWith(right.Unknown);
+            left.Value.External.UnionWith(right.External);
+            return left.Value;
+        }
+
+        private bool IsExternalCallable(BoundExpression expression)
+        {
+            return UnwrapCallable(expression) is BoundVariableExpression variable
+                && (variable.Variable is ParameterSymbol { IsReadOnly: true }
+                    || externalFunctionValues.Contains(variable.Variable));
+        }
+
+        private bool IsUnknownCallable(BoundExpression expression)
+            => UnwrapCallable(expression) is BoundVariableExpression variable
+                && unknownFunctionValues.Contains(variable.Variable);
+
+        private void AnalyzeCallableInvocation(BoundExpression expression)
+        {
+            var callable = UnwrapCallable(expression);
+            if (callable is BoundFunctionLiteralExpression direct)
+            {
+                VisitFunctionLiteralBody(direct);
+                return;
+            }
+
+            if (callable is not BoundVariableExpression variable)
+            {
+                MayMutateAnyRoot = true;
+                return;
+            }
+
+            callableInvocations.Add(variable.Variable);
+            AnalyzeCallableVariable(variable.Variable);
+        }
+
+        private void AnalyzeCallableVariable(VariableSymbol variable)
+        {
+            if (functionLiterals.TryGetValue(variable, out var literals))
+            {
+                foreach (var literal in literals)
+                {
+                    VisitFunctionLiteralBody(literal);
+                }
+            }
+
+            // A read-only callable parameter originates outside this function
+            // and cannot capture this function's local slots.
+            MayMutateAnyRoot |= unknownFunctionValues.Contains(variable)
+                || (variable is not ParameterSymbol { IsReadOnly: true }
+                    && !externalFunctionValues.Contains(variable)
+                    && !functionLiterals.ContainsKey(variable));
+            if (variable is ParameterSymbol { IsReadOnly: true }
+                || externalFunctionValues.Contains(variable))
+            {
+                MarkMayMutateGlobalRoots();
+                MayMutateWritableReferenceRoots = true;
+            }
+        }
+
+        private void MarkMayMutateGlobalRoots()
+        {
+            MayMutateGlobalRoots = true;
+            var protectedRoots = enclosingGlobalAssignments.ToHashSet();
+            if (globalMutationProtectedRoots == null)
+            {
+                globalMutationProtectedRoots = protectedRoots;
+            }
+            else
+            {
+                globalMutationProtectedRoots.IntersectWith(protectedRoots);
+            }
+        }
+
+        private static bool IsCallableType(TypeSymbol? type)
+            => type is FunctionTypeSymbol or DelegateTypeSymbol
+                || (type?.ClrType is { } clrType && ClrTypeUtilities.IsDelegateType(clrType));
+
+        private bool TryGetFunctionLiterals(
+            BoundExpression expression,
+            [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out IReadOnlyCollection<BoundFunctionLiteralExpression>? literals)
+        {
+            var callable = UnwrapCallable(expression);
+            if (callable is BoundFunctionLiteralExpression direct)
+            {
+                literals = new[] { direct };
+                return true;
+            }
+
+            if (callable is BoundVariableExpression variable
+                && functionLiterals.TryGetValue(variable.Variable, out var stored))
+            {
+                literals = stored;
+                return true;
+            }
+
+            literals = null;
+            return false;
+        }
+
+        private void VisitFunctionLiteralBody(BoundFunctionLiteralExpression literal)
+        {
+            if (literal.Body is not { } body
+                || !visitedFunctionLiterals.Add(literal))
             {
                 return;
             }
 
-            if (node is BoundFunctionLiteralExpression literal && literal.Body != null)
+            try
             {
-                VisitStatement(literal.Body);
+                VisitStatement(body);
+            }
+            finally
+            {
+                visitedFunctionLiterals.Remove(literal);
+            }
+        }
+
+        private static BoundExpression UnwrapCallable(BoundExpression expression)
+        {
+            while (expression is BoundConversionExpression conversion)
+            {
+                expression = conversion.Expression;
             }
 
-            base.VisitExpression(node);
+            while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+            {
+                expression = assertion.Operand;
+            }
+
+            return expression;
         }
 
         protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
         {
             if (node.Variable != null)
             {
+                writableReferenceAliases.Remove(node.Variable);
+                tryAssignedVariables?.Add(node.Variable);
+                var externalCallable = IsExternalCallable(node.Expression);
+                if (TryGetFunctionLiterals(node.Expression, out var literals))
+                {
+                    if (pendingConditionalTargets.Count > 0
+                        && functionLiterals.TryGetValue(node.Variable, out var existing))
+                    {
+                        existing.UnionWith(literals);
+                    }
+                    else
+                    {
+                        functionLiterals[node.Variable] =
+                            new HashSet<BoundFunctionLiteralExpression>(literals);
+                    }
+
+                    if (UnwrapCallable(node.Expression) is BoundVariableExpression source
+                        && unknownFunctionValues.Contains(source.Variable))
+                    {
+                        unknownFunctionValues.Add(node.Variable);
+                    }
+                    else if (pendingConditionalTargets.Count == 0)
+                    {
+                        unknownFunctionValues.Remove(node.Variable);
+                    }
+
+                    if (externalCallable)
+                    {
+                        MarkExternalAssignment(node.Variable);
+                    }
+                    else if (pendingConditionalTargets.Count == 0)
+                    {
+                        externalFunctionValues.Remove(node.Variable);
+                    }
+                }
+                else if (externalCallable)
+                {
+                    if (pendingConditionalTargets.Count == 0)
+                    {
+                        functionLiterals.Remove(node.Variable);
+                        unknownFunctionValues.Remove(node.Variable);
+                    }
+
+                    MarkExternalAssignment(node.Variable);
+                }
+                else
+                {
+                    if (pendingConditionalTargets.Count == 0)
+                    {
+                        functionLiterals.Remove(node.Variable);
+                        externalFunctionValues.Remove(node.Variable);
+                    }
+
+                    unknownFunctionValues.Add(node.Variable);
+                }
+
                 Roots.Add(node.Variable);
                 if (!assignments.TryGetValue(node.Variable, out var rootAssignments))
                 {
@@ -1174,7 +2989,87 @@ internal sealed partial class StatementBinder
                 rootAssignments.Add(node);
             }
 
+            var protectedGlobalRoot = node.Variable as GlobalVariableSymbol;
+            if (protectedGlobalRoot != null)
+            {
+                enclosingGlobalAssignments.Push(protectedGlobalRoot);
+            }
+
             base.VisitAssignmentExpression(node);
+
+            if (protectedGlobalRoot != null)
+            {
+                enclosingGlobalAssignments.Pop();
+            }
+        }
+
+        protected override void VisitAddressOfExpression(BoundAddressOfExpression node)
+        {
+            if (!node.IsReadOnly)
+            {
+                RecordWritableReference(node.Operand);
+            }
+
+            base.VisitAddressOfExpression(node);
+        }
+
+        private void RecordWritableReference(BoundExpression expression)
+        {
+            while (true)
+            {
+                expression = expression switch
+                {
+                    BoundAddressOfExpression address => address.Operand,
+                    BoundConversionExpression conversion => conversion.Expression,
+                    BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion => assertion.Operand,
+                    _ => expression,
+                };
+
+                if (expression is not BoundAddressOfExpression
+                    and not BoundConversionExpression
+                    and not BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion })
+                {
+                    break;
+                }
+            }
+
+            if (expression is BoundVariableExpression variable)
+            {
+                Roots.Add(variable.Variable);
+                WritableReferenceRoots.Add(variable.Variable);
+                return;
+            }
+
+            if (expression is BoundConditionalAddressExpression conditional)
+            {
+                RecordWritableReference(conditional.WhenTrueOperand);
+                RecordWritableReference(conditional.WhenFalseOperand);
+                return;
+            }
+
+            if (!SmartCastStability.TryGetStableMemberPath(expression, out var path, out _))
+            {
+                if (expression is BoundIndexExpression or BoundClrIndexExpression)
+                {
+                    MayMutateMemberPaths = true;
+                }
+                else
+                {
+                    MayMutateAnyRoot = true;
+                    MayMutateAnyRootViaPointer = true;
+                }
+
+                return;
+            }
+
+            if (path.HasMembers)
+            {
+                MayMutateMemberPaths = true;
+            }
+            else
+            {
+                Roots.Add(path.Root);
+            }
         }
 
         protected override void VisitFieldAssignmentExpression(BoundFieldAssignmentExpression node)
@@ -1203,28 +3098,15 @@ internal sealed partial class StatementBinder
         private readonly record struct AssignedProperty(VariableSymbol? Receiver, PropertySymbol Property);
     }
 
+    private sealed record FinallyFlowSummary(
+        AssignedRootsCollector Mutations,
+        Dictionary<AccessPath, TypeSymbol>? NonNullOnNormalExit);
+
     private sealed class LoopBackEdgeMutationCollector : AssignedRootsCollector
     {
         public LoopBackEdgeMutationCollector(Func<BoundAssignmentExpression, TypeSymbol, bool> assignmentPreservesNarrowing)
             : base(assignmentPreservesNarrowing)
         {
-        }
-
-        public bool MayMutateMemberPaths { get; private set; }
-
-        public override void VisitExpression(BoundExpression? node)
-        {
-            if (node == null)
-            {
-                return;
-            }
-
-            if (IsPotentiallyMutatingMemberPathExpression(node.Kind))
-            {
-                MayMutateMemberPaths = true;
-            }
-
-            base.VisitExpression(node);
         }
     }
 
@@ -1287,15 +3169,87 @@ internal sealed partial class StatementBinder
     private static bool IsReferenceLikeType(TypeSymbol type)
         => type != null && Conversion.IsReferenceLikeTarget(type);
 
+    private bool HasInternallyReachableFallthrough(BoundStatement statement)
+    {
+        if (internallyReachableFallthroughStatements.Contains(statement))
+        {
+            return true;
+        }
+
+        switch (statement)
+        {
+            case BoundLabelStatement label:
+                return internallyReachableLoopExits.Contains(label.Label)
+                    || internallyReachableLoopBacks.Contains(label.Label);
+
+            case BoundBlockStatement block:
+                var fallsThrough = false;
+                foreach (var child in block.Statements)
+                {
+                    fallsThrough =
+                        (fallsThrough || HasInternallyReachableFallthrough(child))
+                        && !EndsInUnconditionalExit(child);
+                }
+
+                return fallsThrough;
+
+            case BoundIfStatement ifStatement:
+                return HasInternallyReachableFallthrough(ifStatement.ThenStatement)
+                    || (ifStatement.ElseStatement != null
+                        && HasInternallyReachableFallthrough(ifStatement.ElseStatement));
+
+            case BoundTryStatement tryStatement:
+                return (tryStatement.FinallyBlock == null
+                        || !EndsInUnconditionalExit(tryStatement.FinallyBlock))
+                    && (HasInternallyReachableFallthrough(tryStatement.TryBlock)
+                        || tryStatement.CatchClauses.Any(clause =>
+                            HasInternallyReachableFallthrough(clause.Body)));
+
+            case BoundPatternSwitchStatement switchStatement:
+                return switchStatement.Arms.Any(arm =>
+                    HasInternallyReachableFallthrough(arm.Body));
+
+            case BoundForInfiniteStatement infiniteLoop:
+                return internallyReachableLoopExits.Contains(infiniteLoop.BreakLabel);
+
+            case BoundForEllipsisStatement ellipsisLoop:
+                return internallyReachableLoopExits.Contains(ellipsisLoop.BreakLabel)
+                    || internallyReachableLoopBacks.Contains(ellipsisLoop.ContinueLabel)
+                    || HasInternallyReachableFallthrough(ellipsisLoop.Body);
+
+            case BoundForRangeStatement rangeLoop:
+                return internallyReachableLoopExits.Contains(rangeLoop.BreakLabel)
+                    || internallyReachableLoopBacks.Contains(rangeLoop.ContinueLabel)
+                    || HasInternallyReachableFallthrough(rangeLoop.Body);
+
+            case BoundAwaitForRangeStatement awaitRangeLoop:
+                return internallyReachableLoopExits.Contains(awaitRangeLoop.BreakLabel)
+                    || internallyReachableLoopBacks.Contains(awaitRangeLoop.ContinueLabel)
+                    || HasInternallyReachableFallthrough(awaitRangeLoop.Body);
+
+            default:
+                return false;
+        }
+    }
+
     /// <summary>
     /// ADR-0069 / issue #700: structurally determine whether the given
     /// bound statement unconditionally transfers control out of its
     /// enclosing block (return / throw / unconditional goto, which covers
     /// the lowered shapes of <c>break</c> and <c>continue</c>). A block
     /// counts when its last statement does any of those; an
-    /// <see cref="BoundIfStatement"/> counts only if both arms do.
+    /// <see cref="BoundIfStatement"/> counts only if both arms do; a
+    /// <see cref="BoundTryStatement"/> counts when its <c>finally</c> exits or
+    /// its protected block and every handler exit.
     /// </summary>
-    private static bool EndsInUnconditionalExit(BoundStatement? statement)
+    /// <param name="statement">The statement to classify.</param>
+    /// <param name="gotoExits">
+    /// When <see langword="false"/>, a goto is not counted as an exit, so only
+    /// return/throw do. Callable-alias joins use this because a goto can still
+    /// reach code after the enclosing construct.
+    /// </param>
+    /// <returns><see langword="true"/> when the statement always leaves its block.</returns>
+    private static bool EndsInUnconditionalExit(BoundStatement? statement, bool gotoExits = true)
     {
         switch (statement)
         {
@@ -1310,8 +3264,11 @@ internal sealed partial class StatementBinder
             case BoundGotoStatement:
                 // `break`/`continue` lower to BoundGotoStatement before this
                 // helper runs; an explicit `goto` likewise transfers
-                // control unconditionally.
-                return true;
+                // control unconditionally. Callable-alias joins pass
+                // gotoExits: false because a goto (notably a switch's own
+                // break label) can still reach code after the construct, so
+                // only return/throw are proven to leave it (fail-safe).
+                return gotoExits;
 
             case BoundBlockStatement block:
                 if (block.Statements.IsDefaultOrEmpty)
@@ -1319,7 +3276,7 @@ internal sealed partial class StatementBinder
                     return false;
                 }
 
-                return EndsInUnconditionalExit(block.Statements[block.Statements.Length - 1]);
+                return EndsInUnconditionalExit(block.Statements[block.Statements.Length - 1], gotoExits);
 
             case BoundIfStatement nested:
                 if (nested.ElseStatement == null)
@@ -1327,8 +3284,18 @@ internal sealed partial class StatementBinder
                     return false;
                 }
 
-                return EndsInUnconditionalExit(nested.ThenStatement)
-                    && EndsInUnconditionalExit(nested.ElseStatement);
+                return EndsInUnconditionalExit(nested.ThenStatement, gotoExits)
+                    && EndsInUnconditionalExit(nested.ElseStatement, gotoExits);
+
+            case BoundTryStatement nestedTry:
+                if (nestedTry.FinallyBlock != null
+                    && EndsInUnconditionalExit(nestedTry.FinallyBlock, gotoExits))
+                {
+                    return true;
+                }
+
+                return EndsInUnconditionalExit(nestedTry.TryBlock, gotoExits)
+                    && nestedTry.CatchClauses.All(clause => EndsInUnconditionalExit(clause.Body, gotoExits));
 
             case BoundPatternSwitchStatement nestedSwitch:
                 {
@@ -1345,7 +3312,7 @@ internal sealed partial class StatementBinder
                             hasDefault = true;
                         }
 
-                        if (!EndsInUnconditionalExit(arm.Body))
+                        if (!EndsInUnconditionalExit(arm.Body, gotoExits))
                         {
                             return false;
                         }
@@ -1862,6 +3829,11 @@ internal sealed partial class StatementBinder
         }
 
         var declaredVariable = Invariant.Required(variable, "a variable declaration produces a variable symbol");
+        if (convertedInitializer is { } callableInitializer
+            && IsExternalCallableSource(callableInitializer))
+        {
+            externalCallableAliases.Add(declaredVariable);
+        }
 
         // Issue #216 / #3519: a foldable `const` initializer carries its
         // target-typed compile-time value. Package constants also retain that
@@ -1903,6 +3875,49 @@ internal sealed partial class StatementBinder
             declaredVariable,
             convertedInitializer,
             constValue);
+    }
+
+    private bool IsExternalCallableSource(BoundExpression expression)
+        => IsExternalCallableSource(expression, externalCallableAliases);
+
+    private static bool IsExternalCallableSource(
+        BoundExpression expression,
+        IReadOnlyCollection<VariableSymbol> externalAliases)
+    {
+        if (IsMethodCallableSource(expression))
+        {
+            return true;
+        }
+
+        while (expression is BoundConversionExpression conversion)
+        {
+            expression = conversion.Expression;
+        }
+
+        while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+        {
+            expression = assertion.Operand;
+        }
+
+        return expression is BoundVariableExpression variable
+                && (variable.Variable is ParameterSymbol { IsReadOnly: true }
+                    || externalAliases.Contains(variable.Variable));
+    }
+
+    private static bool IsMethodCallableSource(BoundExpression expression)
+    {
+        while (expression is BoundConversionExpression conversion)
+        {
+            expression = conversion.Expression;
+        }
+
+        while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+        {
+            expression = assertion.Operand;
+        }
+
+        return expression is BoundFunctionPointerFromMethodExpression
+            or BoundMethodGroupExpression;
     }
 
     private static ImmutableArray<string> GetCallableParameterNames(BoundExpression initializer)
@@ -2116,7 +4131,7 @@ internal sealed partial class StatementBinder
         // `initializer.Type is TupleTypeSymbol` / `is StructSymbol` and then
         // probes for an imported `Deconstruct`, none of which a platform
         // wrapper matches.
-        initializer = PlatformCoercion.InsertCheck(
+        initializer = binderCtx.InsertPlatformCheck(
             initializer,
             syntax.Initializer.Location,
             "a deconstruction source");
@@ -2615,7 +4630,7 @@ internal sealed partial class StatementBinder
         // the symbol-kind test below needs: a platform wrapper is not a
         // StructSymbol, so `let { X = x } = obliviousCall()` reported GS0164
         // where `DPt` compiled.
-        initializer = PlatformCoercion.InsertCheck(
+        initializer = binderCtx.InsertPlatformCheck(
             initializer,
             syntax.Initializer.Location,
             "a deconstruction source");

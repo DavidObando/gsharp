@@ -25,6 +25,7 @@ internal sealed partial class StatementBinder
     private BoundStatement BindSwitchStatement(SwitchStatementSyntax syntax)
     {
         var discriminant = bindExpression(syntax.Expression);
+        ApplyHeaderCallableEffects(discriminant);
         var switchType = discriminant.Type;
         if (switchType == TypeSymbol.Error)
         {
@@ -33,6 +34,9 @@ internal sealed partial class StatementBinder
 
         var arms = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(syntax.Cases.Length);
         var hasDefault = false;
+        var callableEntry = CaptureExternalCallableAliases();
+        HashSet<VariableSymbol>? callableExits = null;
+        HashSet<VariableSymbol>? callableFallthrough = null;
 
         // ADR-0069 addendum / issue #712: track each non-exiting arm's
         // discriminator narrowing so we can lift a common post-switch
@@ -62,6 +66,13 @@ internal sealed partial class StatementBinder
         for (var caseIndex = 0; caseIndex < syntax.Cases.Length; caseIndex++)
         {
             var caseSyntax = syntax.Cases[caseIndex];
+            var callableArmEntry = new HashSet<VariableSymbol>(callableEntry);
+            if (callableFallthrough != null)
+            {
+                callableArmEntry.IntersectWith(callableFallthrough);
+            }
+
+            RestoreExternalCallableAliases(callableArmEntry);
 
             // Issue #3501 A3: arm the fallthrough context for this arm. The
             // one legal position is the body's last statement; a trailing
@@ -96,6 +107,12 @@ internal sealed partial class StatementBinder
                 var defaultBody = BindBlockStatement(caseSyntax.Body);
                 defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex]);
                 arms.Add(new BoundPatternSwitchArm(null, pattern: null, guard: null, defaultBody));
+                var callableDefaultExit = CaptureExternalCallableAliases();
+                callableFallthrough = endsInFallthrough ? callableDefaultExit : null;
+                if (!EndsInUnconditionalExit(defaultBody, gotoExits: false))
+                {
+                    callableExits = JoinExternalCallableAliases(callableExits, callableDefaultExit);
+                }
 
                 if (!EndsInUnconditionalExit(defaultBody))
                 {
@@ -147,6 +164,7 @@ internal sealed partial class StatementBinder
                 guard = BindGuardExpressionWithNarrowing(
                     Invariant.Required(guardSyntax, "a guarded switch case has a guard expression"),
                     frame);
+                callableEntry.ExceptWith(ApplyHeaderCallableEffects(guard) ?? new HashSet<VariableSymbol>());
             }
 
             // ADR-0166: the arm body runs only when the guard was true, so the
@@ -164,6 +182,12 @@ internal sealed partial class StatementBinder
             scope = scope.Pop();
             body = PrependArmEntryLabel(body, armEntryLabels[caseIndex]);
             arms.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
+            var callableArmExit = CaptureExternalCallableAliases();
+            callableFallthrough = endsInFallthrough ? callableArmExit : null;
+            if (!EndsInUnconditionalExit(body, gotoExits: false))
+            {
+                callableExits = JoinExternalCallableAliases(callableExits, callableArmExit);
+            }
 
             // Issue #991: a guarded arm may not actually run even when its
             // pattern matches, so it cannot contribute a reliable post-switch
@@ -226,6 +250,13 @@ internal sealed partial class StatementBinder
             binderCtx.CurrentFallthroughTarget = savedFallthroughTarget;
             binderCtx.CurrentFallthroughAnchor = savedFallthroughAnchor;
         }
+
+        if (!hasDefault)
+        {
+            callableExits = JoinExternalCallableAliases(callableExits, callableEntry);
+        }
+
+        RestoreExternalCallableAliases(callableExits ?? callableEntry);
 
         var boundArms = arms.ToImmutable();
         var isExhaustive = ExhaustivenessAnalyzer.AnalyzeSwitchStatement(
@@ -308,7 +339,24 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
     {
-        var tryBlock = BindBlockStatement(syntax.TryBlock);
+        var callableEntry = CaptureExternalCallableAliases();
+        var reachabilityGeneration = internalReachabilityGeneration;
+        var tryBlock = BindWithinFinallyScope(
+            syntax.FinallyClause,
+            () => BindBlockStatement(syntax.TryBlock));
+        var callableTryExit = CaptureExternalCallableAliases();
+        var tryMutations = new AssignedRootsCollector(null, callableEntry);
+        tryMutations.Visit(tryBlock);
+        var callableExceptionalEntry = new HashSet<VariableSymbol>(callableEntry);
+        callableExceptionalEntry.ExceptWith(tryMutations.Roots);
+        var callableFinallyEntries = JoinExternalCallableAliases(
+            new HashSet<VariableSymbol>(callableTryExit),
+            callableExceptionalEntry);
+        HashSet<VariableSymbol>? callableExits = CanReachCallableJoin(tryBlock)
+            ? new HashSet<VariableSymbol>(callableTryExit)
+            : null;
+        var handlersReachable = currentStatementListFallsThrough
+            || internalReachabilityGeneration != reachabilityGeneration;
 
         var exceptionType = ResolveExceptionType();
         if (exceptionType == null)
@@ -328,6 +376,10 @@ internal sealed partial class StatementBinder
 
         foreach (var catchSyntax in syntax.CatchClauses)
         {
+            RestoreExternalCallableAliases(callableExceptionalEntry);
+            var inheritedReachability = currentStatementListFallsThrough;
+            currentStatementListFallsThrough = handlersReachable;
+
             // ADR-0177 A: a bare `catch { … }` carries no type clause and means
             // `catch (System.Exception)`, exactly as in C#.
             var catchType = exceptionType;
@@ -361,23 +413,28 @@ internal sealed partial class StatementBinder
                 : bindLocalVariable(catchSyntax.Identifier, isReadOnly: true, type: catchType);
 
             var filter = BindCatchFilter(catchSyntax);
+            callableExceptionalEntry.ExceptWith(ApplyHeaderCallableEffects(filter) ?? new HashSet<VariableSymbol>());
             var (filterWhenTrue, _) = PatternVariables.Classify(filter);
 
             exceptionHandlerRegions.Push(catchSyntax);
+
             BoundStatement body;
             try
             {
                 // The handler runs only when its filter returned true, so any
                 // pattern variables the filter definitely assigns on that path
                 // are in scope and assigned throughout the handler.
-                body = PatternVariables.BindInScope(
-                    binderCtx,
-                    filterWhenTrue,
-                    () => BindBlockStatement(catchSyntax.Body));
+                body = BindWithinFinallyScope(
+                    syntax.FinallyClause,
+                    () => PatternVariables.BindInScope(
+                        binderCtx,
+                        filterWhenTrue,
+                        () => BindBlockStatement(catchSyntax.Body)));
             }
             finally
             {
                 exceptionHandlerRegions.Pop();
+                currentStatementListFallsThrough = inheritedReachability;
             }
 
             scope = scope.Pop();
@@ -388,20 +445,39 @@ internal sealed partial class StatementBinder
             }
 
             catches.Add(new BoundCatchClause(catchType, variable, filter, body, exitsThroughFinally: false));
+            var callableCatchExit = CaptureExternalCallableAliases();
+            callableFinallyEntries = JoinExternalCallableAliases(
+                callableFinallyEntries,
+                callableCatchExit);
+            if (CanReachCallableJoin(body))
+            {
+                callableExits = JoinExternalCallableAliases(callableExits, callableCatchExit);
+            }
         }
 
         BoundStatement? finallyBlock = null;
         if (syntax.FinallyClause != null)
         {
+            RestoreExternalCallableAliases(callableFinallyEntries);
+            finallyEntryExternalCallableAliases[syntax.FinallyClause] =
+                callableExits?.ToImmutableArray() ?? ImmutableArray<VariableSymbol>.Empty;
+            var inheritedReachability = currentStatementListFallsThrough;
+            currentStatementListFallsThrough = handlersReachable;
             exceptionHandlerRegions.Push(syntax.FinallyClause);
             try
             {
                 finallyBlock = BindBlockStatement(syntax.FinallyClause.Body);
+                boundFinallyBlocks[syntax.FinallyClause] = finallyBlock;
             }
             finally
             {
                 exceptionHandlerRegions.Pop();
+                currentStatementListFallsThrough = inheritedReachability;
             }
+        }
+        else
+        {
+            RestoreExternalCallableAliases(callableExits ?? callableEntry);
         }
 
         if (catches.Count == 0 && finallyBlock == null)
@@ -428,6 +504,28 @@ internal sealed partial class StatementBinder
         }
 
         return new BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock);
+    }
+
+    private BoundStatement BindWithinFinallyScope(
+        FinallyClauseSyntax? finallyClause,
+        Func<BoundStatement> bind)
+    {
+        if (finallyClause == null)
+        {
+            return bind();
+        }
+
+        activeFinallyClauses.Push(finallyClause);
+        activeCleanupRegions.Push(new GotoCleanupRegion(finallyClause, null));
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            activeCleanupRegions.Pop();
+            activeFinallyClauses.Pop();
+        }
     }
 
     /// <summary>
@@ -567,7 +665,7 @@ internal sealed partial class StatementBinder
         // not inherit the check from the value seam; without this it still
         // fails fast (the CLR's own `throw` on a nil), but unattributed,
         // which is the entire thing §4 buys over the CLR's check.
-        expression = PlatformCoercion.InsertCheck(
+        expression = binderCtx.InsertPlatformCheck(
             expression,
             syntax.Expression.Location,
             "a 'throw' operand");
@@ -672,7 +770,20 @@ internal sealed partial class StatementBinder
     /// <param name="syntax">The nested function's block body.</param>
     /// <returns>The bound body.</returns>
     internal BoundStatement BindNestedFunctionBody(BlockStatementSyntax syntax)
-        => OutsideExceptionHandlers(() => BindBlockStatement(syntax));
+    {
+        var inheritedFallthrough = currentStatementListFallsThrough;
+        var inheritedReachabilityGeneration = internalReachabilityGeneration;
+        currentStatementListFallsThrough = true;
+        try
+        {
+            return OutsideExceptionHandlers(() => BindBlockStatement(syntax));
+        }
+        finally
+        {
+            currentStatementListFallsThrough = inheritedFallthrough;
+            internalReachabilityGeneration = inheritedReachabilityGeneration;
+        }
+    }
 
     /// <summary>
     /// Runs <paramref name="bind"/> with the enclosing exception-handler
@@ -684,7 +795,13 @@ internal sealed partial class StatementBinder
     internal T OutsideExceptionHandlers<T>(Func<T> bind)
     {
         var saved = exceptionHandlerRegions.ToArray();
+        var savedFinallyClauses = activeFinallyClauses.ToArray();
+        var savedCleanupStatements = activeCleanupStatements.ToArray();
+        var savedCleanupRegions = activeCleanupRegions.ToArray();
         exceptionHandlerRegions.Clear();
+        activeFinallyClauses.Clear();
+        activeCleanupStatements.Clear();
+        activeCleanupRegions.Clear();
         try
         {
             return bind();
@@ -692,11 +809,29 @@ internal sealed partial class StatementBinder
         finally
         {
             exceptionHandlerRegions.Clear();
+            activeFinallyClauses.Clear();
+            activeCleanupStatements.Clear();
+            activeCleanupRegions.Clear();
 
             // Stack.ToArray() yields top-first; push back in reverse to restore.
             for (var i = saved.Length - 1; i >= 0; i--)
             {
                 exceptionHandlerRegions.Push(saved[i]);
+            }
+
+            for (var i = savedFinallyClauses.Length - 1; i >= 0; i--)
+            {
+                activeFinallyClauses.Push(savedFinallyClauses[i]);
+            }
+
+            for (var i = savedCleanupStatements.Length - 1; i >= 0; i--)
+            {
+                activeCleanupStatements.Push(savedCleanupStatements[i]);
+            }
+
+            for (var i = savedCleanupRegions.Length - 1; i >= 0; i--)
+            {
+                activeCleanupRegions.Push(savedCleanupRegions[i]);
             }
         }
     }
@@ -1061,7 +1196,7 @@ internal sealed partial class StatementBinder
         }
 
         // ADR-0186 §4: a send requires a non-null channel.
-        channel = PlatformCoercion.InsertCheck(channel, syntax.Channel.Location, "a channel send target");
+        channel = binderCtx.InsertPlatformCheck(channel, syntax.Channel.Location, "a channel send target");
 
         if (!ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var elementType, out var direction, out _))
         {
@@ -1160,7 +1295,7 @@ internal sealed partial class StatementBinder
             var channelExpr = bindExpression(channelSyntax);
 
             // ADR-0186 §4: a select case operates on a non-null channel.
-            channelExpr = PlatformCoercion.InsertCheck(channelExpr, channelSyntax.Location, "a select case channel");
+            channelExpr = binderCtx.InsertPlatformCheck(channelExpr, channelSyntax.Location, "a select case channel");
             ChannelTypeSymbol? chan = null;
             TypeSymbol? selectableElement = null;
             if (channelExpr is not BoundErrorExpression
@@ -1316,7 +1451,7 @@ internal sealed partial class StatementBinder
 
         // ADR-0186 §4: awaiting a task in a select arm requires a non-null
         // task, exactly as a plain `await` does (ExpressionBinder.BindAwaitExpression).
-        task = PlatformCoercion.InsertCheck(task, taskSyntax.Location, "an awaited select case task");
+        task = binderCtx.InsertPlatformCheck(task, taskSyntax.Location, "an awaited select case task");
         var guard = BindSelectArmGuard(caseSyntax);
         TypeSymbol? result = null;
         var recognized = task is BoundErrorExpression;
@@ -2172,7 +2307,7 @@ internal sealed partial class StatementBinder
         // ADR-0186 §4: the asynchronous twin of the `for … in` source check
         // (StatementBinder.Loops). A nil oblivious stream otherwise fails
         // inside the lowered `GetAsyncEnumerator` call, unattributed.
-        stream = PlatformCoercion.InsertCheck(
+        stream = binderCtx.InsertPlatformCheck(
             stream,
             syntax.Stream.Location,
             "an 'await for' source");

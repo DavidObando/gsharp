@@ -1164,6 +1164,16 @@ internal sealed partial class OverloadResolver
         var narrowedCallTargetType = symbol is VariableSymbol callTargetVariable
             ? TryGetNarrowedVariableType(callTargetVariable)
             : null;
+        if (syntax.NullableQuestionToken == null
+            && symbol is VariableSymbol narrowedCallTarget
+            && narrowedCallTargetType != null)
+        {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                GetNarrowedVariablePath(narrowedCallTarget),
+                syntax.Identifier.Location,
+                syntax.Identifier.ValueText,
+                BackwardGotoNarrowingUseKind.Function);
+        }
 
         // Issue #1566: an accessible in-scope member of the enclosing type
         // shadows a same-named top-level EXTENSION function for an unqualified,

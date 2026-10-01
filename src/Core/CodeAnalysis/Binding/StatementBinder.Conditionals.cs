@@ -27,6 +27,7 @@ internal sealed partial class StatementBinder
         if (syntax.Initializer == null)
         {
             var condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
+            ApplyHeaderCallableEffects(condition);
 
             // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
             // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
@@ -51,12 +52,15 @@ internal sealed partial class StatementBinder
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
             var (patternThen, patternElse) = PatternVariables.Classify(condition);
+            var callableEntry = CaptureExternalCallableAliases();
             var thenStatement = BindWithPatternVariables(
                 patternThen,
                 () =>
                 {
                     return BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow);
                 });
+            var callableThenExit = CaptureExternalCallableAliases();
+            RestoreExternalCallableAliases(callableEntry);
             var elseStatement = syntax.ElseClause == null
                 ? null
                 : BindWithPatternVariables(
@@ -65,6 +69,10 @@ internal sealed partial class StatementBinder
                     {
                         return BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow);
                     });
+            var callableElseExit = syntax.ElseClause == null
+                ? callableEntry
+                : CaptureExternalCallableAliases();
+            RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit);
             var result = new BoundIfStatement(syntax, condition, thenStatement, elseStatement);
 
             // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
@@ -93,8 +101,15 @@ internal sealed partial class StatementBinder
         //   }
         scope = new BoundScope(scope);
 
+        var initializerAliasesAtEntry = externalCallableAliases.ToArray();
         var initStatement = BindStatement(syntax.Initializer);
+        if (initStatement != null)
+        {
+            UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry);
+        }
+
         var initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
+        ApplyHeaderCallableEffects(initCondition);
 
         Dictionary<AccessPath, TypeSymbol>? initThenNarrow;
         Dictionary<AccessPath, TypeSymbol>? initElseNarrow;
@@ -109,12 +124,15 @@ internal sealed partial class StatementBinder
         initElseNarrow = MergeNarrowingFrames(initElseNarrow, initTypeElse);
 
         var (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition);
+        var initCallableEntry = CaptureExternalCallableAliases();
         var initThen = BindWithPatternVariables(
             initPatternThen,
             () =>
             {
                 return BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow);
             });
+        var initCallableThenExit = CaptureExternalCallableAliases();
+        RestoreExternalCallableAliases(initCallableEntry);
         var initElse = syntax.ElseClause == null
             ? null
             : BindWithPatternVariables(
@@ -123,6 +141,10 @@ internal sealed partial class StatementBinder
                 {
                     return BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, initElseNarrow);
                 });
+        var initCallableElseExit = syntax.ElseClause == null
+            ? initCallableEntry
+            : CaptureExternalCallableAliases();
+        RestoreJoinedExternalCallableAliases(initCallableThenExit, initCallableElseExit);
 
         scope = scope.Pop();
 
@@ -1120,7 +1142,7 @@ internal sealed partial class StatementBinder
         return true;
     }
 
-    private static bool IsFlowTransparentConversion(BoundConversionExpression conversion)
+    internal static bool IsFlowTransparentConversion(BoundConversionExpression conversion)
     {
         if (ReferenceEquals(conversion.Type, conversion.Expression.Type))
         {
@@ -1249,19 +1271,30 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<AccessPath, TypeSymbol>? frame)
     {
-        if (frame == null)
-        {
-            return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
-        }
-
-        binderCtx.NarrowedVariables.Add(frame);
+        var inheritedFallthrough = currentStatementListFallsThrough;
+        var inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel;
         try
         {
-            return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
+            if (frame == null)
+            {
+                return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
+            }
+
+            binderCtx.BeginNarrowingProof(frame);
+            binderCtx.NarrowedVariables.Add(frame);
+            try
+            {
+                return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
+            }
+            finally
+            {
+                binderCtx.EndNarrowingProof();
+            }
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            currentStatementListFallsThrough = inheritedFallthrough;
+            binderCtx.PotentialReachabilityLabel = inheritedPotentialReachabilityLabel;
         }
     }
 
@@ -1275,6 +1308,7 @@ internal sealed partial class StatementBinder
             return bindExpressionWithTargetType(syntax, TypeSymbol.Bool);
         }
 
+        binderCtx.BeginNarrowingProof(frame);
         binderCtx.NarrowedVariables.Add(frame);
         try
         {
@@ -1282,7 +1316,7 @@ internal sealed partial class StatementBinder
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            binderCtx.EndNarrowingProof();
         }
     }
 

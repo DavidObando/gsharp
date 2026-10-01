@@ -120,7 +120,7 @@ internal sealed partial class StatementBinder
 
         scope = scope.Pop();
 
-        return new BoundForInfiniteStatement(null, body, breakLabel, continueLabel);
+        return new BoundForInfiniteStatement(originatingSyntax, body, breakLabel, continueLabel);
     }
 
     private BoundStatement BindForEllipsisStatement(ForEllipsisStatementSyntax syntax)
@@ -219,6 +219,7 @@ internal sealed partial class StatementBinder
         Func<VariableSymbol, ImmutableArray<BoundStatement>>? bindLoopPrelude = null)
     {
         var collection = bindExpression(syntax.Collection);
+        ApplyHeaderCallableEffects(collection);
 
         // ADR-0186 §4/§5: a `foreach`/`range` source is one of the positions
         // the ADR names explicitly — "used where the language requires a
@@ -228,7 +229,7 @@ internal sealed partial class StatementBinder
         // so a platform wrapper matched no arm at all and
         // `for v in obliviousList()` reported GS0116 "not indexable" — the
         // receiver's platform-ness changing what the binder found.
-        collection = PlatformCoercion.InsertCheck(
+        collection = binderCtx.InsertPlatformCheck(
             collection,
             syntax.Collection.Location,
             "a 'for … in' source");
@@ -758,6 +759,7 @@ internal sealed partial class StatementBinder
                     boundCondition = conditionSyntax == null
                         ? null
                         : bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
+                    ApplyHeaderCallableEffects(boundCondition);
                     boundPost = postSyntax == null ? null : BindStatement(postSyntax);
                     var (patternWhenTrue, _) = PatternVariables.Classify(boundCondition);
                     var boundBody = PatternVariables.BindInScope(
@@ -788,6 +790,7 @@ internal sealed partial class StatementBinder
             return Invariant.Required(BindStatement(bodySyntax), "a loop body has a bound statement");
         }
 
+        binderCtx.BeginNarrowingProof(loopNarrow);
         binderCtx.NarrowedVariables.Add(loopNarrow);
         try
         {
@@ -795,7 +798,7 @@ internal sealed partial class StatementBinder
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            binderCtx.EndNarrowingProof();
         }
     }
 
@@ -1000,7 +1003,7 @@ internal sealed partial class StatementBinder
         // than passing through `BindConversion`. It also needs the unwrap for
         // §5's reason: `IsLockableReferenceType` below dispatches on the
         // target's symbol KIND, which a platform wrapper is not.
-        target = PlatformCoercion.InsertCheck(
+        target = binderCtx.InsertPlatformCheck(
             target,
             syntax.Expression.Location,
             "a 'lock' subject");
@@ -1165,13 +1168,22 @@ internal sealed partial class StatementBinder
         // enclosing block, matching C#'s `goto`/label semantics).
         if (!IsLabelableLoop(inner))
         {
+            var reachableOnEntry = currentStatementListFallsThrough;
             var userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location);
             var boundInner = BindStatement(inner);
-            return new BoundBlockStatement(
+            var labeledStatement = new BoundBlockStatement(
                 syntax,
                 ImmutableArray.Create<BoundStatement>(
                     new BoundLabelStatement(syntax, userLabel),
                     Invariant.Required(boundInner, "a labeled statement has a bound inner statement")));
+            if (!reachableOnEntry
+                && currentStatementListFallsThrough
+                && !EndsInUnconditionalExit(boundInner))
+            {
+                internallyReachableFallthroughStatements.Add(labeledStatement);
+            }
+
+            return labeledStatement;
         }
 
         // ADR-0070: a label that shadows an enclosing live loop's label is a

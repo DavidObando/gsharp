@@ -317,6 +317,9 @@ public sealed class Binder
                 ParameterAllowedTargets,
                 "a parameter declaration",
                 System.AttributeTargets.Parameter),
+            reportUnsafeBackwardGotoNarrowings: () => Statements.FinalizeNestedUserLabelNarrowings(),
+            isolateExternalCallableAliases: () => Statements.IsolateExternalCallableAliases(),
+            restoreExternalCallableAliases: saved => Statements.RestoreExternalCallableAliases(saved),
             bindLocalVariable: (identifier, isReadOnly, type) =>
             {
                 return Declarations.BindVariableDeclaration(identifier, isReadOnly, type);

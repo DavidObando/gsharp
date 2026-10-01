@@ -110,10 +110,22 @@ internal sealed partial class StatementBinder
     /// </summary>
     private readonly Action<IReadOnlyList<BoundFunctionLiteralExpression>>? reconcileGenericLocalFunctionGroupCaptures;
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
+    private readonly Stack<FinallyClauseSyntax> activeFinallyClauses = new();
+    private readonly Stack<BoundStatement> activeCleanupStatements = new();
+    private readonly Stack<GotoCleanupRegion> activeCleanupRegions = new();
+    private readonly Dictionary<FinallyClauseSyntax, BoundStatement> boundFinallyBlocks = new();
+    private readonly Dictionary<FinallyClauseSyntax, ImmutableArray<VariableSymbol>>
+        finallyEntryExternalCallableAliases = new();
+    private readonly Dictionary<BoundStatement, FinallyFlowSummary> finallyFlowSummaries = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
         new(StringComparer.Ordinal);
     private readonly List<(string LabelName, TextLocation Location, ImmutableArray<SyntaxNode> SourceRegions)>
         userGotoHandlerRegions = new();
+    private readonly HashSet<BoundStatement> internallyReachableFallthroughStatements = new();
+    private readonly HashSet<BoundLabel> internallyReachableLoopExits = new();
+    private readonly HashSet<BoundLabel> internallyReachableLoopBacks = new();
+    private int internalReachabilityGeneration;
+    private bool currentStatementListFallsThrough = true;
     private int usingInitializationFlagCount;
 
     public StatementBinder(
@@ -285,6 +297,7 @@ internal sealed partial class StatementBinder
     internal BoundStatement BindBlockStatement(BlockStatementSyntax syntax)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var reachableOnEntry = currentStatementListFallsThrough;
         scope = new BoundScope(scope);
 
         // ADR-0175 (#3820/#3824): a block statement accepts only the
@@ -329,12 +342,16 @@ internal sealed partial class StatementBinder
             : default;
         using (binderCtx.PushUnsafeContext(entersUnsafe))
         {
-            BindBlockStatements(syntax.Statements, 0, statements);
+            var fallsThrough = BindBlockStatements(syntax.Statements, 0, statements);
+            var block = new BoundBlockStatement(syntax, statements.ToImmutable());
+            if (!reachableOnEntry && fallsThrough)
+            {
+                internallyReachableFallthroughStatements.Add(block);
+            }
+
+            scope = scope.Pop();
+            return block;
         }
-
-        scope = scope.Pop();
-
-        return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
     internal ImmutableArray<BoundStatement> BindStatementList(
@@ -343,7 +360,7 @@ internal sealed partial class StatementBinder
         Func<BoundStatement>? trailingStatement = null)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement);
+        _ = BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement);
         return statements.ToImmutable();
     }
 
@@ -564,7 +581,7 @@ internal sealed partial class StatementBinder
         return end - 1;
     }
 
-    private void BindBlockStatements(
+    private bool BindBlockStatements(
         ImmutableArray<StatementSyntax> statementSyntaxes,
         int startIndex,
         ImmutableArray<BoundStatement>.Builder statements,
@@ -576,6 +593,11 @@ internal sealed partial class StatementBinder
         // named fields are added to this frame and remain narrowed for all
         // subsequent statements in the block (until assignment invalidates them).
         var memberNotNullFrame = new Dictionary<AccessPath, TypeSymbol>();
+        var inheritedAssignmentGenerations =
+            new Dictionary<VariableSymbol, int>(binderCtx.AssignmentNarrowingGenerations);
+        var inheritedFallthrough = currentStatementListFallsThrough;
+        var inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel;
+        binderCtx.BeginNarrowingProof(memberNotNullFrame);
         binderCtx.NarrowedVariables.Add(memberNotNullFrame);
         try
         {
@@ -659,9 +681,17 @@ internal sealed partial class StatementBinder
 
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
+                    var cleanupEffect = new BoundExpressionStatement(null, defer.Cleanup);
+                    var fallsThrough = BindWithinSynthesizedCleanup(
+                        cleanupEffect,
+                        () => BindBlockStatements(
+                            statementSyntaxes,
+                            i + 1,
+                            innerStatements,
+                            beforeBind,
+                            trailingStatement));
                     statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), defer.Cleanup, shieldCleanup: true));
-                    return;
+                    return fallsThrough;
                 }
 
                 if (statementSyntax is UsingStatementSyntax usingSyntax)
@@ -694,13 +724,21 @@ internal sealed partial class StatementBinder
                         Invariant.Required(usingLowering.Initialized, "a valid using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
+                    var cleanupEffect = new BoundExpressionStatement(null, usingLowering.Cleanup);
+                    var fallsThrough = BindWithinSynthesizedCleanup(
+                        cleanupEffect,
+                        () => BindBlockStatements(
+                            statementSyntaxes,
+                            i + 1,
+                            innerStatements,
+                            beforeBind,
+                            trailingStatement));
                     statements.Add(BuildCleanupTryStatement(
                         innerStatements.ToImmutable(),
                         usingLowering.Cleanup,
                         usingLowering.Initialized,
                         usingResource));
-                    return;
+                    return fallsThrough;
                 }
 
                 if (statementSyntax is AwaitUsingStatementSyntax awaitUsingSyntax)
@@ -732,13 +770,21 @@ internal sealed partial class StatementBinder
                         Invariant.Required(awaitUsingLowering.Initialized, "a valid await using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
+                    var cleanupEffect = new BoundExpressionStatement(null, awaitUsingLowering.Cleanup);
+                    var fallsThrough = BindWithinSynthesizedCleanup(
+                        cleanupEffect,
+                        () => BindBlockStatements(
+                            statementSyntaxes,
+                            i + 1,
+                            innerStatements,
+                            beforeBind,
+                            trailingStatement));
                     statements.Add(BuildCleanupTryStatement(
                         innerStatements.ToImmutable(),
                         awaitUsingLowering.Cleanup,
                         awaitUsingLowering.Initialized,
                         awaitUsingResource));
-                    return;
+                    return fallsThrough;
                 }
 
                 // ADR-0071 / issue #708: `guard let` extends the enclosing block's
@@ -754,6 +800,7 @@ internal sealed partial class StatementBinder
                     continue;
                 }
 
+                var externalCallableAliasesAtEntry = externalCallableAliases.ToArray();
                 var statement = BindStatement(statementSyntax);
                 if (statement == null)
                 {
@@ -783,6 +830,7 @@ internal sealed partial class StatementBinder
                 // narrowing from the current frame so subsequent reads in this
                 // block see the variable at its declared (nullable) type again.
                 InvalidateNarrowingsForAssignedVariables(statementSyntax, statement);
+                RestoreEarlyExitLiftsWrittenOnlyByCondition(statement, memberNotNullFrame);
 
                 // Issue #1123: assignment-based smart cast. After invalidation
                 // (which clears any stale narrowing on the assigned variable),
@@ -792,6 +840,7 @@ internal sealed partial class StatementBinder
                 // later mutation invalidates it again. Runs last so it wins over
                 // the invalidation pass for the same statement.
                 ApplyAssignmentNarrowing(statement, memberNotNullFrame);
+                UpdateExternalCallableAliases(statement, externalCallableAliasesAtEntry);
 
                 // Issue #2159: `if`-join narrowing. After invalidation (which
                 // drops any narrowing the `if` mutates), lift a nullable `var`
@@ -800,17 +849,45 @@ internal sealed partial class StatementBinder
                 // type. Runs after invalidation for the same reason as the
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame);
+                ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame);
+                var hasInternallyReachableFallthrough =
+                    HasInternallyReachableFallthrough(statement);
+                var canCompleteNormally = CanCompleteNormally(statement);
+                currentStatementListFallsThrough =
+                    (currentStatementListFallsThrough || hasInternallyReachableFallthrough)
+                    && canCompleteNormally;
+                if (!canCompleteNormally
+                    && !hasInternallyReachableFallthrough)
+                {
+                    binderCtx.PotentialReachabilityLabel = null;
+                }
             }
 
             if (trailingStatement != null)
             {
                 statements.Add(trailingStatement());
             }
+
+            return currentStatementListFallsThrough;
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            binderCtx.EndNarrowingProof();
+            binderCtx.AssignmentNarrowingGenerations.Clear();
+            foreach (var entry in inheritedAssignmentGenerations)
+            {
+                binderCtx.AssignmentNarrowingGenerations.Add(entry.Key, entry.Value);
+            }
+
+            currentStatementListFallsThrough = inheritedFallthrough;
+            binderCtx.PotentialReachabilityLabel = inheritedPotentialReachabilityLabel;
         }
+    }
+
+    private static bool IsSyntacticallyInfiniteLoop(BoundForInfiniteStatement statement)
+    {
+        return statement.Syntax is ForInfiniteStatementSyntax
+            or LabeledStatementSyntax { Statement: ForInfiniteStatementSyntax };
     }
 
     private static BoundExpressionStatement BuildInitializedAssignment(
@@ -879,6 +956,21 @@ internal sealed partial class StatementBinder
                         null,
                         ImmutableArray.Create<BoundStatement>(
                             new BoundExpressionStatement(null, runtime.BindContextDispose(shield)))))));
+    }
+
+    private T BindWithinSynthesizedCleanup<T>(BoundStatement cleanup, Func<T> bind)
+    {
+        activeCleanupStatements.Push(cleanup);
+        activeCleanupRegions.Push(new GotoCleanupRegion(null, cleanup));
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            activeCleanupRegions.Pop();
+            activeCleanupStatements.Pop();
+        }
     }
 
     private BoundTryStatement BuildCleanupTryStatement(

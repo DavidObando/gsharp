@@ -5329,6 +5329,91 @@ internal sealed class MemberLookup
         return ClrNullability.GetPropertyTypeSymbol(closedProperty);
     }
 
+    internal static TypeSymbol GetDeclaredAccessPathType(AccessPath path, TypeSymbol fallback)
+    {
+        var receiverType = path.Root.Type;
+        foreach (var member in path.Members)
+        {
+            receiverType = receiverType is NullableTypeSymbol nullable
+                ? nullable.UnderlyingType
+                : receiverType;
+            receiverType = member.SourceSymbol switch
+            {
+                FieldSymbol field => FindSourceFieldType(receiverType, field) ?? field.Type,
+                PropertySymbol property => FindSourcePropertyType(receiverType, property) ?? property.Type,
+                VariableSymbol variable => variable.Type,
+                _ => member.ClrMember switch
+                {
+                    FieldInfo field => GetClrFieldTypeSymbol(receiverType, field),
+                    PropertyInfo property => GetClrPropertyTypeSymbol(receiverType, property),
+                    _ => fallback,
+                },
+            };
+        }
+
+        return receiverType;
+
+        static TypeSymbol? FindSourceFieldType(TypeSymbol receiver, FieldSymbol selected)
+        {
+            if (receiver is not StructSymbol structType)
+            {
+                return null;
+            }
+
+            foreach (var owner in structType.GetHierarchy())
+            {
+                foreach (var candidate in owner.Definition.Fields)
+                {
+                    if (ReferenceEquals(candidate, selected)
+                        || (selected.Declaration != null
+                            && ReferenceEquals(candidate.Declaration, selected.Declaration)))
+                    {
+                        return owner.SubstituteMemberType(candidate.Type);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        static TypeSymbol? FindSourcePropertyType(TypeSymbol receiver, PropertySymbol selected)
+        {
+            if (receiver is StructSymbol structType)
+            {
+                foreach (var owner in structType.GetHierarchy())
+                {
+                    foreach (var candidate in owner.Definition.Properties)
+                    {
+                        if (ReferenceEquals(candidate, selected)
+                            || (selected.Declaration != null
+                                && ReferenceEquals(candidate.Declaration, selected.Declaration)))
+                        {
+                            return owner.SubstituteMemberType(candidate.Type);
+                        }
+                    }
+                }
+            }
+            else if (receiver is InterfaceSymbol interfaceType)
+            {
+                foreach (var owner in interfaceType.SelfAndAllBaseInterfaces())
+                {
+                    owner.EnsureMembersResolved();
+                    foreach (var candidate in owner.Definition.Properties)
+                    {
+                        if (ReferenceEquals(candidate, selected)
+                            || (selected.Declaration != null
+                                && ReferenceEquals(candidate.Declaration, selected.Declaration)))
+                        {
+                            return owner.SubstituteMemberType(candidate.Type);
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+    }
+
     /// <summary>
     /// Resolves a CLR field type through receiver-carried generic nullability.
     /// </summary>

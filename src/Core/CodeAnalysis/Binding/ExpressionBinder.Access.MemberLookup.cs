@@ -157,12 +157,862 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax rightPart,
         ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
-        => BindAccessorStepAfterPlatformReceiverCheck(
+    {
+        var result = BindAccessorStepAfterPlatformReceiverCheck(
             CheckPlatformReceiver(receiver, receiverSyntax?.Location ?? rightPart.Location),
             classSymbol == null ? null : WithFamilyAccess(classSymbol),
             rightPart,
             receiverSyntax,
             receiverStart);
+        var unwrappedResult = UnwrapTransparentMemberResult(result);
+        var recoveredDeclaredReceiver = false;
+        if (receiver != null
+            && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var receiverPath, out _)
+            && TryGetDeclaredReceiver(receiverPath, receiver) is { } declaredCallReceiver
+            && rightPart is CallExpressionSyntax callSyntax
+            && unwrappedResult is BoundUserInstanceCallExpression call
+            && FindDeclaredMethod(
+                declaredCallReceiver.Type,
+                callSyntax.Identifier.ValueText,
+                call.Method,
+                receiver.Type) is { } declaredMethod)
+        {
+            binderCtx.UntrackBackwardGotoNarrowingConversion(
+                receiverPath,
+                receiverSyntax?.Location ?? rightPart.Location);
+            receiver = declaredCallReceiver;
+            result = RewrapTransparentMemberResult(result, new BoundUserInstanceCallExpression(
+                call.Syntax,
+                receiver,
+                declaredMethod,
+                call.Arguments,
+                call.Type,
+                call.ConstrainedReceiverTypeParameter,
+                call.ConstrainedInterfaceType)
+            {
+                MethodTypeArguments = call.MethodTypeArguments,
+            });
+            recoveredDeclaredReceiver = true;
+        }
+        else if (receiver != null
+            && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out receiverPath, out _)
+            && TryGetDeclaredReceiver(receiverPath, receiver) is { } declaredClrReceiver
+            && rightPart is CallExpressionSyntax
+            && unwrappedResult is BoundImportedInstanceCallExpression importedCall
+            && FindDeclaredClrMethod(
+                declaredClrReceiver.Type,
+                importedCall.Method,
+                importedCall.Type,
+                receiver.Type) is { } declaredClrMethod)
+        {
+            binderCtx.UntrackBackwardGotoNarrowingConversion(
+                receiverPath,
+                receiverSyntax?.Location ?? rightPart.Location);
+            receiver = declaredClrReceiver;
+            result = RewrapTransparentMemberResult(result, new BoundImportedInstanceCallExpression(
+                importedCall.Syntax,
+                declaredClrReceiver,
+                declaredClrMethod,
+                importedCall.Type,
+                importedCall.Arguments,
+                importedCall.ArgumentRefKinds,
+                importedCall.TypeArgumentSymbols,
+                importedCall.ConstrainedReceiverTypeParameter,
+                importedCall.ConstrainedInterfaceType,
+                importedCall.IsNonVirtualBaseCall));
+            recoveredDeclaredReceiver = true;
+        }
+        else if (receiver != null
+            && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out receiverPath, out _)
+            && TryGetDeclaredReceiver(receiverPath, receiver) is { } declaredMemberReceiver
+            && rightPart is NameExpressionSyntax)
+        {
+            var diagnosticCount = Diagnostics.Count;
+            var declaredResult = BindAccessorStepAfterPlatformReceiverCheck(
+                declaredMemberReceiver,
+                classSymbol == null ? null : WithFamilyAccess(classSymbol),
+                rightPart,
+                receiverSyntax,
+                receiverStart);
+            Diagnostics.TruncateTo(diagnosticCount);
+
+            // Rebind through the declared receiver only when the declared
+            // lookup preserves the result type: a covariant override yields a
+            // more derived type than the base slot, and replacing the bound
+            // result would widen it (fail-safe: keep the original binding).
+            if (declaredResult is not BoundErrorExpression
+                && RefersToSameMemberSlot(result, declaredResult, receiver.Type)
+                && Equals(
+                    UnwrapTransparentMemberResult(result).Type,
+                    UnwrapTransparentMemberResult(declaredResult).Type))
+            {
+                binderCtx.UntrackBackwardGotoNarrowingConversion(
+                    receiverPath,
+                    receiverSyntax?.Location ?? rightPart.Location);
+                receiver = declaredMemberReceiver;
+                result = declaredResult;
+                recoveredDeclaredReceiver = true;
+            }
+        }
+
+        if (!recoveredDeclaredReceiver)
+        {
+            TrackBackwardGotoNarrowingAccess(receiver, rightPart, result);
+        }
+
+        return result;
+    }
+
+    private BoundExpression? TryGetDeclaredReceiver(
+        AccessPath path,
+        BoundExpression receiver)
+    {
+        if (!path.HasMembers)
+        {
+            return path.Root.Type is NullableTypeSymbol
+                ? null
+                : DeclaredReceiver(path.Root, receiver.Syntax);
+        }
+
+        var declaredType = MemberLookup.GetDeclaredAccessPathType(path, receiver.Type);
+        if (declaredType is NullableTypeSymbol)
+        {
+            return null;
+        }
+
+        switch (receiver)
+        {
+            case BoundFieldAccessExpression field:
+                return new BoundFieldAccessExpression(
+                    field.Syntax,
+                    field.Receiver,
+                    field.StructType,
+                    field.Field,
+                    field.SubstitutedType,
+                    narrowedType: null);
+
+            case BoundPropertyAccessExpression property:
+                return new BoundPropertyAccessExpression(
+                    property.Syntax,
+                    property.Receiver,
+                    property.StructType,
+                    property.Property,
+                    property.SubstitutedType,
+                    narrowedType: null,
+                    property.InterfaceType);
+
+            case BoundClrPropertyAccessExpression property:
+                return new BoundClrPropertyAccessExpression(
+                    property.Syntax,
+                    property.Receiver,
+                    property.Member,
+                    declaredType,
+                    property.StaticContainerType,
+                    property.ConstrainedReceiverTypeParameter,
+                    property.ConstrainedInterfaceType);
+        }
+
+        for (var candidate = receiver;
+             candidate is BoundConversionExpression conversion;
+             candidate = conversion.Expression)
+        {
+            if (Equals(conversion.Expression.Type, declaredType)
+                && Equals(SmartCastStability.TryGetStablePath(conversion.Expression), path))
+            {
+                return conversion.Expression;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool RefersToSameMemberSlot(
+        BoundExpression selected,
+        BoundExpression declared,
+        TypeSymbol receiverType)
+    {
+        selected = UnwrapTransparentMemberResult(selected);
+        declared = UnwrapTransparentMemberResult(declared);
+        return (selected, declared) switch
+        {
+            (BoundFieldAccessExpression left, BoundFieldAccessExpression right) =>
+                ReferenceEquals(left.Field, right.Field)
+                || (left.Field.Declaration != null
+                    && ReferenceEquals(left.Field.Declaration, right.Field.Declaration)),
+            (BoundPropertyAccessExpression left, BoundPropertyAccessExpression right) =>
+                SamePropertySlot(left.Property, right.Property, MemberOperation.Read, receiverType),
+            (BoundClrPropertyAccessExpression left, BoundClrPropertyAccessExpression right) =>
+                SameClrMemberSlot(left.Member, right.Member, MemberOperation.Read),
+            (BoundMethodGroupExpression left, BoundMethodGroupExpression right) =>
+                left.Candidates.Length == right.Candidates.Length
+                && left.Candidates.All(candidate =>
+                    right.Candidates.Any(other => SameMethodSlot(candidate, other))),
+            (BoundClrMethodGroupExpression left, BoundClrMethodGroupExpression right) =>
+                left.Candidates.Length == right.Candidates.Length
+                && left.Candidates.All(candidate =>
+                    right.Candidates.Any(other => SameClrMethodSlot(candidate, other))),
+            _ => false,
+        };
+    }
+
+    private static BoundExpression UnwrapTransparentMemberResult(BoundExpression expression)
+    {
+        while (expression is BoundDereferenceExpression dereference)
+        {
+            expression = dereference.Operand;
+        }
+
+        return expression;
+    }
+
+    private static BoundExpression RewrapTransparentMemberResult(
+        BoundExpression original,
+        BoundExpression replacement)
+        => original is BoundDereferenceExpression dereference
+            ? new BoundDereferenceExpression(
+                dereference.Syntax,
+                RewrapTransparentMemberResult(dereference.Operand, replacement))
+            : replacement;
+
+    private enum MemberOperation
+    {
+        Read,
+        Write,
+    }
+
+    private static bool SamePropertySlot(
+        PropertySymbol selected,
+        PropertySymbol declared,
+        MemberOperation operation,
+        TypeSymbol receiverType,
+        InterfaceSymbol? declaredOwner = null)
+    {
+        if (!HasRequiredAccessor(selected, operation)
+            || !HasRequiredAccessor(declared, operation))
+        {
+            return false;
+        }
+
+        for (var current = selected; current != null; current = current.OverriddenProperty)
+        {
+            if (ReferenceEquals(current, declared)
+                || (current.Declaration != null
+                    && ReferenceEquals(current.Declaration, declared.Declaration)))
+            {
+                return true;
+            }
+        }
+
+        var selectedAccessor = operation == MemberOperation.Read
+            ? selected.GetterSymbol
+            : selected.SetterSymbol;
+        var declaredAccessor = operation == MemberOperation.Read
+            ? declared.GetterSymbol
+            : declared.SetterSymbol;
+        if (selectedAccessor != null
+            && declaredAccessor != null
+            && (SameMethodSlot(selectedAccessor, declaredAccessor)
+                || ReferenceEquals(selectedAccessor.ExplicitInterfaceMember, declaredAccessor)
+                || ReferenceEquals(selected.ExplicitInterfaceMember, declared)))
+        {
+            return true;
+        }
+
+        if (!CanRecoverInterfacePropertySlot(selected, declared, operation, receiverType))
+        {
+            return false;
+        }
+
+        return selected.Name == declared.Name
+                && Equals(
+                    selected.Type,
+                    declaredOwner?.SubstituteMemberType(declared.Type) ?? declared.Type)
+                && selected.ReturnRefKind == declared.ReturnRefKind
+                && selected.Parameters.Length == declared.Parameters.Length
+                && selected.Parameters.Zip(declared.Parameters).All(pair =>
+                    pair.First.RefKind == pair.Second.RefKind
+                    && Equals(
+                        pair.First.Type,
+                        declaredOwner?.SubstituteMemberType(pair.Second.Type) ?? pair.Second.Type));
+
+        static bool HasRequiredAccessor(PropertySymbol property, MemberOperation operation)
+            => operation == MemberOperation.Read ? property.HasGetter : property.HasSetter;
+    }
+
+    private static bool CanRecoverInterfacePropertySlot(
+        PropertySymbol selected,
+        PropertySymbol declared,
+        MemberOperation operation,
+        TypeSymbol receiverType)
+    {
+        var selectedAccessor = operation == MemberOperation.Read
+            ? selected.GetterSymbol
+            : selected.SetterSymbol;
+        var declaredAccessor = operation == MemberOperation.Read
+            ? declared.GetterSymbol
+            : declared.SetterSymbol;
+        var declaredOwner = declared.ContainingType ?? declaredAccessor?.ContainingType;
+        if (declaredOwner is not InterfaceSymbol
+            || selected.HasExplicitInterfaceClause
+            || (operation == MemberOperation.Read && (!selected.HasGetter || !declared.HasGetter))
+            || (operation == MemberOperation.Write && (!selected.HasSetter || !declared.HasSetter)))
+        {
+            return false;
+        }
+
+        // The competing explicit implementation must be looked up on the
+        // narrowed receiver's own hierarchy: for an inherited public member the
+        // selected owner is the base type, which cannot see a derived class
+        // re-implementing the interface explicitly. An unresolvable receiver
+        // keeps the concrete access (fail-safe).
+        if (GetReceiverStruct(receiverType) is not { } implementationType)
+        {
+            return false;
+        }
+
+        return !implementationType.GetHierarchy().SelectMany(type => type.Properties).Any(property =>
+            !ReferenceEquals(property, selected)
+            && (ReferenceEquals(property.ExplicitInterfaceMember, declared)
+                || (operation == MemberOperation.Read
+                    && ReferenceEquals(property.GetterSymbol?.ExplicitInterfaceMember, declared.GetterSymbol))
+                || (operation == MemberOperation.Write
+                    && ReferenceEquals(property.SetterSymbol?.ExplicitInterfaceMember, declared.SetterSymbol))));
+    }
+
+    private static StructSymbol? GetReceiverStruct(TypeSymbol receiverType)
+        => (receiverType is NullableTypeSymbol nullable ? nullable.UnderlyingType : receiverType) as StructSymbol;
+
+    private static bool SameMethodSlot(FunctionSymbol left, FunctionSymbol right)
+    {
+        for (var current = left; current != null; current = current.OverriddenMethod)
+        {
+            if (ReferenceEquals(current, right)
+                || (current.Declaration != null
+                    && ReferenceEquals(current.Declaration, right.Declaration)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SameClrMemberSlot(
+        System.Reflection.MemberInfo left,
+        System.Reflection.MemberInfo right,
+        MemberOperation operation)
+    {
+        return left switch
+        {
+            System.Reflection.MethodInfo leftMethod when right is System.Reflection.MethodInfo rightMethod =>
+                SameClrMethodSlot(leftMethod, rightMethod),
+            System.Reflection.PropertyInfo leftProperty when right is System.Reflection.PropertyInfo rightProperty =>
+                SameClrPropertySlot(leftProperty, rightProperty, operation),
+            _ => left.MetadataToken == right.MetadataToken
+                && ReferenceEquals(left.Module, right.Module),
+        };
+    }
+
+    private static bool SameClrMethodSlot(
+        System.Reflection.MethodInfo left,
+        System.Reflection.MethodInfo right)
+    {
+        try
+        {
+            left = left.GetBaseDefinition();
+            right = right.GetBaseDefinition();
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            // MetadataLoadContext cannot expose override chains, so only exact
+            // member identity is safe.
+        }
+
+        return left.MetadataToken == right.MetadataToken
+            && ReferenceEquals(left.Module, right.Module);
+    }
+
+    private static bool SameClrPropertySlot(
+        System.Reflection.PropertyInfo left,
+        System.Reflection.PropertyInfo right,
+        MemberOperation operation)
+    {
+        var leftAccessor = operation == MemberOperation.Read ? left.GetMethod : left.SetMethod;
+        var rightAccessor = operation == MemberOperation.Read ? right.GetMethod : right.SetMethod;
+        return leftAccessor != null
+            && rightAccessor != null
+            && SameClrMethodSlot(leftAccessor, rightAccessor);
+    }
+
+    private static BoundExpression DeclaredReceiver(VariableSymbol variable, SyntaxNode? syntax)
+    {
+        return variable.Type is NullableTypeSymbol nullable
+            ? new BoundVariableExpression(syntax, variable, nullable.UnderlyingType)
+            : new BoundVariableExpression(syntax, variable);
+    }
+
+    private static FunctionSymbol? FindDeclaredMethod(
+        TypeSymbol declaredType,
+        string name,
+        FunctionSymbol selected,
+        TypeSymbol receiverType)
+    {
+        declaredType = declaredType is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : declaredType;
+        var candidateArray = Array.Empty<FunctionSymbol>();
+        if (declaredType is StructSymbol structType)
+        {
+            candidateArray = structType.GetMethodsIncludingInherited(name).ToArray();
+        }
+        else if (declaredType is InterfaceSymbol interfaceType)
+        {
+            candidateArray = interfaceType.SelfAndAllBaseInterfaces().SelectMany(current => current.GetMethods(name)).ToArray();
+        }
+
+        var overridden = selected;
+        while (overridden != null)
+        {
+            var exact = candidateArray.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate, overridden)
+                || (overridden.Declaration != null
+                    && ReferenceEquals(candidate.Declaration, overridden.Declaration)));
+            if (exact != null)
+            {
+                return exact;
+            }
+
+            overridden = overridden.OverriddenMethod;
+        }
+
+        if (selected.ExplicitInterfaceMember is { } explicitInterfaceMember)
+        {
+            var exactInterfaceMatch = candidateArray.FirstOrDefault(candidate =>
+                SameMethodSlot(explicitInterfaceMember, candidate));
+            if (exactInterfaceMatch != null)
+            {
+                return exactInterfaceMatch;
+            }
+        }
+
+        if (declaredType is not InterfaceSymbol)
+        {
+            return null;
+        }
+
+        var interfaceMatches = candidateArray
+            .Where(candidate =>
+                HasSameCallableSignature(candidate, selected)
+                && CanRecoverInterfaceMethodSlot(selected, candidate, receiverType))
+            .Take(2)
+            .ToArray();
+        return interfaceMatches.Length == 1 ? interfaceMatches[0] : null;
+    }
+
+    private static bool CanRecoverInterfaceMethodSlot(
+        FunctionSymbol selected,
+        FunctionSymbol declared,
+        TypeSymbol receiverType)
+    {
+        if (declared.ContainingType is not InterfaceSymbol
+            || selected.HasExplicitInterfaceClause)
+        {
+            return false;
+        }
+
+        // Scan the narrowed receiver's hierarchy, not the selected member's
+        // owner (the base type for an inherited public method); an
+        // unresolvable receiver keeps the concrete call (fail-safe).
+        if (GetReceiverStruct(receiverType) is not { } implementationType)
+        {
+            return false;
+        }
+
+        return !implementationType.GetHierarchy().SelectMany(type => type.Methods).Any(method =>
+            !ReferenceEquals(method, selected)
+            && method.ExplicitInterfaceMember is { } explicitMember
+            && SameMethodSlot(explicitMember, declared));
+    }
+
+    private static System.Reflection.MethodInfo? FindDeclaredClrMethod(
+        TypeSymbol declaredType,
+        System.Reflection.MethodInfo selected,
+        TypeSymbol selectedReturnType,
+        TypeSymbol receiverType)
+    {
+        declaredType = declaredType is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : declaredType;
+        System.Reflection.MethodInfo? WithCompatibleReturn(System.Reflection.MethodInfo method)
+            => Equals(
+                MemberLookup.GetClrMethodReturnTypeSymbol(declaredType, method),
+                selectedReturnType)
+                ? method
+                : null;
+
+        var declaredClrType = declaredType.ClrType;
+        if (declaredClrType == null)
+        {
+            return IsClrMethodAvailableOnSourceType(declaredType, selected)
+                ? WithCompatibleReturn(selected)
+                : null;
+        }
+
+        var selectedDefinition = selected.IsGenericMethod
+            ? selected.GetGenericMethodDefinition()
+            : selected;
+        var flags = System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.NonPublic
+            | System.Reflection.BindingFlags.Instance;
+        var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(declaredClrType, flags);
+        foreach (var candidate in candidates)
+        {
+            var candidateDefinition = candidate.IsGenericMethod
+                ? candidate.GetGenericMethodDefinition()
+                : candidate;
+            if (!SameClrMethodSlot(selectedDefinition, candidateDefinition))
+            {
+                continue;
+            }
+
+            if (candidateDefinition.IsGenericMethodDefinition && selected.IsGenericMethod)
+            {
+                try
+                {
+                    return WithCompatibleReturn(
+                        candidateDefinition.MakeGenericMethod(selected.GetGenericArguments()));
+                }
+                catch (ArgumentException)
+                {
+                    return null;
+                }
+            }
+
+            return WithCompatibleReturn(candidate);
+        }
+
+        // Resolve the interface map and competing explicit implementations
+        // against the narrowed receiver's CLR type; selected.DeclaringType is
+        // the base type for an inherited method. An unresolvable receiver
+        // (for example a source type) keeps the concrete call (fail-safe).
+        var receiverClrType = (receiverType is NullableTypeSymbol nullableReceiver
+            ? nullableReceiver.UnderlyingType
+            : receiverType).ClrType;
+        if (!declaredClrType.IsInterface || selected.DeclaringType == null || receiverClrType == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var map = receiverClrType.GetInterfaceMap(declaredClrType);
+            for (var i = 0; i < map.TargetMethods.Length; i++)
+            {
+                if (SameClrMethodSlot(selectedDefinition, map.TargetMethods[i]))
+                {
+                    return WithCompatibleReturn(map.InterfaceMethods[i]);
+                }
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex) || ex is ArgumentException)
+        {
+        }
+
+        var implicitMatches = candidates
+            .Where(candidate => IsImplicitClrInterfaceImplementation(
+                declaredClrType,
+                receiverClrType,
+                selectedDefinition,
+                candidate))
+            .Take(2)
+            .ToArray();
+        if (implicitMatches.Length != 1)
+        {
+            return null;
+        }
+
+        var implicitMatch = implicitMatches[0];
+        if (implicitMatch.IsGenericMethodDefinition && selected.IsGenericMethod)
+        {
+            try
+            {
+                return WithCompatibleReturn(
+                    implicitMatch.MakeGenericMethod(selected.GetGenericArguments()));
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+        }
+
+        return WithCompatibleReturn(implicitMatch);
+    }
+
+    private static bool IsImplicitClrInterfaceImplementation(
+        Type interfaceType,
+        Type receiverClrType,
+        System.Reflection.MethodInfo selected,
+        System.Reflection.MethodInfo interfaceMethod)
+    {
+        if (!selected.IsPublic
+            || selected.IsStatic
+            || selected.DeclaringType == null
+            || !ClrTypeUtilities.IsAssignableByName(interfaceType, receiverClrType)
+            || HasExplicitClrInterfaceImplementation(receiverClrType, selected, interfaceMethod)
+            || selected.Name != interfaceMethod.Name
+            || selected.GetGenericArguments().Length != interfaceMethod.GetGenericArguments().Length
+            || !SameClrSignatureType(selected.ReturnType, interfaceMethod.ReturnType))
+        {
+            return false;
+        }
+
+        var selectedParameters = selected.GetParameters();
+        var interfaceParameters = interfaceMethod.GetParameters();
+        return selectedParameters.Length == interfaceParameters.Length
+            && selectedParameters.Zip(interfaceParameters).All(pair =>
+                SameClrSignatureType(pair.First.ParameterType, pair.Second.ParameterType));
+    }
+
+    private static bool HasExplicitClrInterfaceImplementation(
+        Type receiverClrType,
+        System.Reflection.MethodInfo selected,
+        System.Reflection.MethodInfo interfaceMethod)
+    {
+        var suffix = "." + interfaceMethod.Name;
+        var interfaceParameters = interfaceMethod.GetParameters();
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.NonPublic
+            | System.Reflection.BindingFlags.DeclaredOnly;
+
+        // Walk the receiver's whole hierarchy: a derived class can re-implement
+        // the interface explicitly over an inherited public method.
+        try
+        {
+            return HasExplicitImplementationInHierarchy();
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            // An unresolvable base type: assume an explicit implementation
+            // exists so no interface slot is recovered (fail-safe).
+            return true;
+        }
+
+        bool HasExplicitImplementationInHierarchy()
+        {
+            for (var current = receiverClrType; current != null; current = current.BaseType)
+            {
+                if (ClrTypeUtilities.SafeGetMethods(current, flags)
+                    .Any(candidate =>
+                        !ReferenceEquals(candidate, selected)
+                        && candidate.IsPrivate
+                        && candidate.IsVirtual
+                        && candidate.IsFinal
+                        && candidate.Name.EndsWith(suffix, StringComparison.Ordinal)
+                        && candidate.GetGenericArguments().Length == interfaceMethod.GetGenericArguments().Length
+                        && SameClrSignatureType(candidate.ReturnType, interfaceMethod.ReturnType)
+                        && candidate.GetParameters() is { } parameters
+                        && parameters.Length == interfaceParameters.Length
+                        && parameters.Zip(interfaceParameters).All(pair =>
+                            SameClrSignatureType(pair.First.ParameterType, pair.Second.ParameterType))))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    // Compares two signature types structurally. Under MetadataLoadContext the
+    // T of I.Map<T> and the T of an implementation are distinct reflection
+    // objects, so raw Type equality rejects valid generic methods. Generic
+    // parameters compare by kind and ordinal; compound types recurse.
+    private static bool SameClrSignatureType(Type left, Type right)
+    {
+        if (ReferenceEquals(left, right) || left == right)
+        {
+            return true;
+        }
+
+        if (left.IsGenericParameter || right.IsGenericParameter)
+        {
+            // Only method-level parameters match by ordinal; a type-level
+            // parameter of a different declaring type is a different type.
+            return left.IsGenericParameter
+                && right.IsGenericParameter
+                && left.DeclaringMethod != null
+                && right.DeclaringMethod != null
+                && left.GenericParameterPosition == right.GenericParameterPosition;
+        }
+
+        if (left.HasElementType || right.HasElementType)
+        {
+            return left.HasElementType
+                && right.HasElementType
+                && left.IsArray == right.IsArray
+                && left.IsByRef == right.IsByRef
+                && left.IsPointer == right.IsPointer
+                && (!left.IsArray || left.GetArrayRank() == right.GetArrayRank())
+                && left.GetElementType() is { } leftElement
+                && right.GetElementType() is { } rightElement
+                && SameClrSignatureType(leftElement, rightElement);
+        }
+
+        if (left.IsGenericType && right.IsGenericType)
+        {
+            var leftArguments = left.GetGenericArguments();
+            var rightArguments = right.GetGenericArguments();
+            return leftArguments.Length == rightArguments.Length
+                && left.GetGenericTypeDefinition() is { } leftDefinition
+                && right.GetGenericTypeDefinition() is { } rightDefinition
+                && (leftDefinition == rightDefinition
+                    || (leftDefinition.FullName != null
+                        && leftDefinition.FullName == rightDefinition.FullName
+                        && leftDefinition.Assembly.GetName().Name == rightDefinition.Assembly.GetName().Name))
+                && leftArguments.Zip(rightArguments).All(pair =>
+                    SameClrSignatureType(pair.First, pair.Second));
+        }
+
+        return false;
+    }
+
+    private static bool IsClrMethodAvailableOnSourceType(
+        TypeSymbol declaredType,
+        System.Reflection.MethodInfo selected)
+    {
+        var declaringClrType = selected.DeclaringType;
+        if (declaringClrType == null)
+        {
+            return false;
+        }
+
+        if (declaringClrType.FullName == typeof(object).FullName)
+        {
+            return true;
+        }
+
+        if (declaredType is not StructSymbol structType)
+        {
+            return false;
+        }
+
+        foreach (var current in structType.GetHierarchy())
+        {
+            if (current.ImportedBaseType?.ClrType is { } importedBase
+                && ClrTypeUtilities.IsAssignableByName(declaringClrType, importedBase))
+            {
+                return true;
+            }
+
+            if (current.ImplementedClrInterfaces.Any(type =>
+                type.ClrType is { } clrInterface
+                && ClrTypeUtilities.IsAssignableByName(declaringClrType, clrInterface)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasSameCallableSignature(FunctionSymbol candidate, FunctionSymbol selected)
+    {
+        if (candidate.Parameters.Length != selected.Parameters.Length
+            || candidate.TypeParameters.Length != selected.TypeParameters.Length
+            || candidate.ReturnRefKind != selected.ReturnRefKind)
+        {
+            return false;
+        }
+
+        var typeParameterMap = candidate.TypeParameters
+            .Zip(selected.TypeParameters)
+            .ToDictionary(pair => pair.First, pair => (TypeSymbol)pair.Second);
+        if (!Equals(
+                StructSymbol.SubstituteTypeParameters(candidate.Type, typeParameterMap),
+                selected.Type))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < candidate.Parameters.Length; i++)
+        {
+            if (candidate.Parameters[i].RefKind != selected.Parameters[i].RefKind
+                || !Equals(
+                    StructSymbol.SubstituteTypeParameters(candidate.Parameters[i].Type, typeParameterMap),
+                    selected.Parameters[i].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void TrackBackwardGotoNarrowingAccess(
+        BoundExpression? receiver,
+        ExpressionSyntax rightPart,
+        BoundExpression result)
+    {
+        result = UnwrapTransparentMemberResult(result);
+        TextLocation location;
+        string? memberName;
+        bool isInvocation;
+        switch (rightPart)
+        {
+            case NameExpressionSyntax name:
+                location = name.Location;
+                memberName = name.IdentifierToken.ValueText;
+                isInvocation = false;
+                break;
+            case CallExpressionSyntax call:
+                location = call.Identifier.Location;
+                memberName = call.Identifier.ValueText;
+                isInvocation = true;
+                break;
+            default:
+                return;
+        }
+
+        AccessPath path;
+        if (receiver is BoundVariableExpression { NarrowedType: not null } variableRead)
+        {
+            path = AccessPath.ForVariable(variableRead.Variable);
+        }
+        else if (receiver == null
+            || !SmartCastStability.TryGetStableMemberPath(receiver, out var stablePath, out _))
+        {
+            return;
+        }
+        else
+        {
+            path = Invariant.Required(
+                stablePath,
+                "a narrowed stable member receiver has an access path");
+        }
+
+        var kind = isInvocation
+            ? BackwardGotoNarrowingUseKind.Function
+            : BackwardGotoNarrowingUseKind.Member;
+        var requiredType = result switch
+        {
+            BoundUserInstanceCallExpression call => call.Method.ContainingType,
+            BoundImportedInstanceCallExpression call => call.CalledFunction.ContainingType,
+            BoundFieldAccessExpression field => field.Field.ContainingType,
+            BoundPropertyAccessExpression property => property.Property.ContainingType,
+            BoundClrPropertyAccessExpression property => property.ReferencedProperty?.ContainingType,
+            BoundMethodGroupExpression group => group.Function?.ContainingType,
+            BoundClrMethodGroupExpression group => group.Method?.ContainingType,
+            _ => null,
+        };
+        binderCtx.TrackBackwardGotoNarrowingUse(
+            path,
+            location,
+            memberName,
+            kind,
+            requiredType: requiredType);
+    }
 
     /// <summary>
     /// ADR-0186 §4 and §5, in one move: replaces a platform-typed receiver
@@ -1277,6 +2127,7 @@ internal sealed partial class ExpressionBinder
         SeparatedSyntaxList<ExpressionSyntax> indexSyntaxes,
         TextLocation targetLocation)
     {
+        TrackBackwardGotoIndexUse(target, targetLocation);
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
 
         if (rectangular == null && target.Type is StructSymbol or InterfaceSymbol)
@@ -1507,6 +2358,8 @@ internal sealed partial class ExpressionBinder
         TextLocation targetLocation,
         BoundExpression? boundIndexOverride = null)
     {
+        TrackBackwardGotoIndexUse(target, targetLocation);
+
         // ADR-0186 §4/§5: an indexer receiver is a receiver. Checked and
         // unwrapped here for the same two reasons `BindAccessorStep` does it
         // — see `CheckPlatformReceiver`. Without the unwrap, indexing a
@@ -1782,6 +2635,27 @@ internal sealed partial class ExpressionBinder
                 out var readReported,
                 out var readView))
             {
+                ReplaceBackwardGotoIndexUse(
+                    target,
+                    targetLocation,
+                    readIndexer.ContainingType ?? readView ?? target.Type);
+                if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var targetPath, out _)
+                    && !targetPath.HasMembers
+                    && targetPath.Root.Type is not NullableTypeSymbol
+                    && FindDeclaredIndexer(
+                        targetPath.Root.Type,
+                        readIndexer,
+                        MemberOperation.Read,
+                        target.Type,
+                        readSubstitution) is { } declaredIndexer)
+                {
+                    binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath.Root, targetLocation);
+                    target = DeclaredReceiver(targetPath.Root, target.Syntax);
+                    readIndexer = declaredIndexer.Indexer;
+                    readSubstitution = declaredIndexer.Substitution;
+                    readView = declaredIndexer.View ?? target.Type;
+                }
+
                 return BindUserIndexerRead(
                     ViewIndexerReceiver(target, readView, targetLocation),
                     readIndexer,
@@ -1808,6 +2682,80 @@ internal sealed partial class ExpressionBinder
         return new BoundErrorExpression(null);
     }
 
+    private VisibleUserIndexer? FindDeclaredIndexer(
+        TypeSymbol declaredType,
+        PropertySymbol indexer,
+        MemberOperation operation,
+        TypeSymbol receiverType,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? selectedSubstitution)
+    {
+        declaredType = declaredType is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : declaredType;
+        var candidates = GetVisibleUserIndexers(declaredType);
+        var overridden = indexer;
+        while (overridden != null)
+        {
+            foreach (var candidate in candidates)
+            {
+                if (ReferenceEquals(candidate.Indexer, overridden)
+                || (overridden.Declaration != null
+                    && ReferenceEquals(candidate.Indexer.Declaration, overridden.Declaration)))
+                {
+                    // A covariant override has a different result type than the
+                    // declared slot; keep the original binding (fail-safe).
+                    return SamePropertySlot(indexer, candidate.Indexer, operation, receiverType)
+                        && Equals(
+                            SubstituteIndexerType(candidate.Indexer.Type, candidate.Substitution),
+                            SubstituteIndexerType(indexer.Type, selectedSubstitution))
+                        ? candidate
+                        : null;
+                }
+            }
+
+            overridden = overridden.OverriddenProperty;
+        }
+
+        if (declaredType is not InterfaceSymbol)
+        {
+            return null;
+        }
+
+        var interfaceMatches = candidates
+            .Where(candidate =>
+                CanRecoverInterfacePropertySlot(indexer, candidate.Indexer, operation, receiverType)
+                && HasSameIndexerSignature(candidate.Indexer, indexer, candidate.Substitution))
+            .Take(2)
+            .ToArray();
+        return interfaceMatches.Length == 1 ? interfaceMatches[0] : null;
+    }
+
+    private bool HasSameIndexerSignature(
+        PropertySymbol candidate,
+        PropertySymbol selected,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution)
+    {
+        if (candidate.Parameters.Length != selected.Parameters.Length
+            || candidate.ReturnRefKind != selected.ReturnRefKind
+            || !Equals(SubstituteIndexerType(candidate.Type, substitution), selected.Type))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < candidate.Parameters.Length; i++)
+        {
+            if (candidate.Parameters[i].RefKind != selected.Parameters[i].RefKind
+                || !Equals(
+                    SubstituteIndexerType(candidate.Parameters[i].Type, substitution),
+                    selected.Parameters[i].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// ADR-0149 follow-up (issue #2370): the interface counterpart of
     /// <see cref="TryGetUserIndexer(StructSymbol, out PropertySymbol, out Dictionary{TypeParameterSymbol, TypeSymbol})"/>.
@@ -1820,6 +2768,51 @@ internal sealed partial class ExpressionBinder
     /// members), building the type-parameter substitution for a constructed
     /// generic receiver (e.g. <c>IBox[int32]</c> over <c>interface IBox[T]</c>).
     /// </summary>
+    private void TrackBackwardGotoIndexUse(
+        BoundExpression target,
+        TextLocation location,
+        TypeSymbol? requiredType = null)
+    {
+        if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var path, out _))
+        {
+            if (requiredType == null
+                && target.Type is StructSymbol structType
+                && TryGetUserIndexer(structType, out var structIndexer, out _))
+            {
+                requiredType = structIndexer.ContainingType;
+            }
+            else if (requiredType == null
+                && target.Type is InterfaceSymbol interfaceType
+                && TryGetUserIndexer(interfaceType, out var interfaceIndexer, out _))
+            {
+                requiredType = interfaceIndexer.ContainingType;
+            }
+
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                path,
+                location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Index,
+                requiredType: requiredType);
+        }
+    }
+
+    private void ReplaceBackwardGotoIndexUse(
+        BoundExpression target,
+        TextLocation location,
+        TypeSymbol requiredType)
+    {
+        if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var path, out _))
+        {
+            if (path.Root.Type is not NullableTypeSymbol)
+            {
+                binderCtx.UntrackBackwardGotoNarrowingIndexUse(path.Root, location);
+            }
+
+            TrackBackwardGotoIndexUse(target, location, requiredType);
+        }
+    }
+
     private static bool TryGetUserIndexer(
         InterfaceSymbol target,
         [NotNullWhen(true)] out PropertySymbol? indexer,
@@ -2413,7 +3406,8 @@ internal sealed partial class ExpressionBinder
         // read binder, so explicitly reuse its narrowed receiver construction.
         // Member/indexer lookup sees the effective type while loads still refer
         // to the original variable slot.
-        var target = BuildNarrowedVariableRead(variable);
+        var target = BuildNarrowedVariableRead(variable, diagnosticLocation);
+        TrackBackwardGotoIndexUse(target, diagnosticLocation);
 
         // ADR-0186 §4/§5, issue #4323: the indexer WRITE path needs the same
         // receiver check and unwrap the READ path gets in
@@ -2792,6 +3786,30 @@ internal sealed partial class ExpressionBinder
                 out var writeReported,
                 out var writeView))
             {
+                if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var targetPath, out _)
+                    && !targetPath.HasMembers
+                    && targetPath.Root.Type is not NullableTypeSymbol
+                    && FindDeclaredIndexer(
+                        targetPath.Root.Type,
+                        writeIndexer,
+                        MemberOperation.Write,
+                        target.Type,
+                        writeSubstitution) is { } declaredIndexer)
+                {
+                    binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath.Root, diagnosticLocation);
+                    target = DeclaredReceiver(targetPath.Root, target.Syntax);
+                    writeIndexer = declaredIndexer.Indexer;
+                    writeSubstitution = declaredIndexer.Substitution;
+                    writeView = declaredIndexer.View ?? target.Type;
+                }
+                else
+                {
+                    ReplaceBackwardGotoIndexUse(
+                        target,
+                        diagnosticLocation,
+                        writeIndexer.ContainingType ?? writeView ?? target.Type);
+                }
+
                 target = ViewIndexerReceiver(target, writeView, diagnosticLocation);
                 var selectedIndexer = writeIndexer;
                 var paramType = SubstituteIndexerType(selectedIndexer.Parameters[0].Type, writeSubstitution);
