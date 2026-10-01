@@ -231,9 +231,10 @@ before stable-ID derivation, deduplication, counting, sorting, or publication.
 Redaction is component-boundary-aware, orders nested roots most-specific first,
 and treats Windows drive/UNC case and slash variants as aliases.
 Non-`file:` URI text is not a filesystem candidate. Absolute Unix,
-Windows-drive, and UNC `file:` paths are redacted without decoding; relative or
-percent-encoded forms and ambiguous noncanonical separator counts fail closed
-as `file:<private-path>`.
+Windows-drive, case-insensitive `localhost`, drive-authority, and configured
+UNC `file:` paths are redacted without decoding. Unknown authorities, relative
+or percent-encoded forms, and ambiguous noncanonical separator counts fail
+closed as `file:<private-path>`.
 The blocker ID uses the exact bounded message present in the artifact.
 The final record bound applies equally to preload-only failure inventories.
 Validation recomputes source-manifest identity and byte-validity claims, and

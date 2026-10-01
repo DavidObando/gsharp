@@ -63,9 +63,10 @@ diagnostic. Redaction matches complete path components, prefers the most
 specific nested root, and recognizes case- and separator-equivalent Windows
 drive and UNC paths without rewriting unrelated message text. Non-`file:`
 URIs are never interpreted as filesystem paths. Absolute Unix, Windows-drive,
-and UNC `file:` URIs redact their path roots; percent-encoded or relative
-`file:` forms and ambiguous noncanonical separator counts are not decoded or
-guessed and collapse to `file:<private-path>`.
+case-insensitive `localhost`, drive-authority, and configured UNC `file:` URIs
+redact their path roots. Unknown authorities, percent-encoded or relative
+forms, and ambiguous noncanonical separator counts are not decoded or guessed
+and collapse to `file:<private-path>`.
 
 The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,
