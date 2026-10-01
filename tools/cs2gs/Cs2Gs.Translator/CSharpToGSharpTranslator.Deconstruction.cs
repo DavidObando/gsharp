@@ -1827,7 +1827,7 @@ public sealed partial class CSharpToGSharpTranslator
                     && (this.IsLocalFunctionReferencedAsValue(
                             recursiveLocal,
                             GetLocalFunctionSiblingStatements(localFunction))
-                        || this.IsLocalFunctionReferencedFromAnotherSwitchSection(
+                        || this.IsLocalFunctionReferencedAsValueFromAnotherSwitchSection(
                             recursiveLocal,
                             localFunction)))
                 {
