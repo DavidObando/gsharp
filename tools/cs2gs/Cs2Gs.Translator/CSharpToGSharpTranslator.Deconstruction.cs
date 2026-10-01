@@ -1807,15 +1807,15 @@ public sealed partial class CSharpToGSharpTranslator
         private IReadOnlyList<GStatement> TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
             if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedGeneric
-                && this.state.UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions.Contains(
+                && this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(
                     unsupportedGeneric))
             {
                 this.context.ReportUnsupported(
                     localFunction,
-                    $"capturing generic recursive local function '{localFunction.Identifier.Text}' references an enclosing type parameter that G# cannot reify.");
+                    $"recursive local function '{localFunction.Identifier.Text}' cannot preserve an enclosing type parameter in G# lowering.");
                 return new GStatement[]
                 {
-                    new RawStatement($"// unsupported: capturing generic recursive local function '{localFunction.Identifier.Text}' references an enclosing type parameter"),
+                    new RawStatement($"// unsupported: recursive local function '{localFunction.Identifier.Text}' cannot preserve an enclosing type parameter"),
                 };
             }
 

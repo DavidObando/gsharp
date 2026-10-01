@@ -2642,7 +2642,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             bool ReferencesEnclosingTypeParameter(
-                (LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol) candidate)
+                (LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol) candidate,
+                bool includeContainingTypeParameters)
             {
                 var enclosingTypeParameters = new HashSet<ITypeParameterSymbol>(
                     SymbolEqualityComparer.Default);
@@ -2654,7 +2655,8 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         enclosingTypeParameters.UnionWith(method.TypeParameters);
                     }
-                    else if (owner is INamedTypeSymbol type)
+                    else if (includeContainingTypeParameters
+                        && owner is INamedTypeSymbol type)
                     {
                         enclosingTypeParameters.UnionWith(type.TypeParameters);
                     }
@@ -2721,6 +2723,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> dependencyClosure =
                     GetDependencyClosure(component);
+                bool canUseNativeGroup = CanUseNativeLocalFunctionGroup(component);
 
                 // A member fallback cannot name an enclosing method type parameter,
                 // while native generic closure lowering rejects this shape with GS0468.
@@ -2731,11 +2734,21 @@ public sealed partial class CSharpToGSharpTranslator
                         || ownDependencies.Any(dependency =>
                             SymbolEqualityComparer.Default.Equals(dependency, pair.Symbol)))
                     && component.Any(candidate => candidate.Syntax.TypeParameterList != null)
-                    && dependencyClosure.Any(CapturesOuterValue)
-                    && dependencyClosure.Any(ReferencesEnclosingTypeParameter);
-                if (unsupportedCapturingGeneric)
+                    && dependencyClosure.Any(candidate => CapturesOuterValue(candidate))
+                    && dependencyClosure.Any(candidate =>
+                        ReferencesEnclosingTypeParameter(
+                            candidate,
+                            includeContainingTypeParameters: true));
+                bool unsupportedFallbackMethodTypeParameter =
+                    recursiveThroughOthers
+                    && (forceLift || !canUseNativeGroup)
+                    && dependencyClosure.Any(candidate =>
+                        ReferencesEnclosingTypeParameter(
+                            candidate,
+                            includeContainingTypeParameters: false));
+                if (unsupportedCapturingGeneric || unsupportedFallbackMethodTypeParameter)
                 {
-                    this.state.UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions.UnionWith(
+                    this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.UnionWith(
                         component.Select(candidate => candidate.Symbol));
                     continue;
                 }
@@ -2749,7 +2762,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (recursiveThroughOthers
                     && (forceLift
                         || IsCapturingRecursiveGroupMember(pair.Symbol)
-                        || !CanUseNativeLocalFunctionGroup(component)))
+                        || !canUseNativeGroup))
                 {
                     toLift.Add(pair.Symbol);
                 }
@@ -2766,7 +2779,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 foreach (IMethodSymbol dependency in dependencies)
                 {
-                    if (!this.state.UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions.Contains(
+                    if (!this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(
                             dependency)
                         && toLift.Add(dependency))
                     {
@@ -2787,7 +2800,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (this.state.LiftedStaticLocalFunctions.ContainsKey(pair.Symbol)
                     || !toLift.Contains(pair.Symbol)
-                    || this.state.UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions.Contains(
+                    || this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(
                         pair.Symbol)
                     || IsCapturingRecursiveGroupMember(pair.Symbol))
                 {
@@ -2802,7 +2815,7 @@ public sealed partial class CSharpToGSharpTranslator
             var capturingLocals = localFunctions
                 .Where(pair => !pair.Symbol.IsStatic
                     && toLift.Contains(pair.Symbol)
-                    && !this.state.UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions.Contains(
+                    && !this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(
                         pair.Symbol)
                     && !IsCapturingRecursiveGroupMember(pair.Symbol))
                 .ToList();
