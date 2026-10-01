@@ -61,7 +61,15 @@ The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,
 `GOSUMDB=off`, `GOWORK=off` unless a later version adds an explicit workspace,
 and disables `GOPACKAGESDRIVER`. The child environment is allowlisted rather
-than inherited wholesale. The selected `go` executable's build metadata supplies its version. Its
+than inherited wholesale. Profile `entryPatterns` are restricted to `.`,
+`./...`, or canonical module-relative `./segment[/segment]` patterns,
+optionally ending in `/...` for recursion.
+Segments use ASCII letters, digits, `.`, `_`, or `-`; no normalization is
+performed. Absolute paths, backslashes, traversal, query forms such as
+`file=`, URI/drive/UNC forms, bare `std`/`cmd`/`all` meta-patterns, whitespace,
+control characters, and any other `go/packages` operator syntax are rejected
+before either package-load phase.
+The selected `go` executable's build metadata supplies its version. Its
 `GOROOT` is derived from the verified executable path or the parent's verified
 handoff, and the bounded `VERSION` file is hashed. Bootstrap never runs
 `go version` or `go env`. `goFlags` accepts only `-tags`, `-trimpath`, and

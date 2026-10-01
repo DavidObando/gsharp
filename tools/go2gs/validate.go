@@ -462,6 +462,9 @@ func validateAnalysisHeader(a Analysis) error {
 	if err := validateLimits(p.Limits); err != nil {
 		return fmt.Errorf("analysis profile limits: %w", err)
 	}
+	if err := validateEntryPatterns(p.EntryPatterns); err != nil {
+		return fmt.Errorf("analysis profile: %w", err)
+	}
 	if err := validateGOFLAGS(p.GOFLAGS); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
