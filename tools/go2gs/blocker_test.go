@@ -543,6 +543,120 @@ func TestRecordedMessageURIPathRedaction(t *testing.T) {
 			want:       "file:<private-path>",
 		},
 		{
+			name:       "Unix current component fails closed",
+			message:    "file:///private/./source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "Unix parent component fails closed",
+			message:    "file:///public/../private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "localhost current component fails closed",
+			message:    "file://localhost/private/./source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "single separator parent component fails closed",
+			message:    "file:/private/../private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "direct drive current component fails closed",
+			message:    "file:C:/Work/./Source/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "single separator drive parent component fails closed",
+			message:    "file:/C:/Work/../Work/Source/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "drive authority current component fails closed",
+			message:    "file://C:/Work/./Source/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "triple separator drive parent component fails closed",
+			message:    "file:///C:/Work/../Work/Source/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "localhost drive current component fails closed",
+			message:    "file://localhost/C:/Work/./Source/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "UNC parent component fails closed",
+			message:    "file://server/share/public/../source/file.go",
+			redactions: []messagePathRedaction{{`\\server\share\source`, "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "backslash current component fails closed",
+			message:    `file:\private\.\source\file.go`,
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "Unicode dot component fails closed",
+			message:    "file:///private/\uFF0E/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "Unicode separator ambiguity fails closed",
+			message:    "file:///private\uFF0Fsource/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "Unicode big solidus ambiguity fails closed",
+			message:    "file:///private\u29F8source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "Unicode big reverse solidus ambiguity fails closed",
+			message:    "file:///private\u29F9source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "Unicode set minus ambiguity fails closed",
+			message:    "file:///private\u2216source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "Unicode letter path remains eligible",
+			message:    "file:///public/r\u00E9sum\u00E9/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:///public/r\u00E9sum\u00E9/file.go",
+		},
+		{
+			name:       "invalid UTF-8 after traversal fails closed",
+			message:    "file:///public/../\xffsecret",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "wrapped invalid UTF-8 path fails closed",
+			message:    "[file:///public/\xff/private/source]",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "[file:<private-path>]",
+		},
+		{
 			name:       "file URI query and fragment",
 			message:    "`file:///private/source/file.go?mode=read#location`",
 			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
@@ -599,6 +713,72 @@ func TestRecordedMessageURIPathRedaction(t *testing.T) {
 		{
 			name:       "empty suffix component fails closed",
 			message:    "file:///public/file.go?mode=read#",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "query parent token fails closed",
+			message:    "file:///public/file.go?path=..",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "query current token fails closed",
+			message:    "file:///public/file.go?path=.",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "fragment parent token fails closed",
+			message:    "file:///public/file.go#..",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "repeated query component separator fails closed",
+			message:    "file:///public/file.go?mode=read&&kind=x",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "leading query component separator fails closed",
+			message:    "file:///public/file.go?&mode=read",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "trailing query component separator fails closed",
+			message:    "file:///public/file.go?mode=read&",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "empty query key fails closed",
+			message:    "file:///public/file.go?=read",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "duplicate query equals fails closed",
+			message:    "file:///public/file.go?mode==read",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "key only query fails closed",
+			message:    "file:///public/file.go?mode",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "duplicate query key fails closed",
+			message:    "file:///public/file.go?mode=read&mode=write",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "Unicode query token fails closed",
+			message:    "file:///public/file.go?mode=r\u00E9ad",
 			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
 			want:       "file:<private-path>",
 		},
@@ -696,6 +876,21 @@ func TestBlockerPathAliasesPublishOneStableIdentity(t *testing.T) {
 	ambiguousDriveAlias := build("c:/work/source", `FiLe:\\\\\c:\WORK\source\file.go`)
 	if ambiguousDrive.Message != "file:<private-path>" || ambiguousDrive.ID != ambiguousDriveAlias.ID {
 		t.Fatalf("ambiguous drive file URI aliases produced unstable blocker identities: %#v != %#v", ambiguousDrive, ambiguousDriveAlias)
+	}
+	invalidURI := build("/private/source", "file:///public/../\xff/private/source")
+	invalidURIAlias := build("/different/source", "FiLe:///public/../\xfe/different/source")
+	if invalidURI.Message != "file:<private-path>" || invalidURI.ID != invalidURIAlias.ID {
+		t.Fatalf("invalid file URI aliases produced unstable blocker identities: %#v != %#v", invalidURI, invalidURIAlias)
+	}
+	traversalURI := build("/private/source", "file:///private/./source/file.go")
+	traversalURIAlias := build("/different/source", "file:///public/../different/source/file.go")
+	if traversalURI.Message != "file:<private-path>" || traversalURI.ID != traversalURIAlias.ID {
+		t.Fatalf("traversal file URI aliases produced unstable blocker identities: %#v != %#v", traversalURI, traversalURIAlias)
+	}
+	malformedSuffix := build("/private/source", "file:///public/file.go?path=..")
+	malformedSuffixAlias := build("/different/source", "file:///public/file.go?mode=read&&kind=x")
+	if malformedSuffix.Message != "file:<private-path>" || malformedSuffix.ID != malformedSuffixAlias.ID {
+		t.Fatalf("malformed file URI suffixes produced unstable blocker identities: %#v != %#v", malformedSuffix, malformedSuffixAlias)
 	}
 }
 

@@ -68,11 +68,13 @@ redact their path roots. Unknown authorities, percent-encoded or relative
 non-drive forms, and ambiguous noncanonical separator counts are not decoded
 or guessed and collapse to `file:<private-path>`. Absolute drive paths redact
 with zero, one, or three separators after `file:`; unmatched drive-shaped
-paths fail closed. A query and fragment are retained only when each is
-nonempty, ordered as `?query#fragment`, and contains ASCII letters, digits,
-`-._~=&` only; path separators, drive colons, percent encoding, extra
-delimiters, and all other suffix bytes collapse the complete URI to the same
-stable placeholder.
+paths fail closed. Any `.` or `..` path component, encoded form, invalid byte,
+or Unicode dot/separator ambiguity also collapses the complete URI. A query is
+retained only as unique, nonempty `key=value` pairs separated by one `&`; keys
+and values must start and end with an ASCII letter or digit and may contain
+`-._~` internally, but cannot equal `.` or `..`. A fragment is one token under
+the same rule. Key-only, empty, duplicate, repeated-delimiter, Unicode,
+path-like, and otherwise ambiguous suffixes fail closed.
 
 The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,

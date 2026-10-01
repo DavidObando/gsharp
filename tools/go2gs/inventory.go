@@ -454,6 +454,7 @@ func messageURIAt(
 	if schemeEnd >= len(message) || message[schemeEnd] != ':' {
 		return 0, 0, false
 	}
+	fileScheme := strings.EqualFold(message[offset:schemeEnd], "file")
 	if schemeEnd == offset+1 && schemeEnd+1 < len(message) &&
 		isPathSeparator(rune(message[schemeEnd+1])) {
 		for _, redaction := range redactions {
@@ -471,7 +472,14 @@ func messageURIAt(
 	depth := 0
 	for uriEnd < len(message) {
 		current, size := utf8.DecodeRuneInString(message[uriEnd:])
-		if current == utf8.RuneError && size == 1 || unicode.IsSpace(current) {
+		if current == utf8.RuneError && size == 1 {
+			if fileScheme {
+				uriEnd++
+				continue
+			}
+			break
+		}
+		if unicode.IsSpace(current) {
 			break
 		}
 		if closing != 0 {
@@ -538,6 +546,9 @@ func redactFileURI(
 	}
 	path, suffix := remainder[:pathEnd], remainder[pathEnd:]
 	if path == "" || !isBenignFileURISuffix(suffix) {
+		return privateFileURI
+	}
+	if hasUnsafeFileURIPathComponent(path) {
 		return privateFileURI
 	}
 
@@ -657,38 +668,97 @@ func hasRepeatedPathSeparators(value string) bool {
 	return false
 }
 
+func hasUnsafeFileURIPathComponent(value string) bool {
+	componentStart := 0
+	for index := 0; index <= len(value); index++ {
+		if index < len(value) && !isPathSeparator(rune(value[index])) {
+			continue
+		}
+		component := value[componentStart:index]
+		if component == "." || component == ".." || hasAmbiguousFileURIPathRune(component) {
+			return true
+		}
+		componentStart = index + 1
+	}
+	return false
+}
+
+func hasAmbiguousFileURIPathRune(value string) bool {
+	for len(value) > 0 {
+		current, size := utf8.DecodeRuneInString(value)
+		if current == utf8.RuneError && size == 1 {
+			return true
+		}
+		if unicode.IsControl(current) ||
+			current > unicode.MaxASCII &&
+				(!unicode.IsLetter(current) && !unicode.IsNumber(current)) {
+			return true
+		}
+		value = value[size:]
+	}
+	return false
+}
+
 func isBenignFileURISuffix(value string) bool {
 	if value == "" {
 		return true
 	}
-	if value[0] != '?' && value[0] != '#' {
+	if value[0] == '#' {
+		return isBenignFileURIToken(value[1:])
+	}
+	if value[0] != '?' {
 		return false
 	}
-	segmentStart := 1
-	seenFragment := value[0] == '#'
-	for index := 1; index < len(value); index++ {
-		switch value[index] {
-		case '?':
+	query := value[1:]
+	fragment := ""
+	if fragmentStart := strings.IndexByte(query, '#'); fragmentStart >= 0 {
+		fragment = query[fragmentStart+1:]
+		query = query[:fragmentStart]
+		if !isBenignFileURIToken(fragment) {
 			return false
-		case '#':
-			if seenFragment || index == segmentStart {
-				return false
-			}
-			seenFragment = true
-			segmentStart = index + 1
-		default:
-			if !isBenignFileURISuffixByte(value[index]) {
-				return false
-			}
 		}
 	}
-	return segmentStart < len(value)
+	return isBenignFileURIQuery(query)
 }
 
-func isBenignFileURISuffixByte(value byte) bool {
-	return isASCIIAlpha(value) ||
-		value >= '0' && value <= '9' ||
-		strings.ContainsRune("-._~=&", rune(value))
+func isBenignFileURIQuery(value string) bool {
+	if value == "" {
+		return false
+	}
+	keys := make(map[string]struct{})
+	for _, component := range strings.Split(value, "&") {
+		separator := strings.IndexByte(component, '=')
+		if separator <= 0 || separator != strings.LastIndexByte(component, '=') ||
+			!isBenignFileURIToken(component[:separator]) ||
+			!isBenignFileURIToken(component[separator+1:]) {
+			return false
+		}
+		key := component[:separator]
+		if _, exists := keys[key]; exists {
+			return false
+		}
+		keys[key] = struct{}{}
+	}
+	return true
+}
+
+func isBenignFileURIToken(value string) bool {
+	if value == "" || value == "." || value == ".." ||
+		!isASCIIAlphaNumeric(value[0]) ||
+		!isASCIIAlphaNumeric(value[len(value)-1]) {
+		return false
+	}
+	for index := 1; index+1 < len(value); index++ {
+		current := value[index]
+		if !isASCIIAlphaNumeric(current) && !strings.ContainsRune("-._~", rune(current)) {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIAlphaNumeric(value byte) bool {
+	return isASCIIAlpha(value) || value >= '0' && value <= '9'
 }
 
 func redactFileURIPath(

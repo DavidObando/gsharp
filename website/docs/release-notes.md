@@ -144,7 +144,8 @@ Before moving an application to a different compiler version, pin the intended S
   separator aliases without over-redacting lookalike prefixes or remote URIs;
   absolute, `localhost`, drive-authority, and configured UNC `file:` URI paths
   are redacted, while unknown or encoded authority forms, unmatched drive
-  paths, and path-bearing query or fragment text fail closed. Profile and `goFlags`
+  paths, dot-segment aliases, and malformed or path-bearing query/fragment
+  text fail closed. Profile and `goFlags`
   tags share one canonical selection set, architecture feature levels expand
   to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
   typed `*ast.File` root for every compiled file. Output locking, invalidation,
