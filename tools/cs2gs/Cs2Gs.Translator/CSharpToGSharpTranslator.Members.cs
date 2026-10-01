@@ -3063,6 +3063,12 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             taken.UnionWith(this.state.SynthesizedPropertyBackingFieldNames.Values);
+            taken.UnionWith(this.state.LiftedStaticLocalFunctions.Values);
+            taken.UnionWith(this.state.LiftedRecursiveLocalFunctions.Values.Select(lift => lift.Name));
+            taken.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
+                ?? Enumerable.Empty<string>());
+            taken.UnionWith(this.state.PendingInstanceSynthHelpers?.Select(helper => helper.Name)
+                ?? Enumerable.Empty<string>());
 
             string candidate = baseName;
             for (int suffix = 2; taken.Contains(candidate); suffix++)

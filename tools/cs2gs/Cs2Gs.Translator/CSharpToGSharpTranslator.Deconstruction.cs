@@ -1806,6 +1806,18 @@ public sealed partial class CSharpToGSharpTranslator
 
         private IReadOnlyList<GStatement> TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedTopLevel
+                && this.state.UnsupportedTopLevelRecursiveLocalFunctions.Contains(unsupportedTopLevel))
+            {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    $"top-level recursive local function '{localFunction.Identifier.Text}' requires a member-helper fallback, but top-level statements have no containing aggregate for that helper.");
+                return new GStatement[]
+                {
+                    new RawStatement($"// unsupported: top-level recursive local function '{localFunction.Identifier.Text}'"),
+                };
+            }
+
             if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol recursiveLocal
                 && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
                     recursiveLocal,
@@ -1822,6 +1834,14 @@ public sealed partial class CSharpToGSharpTranslator
                     return new GStatement[]
                     {
                         new RawStatement($"// unsupported: capturing recursive local function value '{localFunction.Identifier.Text}'"),
+                    };
+                }
+
+                if (!this.state.EmittedLiftedRecursiveLocalFunctions.Add(recursiveLocal))
+                {
+                    return new GStatement[]
+                    {
+                        new RawStatement($"// lifted recursive local function {recursiveLift.Name}"),
                     };
                 }
 
@@ -1903,6 +1923,14 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(staticLocal, out string liftedName)
                 && this.state.PendingStaticSynthHelpers != null)
             {
+                if (!this.state.EmittedLiftedStaticLocalFunctions.Add(staticLocal))
+                {
+                    return new GStatement[]
+                    {
+                        new RawStatement($"// lifted static local function {liftedName}"),
+                    };
+                }
+
                 bool liftedIsAsync = localFunction.Modifiers.Any(SyntaxKind.AsyncKeyword);
                 List<Parameter> liftedParameters = this.MapParameters(
                     staticLocal,

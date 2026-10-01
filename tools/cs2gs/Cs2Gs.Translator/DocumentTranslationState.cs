@@ -350,6 +350,9 @@ internal sealed class DocumentTranslationState
     public Dictionary<IMethodSymbol, string> LiftedStaticLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
 
+    public HashSet<IMethodSymbol> EmittedLiftedStaticLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
     // Issue #3467: synthesized control-flow label names, allocated per
     // enclosing function body in first-use order instead of embedding the
     // syntax node's SpanStart. The node-keyed memo keeps the independent call
@@ -363,6 +366,12 @@ internal sealed class DocumentTranslationState
 
     public Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction> LiftedRecursiveLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> EmittedLiftedRecursiveLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> UnsupportedTopLevelRecursiveLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
 
     // Issue #3399: local functions participating (directly or transitively) in
     // recursion/mutual recursion that cannot be lifted as static helpers
