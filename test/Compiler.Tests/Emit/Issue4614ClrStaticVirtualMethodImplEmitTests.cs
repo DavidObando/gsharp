@@ -59,6 +59,7 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
 
         public interface IP { static abstract int P { get; } }
         public interface IP2 : IP { }
+        public interface IPV { static virtual int P { get => 1; set { } } }
 
         public interface IGen { static abstract int Count<U>(U u); }
 
@@ -78,6 +79,7 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
             public static int Z<T>() where T : IS => T.Z();
             public static int V<T>() where T : ISV => T.V();
             public static int P<T>() where T : IP => T.P;
+            public static int PV<T>() where T : IPV => T.P;
             public static int Count<T>() where T : IGen => T.Count<string>("abc");
             public static void Hook<T>(System.Action a) where T : IEv => T.Changed += a;
             public static int N<T, U>(IInst<T> i, T x, U y) => i.N(x, y);
@@ -189,6 +191,27 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
             }
 
             Console.WriteLine(Probe.V[VD]())
+            """,
+            new[] { "5" },
+        };
+
+        // A get-only property overrides just the getter of a defaulted get/set
+        // static virtual property; csc binds the getter independently too.
+        yield return new object[]
+        {
+            "get-only-override-of-a-defaulted-get-set-property",
+            """
+            package P
+            import System
+            import Clib
+
+            struct PG : IPV {
+                shared {
+                    prop P int32 { get { return 5 } }
+                }
+            }
+
+            Console.WriteLine(Probe.PV[PG]())
             """,
             new[] { "5" },
         };

@@ -1158,10 +1158,11 @@ internal sealed class InterfaceImplEmitter
                 PropertySymbol? implementation = null;
                 foreach (var candidate in structSymbol.StaticProperties)
                 {
+                    // Accessors bind independently below (as csc and the
+                    // G#-declared-interface path do), so a get-only property
+                    // overrides just the getter of a defaulted get/set slot.
                     if (candidate.Name == slotProperty.Name
                         && MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
-                        && (slotGetter == null || candidate.HasGetter)
-                        && (slotSetter == null || candidate.HasSetter)
                         && MemberLookup.PropertyMatchesClrInterfaceSignature(candidate, slotOwnerSymbol, slotProperty))
                     {
                         implementation = candidate;
