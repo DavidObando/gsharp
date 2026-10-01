@@ -1066,8 +1066,13 @@ internal sealed class InterfaceImplEmitter
     /// <c>MethodImpl</c> a direct implementer (<c>struct SD : IS</c>) failed
     /// to load, and a type re-listing such an interface over an imported base
     /// that already implements it (<c>class DZ : BaseS, IS2</c>) silently kept
-    /// the base's implementation. csc binds a public static method of the same
-    /// name and signature implicitly, and so does this pass. The interfaces
+    /// the base's implementation. This pass binds the type's own static
+    /// member of the same name and signature implicitly, as csc does, with
+    /// one deliberate difference: csc requires that member to be public,
+    /// while this pass (like <see cref="EmitStaticVirtualMethodImpls"/> for
+    /// G#-declared interfaces) applies no accessibility check, so an own-type
+    /// member of any accessibility implements the slot. That is G#'s existing
+    /// policy, not an omission. The interfaces
     /// come from <see cref="ClrInterfaceClosure"/>, the same set the type's
     /// <c>InterfaceImpl</c> rows are emitted from, so slots inherited through
     /// a base interface are covered and every declaration resolves against a
