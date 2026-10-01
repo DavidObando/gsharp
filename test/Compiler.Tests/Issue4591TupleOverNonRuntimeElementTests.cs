@@ -43,16 +43,19 @@ namespace GSharp.Compiler.Tests;
 /// <c>call.Item1</c> / <c>call.Item2</c> reported GS0158. A plain
 /// conversion of the same array to <c>IEnumerable[(int32, Type)]</c> was an
 /// internal compiler error (GS9998).</para>
-/// <para><b>The fix.</b> The tuple is closed in its elements' own load
-/// context: the matching <c>ValueTuple`N</c> is resolved from that context's
-/// core assembly and any host primitive element is remapped into it (the same
-/// rule <c>MemberLookup.ResolveErasedValueTupleOpenDefinition</c> already
-/// applied to erased inference shapes). When no load context can be found the
-/// tuple stays symbolic (a null <c>ClrType</c>, the state a tuple over a
-/// same-compilation type already has) instead of carrying the poisoned
-/// instantiation.</para>
+/// <para><b>The fix.</b> When every non-host element provably belongs to one
+/// load context, the tuple is closed in that context: the matching
+/// <c>ValueTuple`N</c> (and, for a nullable value-type element, the
+/// <c>Nullable&lt;&gt;</c>) is resolved from that context's core assembly and
+/// any host primitive element is remapped into it (the same rule
+/// <c>MemberLookup.ResolveErasedValueTupleOpenDefinition</c> already applied
+/// to erased inference shapes). Every other shape keeps the previous host
+/// construction exactly, notably a function-type element, whose own
+/// <c>Func&lt;…&gt;</c> is already a host instantiation; the
+/// <c>function-type-element-through-linq</c> green row pins that.</para>
 /// <para><b>Discrimination witness (ADR-0154).</b> Reverting
-/// <c>src/Core/CodeAnalysis/Symbols/TupleTypeSymbol.cs</c> to its parent
+/// <c>src/Core/CodeAnalysis/Symbols/TupleTypeSymbol.cs</c> and
+/// <c>src/Core/CodeAnalysis/Binding/MemberLookup.cs</c> to their parent
 /// state fails every <c>TupleOverANonRuntimeElement_CompilesVerifiesAndRuns</c>
 /// row (GS9998 or GS0158/GS0159) and leaves every
 /// <c>AGreenNeighbour_CompilesVerifiesAndRuns</c> row passing.</para>
