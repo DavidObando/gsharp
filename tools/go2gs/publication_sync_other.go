@@ -6,7 +6,11 @@ package main
 
 import "os"
 
-func syncRootPublication(root *os.Root, _ string, _ os.FileInfo) (err error) {
+func prepareStagedPublication(file *os.File, mode os.FileMode) error {
+	return file.Chmod(mode)
+}
+
+func syncRootPublication(root *os.Root, _ string, _ os.FileInfo, _ os.FileMode) (err error) {
 	directory, err := root.Open(".")
 	if err != nil {
 		return err
@@ -19,7 +23,7 @@ func syncRootPublication(root *os.Root, _ string, _ os.FileInfo) (err error) {
 	return directory.Sync()
 }
 
-func syncPathPublication(directoryPath, _ string, _ os.FileInfo) (err error) {
+func syncPathPublication(directoryPath, _ string, _ os.FileInfo, _ os.FileMode) (err error) {
 	directory, err := os.Open(directoryPath)
 	if err != nil {
 		return err
