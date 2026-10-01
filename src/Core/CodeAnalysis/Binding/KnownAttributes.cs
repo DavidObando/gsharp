@@ -435,6 +435,9 @@ internal static class KnownAttributes
     /// attribute and could not see the attribute through an alias. Runtime
     /// identity compares the full type name, assembly simple name and public
     /// key token; assembly version and culture do not affect recognition.
+    /// Issue #4584: any of the BCL identities that define the attribute
+    /// (System.Private.CoreLib at run time, the System.Runtime reference
+    /// assembly in an SDK build) is accepted, still by name and key.
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[UnscopedRef]</c>.</returns>
@@ -501,7 +504,9 @@ internal static class KnownAttributes
     // host type rejected the genuine attribute and GS0589 fired on members
     // that carried `@UnscopedRef`. Platform identities are listed explicitly
     // rather than matched by name alone, so a same-named user assembly with a
-    // different key is still not recognized (ADR-0084 section L5).
+    // different key is still not recognized (issue #835 / ADR-0084 section L5,
+    // the metadata-identity rule this file follows; ADR-0184 section 1 for
+    // UnscopedRef).
     // ReferenceResolver.WellKnownBclAssemblyNames is name-only, so it cannot
     // serve this token-checked identity test.
     private static bool IsPlatformAssemblyIdentity(string? name, byte[] publicKeyToken)
