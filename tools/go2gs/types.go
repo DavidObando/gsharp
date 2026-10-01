@@ -174,8 +174,20 @@ func structuralTypeOwners(t types.Type) []string {
 			if value.Recv() != nil {
 				walk(value.Recv().Type(), position+".receiver")
 			}
+			if parameters := value.RecvTypeParams(); parameters != nil {
+				for i := 0; i < parameters.Len(); i++ {
+					walk(parameters.At(i), position+".receiverTypeParameter["+strconv.Itoa(i)+"]")
+				}
+			}
+			if parameters := value.TypeParams(); parameters != nil {
+				for i := 0; i < parameters.Len(); i++ {
+					walk(parameters.At(i), position+".typeParameter["+strconv.Itoa(i)+"]")
+				}
+			}
 			walk(value.Params(), position+".parameters")
 			walk(value.Results(), position+".results")
+		case *types.TypeParam:
+			walk(value.Constraint(), position+".constraint")
 		case *types.Interface:
 			value.Complete()
 			for i := 0; i < value.NumMethods(); i++ {

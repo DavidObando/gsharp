@@ -66,4 +66,30 @@ func TestStructuralTypeIdentityIncludesPositionalUnexportedOwnership(t *testing.
 	if canonicalTypeIdentity(firstInterface) == canonicalTypeIdentity(secondInterface) {
 		t.Fatal("structural identity omitted unexported method ownership")
 	}
+
+	typeParameter := func(name string, owner *types.Package) *types.TypeParam {
+		return types.NewTypeParam(types.NewTypeName(token.NoPos, nil, name, nil),
+			types.NewInterfaceType([]*types.Func{method(owner)}, nil).Complete())
+	}
+	signature := func(owners ...*types.Package) *types.Signature {
+		parameters := make([]*types.TypeParam, len(owners))
+		for i, owner := range owners {
+			parameters[i] = typeParameter(string(rune('T'+i)), owner)
+		}
+		return types.NewSignatureType(nil, nil, parameters, nil, nil, false)
+	}
+	firstSignature := signature(first)
+	secondSignature := signature(second)
+	if types.Identical(firstSignature, secondSignature) {
+		t.Fatal("go/types unexpectedly considers generic constraints from different packages identical")
+	}
+	if canonicalType(firstSignature) != canonicalType(secondSignature) {
+		t.Fatal("display identity unexpectedly distinguishes generic constraint ownership")
+	}
+	if canonicalTypeIdentity(firstSignature) == canonicalTypeIdentity(secondSignature) {
+		t.Fatal("structural identity omitted generic constraint ownership")
+	}
+	if canonicalTypeIdentity(signature(first, second)) == canonicalTypeIdentity(signature(second, first)) {
+		t.Fatal("structural identity omitted positional generic constraint ownership")
+	}
 }
