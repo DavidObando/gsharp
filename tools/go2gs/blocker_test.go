@@ -271,6 +271,136 @@ func TestRecordedMessagePathRedactionIsComponentAware(t *testing.T) {
 	}
 }
 
+func TestRecordedMessageURIPathRedaction(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		message    string
+		redactions []messagePathRedaction
+		want       string
+	}{
+		{
+			name:       "remote UNC-like authority unchanged",
+			message:    "https://server/share/source/file",
+			redactions: []messagePathRedaction{{`\\server\share\source`, "<source>"}},
+			want:       "https://server/share/source/file",
+		},
+		{
+			name:       "remote filesystem root unchanged",
+			message:    "https://example.test/path",
+			redactions: []messagePathRedaction{{"/", "<source>"}},
+			want:       "https://example.test/path",
+		},
+		{
+			name:       "remote drive-looking path unchanged",
+			message:    "custom+ssh://example.test/C:/Work/Source/file.go",
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "custom+ssh://example.test/C:/Work/Source/file.go",
+		},
+		{
+			name:       "one-letter scheme unchanged",
+			message:    "x:/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "x:/private/source/file.go",
+		},
+		{
+			name:       "remote URI and separate filesystem path",
+			message:    "see https://example.test/private/source then /private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "see https://example.test/private/source then <source>/file.go",
+		},
+		{
+			name:       "bracket wrapped URI and adjacent path",
+			message:    "[https://example.test/private/source]/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "[https://example.test/private/source]<source>/file.go",
+		},
+		{
+			name:       "parenthesis wrapped URI and adjacent path",
+			message:    "(https://example.test/a_(b))/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "(https://example.test/a_(b))<source>/file.go",
+		},
+		{
+			name:       "IPv6 authority inside bracket wrapper",
+			message:    "[https://[2001:db8::1]/private/source]/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "[https://[2001:db8::1]/private/source]<source>/file.go",
+		},
+		{
+			name:       "Unix file URI",
+			message:    "file:///private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file://<source>/file.go",
+		},
+		{
+			name:       "Windows file URI",
+			message:    "file:///C:/Work/Source/file.go",
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "file:///<source>/file.go",
+		},
+		{
+			name:       "Windows file URI aliases",
+			message:    `FiLe:///c:\WORK\source\file.go`,
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       `FiLe:///<source>\file.go`,
+		},
+		{
+			name:       "UNC file URI",
+			message:    "file://server/share/source/file.go",
+			redactions: []messagePathRedaction{{`\\SERVER\SHARE\source`, "<source>"}},
+			want:       "file://<source>/file.go",
+		},
+		{
+			name:       "extra local file separators",
+			message:    "file:////private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:///<source>/file.go",
+		},
+		{
+			name:       "ambiguous extra separators fail closed",
+			message:    "file:////public/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "file URI query and fragment",
+			message:    "`file:///private/source/file.go?mode=read#location`",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "`file://<source>/file.go?mode=read#location`",
+		},
+		{
+			name:       "unrelated file URI unchanged",
+			message:    "file:///public/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:///public/source/file.go",
+		},
+		{
+			name:       "percent encoded file URI fails closed",
+			message:    "file:///private%2Fsource/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "relative file URI fails closed",
+			message:    "file:private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "remote percent encoding unchanged",
+			message:    "https://example.test/private%2Fsource/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "https://example.test/private%2Fsource/file.go",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := redactMessagePaths(test.message, test.redactions); got != test.want {
+				t.Fatalf("redacted URI message = %q; want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestBlockerPathAliasesPublishOneStableIdentity(t *testing.T) {
 	profile := testProfile()
 	profile.Limits.MaxStringBytes = 256
