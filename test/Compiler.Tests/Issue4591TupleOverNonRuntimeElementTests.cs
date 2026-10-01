@@ -227,6 +227,31 @@ public class Issue4591TupleOverNonRuntimeElementTests
             new[] { "1", "square" },
         };
 
+        // Arity nine: the CLR shape nests a `TRest` ValueTuple, and the
+        // imported elements live in that rest node, so the recursion has to
+        // build it in the same load context as the outer node.
+        yield return new object[]
+        {
+            "arity-nine-imported-elements-in-the-rest-node",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import System.Linq
+            import HelperLib
+
+            let xs = [](int32, int32, int32, int32, int32, int32, int32, Uri, Uri){
+                (1, 2, 3, 4, 5, 6, 7, Uri("https://a.example/"), Uri("https://b.example/")),
+            }
+            let e IEnumerable[(int32, int32, int32, int32, int32, int32, int32, Uri, Uri)] = xs
+            Console.WriteLine(e.Count())
+            let one = Picker.Single(xs)
+            Console.WriteLine(one.Item1)
+            Console.WriteLine(one.Item9.Host)
+            """,
+            new[] { "1", "1", "b.example" },
+        };
+
         // A NULLABLE imported value type. Its `Nullable<T>` used to be built
         // from the host `typeof(Nullable<>)` before the tuple ever saw it, an
         // instantiation that is already poisoned (the #4035 trap), so the
