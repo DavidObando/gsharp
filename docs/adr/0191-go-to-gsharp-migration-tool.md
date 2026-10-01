@@ -236,12 +236,16 @@ UNC `file:` paths are redacted without decoding. Absolute drive paths accept
 zero, one, or three separators after `file:`. Unknown authorities, relative
 non-drive or percent-encoded forms, and ambiguous noncanonical separator
 counts fail closed as `file:<private-path>`; unmatched drive-shaped paths do
-likewise.
-Query and fragment text is preserved only when every nonempty component uses
-ASCII letters, digits, or `-._~=&`, with at most one ordered `?` and `#`.
-Filesystem separators, drive colons, percent encoding, empty components,
-repeated delimiters, or any other suffix byte collapse the complete URI to the
-stable placeholder rather than reattaching unexamined text.
+likewise. Exact `.` or `..` path components, invalid bytes, and encoded or
+Unicode dot/separator ambiguities collapse the complete URI before matching or
+any unchanged fallback.
+Query text is preserved only as unique nonempty `key=value` pairs separated by
+one `&`. Keys and values start and end with an ASCII alphanumeric and may use
+`-._~` internally, but cannot equal `.` or `..`; key-only parameters are
+forbidden. A fragment is one nonempty token under the same rule. Empty or
+duplicate components, duplicate delimiters or keys, filesystem separators,
+drive colons, percent encoding, controls, Unicode, and any other suffix byte
+collapse the complete URI rather than reattaching unexamined text.
 The blocker ID uses the exact bounded message present in the artifact.
 The final record bound applies equally to preload-only failure inventories.
 Validation recomputes source-manifest identity and byte-validity claims, and

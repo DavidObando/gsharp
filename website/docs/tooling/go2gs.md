@@ -35,11 +35,15 @@ URI paths are redacted. Unknown authorities, encoded or relative forms, and
 ambiguous noncanonical separator counts fail closed rather than being decoded
 or guessed; unmatched drive-shaped paths also fail closed. Absolute drive
 paths redact with zero, one, or three separators after `file:`. Query and
-fragment text is retained only for nonempty components containing ASCII
-letters, digits, or `-._~=&`, with one ordered `?` and `#`. Path separators,
-drive colons, percent encoding, empty components, repeated delimiters, and
-other suffix bytes collapse the complete URI to `file:<private-path>`. The
-published bounded message is therefore the message the ID names.
+fragment text is retained only under a path-incapable grammar. Queries require
+unique nonempty `key=value` pairs separated by one `&`; fragments are one
+nonempty token. Every token starts and ends with an ASCII letter or digit, may
+use `-._~` internally, and cannot equal `.` or `..`. Exact dot path
+components, Unicode dot/separator ambiguity, path separators, drive colons,
+percent encoding, controls, Unicode, key-only or empty parameters, duplicate
+keys/delimiters, and other ambiguous bytes collapse the complete URI to
+`file:<private-path>`. The published bounded message is therefore the message
+the ID names.
 
 Analysis is offline and fail-closed. It disables automatic Go toolchain
 downloads, network module resolution, ambient workspaces, unapproved package
