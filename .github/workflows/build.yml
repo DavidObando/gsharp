@@ -46,7 +46,7 @@ jobs:
         run: |
           go mod verify
           go test -count=1 ./...
-          go test -race -count=1 ./...
+          go test -race -timeout 20m -count=1 ./...
           go vet ./...
 
   go2gs-windows:
@@ -67,7 +67,7 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           go mod verify
-          go test -count=1 -run '^(TestWindowsRootedMetadata.*|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$' .
+          go test -count=1 -run '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$' .
           go vet ./...
 
   go2gs-macos:

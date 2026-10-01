@@ -15,8 +15,8 @@ func peakRSS() int64 {
 		return 0
 	}
 	if runtime.GOOS == "darwin" {
-		return usage.Maxrss
+		return int64(usage.Maxrss)
 	}
 	// Linux and the BSDs report KiB.
-	return usage.Maxrss * 1024
+	return int64(usage.Maxrss) * 1024
 }

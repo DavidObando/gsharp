@@ -24,3 +24,7 @@ func walkRootedMetadataTree(root string, visit func(string, os.DirEntry) (bool, 
 func readRootedMetadataDirectory(path string) ([]os.DirEntry, error) {
 	return nil, errors.New("secure descriptor-relative directory reads are unsupported on this platform")
 }
+
+func ensureOutputRoot(string, os.FileMode) error {
+	return errors.New("secure output-root creation is unsupported on this platform")
+}
