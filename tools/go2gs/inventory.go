@@ -1520,11 +1520,15 @@ func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason str
 	if !captured {
 		return "", fmt.Errorf("selected package input was not captured in the immutable loader snapshot: %s", filepath.Base(path))
 	}
+	native, embed, validRole := fileRoleFlags(role)
+	if !validRole {
+		return "", fmt.Errorf("selected package input has unsupported role %q: %s", role, filepath.Base(path))
+	}
 	record := FileRecord{
 		PackageID: b.packageIDs[pkg], Path: portable, Role: role, Reason: reason,
 		LanguageVersion: fileLanguageVersion(pkg, path), SHA256: hashBytes(data), Bytes: int64(len(data)),
 		ContentBase64: base64.StdEncoding.EncodeToString(data), ValidUTF8: utf8.Valid(data),
-		Native: role == "native", Embed: role == "embed", Provenance: "go/packages",
+		Native: native, Embed: embed, Provenance: "go/packages",
 	}
 	record.ID = fileRecordID(record)
 	if !appendInventoryRecord(b, &b.analysis.Files, record) {

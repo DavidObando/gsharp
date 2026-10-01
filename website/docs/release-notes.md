@@ -169,9 +169,12 @@ Before moving an application to a different compiler version, pin the intended S
   line-directive-adjusted paths, lines, and columns. Diagnostics
   are path-stable, initialization order is explicit, and schema validation
   rejects missing fields, count mismatches, stale payload-derived deterministic
-  record IDs, and complete artifacts without a loaded main-module
-  package/source ownership graph. These ID checks reuse the producer formulas
-  and establish internal consistency, not artifact authenticity. The pinned
+  record IDs, unknown file roles, native/embed role-flag disagreement,
+  noncompiled-file syntax trees, detached nodes, parent cycles, and complete
+  artifacts without a loaded main-module package/source ownership graph. Each
+  node-bearing file must be one `*ast.File`-rooted tree. These checks reuse
+  producer contracts and establish internal consistency, not artifact
+  authenticity. The pinned
   cliamp profile reports an actionable mismatch rather than substituting the
   installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged

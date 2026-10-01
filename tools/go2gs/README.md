@@ -210,8 +210,13 @@ ID whose schema-v1 derivation is fully represented by the serialized payload
 instance, embed, generate directive, dependency, feature, diagnostic, and
 blocker). Package and symbol IDs retain canonical loader/type ownership inputs
 that are not duplicated into their records and remain covered by uniqueness,
-reference, and ownership checks. Validation does not authenticate the recorded
-binaries or captured content.
+reference, and ownership checks. File roles are closed to `compiled`, `active`,
+`test`, `ignored`, `native`, and `embed`, with exact native/embed flag
+agreement. Every serialized syntax node must belong to a compiled file, and
+every node-bearing file must form one parent-linked `*ast.File` tree without
+detached nodes or cycles. Incomplete artifacts may omit trees; complete
+artifacts require one for every compiled file. Validation does not authenticate
+the recorded binaries or captured content.
 Compiled Go file records use the type checker's effective
 `types.Info.FileVersions` value, including a selected `go1.N` build constraint;
 non-syntax inputs retain the module language-version fallback. Structural type
