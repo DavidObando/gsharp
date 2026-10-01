@@ -69,8 +69,12 @@ public class Issue4601TransitiveClrInterfaceImplEmitTests
         public interface IG2<T> : IG<T> { }
         public class BaseG<T> : IG<T> { public T Get() => default!; }
 
+        public interface IMark<T> { }
+        public interface IMark2<T> : IMark<T> { }
+
         public static class Probe
         {
+            public static bool Is<T>(object o) => o is IMark<T>;
             public static int Read(IBaseI x) => x.Value;
             public static int M(IM x) => x.M();
             public static int A(IA x) => x.A();
@@ -205,6 +209,31 @@ public class Issue4601TransitiveClrInterfaceImplEmitTests
             new[] { "3" },
         };
 
+        // Two same-named G# types (`Shape`, `Outer.Shape`) as arguments of one
+        // generic interface: the rows de-duplicate on the TypeSpec signature,
+        // never on a display name that would conflate them and drop a row.
+        yield return new object[]
+        {
+            "same-named-type-arguments-keep-their-rows",
+            """
+            package P
+            import System
+            import Clib
+
+            class Shape { }
+            class Outer {
+                class Shape { }
+            }
+            class X : IMark2[Shape], IMark2[Outer.Shape] { }
+            class Y : IMark2[Shape], IMark[Outer.Shape] { }
+
+            Console.WriteLine(Probe.Is[Shape](X()))
+            Console.WriteLine(Probe.Is[Outer.Shape](X()))
+            Console.WriteLine(Probe.Is[Outer.Shape](Y()))
+            """,
+            new[] { "True", "True", "True" },
+        };
+
         // Two closed instantiations of one generic interface: neither row may
         // be lost to de-duplication.
         yield return new object[]
@@ -291,6 +320,25 @@ public class Issue4601TransitiveClrInterfaceImplEmitTests
             """,
             "Box`1",
             new[] { "IG2`1<!0>", "IG`1<!0>" },
+        };
+
+        // Same-named argument types stay distinct rows.
+        yield return new object[]
+        {
+            "same-named-type-arguments",
+            """
+            package P
+            import System
+            import Clib
+
+            class Shape { }
+            class Outer {
+                class Shape { }
+            }
+            class X : IMark2[Shape], IMark2[Outer.Shape] { }
+            """,
+            "X",
+            new[] { "IMark2`1<Shape>", "IMark`1<Shape>", "IMark2`1<Shape>", "IMark`1<Shape>" },
         };
 
         // A diamond lists the shared base once.

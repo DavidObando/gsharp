@@ -2874,8 +2874,10 @@ internal sealed class ReflectionMetadataEmitter
 
             // Issue #4601: every CLR interface row this type gets, keyed so a
             // row is emitted once. Concrete interfaces are keyed by CLR type,
-            // symbolic generic ones (`IList[Shape]`, `IList[T]`) by display
-            // string; the #985 bridge rows below share the same sets.
+            // symbolic generic ones (`IList[Shape]`, `IList[T]`) by the bytes
+            // of their TypeSpec signature: equal bytes are the same row, and a
+            // display name would conflate same-named types (`Shape` vs
+            // `Outer.Shape`). The #985 bridge rows below share the same sets.
             var emittedClrInterfaces = new System.Collections.Generic.List<System.Type>();
             var emittedSymbolicInterfaces = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
 
@@ -2905,7 +2907,9 @@ internal sealed class ReflectionMetadataEmitter
 
             void EmitSymbolicInterfaceRow(TypeSymbol symbolicIface)
             {
-                if (emittedSymbolicInterfaces.Add(symbolicIface.ToDisplayString(DisplayFormat.FullyQualified)))
+                var signature = new BlobBuilder();
+                this.signatures.EncodeTypeSymbol(new BlobEncoder(signature).TypeSpecificationSignature(), symbolicIface);
+                if (emittedSymbolicInterfaces.Add(System.Convert.ToBase64String(signature.ToArray())))
                 {
                     this.emitCtx.Metadata.AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
