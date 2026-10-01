@@ -39,11 +39,14 @@ fragment text is retained only under a path-incapable grammar. Queries require
 unique nonempty `key=value` pairs separated by one `&`; fragments are one
 nonempty token. Every token starts and ends with an ASCII letter or digit, may
 use `-._~` internally, and cannot equal `.` or `..`. Exact dot path
-components, Unicode dot/separator ambiguity, path separators, drive colons,
-percent encoding, controls, Unicode, key-only or empty parameters, duplicate
-keys/delimiters, and other ambiguous bytes collapse the complete URI to
-`file:<private-path>`. The published bounded message is therefore the message
-the ID names.
+components, raw whitespace, misplaced drive components, unexpected ASCII or
+Unicode punctuation, path separators, percent encoding, controls, Unicode
+suffixes, key-only or empty parameters, duplicate keys/delimiters, and other
+ambiguous bytes collapse the complete URI to `file:<private-path>`. Path
+components otherwise allow ASCII letters, digits, `-._~`, and ordinary
+Unicode letters/numbers. Recognized wrappers end the URI so an adjacent path
+is sanitized independently; malformed unwrapped tails are consumed and fail
+closed. The published bounded message is therefore the message the ID names.
 
 Analysis is offline and fail-closed. It disables automatic Go toolchain
 downloads, network module resolution, ambient workspaces, unapproved package

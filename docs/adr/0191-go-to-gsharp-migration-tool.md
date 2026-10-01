@@ -238,7 +238,13 @@ non-drive or percent-encoded forms, and ambiguous noncanonical separator
 counts fail closed as `file:<private-path>`; unmatched drive-shaped paths do
 likewise. Exact `.` or `..` path components, invalid bytes, and encoded or
 Unicode dot/separator ambiguities collapse the complete URI before matching or
-any unchanged fallback.
+any unchanged fallback. Path components admit ASCII alphanumerics and `-._~`
+plus ordinary Unicode letters/numbers only. Raw whitespace and unexpected
+punctuation fail closed; a drive component is legal only first or immediately
+after `localhost`. The scanner consumes malformed unwrapped tails as part of
+the failing file URI, while a recognized quote, parenthesis, bracket, brace,
+or angle wrapper ends the URI and leaves an adjacent path to the ordinary
+redactor.
 Query text is preserved only as unique nonempty `key=value` pairs separated by
 one `&`. Keys and values start and end with an ASCII alphanumeric and may use
 `-._~` internally, but cannot equal `.` or `..`; key-only parameters are
