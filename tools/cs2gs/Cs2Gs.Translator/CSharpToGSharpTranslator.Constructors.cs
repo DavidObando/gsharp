@@ -2606,6 +2606,16 @@ public sealed partial class CSharpToGSharpTranslator
                 (LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol) candidate)
             {
                 using IDisposable modelScope = this.context.UseSemanticModelFor(candidate.Syntax.SyntaxTree);
+                if (!candidate.Symbol.IsStatic
+                    && this.context.SemanticModel.GetOperation(candidate.Syntax)
+                    ?.DescendantsAndSelf()
+                    .Any(operation =>
+                        operation is IInstanceReferenceOperation instance
+                        && instance.ReferenceKind == InstanceReferenceKind.ContainingTypeInstance) == true)
+                {
+                    return true;
+                }
+
                 foreach (IdentifierNameSyntax identifier in candidate.Syntax.DescendantNodes()
                     .OfType<IdentifierNameSyntax>())
                 {
@@ -2651,11 +2661,32 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 using IDisposable modelScope = this.context.UseSemanticModelFor(candidate.Syntax.SyntaxTree);
+                if (this.context.SemanticModel.GetOperation(candidate.Syntax)
+                    ?.DescendantsAndSelf()
+                    .OfType<IInstanceReferenceOperation>()
+                    .Any(instance =>
+                        instance.ReferenceKind == InstanceReferenceKind.ContainingTypeInstance
+                        && instance.Type != null
+                        && enclosingTypeParameters.Any(enclosing =>
+                            TypeContainsTypeParameter(instance.Type, enclosing))) == true)
+                {
+                    return true;
+                }
+
                 return candidate.Syntax.DescendantNodes()
                     .Select(node => this.context.GetSymbolInfo(node).Symbol)
                     .Any(symbol =>
                         (symbol is ITypeParameterSymbol typeParameter
                             && enclosingTypeParameters.Contains(typeParameter))
+                        || (symbol is IMethodSymbol method
+                            && method.MethodKind != MethodKind.LocalFunction
+                            && method.ContainingType != null
+                            && enclosingTypeParameters.Any(enclosing =>
+                                TypeContainsTypeParameter(method.ContainingType, enclosing)))
+                        || (symbol is IFieldSymbol or IPropertySymbol or IEventSymbol
+                            && symbol.ContainingType != null
+                            && enclosingTypeParameters.Any(enclosing =>
+                                TypeContainsTypeParameter(symbol.ContainingType, enclosing)))
                         || (symbol is ILocalSymbol local
                             && enclosingTypeParameters.Any(enclosing =>
                                 TypeContainsTypeParameter(local.Type, enclosing)))
