@@ -657,6 +657,108 @@ func TestRecordedMessageURIPathRedaction(t *testing.T) {
 			want:       "[file:<private-path>]",
 		},
 		{
+			name:       "raw whitespace path tail fails closed",
+			message:    "file:///private source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unwrapped parenthesis tail fails closed",
+			message:    "file:///public/file.go)/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unwrapped bracket tail fails closed",
+			message:    "file:///public/file.go]/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unwrapped semicolon tail fails closed",
+			message:    "file:///public/file.go;/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unwrapped double quote tail fails closed",
+			message:    "file:///public/file.go\"/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unwrapped backtick tail fails closed",
+			message:    "file:///public/file.go`/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unwrapped angle close tail fails closed",
+			message:    "file:///public/file.go>/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unwrapped angle open tail fails closed",
+			message:    "file:///public/file.go</private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "embedded drive component fails closed",
+			message:    "file:///public/C:/Work/Source/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "localhost embedded drive component fails closed",
+			message:    "file://localhost/public/C:/Work/Source/file.go",
+			redactions: []messagePathRedaction{{"C:/Work/Source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "raw tab path tail fails closed",
+			message:    "file:///public\t/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "unexpected at punctuation fails closed",
+			message:    "file:///public/@scope/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "parenthesis wrapper terminates before adjacent path",
+			message:    "(file:///public/file.go)/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "(file:///public/file.go)<source>/file.go",
+		},
+		{
+			name:       "bracket wrapper terminates before adjacent path",
+			message:    "[file:///public/file.go]/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "[file:///public/file.go]<source>/file.go",
+		},
+		{
+			name:       "quote wrapper terminates before adjacent path",
+			message:    "\"file:///public/file.go\"/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "\"file:///public/file.go\"<source>/file.go",
+		},
+		{
+			name:       "angle wrapper terminates before adjacent path",
+			message:    "<file:///public/file.go>/private/source/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "<file:///public/file.go><source>/file.go",
+		},
+		{
+			name:       "strict ASCII path components remain eligible",
+			message:    "file:///public/.config/name-1_value~2/file.go",
+			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
+			want:       "file:///public/.config/name-1_value~2/file.go",
+		},
+		{
 			name:       "file URI query and fragment",
 			message:    "`file:///private/source/file.go?mode=read#location`",
 			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
@@ -891,6 +993,11 @@ func TestBlockerPathAliasesPublishOneStableIdentity(t *testing.T) {
 	malformedSuffixAlias := build("/different/source", "file:///public/file.go?mode=read&&kind=x")
 	if malformedSuffix.Message != "file:<private-path>" || malformedSuffix.ID != malformedSuffixAlias.ID {
 		t.Fatalf("malformed file URI suffixes produced unstable blocker identities: %#v != %#v", malformedSuffix, malformedSuffixAlias)
+	}
+	malformedTail := build("/private/source", "file:///private source/file.go")
+	malformedTailAlias := build("C:/Work/Source", "file:///public/C:/Work/Source/file.go")
+	if malformedTail.Message != "file:<private-path>" || malformedTail.ID != malformedTailAlias.ID {
+		t.Fatalf("malformed file URI tails produced unstable blocker identities: %#v != %#v", malformedTail, malformedTailAlias)
 	}
 }
 

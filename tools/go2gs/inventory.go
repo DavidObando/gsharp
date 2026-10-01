@@ -479,7 +479,7 @@ func messageURIAt(
 			}
 			break
 		}
-		if unicode.IsSpace(current) {
+		if unicode.IsSpace(current) && !fileScheme {
 			break
 		}
 		if closing != 0 {
@@ -491,7 +491,7 @@ func messageURIAt(
 			} else if current == opening && opening != closing {
 				depth++
 			}
-		} else if strings.ContainsRune("\"`<>", current) {
+		} else if !fileScheme && strings.ContainsRune("\"`<>", current) {
 			break
 		}
 		uriEnd += size
@@ -670,33 +670,52 @@ func hasRepeatedPathSeparators(value string) bool {
 
 func hasUnsafeFileURIPathComponent(value string) bool {
 	componentStart := 0
+	nonEmptyComponents := 0
+	firstComponent := ""
 	for index := 0; index <= len(value); index++ {
 		if index < len(value) && !isPathSeparator(rune(value[index])) {
 			continue
 		}
 		component := value[componentStart:index]
-		if component == "." || component == ".." || hasAmbiguousFileURIPathRune(component) {
-			return true
+		if component != "" {
+			if isWindowsDriveAuthority(component) {
+				if nonEmptyComponents != 0 &&
+					(nonEmptyComponents != 1 || !strings.EqualFold(firstComponent, "localhost")) {
+					return true
+				}
+			} else if !isStrictFileURIPathComponent(component) {
+				return true
+			}
+			if nonEmptyComponents == 0 {
+				firstComponent = component
+			}
+			nonEmptyComponents++
 		}
 		componentStart = index + 1
 	}
 	return false
 }
 
-func hasAmbiguousFileURIPathRune(value string) bool {
+func isStrictFileURIPathComponent(value string) bool {
+	if value == "." || value == ".." {
+		return false
+	}
 	for len(value) > 0 {
 		current, size := utf8.DecodeRuneInString(value)
 		if current == utf8.RuneError && size == 1 {
-			return true
+			return false
 		}
-		if unicode.IsControl(current) ||
-			current > unicode.MaxASCII &&
-				(!unicode.IsLetter(current) && !unicode.IsNumber(current)) {
-			return true
+		if current <= unicode.MaxASCII {
+			if !isASCIIAlphaNumeric(byte(current)) &&
+				!strings.ContainsRune("-._~", current) {
+				return false
+			}
+		} else if !unicode.IsLetter(current) && !unicode.IsNumber(current) {
+			return false
 		}
 		value = value[size:]
 	}
-	return false
+	return true
 }
 
 func isBenignFileURISuffix(value string) bool {
