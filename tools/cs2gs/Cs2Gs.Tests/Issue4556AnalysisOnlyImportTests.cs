@@ -50,6 +50,38 @@ namespace Demo
     }
 
     [Fact]
+    public void ArrayReceiverShapeAnalysis_OfHomonymElement_SynthesizesNoAlias()
+    {
+        // A source `ParameterInfo` makes the metadata one a homonym, which a
+        // printing mapping disambiguates with a synthesized alias import. The
+        // shape-only mapping must not register that alias either.
+        string printed = Translate(@"
+using System;
+
+namespace Demo
+{
+    public class ParameterInfo
+    {
+    }
+
+    public class C
+    {
+        public void M(int value)
+        {
+        }
+
+        public int Count()
+        {
+            return typeof(C).GetMethod(""M"").GetParameters().Length;
+        }
+    }
+}");
+
+        Assert.Contains("GetParameters()", printed);
+        Assert.DoesNotContain("System.Reflection", printed);
+    }
+
+    [Fact]
     public void PrintedElementReference_AfterShapeAnalysis_StillImportsItsNamespace()
     {
         // Negative control: the analysis-only mapping runs first; the printed

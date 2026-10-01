@@ -200,7 +200,8 @@ public sealed class CSharpTypeMapper
     /// <summary>
     /// Issue #4556: how many <see cref="MapWithoutImportTracking"/> calls are
     /// active. While it is non-zero, a mapping records no namespace into
-    /// <see cref="shortenedNamespaces"/>, because nothing it returns is printed.
+    /// <see cref="shortenedNamespaces"/> and registers no new synthesized type
+    /// alias, because nothing it returns is printed.
     /// </summary>
     private int importTrackingSuppression;
 
@@ -450,11 +451,13 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
-    /// Issue #4556: maps <paramref name="type"/> exactly as <see cref="Map"/>
-    /// does, for a caller that only inspects the result's shape and never
-    /// prints it. A printed reference is what needs an <c>import</c>; recording
-    /// the namespace of an analysis-only mapping synthesizes an import no name
-    /// uses, and that import can make an unrelated bare name ambiguous (GS0547:
+    /// Issue #4556: maps <paramref name="type"/> like <see cref="Map"/> for a
+    /// caller that only inspects the result's shape and never prints it, so it
+    /// adds no namespace import and no synthesized type alias (an ambiguous
+    /// type is spelled namespace-qualified instead). A printed reference is
+    /// what needs an <c>import</c>; recording the namespace of an analysis-only
+    /// mapping synthesizes an import no name uses, and that import can make an
+    /// unrelated bare name ambiguous (GS0547:
     /// shape analysis of a <c>ParameterInfo[]</c> receiver imported
     /// <c>System.Reflection</c>, so the file's bare compiler <c>Binder</c>
     /// collided with <c>System.Reflection.Binder</c>).
@@ -1194,6 +1197,14 @@ public sealed class CSharpTypeMapper
         if (reuseOnly)
         {
             return null;
+        }
+
+        // Issue #4556: an analysis-only mapping prints nothing, so it must not
+        // register an alias import either; the qualified target spells the
+        // same type for whatever shape the caller inspects.
+        if (this.importTrackingSuppression != 0)
+        {
+            return target;
         }
 
         this.sourceDeclaredTypeNames ??= BuildSourceDeclaredTypeNames(
