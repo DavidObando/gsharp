@@ -312,6 +312,28 @@ public class Issue4591TupleOverNonRuntimeElementTests
             new[] { "String" },
         };
 
+        // A function-type element over an imported type: its own CLR type is
+        // still a host `Func<…>` instantiation, so the tuple keeps the previous
+        // host construction. An earlier draft of the fix made such a tuple
+        // symbolic, which broke exactly this LINQ shape in the code-exploder
+        // migration (`tools.Select(...)`, `tools.FirstOrDefault(...)`).
+        yield return new object[]
+        {
+            "function-type-element-through-linq",
+            """
+            package P
+            import System
+            import System.Linq
+
+            let tools = [](Name string, Handler (Uri) -> int32){("a", (u Uri) -> u.Port)}
+            let tool = tools.FirstOrDefault((t (Name string, Handler (Uri) -> int32)) -> t.Name == "a")
+            Console.WriteLine(tool.Handler(Uri("https://example.org:8443/")))
+            let names = tools.Select((t (Name string, Handler (Uri) -> int32)) -> t.Name).ToArray()
+            Console.WriteLine(names[0])
+            """,
+            new[] { "8443", "a" },
+        };
+
         // Explicit type arguments bypass inference and already bound before the
         // fix; kept so the context-aware construction cannot regress them.
         yield return new object[]

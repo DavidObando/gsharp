@@ -318,14 +318,16 @@ public sealed class TupleTypeSymbol : TypeSymbol
     /// <see cref="NotSupportedException"/> from <c>GetInterfaces</c> and every
     /// member lookup, which surfaced as GS9998 on an array-to-
     /// <c>IEnumerable</c> conversion and as a silently lost generic overload
-    /// candidate. The tuple is therefore closed in its elements' own load
-    /// context, with host primitives remapped into it. When no single context
-    /// can be determined the result is <see langword="null"/>: the tuple stays
-    /// symbolic, the state a tuple over a same-compilation type already has,
-    /// rather than carrying an instantiation nothing can reflect on.
+    /// candidate. When every such element provably belongs to one
+    /// <c>MetadataLoadContext</c>, the tuple is therefore closed in that
+    /// context, with host primitives remapped into it. Every other shape —
+    /// all-host elements, or an element whose context cannot be proven (for
+    /// instance a function type's <c>Func&lt;…&gt;</c>, which is itself already
+    /// a host instantiation) — keeps the previous host construction exactly,
+    /// so no shape that bound before changes.
     /// </remarks>
     /// <param name="elementTypes">The element CLR types, in order.</param>
-    /// <returns>The closed CLR type, or <see langword="null"/> when it cannot be built in one load context.</returns>
+    /// <returns>The closed CLR type.</returns>
     internal static Type? BuildClrType(Type[] elementTypes)
         => BuildClrType(elementTypes, new bool[elementTypes.Length]);
 
@@ -339,15 +341,42 @@ public sealed class TupleTypeSymbol : TypeSymbol
     /// </summary>
     /// <param name="elementTypes">The element CLR types, nullable value types unwrapped.</param>
     /// <param name="liftToNullable">Per element, whether to wrap it in <c>Nullable&lt;&gt;</c>.</param>
-    /// <returns>The closed CLR type, or <see langword="null"/> when it cannot be built in one load context.</returns>
+    /// <returns>The closed CLR type.</returns>
     private static Type? BuildClrType(Type[] elementTypes, bool[] liftToNullable)
     {
+        var hostObject = typeof(object);
         var contextObject = ResolveLoadContextObject(elementTypes);
-        if (contextObject == null)
+        if (!ReferenceEquals(contextObject, hostObject)
+            && TryBuildClrTypeInContext(elementTypes, liftToNullable, contextObject) is { } inContext)
         {
-            return null;
+            return inContext;
         }
 
+        // The previous construction, unchanged: host `Nullable<>` and host
+        // `ValueTuple<…>` (what `GetEffectiveClrType` and the old builder did).
+        var arguments = new Type[elementTypes.Length];
+        for (var i = 0; i < elementTypes.Length; i++)
+        {
+            arguments[i] = liftToNullable[i]
+                ? typeof(Nullable<>).MakeGenericType(elementTypes[i])
+                : elementTypes[i];
+        }
+
+        return BuildClrType(arguments, 0, arguments.Length, hostObject);
+    }
+
+    /// <summary>
+    /// Issue #4591: closes the tuple in the <c>MetadataLoadContext</c>
+    /// <paramref name="contextObject"/> belongs to, remapping host primitives
+    /// into it and building each nullable value type's <c>Nullable&lt;&gt;</c>
+    /// from that context.
+    /// </summary>
+    /// <param name="elementTypes">The element CLR types, nullable value types unwrapped.</param>
+    /// <param name="liftToNullable">Per element, whether to wrap it in <c>Nullable&lt;&gt;</c>.</param>
+    /// <param name="contextObject">The context's <c>System.Object</c>.</param>
+    /// <returns>The closed CLR type, or <see langword="null"/> when the context cannot build it.</returns>
+    private static Type? TryBuildClrTypeInContext(Type[] elementTypes, bool[] liftToNullable, Type contextObject)
+    {
         try
         {
             var arguments = new Type[elementTypes.Length];
@@ -356,9 +385,7 @@ public sealed class TupleTypeSymbol : TypeSymbol
                 var argument = ClrTypeUtilities.RemapHostCoreTypeToContext(elementTypes[i], contextObject);
                 if (liftToNullable[i])
                 {
-                    var nullableOpen = ReferenceEquals(contextObject.Assembly, typeof(object).Assembly)
-                        ? typeof(Nullable<>)
-                        : contextObject.Assembly.GetType("System.Nullable`1", throwOnError: false);
+                    var nullableOpen = contextObject.Assembly.GetType("System.Nullable`1", throwOnError: false);
                     if (nullableOpen == null)
                     {
                         return null;
@@ -376,7 +403,7 @@ public sealed class TupleTypeSymbol : TypeSymbol
         {
             // An element the remap could not move into the context (a host
             // type outside the core assembly) is rejected by the context's
-            // MakeGenericType; stay symbolic rather than fail.
+            // MakeGenericType; the caller falls back to the host build.
             return null;
         }
     }
@@ -465,18 +492,22 @@ public sealed class TupleTypeSymbol : TypeSymbol
     }
 
     /// <summary>
-    /// Issue #4591: the <c>System.Object</c> of the single load context every
-    /// element of <paramref name="elementTypes"/> can be closed in. Host
-    /// <c>RuntimeType</c> elements fit any context (they are remapped), so the
-    /// answer is the host <c>typeof(object)</c> unless some element comes from
-    /// a <c>MetadataLoadContext</c>, in which case it is that context's.
+    /// Issue #4591: the <c>System.Object</c> of the one
+    /// <c>MetadataLoadContext</c> every non-host element of
+    /// <paramref name="elementTypes"/> provably belongs to. Host
+    /// <c>RuntimeType</c> elements fit any context (they are remapped). The
+    /// answer is the host <c>typeof(object)</c>, meaning "keep the previous
+    /// host construction", whenever that cannot be proven: no element needs a
+    /// context, an element's context cannot be determined, an element is
+    /// already a host instantiation over a context type (it answers the host
+    /// context without being a <c>RuntimeType</c>), or two elements disagree.
     /// </summary>
     /// <param name="elementTypes">The element CLR types.</param>
-    /// <returns>The context's <c>System.Object</c>, or <see langword="null"/> when an element's context is unknown, is already a poisoned host instantiation, or two elements disagree.</returns>
-    private static Type? ResolveLoadContextObject(Type[] elementTypes)
+    /// <returns>The proven context's <c>System.Object</c>, otherwise the host <c>typeof(object)</c>.</returns>
+    private static Type ResolveLoadContextObject(Type[] elementTypes)
     {
         var hostObject = typeof(object);
-        var contextObject = hostObject;
+        Type? contextObject = null;
         foreach (var element in elementTypes)
         {
             if (element.IsRuntimeProvidedType())
@@ -484,31 +515,18 @@ public sealed class TupleTypeSymbol : TypeSymbol
                 continue;
             }
 
-            // A non-RuntimeType element that nonetheless answers the HOST
-            // context is a host generic already closed over a
-            // MetadataLoadContext type (a TypeBuilderInstantiation). It cannot
-            // be rebuilt from here, so the fail-safe is a symbolic tuple, never
-            // another instantiation over it.
             var elementObject = FindLoadContextObject(element);
-            if (elementObject == null || ReferenceEquals(elementObject.Assembly, hostObject.Assembly))
+            if (elementObject == null
+                || ReferenceEquals(elementObject.Assembly, hostObject.Assembly)
+                || (contextObject != null && !ReferenceEquals(elementObject, contextObject)))
             {
-                return null;
-            }
-
-            if (ReferenceEquals(elementObject, contextObject))
-            {
-                continue;
-            }
-
-            if (!ReferenceEquals(contextObject, hostObject))
-            {
-                return null;
+                return hostObject;
             }
 
             contextObject = elementObject;
         }
 
-        return contextObject;
+        return contextObject ?? hostObject;
     }
 
     /// <summary>
