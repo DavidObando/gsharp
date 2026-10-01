@@ -383,6 +383,37 @@ namespace Demo
     }
 
     [Fact]
+    public void RefReturningLocalFunctionNameofFromAnotherSwitchSection_IsHarmless()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int[] data = new int[] { 10 };
+                        switch (value) {
+                            case 0:
+                                static ref int At(int[] values) => ref values[0];
+                                return At(data);
+                            case 1:
+                                _ = nameof(At);
+                                return 0;
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("let At = func (values []int32) ref int32", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void RefReturningLocalFunctionCalledBeforeDeclarationInSwitchSection_RemainsALoudGap()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
@@ -627,6 +658,37 @@ namespace Demo
             "// unsupported: capturing recursive local function value 'First'",
             printed,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CapturingRecursiveLocalCalledFromSiblingSwitchSection_UsesLiftedHelper()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int offset = 1;
+                        switch (value) {
+                            case 0:
+                                int First(int n) => n == 0 ? offset : Second<int>(n - 1);
+                                int Second<T>(int n) => n == 0 ? offset : First(n - 1);
+                                return First(value);
+                            case 1:
+                                return First(value);
+                            default:
+                                return offset;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted recursive local function First", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "// unsupported: capturing recursive local function value 'First'",
+            printed,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     [Fact]
