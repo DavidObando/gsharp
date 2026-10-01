@@ -21,3 +21,15 @@ func TestFallbackEnsureOutputRootFailsBeforeMutation(t *testing.T) {
 		t.Fatalf("fallback output creation mutated the filesystem: %v", statErr)
 	}
 }
+
+func TestFallbackOwnedTempDirectoryFailsBeforeMutation(t *testing.T) {
+	parent := t.TempDir()
+	if _, err := createOwnedTempDir(parent, ".go2gs-work-*"); err == nil ||
+		!strings.Contains(err.Error(), "unsupported on this platform") {
+		t.Fatalf("fallback temporary directory creation returned %v", err)
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("fallback temporary directory creation mutated its parent: %v, %#v", err, entries)
+	}
+}

@@ -1,11 +1,13 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 
-//go:build !linux && !darwin
+//go:build !linux && !darwin && !windows
 
 package main
 
+import "errors"
+
 func cleanupOwnedTempDir(ownedTempDir, func(), func(string)) error {
-	return nil
+	return errors.New("secure temporary-directory cleanup is unsupported on this platform")
 }
 
 func secureTempCleanupSupported() bool {

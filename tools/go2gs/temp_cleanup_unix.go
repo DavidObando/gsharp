@@ -5,8 +5,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -224,14 +222,6 @@ func removeKnownPlaceholder(parentFD int, name string, expected unix.Stat_t) err
 		return err
 	}
 	return nil
-}
-
-func uniquePlaceholderName() (string, error) {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		return "", err
-	}
-	return ".go2gs-entry-" + hex.EncodeToString(value[:]), nil
 }
 
 func restoreRenamedDirectory(parentFD int, tombstone, original string) {

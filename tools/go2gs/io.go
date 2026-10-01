@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func readProfile(path string) (Profile, error) {
@@ -537,6 +538,9 @@ var (
 )
 
 func createOwnedTempDir(parent, pattern string) (ownedTempDir, error) {
+	if !secureTempCleanupSupported() {
+		return ownedTempDir{}, errors.New("secure temporary-directory cleanup is unsupported on this platform")
+	}
 	path, err := os.MkdirTemp(parent, pattern)
 	if err != nil {
 		return ownedTempDir{}, err
@@ -1260,14 +1264,33 @@ func stableID(kind, canonical string) string {
 	return kind + ":" + hex.EncodeToString(sum[:16])
 }
 
+func uniquePlaceholderName() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return ".go2gs-entry-" + hex.EncodeToString(value[:]), nil
+}
+
 func truncate(value string, max int) (string, bool) {
+	const ellipsis = "..."
+	normalized := strings.ToValidUTF8(value, "\uFFFD")
+	changed := normalized != value
+	value = normalized
+	if max <= 0 {
+		return "", changed || value != ""
+	}
 	if len(value) <= max {
-		return value, false
+		return value, changed
 	}
-	if max <= 3 {
-		return value[:max], true
+	if max <= len(ellipsis) {
+		return ellipsis[:max], true
 	}
-	return value[:max-3] + "...", true
+	end := max - len(ellipsis)
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end] + ellipsis, true
 }
 
 func slash(path string) string {

@@ -2160,6 +2160,18 @@ func TestOutputReleaseFailureOverridesIncompleteExit(t *testing.T) {
 }
 
 func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
+	if !secureTempCleanupSupported() {
+		parent := t.TempDir()
+		if _, err := createOwnedTempDir(parent, ".go2gs-work-*"); err == nil ||
+			!strings.Contains(err.Error(), "unsupported on this platform") {
+			t.Fatalf("unsupported platform created a private directory: %v", err)
+		}
+		entries, err := os.ReadDir(parent)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("unsupported cleanup path mutated its parent: %v, %#v", err, entries)
+		}
+		return
+	}
 	for _, pattern := range []string{".go2gs-bootstrap-*", ".go2gs-worker-*", ".go2gs-work-*"} {
 		t.Run("ordinary-"+pattern, func(t *testing.T) {
 			directory, err := createOwnedTempDir(t.TempDir(), pattern)
@@ -2175,12 +2187,6 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 			}
 			if err := directory.cleanup(); err != nil {
 				t.Fatal(err)
-			}
-			if !secureTempCleanupSupported() {
-				if _, err := os.Lstat(directory.path); err != nil {
-					t.Fatalf("fallback cleanup removed private directory: %v", err)
-				}
-				return
 			}
 			if _, err := os.Lstat(directory.path); !os.IsNotExist(err) {
 				t.Fatalf("ordinary owned directory remains: %v", err)
@@ -2205,12 +2211,17 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 			t.Fatal(err)
 		}
 		var tombstone string
-		if err := directory.cleanupWithHooks(nil, func(path string) { tombstone = path }); err == nil ||
-			!strings.Contains(err.Error(), "remains non-empty") {
+		err = directory.cleanupWithHooks(nil, func(path string) { tombstone = path })
+		if runtime.GOOS == "windows" && err != nil {
+			t.Fatalf("reparse-safe cleanup failed: %v", err)
+		}
+		if runtime.GOOS != "windows" && (err == nil || !strings.Contains(err.Error(), "remains non-empty")) {
 			t.Fatalf("retained symlink should report incomplete cleanup, got %v", err)
 		}
-		if info, err := os.Lstat(filepath.Join(tombstone, "link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
-			t.Fatalf("unbound symlink was not safely retained: %v, %v", info, err)
+		if runtime.GOOS != "windows" {
+			if info, err := os.Lstat(filepath.Join(tombstone, "link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("unbound symlink was not safely retained: %v, %v", info, err)
+			}
 		}
 		if data, err := os.ReadFile(outside); err != nil || string(data) != "safe" {
 			t.Fatalf("symlink target was changed: %q, %v", data, err)
@@ -2286,6 +2297,9 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 }
 
 func TestOwnedTemporaryDirectoryLateFileReplacementSurvives(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("atomic exchange cleanup is Unix-specific")
+	}
 	if !secureTempCleanupSupported() {
 		t.Skip("atomic exchange cleanup is unavailable")
 	}
@@ -2350,6 +2364,9 @@ func TestOwnedTemporaryDirectoryLateFileReplacementSurvives(t *testing.T) {
 }
 
 func TestOwnedTemporaryDirectoryExchangeFailureIsSafeAndReported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("atomic exchange cleanup is Unix-specific")
+	}
 	if !secureTempCleanupSupported() {
 		t.Skip("atomic exchange cleanup is unavailable")
 	}
@@ -2415,6 +2432,9 @@ func TestOwnedTemporaryDirectoryExchangeFailureIsSafeAndReported(t *testing.T) {
 }
 
 func TestOwnedTemporaryDirectoryCleanupErrorsReachOwners(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix failure injection uses atomic exchange hooks")
+	}
 	if !secureTempCleanupSupported() {
 		t.Skip("atomic exchange cleanup is unavailable")
 	}
