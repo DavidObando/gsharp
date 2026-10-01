@@ -55,10 +55,17 @@ public sealed class Issue4593ImportedBaseInterfaceReimplementationTests
             public var IsReadOnly bool = true
         }
 
+        // IList[int32] inherits IsReadOnly from ICollection[int32]: the
+        // inherited-property-slot path.
+        public class FieldListBag4593 : Collection[int32], IList[int32] {
+            public var IsReadOnly bool = true
+        }
+
         public func ReadOnlyViaInterface4593() bool {
             var collection ICollection[int32] = FieldBag4593()
             return collection.IsReadOnly
         }
+
         """;
 
     private const string RejectedSource = """
@@ -111,12 +118,26 @@ public sealed class Issue4593ImportedBaseInterfaceReimplementationTests
             IlVerifier.Verify(assemblyPath);
 
             var assembly = EmittedFixture.Load(assemblyPath);
-            var probe = assembly.GetTypes()
+            var probes = assembly.GetTypes()
                 .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
-                .Single(method => method.Name == "ReadOnlyViaInterface4593");
+                .ToArray();
 
             // Collection<int>'s own IsReadOnly is false; the field says true.
-            Assert.Equal(true, probe.Invoke(null, null));
+            // Direct slot (ICollection[int32] declares IsReadOnly):
+            Assert.Equal(true, probes.Single(method => method.Name == "ReadOnlyViaInterface4593").Invoke(null, null));
+
+            // Inherited slot (IList[int32] inherits IsReadOnly from
+            // ICollection[int32]): only the inherited-slot walk synthesizes
+            // this property, so assert the synthesized PropertyDef and its
+            // virtual getter. Runtime dispatch through ICollection[int32] is
+            // not observable here: gsc emits no InterfaceImpl row for the
+            // inherited interface, so the CLR keeps the base mapping (#4601).
+            var fieldListBag = assembly.GetTypes().Single(type => type.Name == "FieldListBag4593");
+            var synthesized = fieldListBag.GetProperty(
+                "IsReadOnly",
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+            Assert.NotNull(synthesized);
+            Assert.True(synthesized.GetMethod?.IsVirtual, "synthesized IsReadOnly getter must be virtual");
         }
         finally
         {
