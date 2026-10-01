@@ -703,6 +703,105 @@ namespace Demo
     }
 
     [Fact]
+    public void GenericRecursiveGroupCapturingInstanceReceiver_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private int offset;
+
+                    public int Run<T>(T value, int depth) {
+                        int First<U>(T item, int n) =>
+                            n == 0 ? this.offset : Second<U>(item, n - 1);
+                        int Second<V>(T item, int n) =>
+                            n == 0 ? offset : First<V>(item, n - 1);
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """, "capturing generic recursive local function");
+
+        Assert.Contains(
+            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StaticGenericRecursiveGroupUsingPatternInput_RemainsNative()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        static int First<U>(T item, int n) =>
+                            item.ToString() is { Length: > 0 } && n > 0
+                                ? Second<U>(item, n - 1)
+                                : 0;
+                        static int Second<V>(T item, int n) =>
+                            n > 0 ? First<V>(item, n - 1) : 0;
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("capturing generic recursive local function", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void GenericRecursiveGroupImplicitlyCapturingGenericContainingType_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C<T> {
+                    private int offset;
+
+                    public int Run(int depth) {
+                        int First<U>(U item, int n) =>
+                            n == 0 ? offset : Second<U>(item, n - 1);
+                        int Second<V>(V item, int n) =>
+                            n == 0 ? offset : First<V>(item, n - 1);
+                        return First<int>(0, depth);
+                    }
+                }
+            }
+            """, "capturing generic recursive local function");
+
+        Assert.Contains(
+            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericRecursiveGroupUsingStaticMemberOfGenericContainingType_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C<T> {
+                    private static int Shared() => 1;
+
+                    public int Run(int depth) {
+                        int offset = 1;
+                        int First<U>(U item, int n) =>
+                            n == 0 ? offset + Shared() : Second<U>(item, n - 1);
+                        int Second<V>(V item, int n) =>
+                            n == 0 ? offset : First<V>(item, n - 1);
+                        return First<int>(0, depth);
+                    }
+                }
+            }
+            """, "capturing generic recursive local function");
+
+        Assert.Contains(
+            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GenericRecursiveGroupWithTransitivelyCapturedEnclosingTypeParameter_RemainsALoudGap()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
