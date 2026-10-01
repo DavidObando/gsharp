@@ -1057,6 +1057,28 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression subject = this.TranslateExpression(node.Expression);
             var cases = new List<SwitchStatementCase>();
+            var sectionByLocalFunction = new Dictionary<IMethodSymbol, SwitchSectionSyntax>(
+                SymbolEqualityComparer.Default);
+            foreach (SwitchSectionSyntax section in node.Sections)
+            {
+                foreach (LocalFunctionStatementSyntax localFunction in section.Statements
+                    .OfType<LocalFunctionStatementSyntax>())
+                {
+                    using IDisposable modelScope = this.context.UseSemanticModelFor(localFunction.SyntaxTree);
+                    if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol symbol)
+                    {
+                        sectionByLocalFunction[symbol] = section;
+                    }
+                }
+            }
+
+            this.RegisterRecursiveLocalFunctionLifts(
+                node.Sections.SelectMany(section => section.Statements),
+                component => component
+                    .Select(symbol => sectionByLocalFunction[symbol])
+                    .Distinct()
+                    .Skip(1)
+                    .Any());
             foreach (SwitchSectionSyntax section in node.Sections)
             {
                 IReadOnlyList<StatementSyntax> ordered =

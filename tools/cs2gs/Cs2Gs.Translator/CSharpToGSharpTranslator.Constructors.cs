@@ -2011,7 +2011,10 @@ public sealed partial class CSharpToGSharpTranslator
                         declaration
                             .DescendantNodes()
                             .Select(this.context.GetDeclaredSymbol)
-                            .Where(symbol => symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol)
+                            .Where(symbol =>
+                                symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
+                                || (symbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction }
+                                    && !SymbolEqualityComparer.Default.Equals(symbol, localFunction)))
                             .Select(symbol => this.EmittedName(symbol, symbol.Name)));
                 }
             }
@@ -2404,7 +2407,12 @@ public sealed partial class CSharpToGSharpTranslator
             return new BlockStatement(statements);
         }
 
-        private void RegisterRecursiveLocalFunctionLifts(IEnumerable<StatementSyntax> statements)
+        private void RegisterRecursiveLocalFunctionLifts(IEnumerable<StatementSyntax> statements) =>
+            this.RegisterRecursiveLocalFunctionLifts(statements, static _ => false);
+
+        private void RegisterRecursiveLocalFunctionLifts(
+            IEnumerable<StatementSyntax> statements,
+            Func<IReadOnlyCollection<IMethodSymbol>, bool> forceLiftGroup)
         {
             // Issue #3399 (hybrid lowering) / #4197 (widened): a registering
             // mutual-recursion SCC's members — and any non-recursive callee
@@ -2473,9 +2481,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            bool CanUseNativeLocalFunctionGroup(IMethodSymbol member)
-            {
-                var component = localFunctions
+            List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> GetRecursiveComponent(
+                IMethodSymbol member) =>
+                localFunctions
                     .Where(candidate =>
                         IsRecursive(
                             member,
@@ -2486,6 +2494,10 @@ public sealed partial class CSharpToGSharpTranslator
                             member,
                             new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { member }))
                     .ToList();
+
+            bool CanUseNativeLocalFunctionGroup(
+                List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> component)
+            {
                 if (component.Count < 2)
                 {
                     return false;
@@ -2551,6 +2563,10 @@ public sealed partial class CSharpToGSharpTranslator
                             dependency,
                             new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { dependency }));
 
+                List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> component =
+                    GetRecursiveComponent(pair.Symbol);
+                bool forceLift = forceLiftGroup(component.Select(candidate => candidate.Symbol).ToList());
+
                 // Issue #3501: gsc `let`-bound function literals now declare
                 // and call through ref/out/in parameters (A2 + the ref-kind
                 // call-site modifier), so a ref-kind signature alone no longer
@@ -2558,8 +2574,9 @@ public sealed partial class CSharpToGSharpTranslator
                 // function does (the partner would be forward-referenced
                 // before its `let` declaration).
                 if (recursiveThroughOthers
-                    && (IsCapturingRecursiveGroupMember(pair.Symbol)
-                        || !CanUseNativeLocalFunctionGroup(pair.Symbol)))
+                    && (forceLift
+                        || IsCapturingRecursiveGroupMember(pair.Symbol)
+                        || !CanUseNativeLocalFunctionGroup(component)))
                 {
                     toLift.Add(pair.Symbol);
                 }
@@ -2757,11 +2774,10 @@ public sealed partial class CSharpToGSharpTranslator
                         excluded.Add(symbol);
                     }
 
-                    // A static local function already lifted as a shared helper has
+                    // A local function already lifted as a shared helper has
                     // working recursion there — nothing to do for it.
-                    if (localFunction.Modifiers.Any(SyntaxKind.StaticKeyword)
-                        && this.state.PendingStaticSynthHelpers is not null
-                        && this.state.LiftedStaticLocalFunctions.ContainsKey(symbol))
+                    if (this.state.LiftedStaticLocalFunctions.ContainsKey(symbol)
+                        || this.state.LiftedRecursiveLocalFunctions.ContainsKey(symbol))
                     {
                         continue;
                     }
