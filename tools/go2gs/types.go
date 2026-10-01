@@ -104,15 +104,99 @@ func canonicalTypeIdentityWith(t types.Type, identify func(*types.TypeName) stri
 		}
 	}
 	walk(t)
+	structuralOwners := structuralTypeOwners(t)
 	if len(declarations) == 0 {
-		return display
+		if len(structuralOwners) == 0 {
+			return display
+		}
+		return display + "\x00structuralOwners=" + strings.Join(structuralOwners, ",")
 	}
 	keys := make([]string, 0, len(declarations))
 	for declaration := range declarations {
 		keys = append(keys, declaration)
 	}
 	sort.Strings(keys)
-	return display + "\x00declarations=" + strings.Join(keys, ",")
+	result := display + "\x00declarations=" + strings.Join(keys, ",")
+	if len(structuralOwners) != 0 {
+		result += "\x00structuralOwners=" + strings.Join(structuralOwners, ",")
+	}
+	return result
+}
+
+func structuralTypeOwners(t types.Type) []string {
+	var result []string
+	active := map[types.Type]bool{}
+	var walk func(types.Type, string)
+	walk = func(current types.Type, position string) {
+		if current == nil || active[current] {
+			return
+		}
+		active[current] = true
+		defer delete(active, current)
+		switch value := current.(type) {
+		case *types.Named:
+			if arguments := value.TypeArgs(); arguments != nil {
+				for i := 0; i < arguments.Len(); i++ {
+					walk(arguments.At(i), position+".argument["+strconv.Itoa(i)+"]")
+				}
+			}
+		case *types.Alias:
+			if arguments := value.TypeArgs(); arguments != nil {
+				for i := 0; i < arguments.Len(); i++ {
+					walk(arguments.At(i), position+".argument["+strconv.Itoa(i)+"]")
+				}
+			}
+		case *types.Array:
+			walk(value.Elem(), position+".element")
+		case *types.Slice:
+			walk(value.Elem(), position+".element")
+		case *types.Pointer:
+			walk(value.Elem(), position+".element")
+		case *types.Map:
+			walk(value.Key(), position+".key")
+			walk(value.Elem(), position+".element")
+		case *types.Chan:
+			walk(value.Elem(), position+".element")
+		case *types.Struct:
+			for i := 0; i < value.NumFields(); i++ {
+				field := value.Field(i)
+				fieldPosition := position + ".field[" + strconv.Itoa(i) + "]"
+				if !field.Exported() && field.Pkg() != nil {
+					result = append(result, fieldPosition+"="+strconv.Quote(field.Pkg().Path()))
+				}
+				walk(field.Type(), fieldPosition+".type")
+			}
+		case *types.Tuple:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.At(i).Type(), position+".tuple["+strconv.Itoa(i)+"]")
+			}
+		case *types.Signature:
+			if value.Recv() != nil {
+				walk(value.Recv().Type(), position+".receiver")
+			}
+			walk(value.Params(), position+".parameters")
+			walk(value.Results(), position+".results")
+		case *types.Interface:
+			value.Complete()
+			for i := 0; i < value.NumMethods(); i++ {
+				method := value.Method(i)
+				methodPosition := position + ".method[" + strconv.Itoa(i) + "]"
+				if !method.Exported() && method.Pkg() != nil {
+					result = append(result, methodPosition+"="+strconv.Quote(method.Pkg().Path()))
+				}
+				walk(method.Type(), methodPosition+".type")
+			}
+			for i := 0; i < value.NumEmbeddeds(); i++ {
+				walk(value.EmbeddedType(i), position+".embedded["+strconv.Itoa(i)+"]")
+			}
+		case *types.Union:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.Term(i).Type(), position+".term["+strconv.Itoa(i)+"]")
+			}
+		}
+	}
+	walk(t, "root")
+	return result
 }
 
 func typeObjectIdentity(object *types.TypeName) string {

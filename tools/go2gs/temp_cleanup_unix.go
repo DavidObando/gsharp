@@ -14,6 +14,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var tempCleanupOpenFile = unix.Openat
+
 func cleanupOwnedTempDir(directory ownedTempDir, beforeRename func(), afterTombstoneIdentity func(string)) error {
 	parent := filepath.Dir(directory.path)
 	parentFD, err := unix.Open(parent, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
@@ -165,9 +167,12 @@ func quarantineAndRemoveFile(parentFD int, directoryPath, name string, before un
 	if before.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil
 	}
-	originalFD, err := unix.Openat(parentFD, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	originalFD, err := tempCleanupOpenFile(parentFD, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ELOOP) {
+			return nil
+		}
+		return fmt.Errorf("open temporary file for quarantine: %w", err)
 	}
 	defer unix.Close(originalFD)
 	var opened unix.Stat_t

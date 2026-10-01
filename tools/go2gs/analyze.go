@@ -756,7 +756,11 @@ func createSourceMirrorContext(ctx context.Context, sourceRoot, outRoot, workRoo
 		if err != nil {
 			return sourceMirror{}, fmt.Errorf("format operational go.mod: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(root, "go.mod"), data, 0o600); err != nil {
+		operationalGoMod := filepath.Join(root, "go.mod")
+		if err := os.Chmod(operationalGoMod, capturedGoMod.info.Mode().Perm()|0o200); err != nil {
+			return sourceMirror{}, fmt.Errorf("make operational go.mod writable: %w", err)
+		}
+		if err := os.WriteFile(operationalGoMod, data, 0o600); err != nil {
 			return sourceMirror{}, fmt.Errorf("write operational go.mod: %w", err)
 		}
 	}
@@ -2132,13 +2136,14 @@ func typeCheckPackages(ctx context.Context, loaded []*packages.Package, sources 
 			}
 		}
 		info := &types.Info{
-			Types:      map[ast.Expr]types.TypeAndValue{},
-			Defs:       map[*ast.Ident]types.Object{},
-			Uses:       map[*ast.Ident]types.Object{},
-			Implicits:  map[ast.Node]types.Object{},
-			Selections: map[*ast.SelectorExpr]*types.Selection{},
-			Scopes:     map[ast.Node]*types.Scope{},
-			Instances:  map[*ast.Ident]types.Instance{},
+			Types:        map[ast.Expr]types.TypeAndValue{},
+			Defs:         map[*ast.Ident]types.Object{},
+			Uses:         map[*ast.Ident]types.Object{},
+			Implicits:    map[ast.Node]types.Object{},
+			Selections:   map[*ast.SelectorExpr]*types.Selection{},
+			Scopes:       map[ast.Node]*types.Scope{},
+			Instances:    map[*ast.Ident]types.Instance{},
+			FileVersions: map[*ast.File]string{},
 		}
 		sizes := types.SizesFor("gc", profile.GOARCH)
 		if sizes == nil {

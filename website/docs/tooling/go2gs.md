@@ -96,11 +96,14 @@ The selected native `cmd/go` is captured into a parent bootstrap capsule only
 for handoff. Linux first validates the captured bytes as a supported static ELF
 executable or static PIE with no interpreter, imported libraries or dynamic
 symbols, RPATH, or RUNPATH. The Linux worker then enters a private user and mount namespace,
+applies a 2 GiB `RLIMIT_DATA` ceiling before either package load,
 recaptures the handoff by expected SHA-256, and places only `go` in a read-only
 tmpfs. It holds the directory descriptor and sets both process `PATH` and
 `packages.Config.Env` `PATH` to `/proc/<worker-pid>/fd/<dir-fd>`. Both package
 loads therefore execute the worker's immutable object and do not depend on the
 original path, bootstrap pathname, or ambient sibling tools after launch.
+Darwin preload requires a native executable Mach-O for the host CPU and rejects
+foreign formats or non-executable Mach-O file types.
 
 M0 uses `go/packages` only for metadata with `CGO_ENABLED=0` and no compiled
 file or export request. Captured source is parsed and type-checked in-process,
@@ -128,6 +131,11 @@ than by discovering or executing an ambient `git` command.
 Source inputs and authorized local replacements are loaded from a private,
 bounded no-follow mirror, so loader semantics and emitted inventory bytes
 come from the same captured snapshot.
+Only the mirrored operational `go.mod` is made owner-writable when replacement
+paths must be rebound; source permissions and unrelated mirrored files remain
+unchanged. Compiled-file records use `go/types`' effective per-file language
+version, and structural identities retain positional package ownership for
+unexported anonymous fields and interface methods.
 Schema validation permits `inventoryComplete: true` only when the artifact
 contains a loaded main module, package, owned source files, and typed-file
 ownership; blocker-free preload artifacts are rejected. Validation reparses

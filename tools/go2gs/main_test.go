@@ -5089,6 +5089,40 @@ func TestLocalReplacementInventoryIsRootIndependent(t *testing.T) {
 	}
 }
 
+func TestOperationalMirrorMakesOnlyRewrittenGoModOwnerWritable(t *testing.T) {
+	root := copyFixture(t, "replacement")
+	goMod := filepath.Join(root, "go.mod")
+	other := filepath.Join(root, "main.go")
+	if err := os.Chmod(goMod, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(other, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(t.TempDir(), "work")
+	if err := os.Mkdir(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mirror, err := createSourceMirror(root, t.TempDir(), work, testProfile().Limits)
+	if err != nil {
+		t.Fatalf("read-only source go.mod could not be rewritten operationally: %v", err)
+	}
+	assertMode := func(path string, wantWrite bool) {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotWrite := info.Mode().Perm()&0o200 != 0; gotWrite != wantWrite {
+			t.Fatalf("%s owner-writable = %v, want %v (mode %o)", path, gotWrite, wantWrite, info.Mode().Perm())
+		}
+	}
+	assertMode(goMod, false)
+	assertMode(other, false)
+	assertMode(filepath.Join(mirror.root, "go.mod"), true)
+	assertMode(filepath.Join(mirror.root, "main.go"), false)
+}
+
 func TestSourceOutputRootRelationships(t *testing.T) {
 	parent := t.TempDir()
 	source := filepath.Join(parent, "source")
@@ -5620,6 +5654,35 @@ func TestGOFLAGSTagsSelectPackagesAndInProcessSyntaxConsistently(t *testing.T) {
 		}) {
 			t.Fatalf("compiled tagged file %s lacks typed syntax", path)
 		}
+	}
+}
+
+func TestFileInventoryUsesEffectiveTypeCheckerLanguageVersion(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":     "module example.com/fileversion\n\ngo 1.27.0\n",
+		"current.go": "package fileversion\n\nvar Current = 1\n",
+		"legacy.go":  "//go:build go1.26\n\npackage fileversion\n\nvar Legacy = 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("file-version analysis failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	versions := map[string]string{}
+	for _, file := range analysis.Files {
+		if file.Role == "compiled" {
+			versions[file.Path] = file.LanguageVersion
+		}
+	}
+	if versions["source://legacy.go"] != "1.26" {
+		t.Fatalf("legacy.go language version = %q, want 1.26", versions["source://legacy.go"])
+	}
+	if versions["source://current.go"] != "1.27.0" {
+		t.Fatalf("current.go language version = %q, want module version 1.27.0", versions["source://current.go"])
 	}
 }
 

@@ -1522,7 +1522,7 @@ func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason str
 	id := stableID("file", b.packageIDs[pkg]+"\x00"+portable+"\x00"+hashBytes(data))
 	record := FileRecord{
 		ID: id, PackageID: b.packageIDs[pkg], Path: portable, Role: role, Reason: reason,
-		LanguageVersion: moduleGoVersion(pkg.Module), SHA256: hashBytes(data), Bytes: int64(len(data)),
+		LanguageVersion: fileLanguageVersion(pkg, path), SHA256: hashBytes(data), Bytes: int64(len(data)),
 		ContentBase64: base64.StdEncoding.EncodeToString(data), ValidUTF8: utf8.Valid(data),
 		Native: role == "native", Embed: role == "embed", Provenance: "go/packages",
 	}
@@ -1532,6 +1532,24 @@ func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason str
 	b.fileIDs[key] = id
 	b.seenFiles[id] = true
 	return id, nil
+}
+
+func fileLanguageVersion(pkg *packages.Package, path string) string {
+	fallback := moduleGoVersion(pkg.Module)
+	if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
+		return fallback
+	}
+	for _, file := range pkg.Syntax {
+		if filepath.Clean(pkg.Fset.PositionFor(file.Pos(), false).Filename) != filepath.Clean(path) {
+			continue
+		}
+		version := pkg.TypesInfo.FileVersions[file]
+		if version == "" {
+			return fallback
+		}
+		return strings.TrimPrefix(version, "go")
+	}
+	return fallback
 }
 
 func (b *inventoryBuilder) portablePath(pkg *packages.Package, path string) (string, error) {
