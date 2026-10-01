@@ -14,13 +14,17 @@ import (
 )
 
 func validateSelectedGoPlatform(data []byte) error {
+	return validateSelectedGoPlatformForArch(data, runtime.GOARCH)
+}
+
+func validateSelectedGoPlatformForArch(data []byte, goarch string) error {
 	file, err := elf.NewFile(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("selected Go Linux executable is not a valid ELF file: %w", err)
 	}
 	defer file.Close()
 
-	class, dataOrder, machine, ok := nativeELFPlatform()
+	class, dataOrder, machine, ok := elfPlatformForGoArch(goarch)
 	if !ok || file.Class != class || file.Data != dataOrder || file.Machine != machine ||
 		(file.Type != elf.ET_EXEC && file.Type != elf.ET_DYN) {
 		return fmt.Errorf("selected Go Linux ELF format is unsupported: class=%s data=%s machine=%s type=%s",
@@ -140,7 +144,11 @@ func dynamicSymbolSection(file *elf.File) *elf.Section {
 }
 
 func nativeELFPlatform() (elf.Class, elf.Data, elf.Machine, bool) {
-	switch runtime.GOARCH {
+	return elfPlatformForGoArch(runtime.GOARCH)
+}
+
+func elfPlatformForGoArch(goarch string) (elf.Class, elf.Data, elf.Machine, bool) {
+	switch goarch {
 	case "386":
 		return elf.ELFCLASS32, elf.ELFDATA2LSB, elf.EM_386, true
 	case "amd64":
@@ -149,6 +157,16 @@ func nativeELFPlatform() (elf.Class, elf.Data, elf.Machine, bool) {
 		return elf.ELFCLASS32, elf.ELFDATA2LSB, elf.EM_ARM, true
 	case "arm64":
 		return elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_AARCH64, true
+	case "loong64":
+		return elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_LOONGARCH, true
+	case "mips":
+		return elf.ELFCLASS32, elf.ELFDATA2MSB, elf.EM_MIPS, true
+	case "mipsle":
+		return elf.ELFCLASS32, elf.ELFDATA2LSB, elf.EM_MIPS, true
+	case "mips64":
+		return elf.ELFCLASS64, elf.ELFDATA2MSB, elf.EM_MIPS, true
+	case "mips64le":
+		return elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_MIPS, true
 	case "ppc64":
 		return elf.ELFCLASS64, elf.ELFDATA2MSB, elf.EM_PPC64, true
 	case "ppc64le":

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"debug/buildinfo"
 	"debug/elf"
+	"encoding/binary"
 	"errors"
 	"os"
 	"os/exec"
@@ -17,6 +18,119 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestLinuxELFPlatformCoversPinnedSupportedTargets(t *testing.T) {
+	expected := map[string]struct {
+		class   elf.Class
+		data    elf.Data
+		machine elf.Machine
+	}{
+		"386":      {elf.ELFCLASS32, elf.ELFDATA2LSB, elf.EM_386},
+		"amd64":    {elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_X86_64},
+		"arm":      {elf.ELFCLASS32, elf.ELFDATA2LSB, elf.EM_ARM},
+		"arm64":    {elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_AARCH64},
+		"loong64":  {elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_LOONGARCH},
+		"mips":     {elf.ELFCLASS32, elf.ELFDATA2MSB, elf.EM_MIPS},
+		"mipsle":   {elf.ELFCLASS32, elf.ELFDATA2LSB, elf.EM_MIPS},
+		"mips64":   {elf.ELFCLASS64, elf.ELFDATA2MSB, elf.EM_MIPS},
+		"mips64le": {elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_MIPS},
+		"ppc64":    {elf.ELFCLASS64, elf.ELFDATA2MSB, elf.EM_PPC64},
+		"ppc64le":  {elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_PPC64},
+		"riscv64":  {elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_RISCV},
+		"s390x":    {elf.ELFCLASS64, elf.ELFDATA2MSB, elf.EM_S390},
+	}
+	for target := range supportedGoTargets {
+		goos, goarch, _ := strings.Cut(target, "/")
+		if goos != "linux" {
+			continue
+		}
+		want, ok := expected[goarch]
+		if !ok {
+			t.Fatalf("pinned Linux target %s has no expected ELF tuple", target)
+		}
+		class, data, machine, ok := elfPlatformForGoArch(goarch)
+		if !ok || class != want.class || data != want.data || machine != want.machine {
+			t.Errorf("%s ELF tuple = (%s, %s, %s, %t), want (%s, %s, %s, true)",
+				target, class, data, machine, ok, want.class, want.data, want.machine)
+		}
+		delete(expected, goarch)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("ELF tuples are not pinned Linux targets: %v", expected)
+	}
+	if _, _, _, ok := elfPlatformForGoArch("unsupported"); ok {
+		t.Fatal("unsupported Linux host architecture was accepted")
+	}
+}
+
+func TestLinuxSelectedGoValidatesNewArchitectureELFTuples(t *testing.T) {
+	tests := []struct {
+		goarch  string
+		class   elf.Class
+		data    elf.Data
+		machine elf.Machine
+	}{
+		{"loong64", elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_LOONGARCH},
+		{"mips", elf.ELFCLASS32, elf.ELFDATA2MSB, elf.EM_MIPS},
+		{"mipsle", elf.ELFCLASS32, elf.ELFDATA2LSB, elf.EM_MIPS},
+		{"mips64", elf.ELFCLASS64, elf.ELFDATA2MSB, elf.EM_MIPS},
+		{"mips64le", elf.ELFCLASS64, elf.ELFDATA2LSB, elf.EM_MIPS},
+	}
+	for _, test := range tests {
+		t.Run(test.goarch, func(t *testing.T) {
+			if err := validateSelectedGoPlatformForArch(
+				minimalStaticELF(t, test.class, test.data, test.machine), test.goarch); err != nil {
+				t.Fatalf("exact ELF tuple rejected: %v", err)
+			}
+			wrongClass := elf.ELFCLASS32
+			if test.class == elf.ELFCLASS32 {
+				wrongClass = elf.ELFCLASS64
+			}
+			wrongData := elf.ELFDATA2LSB
+			if test.data == elf.ELFDATA2LSB {
+				wrongData = elf.ELFDATA2MSB
+			}
+			for _, mutant := range []struct {
+				name    string
+				fixture []byte
+			}{
+				{"class", minimalStaticELF(t, wrongClass, test.data, test.machine)},
+				{"data", minimalStaticELF(t, test.class, wrongData, test.machine)},
+				{"machine", minimalStaticELF(t, test.class, test.data, elf.EM_NONE)},
+			} {
+				t.Run(mutant.name, func(t *testing.T) {
+					if err := validateSelectedGoPlatformForArch(mutant.fixture, test.goarch); err == nil {
+						t.Fatal("foreign ELF tuple was accepted")
+					}
+				})
+			}
+		})
+	}
+}
+
+func minimalStaticELF(t *testing.T, class elf.Class, data elf.Data, machine elf.Machine) []byte {
+	t.Helper()
+	size := 52
+	headerSizeOffset := 40
+	if class == elf.ELFCLASS64 {
+		size = 64
+		headerSizeOffset = 52
+	}
+	result := make([]byte, size)
+	copy(result, []byte{0x7f, 'E', 'L', 'F'})
+	result[elf.EI_CLASS] = byte(class)
+	result[elf.EI_DATA] = byte(data)
+	result[elf.EI_VERSION] = byte(elf.EV_CURRENT)
+	var order binary.ByteOrder = binary.LittleEndian
+	if data == elf.ELFDATA2MSB {
+		order = binary.BigEndian
+	}
+	order.PutUint16(result[16:18], uint16(elf.ET_EXEC))
+	order.PutUint16(result[18:20], uint16(machine))
+	order.PutUint32(result[20:24], uint32(elf.EV_CURRENT))
+	order.PutUint16(result[headerSizeOffset:headerSizeOffset+2], uint16(size))
+	return result
+}
 
 func TestLinuxSelectedGoStaticValidation(t *testing.T) {
 	realGo := filepath.Join(runtime.GOROOT(), "bin", "go")
