@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"strconv"
 	"testing"
 	"unicode/utf8"
 )
@@ -46,15 +45,14 @@ func TestTruncatedDiagnosticIDMatchesPublishedJSON(t *testing.T) {
 	const (
 		max       = 6
 		packageID = "package:test"
-		kind      = 1
 		position  = "fixture.go:1:1"
 	)
 	message, truncated := truncate("αβγδ", max)
 	record := DiagnosticRecord{
-		ID:       stableID("diagnostic", packageID+"\x00"+strconv.Itoa(kind)+"\x00"+position+"\x00"+message),
-		Category: "type", Severity: "error", Message: message, Position: position,
+		Category: "loader", Severity: "error", Message: message, Position: position,
 		PackageID: packageID, Truncated: truncated,
 	}
+	record.ID = diagnosticRecordID(record)
 	first, err := marshalCanonical(record)
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +71,7 @@ func TestTruncatedDiagnosticIDMatchesPublishedJSON(t *testing.T) {
 	if !utf8.ValidString(published.Message) || len(published.Message) > max {
 		t.Fatalf("published message is invalid or too large: %q", published.Message)
 	}
-	wantID := stableID("diagnostic",
-		published.PackageID+"\x00"+strconv.Itoa(kind)+"\x00"+published.Position+"\x00"+published.Message)
+	wantID := diagnosticRecordID(published)
 	if published.ID != wantID {
 		t.Fatalf("published diagnostic ID = %q; want %q for message %q", published.ID, wantID, published.Message)
 	}

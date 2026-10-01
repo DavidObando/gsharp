@@ -204,8 +204,14 @@ and columns exactly. It
 requires the complete v1 handshake, mandatory fields and collections, exact
 record counts, valid references, and loaded main-module package/file ownership
 before `inventoryComplete` may be true. `validate-analysis` checks structural
-and relational consistency; it does not authenticate the recorded binaries or
-captured content.
+and relational consistency, including recomputing every deterministic record
+ID whose schema-v1 derivation is fully represented by the serialized payload
+(module, file, type, node, constant, scope, selection, call, method set,
+instance, embed, generate directive, dependency, feature, diagnostic, and
+blocker). Package and symbol IDs retain canonical loader/type ownership inputs
+that are not duplicated into their records and remain covered by uniqueness,
+reference, and ownership checks. Validation does not authenticate the recorded
+binaries or captured content.
 Compiled Go file records use the type checker's effective
 `types.Info.FileVersions` value, including a selected `go1.N` build constraint;
 non-syntax inputs retain the module language-version fallback. Structural type
@@ -220,7 +226,8 @@ artifacts/go2gs/go2gs validate-analysis \
 ```
 
 Validation rejects unknown schema versions, unknown required record kinds,
-duplicate IDs, dangling references, and inconsistent complete/ready states.
+stale payload-derived IDs, duplicate IDs, dangling references, and inconsistent
+complete/ready states.
 It accepts only a regular file whose opened identity and pre-read size are
 verified beneath a 512 MiB (536870912 byte) ceiling; growth beyond that bound
 is also rejected while reading. Profiles cannot configure `maxOutputBytes`

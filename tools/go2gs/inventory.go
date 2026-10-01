@@ -170,10 +170,11 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 		} else if !imported.Module.Main {
 			disposition = "dependency-unclassified"
 		}
-		depID := stableID("dependency", pkgID+"\x00"+path)
-		if !appendInventoryRecord(b, &b.analysis.Dependencies, DependencyRecord{
-			ID: depID, FromPackageID: pkgID, ImportPath: path, PackageID: importedID, Disposition: disposition,
-		}) {
+		dependency := DependencyRecord{
+			FromPackageID: pkgID, ImportPath: path, PackageID: importedID, Disposition: disposition,
+		}
+		dependency.ID = dependencyRecordID(dependency)
+		if !appendInventoryRecord(b, &b.analysis.Dependencies, dependency) {
 			return b.err
 		}
 	}
@@ -181,15 +182,15 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 	for _, pkgErr := range pkg.Errors {
 		message, truncated := truncate(b.sanitizeDiagnosticMessage(pkg, pkgErr.Msg), b.profile.Limits.MaxStringBytes)
 		position := b.portableDiagnosticPosition(pkg, pkgErr.Pos)
-		id := stableID("diagnostic", pkgID+"\x00"+strconv.Itoa(int(pkgErr.Kind))+"\x00"+position+"\x00"+message)
 		diagnostic := DiagnosticRecord{
-			ID: id, Category: packageErrorCategory(pkgErr.Kind), Severity: "error",
+			Category: packageErrorCategory(pkgErr.Kind), Severity: "error",
 			Message: message, Position: position, PackageID: pkgID, Truncated: truncated,
 		}
+		diagnostic.ID = diagnosticRecordID(diagnostic)
 		if !appendInventoryRecord(b, &b.analysis.Diagnostics, diagnostic) {
 			return b.err
 		}
-		record.DiagnosticIDs = append(record.DiagnosticIDs, id)
+		record.DiagnosticIDs = append(record.DiagnosticIDs, diagnostic.ID)
 		record.InventoryComplete = false
 	}
 
@@ -1519,19 +1520,19 @@ func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason str
 	if !captured {
 		return "", fmt.Errorf("selected package input was not captured in the immutable loader snapshot: %s", filepath.Base(path))
 	}
-	id := stableID("file", b.packageIDs[pkg]+"\x00"+portable+"\x00"+hashBytes(data))
 	record := FileRecord{
-		ID: id, PackageID: b.packageIDs[pkg], Path: portable, Role: role, Reason: reason,
+		PackageID: b.packageIDs[pkg], Path: portable, Role: role, Reason: reason,
 		LanguageVersion: fileLanguageVersion(pkg, path), SHA256: hashBytes(data), Bytes: int64(len(data)),
 		ContentBase64: base64.StdEncoding.EncodeToString(data), ValidUTF8: utf8.Valid(data),
 		Native: role == "native", Embed: role == "embed", Provenance: "go/packages",
 	}
+	record.ID = fileRecordID(record)
 	if !appendInventoryRecord(b, &b.analysis.Files, record) {
 		return "", b.err
 	}
-	b.fileIDs[key] = id
-	b.seenFiles[id] = true
-	return id, nil
+	b.fileIDs[key] = record.ID
+	b.seenFiles[record.ID] = true
+	return record.ID, nil
 }
 
 func fileLanguageVersion(pkg *packages.Package, path string) string {
@@ -1627,8 +1628,9 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 		}
 		astParents = append(astParents, node)
 		span := b.span(pkg, node.Pos(), node.End())
-		nodeID := syntaxNodeID(pkgID, fileID, node, span)
-		record := NodeRecord{ID: nodeID, PackageID: pkgID, FileID: fileID, Kind: fmt.Sprintf("%T", node), Span: span}
+		record := NodeRecord{PackageID: pkgID, FileID: fileID, Kind: fmt.Sprintf("%T", node), Span: span}
+		record.ID = nodeRecordID(record)
+		nodeID := record.ID
 		if len(parents) > 0 {
 			record.ParentID = parents[len(parents)-1]
 		}
@@ -1690,7 +1692,9 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 }
 
 func syntaxNodeID(pkgID, fileID string, node ast.Node, span SourceSpan) string {
-	return stableID("node", pkgID+"\x00"+fileID+"\x00"+fmt.Sprintf("%d:%d:%T", span.StartByte, span.EndByte, node))
+	return nodeRecordID(NodeRecord{
+		PackageID: pkgID, FileID: fileID, Kind: fmt.Sprintf("%T", node), Span: span,
+	})
 }
 
 func expressionTypeFacts(pkg *packages.Package, expr ast.Expr, tv types.TypeAndValue, parents map[ast.Node]ast.Node) (original, effective, conversion types.Type) {
@@ -1946,10 +1950,11 @@ func calleeObject(pkg *packages.Package, expression ast.Expr) types.Object {
 func (b *inventoryBuilder) addConstant(pkg *packages.Package, nodeID string, expr ast.Expr, tv types.TypeAndValue, contextType types.Type, span SourceSpan, arrayLength bool) {
 	exact := tv.Value.ExactString()
 	record := ConstantRecord{
-		ID: stableID("constant", nodeID+"\x00"+exact), NodeID: nodeID,
+		NodeID: nodeID,
 		TypeID: b.addType(pkg, tv.Type), Category: constantCategory(tv.Type), Exact: exact,
 		Untyped: isUntyped(tv.Type), ContextTypeID: b.addType(pkg, contextType), Span: span,
 	}
+	record.ID = constantRecordID(record)
 	if tv.Value.Kind() == constant.Complex {
 		record.RealExact = constant.Real(tv.Value).ExactString()
 		record.ImaginaryExact = constant.Imag(tv.Value).ExactString()
@@ -1964,10 +1969,11 @@ func (b *inventoryBuilder) addConstant(pkg *packages.Package, nodeID string, exp
 func (b *inventoryBuilder) addDeclaredConstant(pkg *packages.Package, nodeID, symbolID string, value *types.Const, span SourceSpan, iota bool) {
 	exact := value.Val().ExactString()
 	record := ConstantRecord{
-		ID: stableID("constant", symbolID+"\x00"+exact), NodeID: nodeID, SymbolID: symbolID,
+		NodeID: nodeID, SymbolID: symbolID,
 		TypeID: b.addType(pkg, value.Type()), Category: constantCategory(value.Type()), Exact: exact,
 		Untyped: isUntyped(value.Type()), Iota: iota, Span: span,
 	}
+	record.ID = constantRecordID(record)
 	if !record.Untyped {
 		record.ContextTypeID = record.TypeID
 	}
@@ -1979,7 +1985,8 @@ func (b *inventoryBuilder) addDeclaredConstant(pkg *packages.Package, nodeID, sy
 }
 
 func (b *inventoryBuilder) addCall(pkg *packages.Package, nodeID string, call *ast.CallExpr) {
-	record := CallRecord{ID: stableID("call", nodeID), NodeID: nodeID, Kind: "function", Ellipsis: call.Ellipsis.IsValid()}
+	record := CallRecord{NodeID: nodeID, Kind: "function", Ellipsis: call.Ellipsis.IsValid()}
+	record.ID = callRecordID(record)
 	if tv, ok := pkg.TypesInfo.Types[call.Fun]; ok && tv.IsType() {
 		record.Kind = "conversion"
 		record.SignatureTypeID = b.addType(pkg, tv.Type)
@@ -2081,10 +2088,12 @@ func (b *inventoryBuilder) addFeatureSites(pkg *packages.Package, pkgID, fileID 
 			disposition = "m1-prerequisite"
 			b.migrationBlock(blocker, "M1 requires an approved lowering/runtime design for "+feature, []string{pkgID})
 		}
-		if !appendInventoryRecord(b, &b.analysis.FeatureSites, FeatureSite{
-			ID: stableID("feature", nodeID+"\x00"+feature), NodeID: nodeID, PackageID: pkgID, FileID: fileID,
+		record := FeatureSite{
+			NodeID: nodeID, PackageID: pkgID, FileID: fileID,
 			Feature: feature, Disposition: disposition, Span: span,
-		}) {
+		}
+		record.ID = featureRecordID(record)
+		if !appendInventoryRecord(b, &b.analysis.FeatureSites, record) {
 			return
 		}
 	}
@@ -2118,12 +2127,12 @@ func (b *inventoryBuilder) addScopes(pkg *packages.Package) {
 	for index := range scopes {
 		entry := &scopes[index]
 		span := b.span(pkg, entry.node.Pos(), entry.node.End())
-		id := stableID("scope", b.packageIDs[pkg]+"\x00"+fmt.Sprintf("%d:%d", span.StartByte, span.EndByte))
-		b.scopeIDs[entry.scope] = id
-		ranges = append(ranges, scopeRange{start: entry.node.Pos(), end: entry.node.End(), id: id})
+		record := ScopeRecord{PackageID: b.packageIDs[pkg], Span: span}
+		record.ID = scopeRecordID(record)
+		b.scopeIDs[entry.scope] = record.ID
+		ranges = append(ranges, scopeRange{start: entry.node.Pos(), end: entry.node.End(), id: record.ID})
 		names := entry.scope.Names()
 		sort.Strings(names)
-		record := ScopeRecord{ID: id, PackageID: b.packageIDs[pkg], Span: span}
 		for _, name := range names {
 			object := entry.scope.Lookup(name)
 			symbolID := b.addObject(pkg, object, SourceSpan{})
@@ -2365,15 +2374,17 @@ func (b *inventoryBuilder) addSelections(pkg *packages.Package) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].expr.Pos() < entries[j].expr.Pos() })
 	for _, item := range entries {
 		span := b.span(pkg, item.expr.Pos(), item.expr.End())
-		nodeID := stableID("node", b.packageIDs[pkg]+"\x00"+b.fileIDForPosition(pkg, item.expr.Pos())+"\x00"+fmt.Sprintf("%d:%d:%T", span.StartByte, span.EndByte, item.expr))
+		nodeID := syntaxNodeID(b.packageIDs[pkg], b.fileIDForPosition(pkg, item.expr.Pos()), item.expr, span)
 		index := append([]int{}, item.selection.Index()...)
 		objectID := b.addObjectWithFallback(pkg, item.selection.Obj(), SourceSpan{}, selectionObjectIdentity(item.selection))
-		if !appendInventoryRecord(b, &b.analysis.Selections, SelectionRecord{
-			ID: stableID("selection", nodeID), NodeID: nodeID, Kind: selectionKind(item.selection.Kind()),
+		record := SelectionRecord{
+			NodeID: nodeID, Kind: selectionKind(item.selection.Kind()),
 			ObjectID:       objectID,
 			ReceiverTypeID: b.addType(pkg, item.selection.Recv()), TypeID: b.addType(pkg, item.selection.Type()),
 			IndexPath: index, Indirect: item.selection.Indirect(),
-		}) {
+		}
+		record.ID = selectionRecordID(record)
+		if !appendInventoryRecord(b, &b.analysis.Selections, record) {
 			return
 		}
 	}
@@ -2391,8 +2402,9 @@ func (b *inventoryBuilder) addInstances(pkg *packages.Package) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ident.Pos() < entries[j].ident.Pos() })
 	for _, item := range entries {
 		span := b.span(pkg, item.ident.Pos(), item.ident.End())
-		nodeID := stableID("node", b.packageIDs[pkg]+"\x00"+b.fileIDForPosition(pkg, item.ident.Pos())+"\x00"+fmt.Sprintf("%d:%d:%T", span.StartByte, span.EndByte, item.ident))
-		record := InstanceRecord{ID: stableID("instance", nodeID), NodeID: nodeID, TypeID: b.addType(pkg, item.instance.Type)}
+		nodeID := syntaxNodeID(b.packageIDs[pkg], b.fileIDForPosition(pkg, item.ident.Pos()), item.ident, span)
+		record := InstanceRecord{NodeID: nodeID, TypeID: b.addType(pkg, item.instance.Type)}
+		record.ID = instanceRecordID(record)
 		for i := 0; i < item.instance.TypeArgs.Len(); i++ {
 			record.TypeArgIDs = append(record.TypeArgIDs, b.addType(pkg, item.instance.TypeArgs.At(i)))
 		}
@@ -2419,12 +2431,13 @@ func (b *inventoryBuilder) addMethodSets(pkg *packages.Package) {
 			pointer bool
 		}{{t, false}, {types.NewPointer(t), true}} {
 			typeID := b.addType(pkg, candidate.t)
-			id := stableID("methodSet", typeID+"\x00"+strconv.FormatBool(candidate.pointer))
+			record := MethodSetRecord{TypeID: typeID, Pointer: candidate.pointer}
+			record.ID = methodSetRecordID(record)
+			id := record.ID
 			if b.seenMethodSets[id] {
 				continue
 			}
 			b.seenMethodSets[id] = true
-			record := MethodSetRecord{ID: id, TypeID: typeID, Pointer: candidate.pointer}
 			for _, method := range methodSetObjects(candidate.t) {
 				fallback := "method-set\x00" + typeID + "\x00" + method.Name()
 				record.MethodSymbolIDs = append(record.MethodSymbolIDs, b.addObjectWithFallback(pkg, method, SourceSpan{}, fallback))
@@ -2464,11 +2477,12 @@ func (b *inventoryBuilder) addEmbeds(pkg *packages.Package) {
 					break
 				}
 			}
-			if !appendInventoryRecord(b, &b.analysis.Embeds, EmbedRecord{
-				ID:        stableID("embed", b.packageIDs[pkg]+"\x00"+pattern+"\x00"+logical),
+			record := EmbedRecord{
 				PackageID: b.packageIDs[pkg], FileID: fileID, Pattern: pattern,
 				LogicalName: logical, ContentSHA256: hash,
-			}) {
+			}
+			record.ID = embedRecordID(record)
+			if !appendInventoryRecord(b, &b.analysis.Embeds, record) {
 				return
 			}
 		}
@@ -2534,10 +2548,11 @@ func (b *inventoryBuilder) addGenerateDirectives(pkg *packages.Package, fileID s
 				continue
 			}
 			span := b.span(pkg, comment.Pos(), comment.End())
-			if !appendInventoryRecord(b, &b.analysis.GenerateDirectives, GenerateRecord{
-				ID:     stableID("generate", fileID+"\x00"+fmt.Sprintf("%d", span.StartByte)),
+			record := GenerateRecord{
 				FileID: fileID, Directive: boundedDirective(strings.TrimPrefix(text, "go:generate "), b.profile.Limits.MaxStringBytes), Executed: false, Span: span,
-			}) {
+			}
+			record.ID = generateRecordID(record)
+			if !appendInventoryRecord(b, &b.analysis.GenerateDirectives, record) {
 				return
 			}
 		}
@@ -2558,7 +2573,7 @@ func (b *inventoryBuilder) addType(pkg *packages.Package, t types.Type) string {
 	}
 	display := canonicalType(t)
 	canonical := b.typeIdentity(pkg, t)
-	id := stableID("type", canonical)
+	id := typeRecordID(TypeRecord{Canonical: canonical})
 	b.typeIDs[t] = id
 	if b.seenTypes[id] {
 		return id
@@ -2771,17 +2786,18 @@ func (b *inventoryBuilder) addModule(module *packages.Module) (string, error) {
 			return "", err
 		}
 	}
+	record := ModuleRecord{
+		Path: module.Path, Version: module.Version, GoVersion: module.GoVersion, Main: module.Main,
+		ReplacementID: replacementID,
+	}
+	id := moduleRecordID(record)
 	canonical := module.Path + "\x00" + module.Version + "\x00replace\x00" + replacementID
-	id := stableID("module", canonical)
 	b.moduleIDs[canonical] = id
 	if b.seenModules[id] {
 		return id, nil
 	}
 	b.seenModules[id] = true
-	record := ModuleRecord{ID: id, Path: module.Path, Version: module.Version, GoVersion: module.GoVersion, Main: module.Main}
-	if replacementID != "" {
-		record.ReplacementID = replacementID
-	}
+	record.ID = id
 	if b.profile.VendorMode {
 		record.VendorProvenance = "source://vendor/modules.txt"
 	}
@@ -2796,15 +2812,14 @@ func (b *inventoryBuilder) addLocalReplacement(logicalPath string, replacement *
 	if err != nil {
 		return "", fmt.Errorf("hash local replacement for %s: %w", logicalPath, err)
 	}
-	canonical := logicalPath + "\x00local-replacement\x00" + hash
-	id := stableID("module", canonical)
+	record := ModuleRecord{Path: logicalPath, GoVersion: replacement.GoVersion, LocalContentSHA256: hash}
+	id := moduleRecordID(record)
 	if b.seenModules[id] {
 		return id, nil
 	}
 	b.seenModules[id] = true
-	if !appendInventoryRecord(b, &b.analysis.Modules, ModuleRecord{
-		ID: id, Path: logicalPath, GoVersion: replacement.GoVersion, LocalContentSHA256: hash,
-	}) {
+	record.ID = id
+	if !appendInventoryRecord(b, &b.analysis.Modules, record) {
 		return "", b.err
 	}
 	return id, b.err
@@ -2980,7 +2995,7 @@ func (b *inventoryBuilder) addTypeForUnknown(t types.Type) string {
 	}
 	display := canonicalType(t)
 	canonical := canonicalTypeIdentity(t)
-	id := stableID("type", canonical)
+	id := typeRecordID(TypeRecord{Canonical: canonical})
 	b.typeIDs[t] = id
 	if !b.seenTypes[id] {
 		b.seenTypes[id] = true
@@ -3012,15 +3027,17 @@ func (b *inventoryBuilder) addBlocker(blocks, category, message string, units, d
 	}
 	sort.Strings(units)
 	sort.Strings(diagnostics)
-	id := stableID("blocker", blocks+"\x00"+category+"\x00"+message+"\x00"+strings.Join(units, "\x00"))
+	record := BlockerRecord{
+		Blocks: blocks, Category: category, Message: message, AffectedUnits: units, DiagnosticIDs: diagnostics,
+	}
+	record.ID = blockerRecordID(record)
+	id := record.ID
 	for _, existing := range b.analysis.Blockers {
 		if existing.ID == id {
 			return
 		}
 	}
-	appendInventoryRecord(b, &b.analysis.Blockers, BlockerRecord{
-		ID: id, Blocks: blocks, Category: category, Message: message, AffectedUnits: units, DiagnosticIDs: diagnostics,
-	})
+	appendInventoryRecord(b, &b.analysis.Blockers, record)
 }
 
 func (b *inventoryBuilder) recordCount() int {

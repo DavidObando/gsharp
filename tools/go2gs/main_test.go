@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -92,6 +93,7 @@ func validIncompleteAnalysis() Analysis {
 		}},
 		RecordCounts: RecordCounts{Blockers: 1, Total: 1},
 	}
+	analysis.Blockers[0].ID = blockerRecordID(analysis.Blockers[0])
 	refreshSourceIdentity(&analysis)
 	return analysis
 }
@@ -3924,6 +3926,7 @@ func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing
 	mismatch := validIncompleteAnalysis()
 	mismatch.Toolchain.RequestedVersion = "1.1"
 	mismatch.Blockers[0].Category = "toolchain"
+	mismatch.Blockers[0].ID = blockerRecordID(mismatch.Blockers[0])
 	if err := writeJSON(path, mismatch, 1<<20); err != nil {
 		t.Fatal(err)
 	}
@@ -4021,10 +4024,12 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 	const expected = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const actual = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	blocker := func(category, blocks string) BlockerRecord {
-		return BlockerRecord{
-			ID: "blocker:" + category + ":" + blocks, Blocks: blocks, Category: category,
+		record := BlockerRecord{
+			Blocks: blocks, Category: category,
 			Message: "test", AffectedUnits: []string{}, DiagnosticIDs: []string{},
 		}
+		record.ID = blockerRecordID(record)
+		return record
 	}
 	withBlockers := func(analysis Analysis, blockers ...BlockerRecord) Analysis {
 		if blockers == nil {
@@ -4266,6 +4271,126 @@ func TestValidateAnalysisRejectsUTF8FlagMutation(t *testing.T) {
 		if err := validateAnalysis(mutated); err == nil || !strings.Contains(err.Error(), "content identity") {
 			t.Fatalf("validUtf8=%t mutation was accepted: %v", valid, err)
 		}
+	}
+}
+
+func TestValidateAnalysisRejectsStalePayloadDerivedRecordIDs(t *testing.T) {
+	complete, loaded, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !loaded {
+		t.Fatalf("build complete identity fixture: loaded=%v err=%v", loaded, err)
+	}
+	incomplete, loaded, err := analyze(t.Context(), copyFixture(t, "invalid"), t.TempDir(), testProfile())
+	if err != nil || loaded || len(incomplete.Diagnostics) == 0 {
+		t.Fatalf("build diagnostic identity fixture: loaded=%v diagnostics=%d err=%v",
+			loaded, len(incomplete.Diagnostics), err)
+	}
+	clone := func(value Analysis) Analysis {
+		data, marshalErr := json.Marshal(value)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var result Analysis
+		if unmarshalErr := json.Unmarshal(data, &result); unmarshalErr != nil {
+			t.Fatal(unmarshalErr)
+		}
+		return result
+	}
+	differentNodeID := func(value *Analysis, current string) string {
+		for _, node := range value.Nodes {
+			if node.ID != current {
+				return node.ID
+			}
+		}
+		t.Fatal("identity fixture has no alternate node")
+		return ""
+	}
+	tests := []struct {
+		name   string
+		kind   string
+		base   Analysis
+		mutate func(*Analysis)
+	}{
+		{"module", "module", complete, func(value *Analysis) {
+			value.Modules[0].Path += "/stale"
+		}},
+		{"file-content-and-hash", "file", complete, func(value *Analysis) {
+			data, decodeErr := base64.StdEncoding.DecodeString(value.Files[0].ContentBase64)
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			data = append(data, '\n')
+			value.Files[0].ContentBase64 = base64.StdEncoding.EncodeToString(data)
+			value.Files[0].SHA256 = hashBytes(data)
+			value.Files[0].Bytes = int64(len(data))
+			value.Files[0].ValidUTF8 = utf8.Valid(data)
+		}},
+		{"type", "type", complete, func(value *Analysis) {
+			value.Types[0].Canonical += "\x00stale"
+		}},
+		{"node", "node", complete, func(value *Analysis) {
+			value.Nodes[0].Kind += "Mutant"
+		}},
+		{"constant", "constant", complete, func(value *Analysis) {
+			value.Constants[0].Exact += "/1"
+		}},
+		{"scope", "scope", complete, func(value *Analysis) {
+			value.Scopes[0].Span.EndByte++
+		}},
+		{"selection", "selection", complete, func(value *Analysis) {
+			value.Selections[0].NodeID = differentNodeID(value, value.Selections[0].NodeID)
+		}},
+		{"call", "call", complete, func(value *Analysis) {
+			value.Calls[0].NodeID = differentNodeID(value, value.Calls[0].NodeID)
+		}},
+		{"method-set", "methodSet", complete, func(value *Analysis) {
+			value.MethodSets[0].Pointer = !value.MethodSets[0].Pointer
+		}},
+		{"instance", "instance", complete, func(value *Analysis) {
+			value.Instances[0].NodeID = differentNodeID(value, value.Instances[0].NodeID)
+		}},
+		{"embed", "embed", complete, func(value *Analysis) {
+			value.Embeds[0].Pattern += "/stale"
+		}},
+		{"generate", "generate", complete, func(value *Analysis) {
+			for _, node := range value.Nodes {
+				if node.FileID != value.GenerateDirectives[0].FileID {
+					value.GenerateDirectives[0].FileID = node.FileID
+					value.GenerateDirectives[0].Span = node.Span
+					return
+				}
+			}
+			t.Fatal("identity fixture has no alternate generated-directive file")
+		}},
+		{"dependency", "dependency", complete, func(value *Analysis) {
+			value.Dependencies[0].ImportPath += "/stale"
+		}},
+		{"feature", "feature", complete, func(value *Analysis) {
+			value.FeatureSites[0].Feature += "-stale"
+		}},
+		{"diagnostic", "diagnostic", incomplete, func(value *Analysis) {
+			value.Diagnostics[0].Message += " stale"
+		}},
+		{"diagnostic-category", "diagnostic", incomplete, func(value *Analysis) {
+			if value.Diagnostics[0].Category == "loader" {
+				value.Diagnostics[0].Category = "parser"
+			} else {
+				value.Diagnostics[0].Category = "loader"
+			}
+		}},
+		{"blocker", "blocker", complete, func(value *Analysis) {
+			value.Blockers[0].Message += " stale"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := clone(test.base)
+			test.mutate(&mutated)
+			err := validateAnalysis(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.kind+" record id") ||
+				!strings.Contains(err.Error(), "payload-derived identity") {
+				t.Fatalf("stale %s identity was accepted: %v", test.kind, err)
+			}
+		})
 	}
 }
 
@@ -4633,9 +4758,9 @@ func TestModuleRecordCountsRejectAddedAndRemovedRecords(t *testing.T) {
 		t.Fatalf("fixture analysis failed: complete=%v err=%v", complete, err)
 	}
 	added := analysis
-	added.Modules = append(append([]ModuleRecord{}, analysis.Modules...), ModuleRecord{
-		ID: "module:added", Path: "example.com/added",
-	})
+	addedModule := ModuleRecord{Path: "example.com/added"}
+	addedModule.ID = moduleRecordID(addedModule)
+	added.Modules = append(append([]ModuleRecord{}, analysis.Modules...), addedModule)
 	if err := validateAnalysis(added); err == nil || !strings.Contains(err.Error(), "recordCounts") {
 		t.Fatalf("adding a module without updating counts was accepted: %v", err)
 	}

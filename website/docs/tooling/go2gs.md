@@ -141,8 +141,14 @@ contains a loaded main module, package, owned source files, and typed-file
 ownership; blocker-free preload artifacts are rejected. Validation reparses
 captured bytes to verify raw and `//line`/`/*line*/` display coordinates,
 including columns and CRLF handling. It checks
-artifact structure and relationships, not the authenticity of recorded
-executables or content.
+artifact structure and relationships. It recomputes deterministic IDs for the
+module, file, type, node, constant, scope, selection, call, method-set,
+instance, embed, generate-directive, dependency, feature, diagnostic, and
+blocker records whose identity inputs are fully serialized. Package and symbol
+identities also depend on canonical loader/type ownership inputs not duplicated
+into their records, so validation instead enforces their uniqueness, references,
+and ownership. These checks do not authenticate recorded executables or
+content.
 
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
 value arrays, and concurrency are inventoried as typed syntax sites with
@@ -150,7 +156,8 @@ migration blockers. Their G# lowering and runtime representations are explicit
 M1 prerequisites and are not selected by M0.
 
 Schema v1 preserves compiled-file and package-initialization order and rejects
-missing fields, null collections, count mismatches, and dangling identities.
+missing fields, null collections, count mismatches, stale payload-derived IDs,
+and dangling identities.
 
 M0 does not emit G#, perform semantic lowering, run a migrated program, or
 provide a Go runtime compatibility layer. See
