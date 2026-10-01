@@ -51,6 +51,12 @@ selfmig_project_filters=(
   # a placeholder Main that the publish overwrites.
   --exclude bench/concurrency/clr
   --exclude bench/concurrency/aot
+  # Issue #4606 / ADR-0191: the go2gs prerequisite spike's AOT project is the
+  # same kind of apparatus. Its only C# is an empty placeholder Main, the
+  # build copies a gsc-emitted assembly over its output, and it refuses to
+  # load without -p:SpikeAssembly, so MSBuildWorkspace cannot even open it
+  # (CS2GS0001).
+  --exclude bench/go2gs-prerequisites/aot
 )
 
 # MSBuildWorkspace design-time project loads evaluate in Debug regardless of
