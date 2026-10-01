@@ -233,6 +233,7 @@ func (c *triggeredDeadlineContext) trigger() {
 func TestWindowsOwnedTempCleanupRunsOnBlockerAndTimeout(t *testing.T) {
 	run := func(t *testing.T, timeoutOnWork bool) error {
 		t.Helper()
+		configurePreloadGoFixture(t)
 		var created []string
 		previous := tempDirectoryCreatedHook
 		ctx := newTriggeredDeadlineContext(t.Context())

@@ -67,7 +67,7 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           go mod verify
-          $filter = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$'
+          $filter = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestWindowsSelectedGoPlatformValidation|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$'
           $securityTests = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe)$'
           $topLevelTests = @(go test -list '^Test' .)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -169,6 +169,7 @@ jobs:
             -not ($_.Test -eq $selectedTests[-1] -and $_.Action -eq 'pass')
           })
           Assert-SimulatedResult 'missing pass' (Get-GoTestSecurityResult (ConvertTo-SimulatedJson $missingPassEvents) $selectedTests 0) 1
+          Assert-SimulatedResult 'malformed JSON' (Get-GoTestSecurityResult @('not JSON') $selectedTests 0) 1
           Assert-SimulatedResult 'exit propagation' (Get-GoTestSecurityResult @('not JSON') $selectedTests 23) 23
           $events = @(go test -json -count=1 -run $filter .)
           $testExitCode = $LASTEXITCODE

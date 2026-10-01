@@ -394,7 +394,7 @@ func publishWorkerArtifactsContext(ctx context.Context, out *boundOutputRoot, an
 	if err := atomicWriteRoot(out, "analysis.json", analysisBytes, 0o644, nil, nil); err != nil {
 		return err
 	}
-	analysisInfo, err := out.root.Lstat("analysis.json")
+	analysisInfo, err := rootEntryStableInfo(out.root, "analysis.json")
 	if err != nil {
 		return err
 	}
@@ -417,7 +417,7 @@ func publishWorkerArtifactsContext(ctx context.Context, out *boundOutputRoot, an
 		_, cleanupErr := removeRootEntryIfSame(out.root, "analysis.json", analysisInfo)
 		return errors.Join(err, cleanupErr)
 	}
-	runInfo, err := out.root.Lstat("run.json")
+	runInfo, err := rootEntryStableInfo(out.root, "run.json")
 	if err != nil {
 		return err
 	}
@@ -1112,6 +1112,17 @@ func rootEntryMatches(root *os.Root, name string, expected os.FileInfo) (bool, e
 		return false, err
 	}
 	return os.SameFile(expected, current), nil
+}
+
+func rootEntryStableInfo(root *os.Root, name string) (_ os.FileInfo, err error) {
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
+	return file.Stat()
 }
 
 func removeRootEntryIfSame(root *os.Root, name string, expected os.FileInfo) (bool, error) {
