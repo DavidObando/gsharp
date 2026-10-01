@@ -472,6 +472,29 @@ namespace Demo
     }
 
     [Fact]
+    public void CapturingRecursiveLocalUsedAsDelegate_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int offset = 1;
+                        System.Func<int, int> callback = First;
+                        return callback(value);
+                        int First(int n) => n == 0 ? offset : Second<int>(n - 1);
+                        int Second<T>(int n) => n == 0 ? offset : First(n - 1);
+                    }
+                }
+            }
+            """, "capturing recursive member helpers require explicit capture arguments");
+
+        Assert.Contains(
+            "// unsupported: capturing recursive local function value 'First'",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ClaimedRecursiveGroup_StillLiftsUnsafeRefReturningDependency()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
@@ -568,8 +591,8 @@ namespace Demo
         Assert.Contains("AddPatternSwitch!!(", printed, StringComparison.Ordinal);
 
         // `CollectLabel` — the default-parameter non-recursive dependency —
-        // must NOT be folded into that group; it stays lifted to a synthetic
-        // helper (a real method, defaults and all).
+        // joins the nullable group, with its omitted default materialized at
+        // call sites.
         Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
         Assert.Contains("var CollectLabel", printed, StringComparison.Ordinal);
         Assert.Contains("CollectLabel!!(", printed, StringComparison.Ordinal);

@@ -1811,6 +1811,20 @@ public sealed partial class CSharpToGSharpTranslator
                     recursiveLocal,
                     out LiftedRecursiveLocalFunction recursiveLift))
             {
+                if (recursiveLift.Captures.Count > 0
+                    && this.IsLocalFunctionReferencedAsValue(
+                        recursiveLocal,
+                        GetLocalFunctionSiblingStatements(localFunction)))
+                {
+                    this.context.ReportUnsupported(
+                        localFunction,
+                        $"capturing recursive local function '{localFunction.Identifier.Text}' cannot be used as a delegate or function value after member lifting.");
+                    return new GStatement[]
+                    {
+                        new RawStatement($"// unsupported: capturing recursive local function value '{localFunction.Identifier.Text}'"),
+                    };
+                }
+
                 bool liftedIsAsync = localFunction.Modifiers.Any(SyntaxKind.AsyncKeyword);
                 List<Parameter> liftedParameters = this.MapParameters(
                     recursiveLocal,
