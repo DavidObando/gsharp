@@ -2872,10 +2872,62 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
+            // Issue #4601: every CLR interface row this type gets, keyed so a
+            // row is emitted once. Concrete interfaces are keyed by CLR type,
+            // symbolic generic ones (`IList[Shape]`, `IList[T]`) by display
+            // string; the #985 bridge rows below share the same sets.
+            var emittedClrInterfaces = new System.Collections.Generic.List<System.Type>();
+            var emittedSymbolicInterfaces = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+
+            bool IsClrInterfaceRowEmitted(System.Type clrIface)
+            {
+                foreach (var emitted in emittedClrInterfaces)
+                {
+                    if (ClrTypeUtilities.AreSame(emitted, clrIface))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            void EmitClrInterfaceRow(System.Type clrIface)
+            {
+                if (!IsClrInterfaceRowEmitted(clrIface))
+                {
+                    emittedClrInterfaces.Add(clrIface);
+                    this.emitCtx.Metadata.AddInterfaceImplementation(
+                        this.cache.StructTypeDefs[c],
+                        this.memberRefs.GetTypeHandleForMember(clrIface));
+                }
+            }
+
+            void EmitSymbolicInterfaceRow(TypeSymbol symbolicIface)
+            {
+                if (emittedSymbolicInterfaces.Add(symbolicIface.ToDisplayString(DisplayFormat.FullyQualified)))
+                {
+                    this.emitCtx.Metadata.AddInterfaceImplementation(
+                        this.cache.StructTypeDefs[c],
+                        this.memberRefs.GetElementTypeToken(symbolicIface));
+                }
+            }
+
             // Issue #525: emit InterfaceImpl rows for imported CLR interfaces
             // declared in the base-type clause so the resulting type is a
             // real CLR implementer (`Type.GetInterfaces()` surfaces them and
             // dispatch through an interface receiver hits the G# method).
+            //
+            // Issue #4601: each declared interface is followed by its
+            // transitive base interfaces, as csc emits them. The CLR re-maps
+            // only the interfaces a type itself lists, so with `IList[int32]`
+            // alone a G# member for an `ICollection[int32]` slot that an
+            // imported base class already implements was silently ignored by
+            // interface dispatch. The closure comes from the same projection
+            // the binder uses for inherited slots (`SafeGetInterfaces`, which
+            // is transitive even over sparse G#-emitted metadata, and
+            // `MapOpenClrTypeToSymbolicWithoutNullability` for symbolic
+            // arguments).
             if (!c.ImplementedClrInterfaces.IsDefaultOrEmpty)
             {
                 foreach (var ifaceSym in c.ImplementedClrInterfaces)
@@ -2886,19 +2938,36 @@ internal sealed class ReflectionMetadataEmitter
                     // InterfaceImpl over the real constructed shape
                     // (`IEquatable<Shape>`) via a symbolic TypeSpec rather than
                     // the erased `IEquatable<object>`.
-                    if (MemberLookup.TryGetSymbolicClrGenericInterface(ifaceSym, out _, out _))
+                    if (MemberLookup.TryGetSymbolicClrGenericInterface(ifaceSym, out var openIface, out var symbolicArgs))
                     {
-                        this.emitCtx.Metadata.AddInterfaceImplementation(
-                            this.cache.StructTypeDefs[c],
-                            this.memberRefs.GetElementTypeToken(ifaceSym));
+                        EmitSymbolicInterfaceRow(ifaceSym);
+                        foreach (var baseIface in ClrTypeUtilities.SafeGetInterfaces(openIface))
+                        {
+                            var baseSym = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                                baseIface,
+                                openIface,
+                                symbolicArgs,
+                                NullabilityFreeReason.TypeStructure);
+                            if (MemberLookup.TryGetSymbolicClrGenericInterface(baseSym, out _, out _))
+                            {
+                                EmitSymbolicInterfaceRow(baseSym);
+                            }
+                            else if (baseSym.ClrType is System.Type concreteBase)
+                            {
+                                EmitClrInterfaceRow(concreteBase);
+                            }
+                        }
+
                         continue;
                     }
 
                     if (ifaceSym?.ClrType is System.Type clrIface)
                     {
-                        this.emitCtx.Metadata.AddInterfaceImplementation(
-                            this.cache.StructTypeDefs[c],
-                            this.memberRefs.GetTypeHandleForMember(clrIface));
+                        EmitClrInterfaceRow(clrIface);
+                        foreach (var baseIface in ClrTypeUtilities.SafeGetInterfaces(clrIface))
+                        {
+                            EmitClrInterfaceRow(baseIface);
+                        }
                     }
                 }
             }
@@ -2912,8 +2981,6 @@ internal sealed class ReflectionMetadataEmitter
             // resolves against a declared interface.
             if (!c.Methods.IsDefaultOrEmpty)
             {
-                System.Collections.Generic.HashSet<System.Type>? bridgeInterfaces = null;
-                System.Collections.Generic.HashSet<string>? symbolicBridgeInterfaces = null;
                 foreach (var method in c.Methods)
                 {
                     var declaringIface = method.ExplicitInterfaceSlot?.DeclaringType;
@@ -2958,26 +3025,12 @@ internal sealed class ReflectionMetadataEmitter
                         && openDeclaring != null
                         && ClrTypeUtilities.AreSame(openDeclaring, declaringIface))
                     {
-                        symbolicBridgeInterfaces ??= new System.Collections.Generic.HashSet<string>(
-                            System.StringComparer.Ordinal);
-                        if (symbolicBridgeInterfaces.Add(
-                                symbolicDeclaring.ToDisplayString(DisplayFormat.FullyQualified)))
-                        {
-                            this.emitCtx.Metadata.AddInterfaceImplementation(
-                                this.cache.StructTypeDefs[c],
-                                this.memberRefs.GetElementTypeToken(symbolicDeclaring));
-                        }
+                        EmitSymbolicInterfaceRow(symbolicDeclaring);
 
                         continue;
                     }
 
-                    bridgeInterfaces ??= new System.Collections.Generic.HashSet<System.Type>();
-                    if (bridgeInterfaces.Add(declaringIface))
-                    {
-                        this.emitCtx.Metadata.AddInterfaceImplementation(
-                            this.cache.StructTypeDefs[c],
-                            this.memberRefs.GetTypeHandleForMember(declaringIface));
-                    }
+                    EmitClrInterfaceRow(declaringIface);
                 }
             }
         }
