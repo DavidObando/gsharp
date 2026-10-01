@@ -2524,6 +2524,32 @@ public sealed partial class CSharpToGSharpTranslator
                             new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { member }))
                     .ToList();
 
+            List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> GetDependencyClosure(
+                IEnumerable<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> roots)
+            {
+                var reachable = new HashSet<IMethodSymbol>(
+                    roots.Select(candidate => candidate.Symbol),
+                    SymbolEqualityComparer.Default);
+                var pending = new Stack<IMethodSymbol>(reachable);
+                while (pending.Count > 0)
+                {
+                    if (!edges.TryGetValue(pending.Pop(), out HashSet<IMethodSymbol> dependencies))
+                    {
+                        continue;
+                    }
+
+                    foreach (IMethodSymbol dependency in dependencies)
+                    {
+                        if (reachable.Add(dependency))
+                        {
+                            pending.Push(dependency);
+                        }
+                    }
+                }
+
+                return localFunctions.Where(candidate => reachable.Contains(candidate.Symbol)).ToList();
+            }
+
             bool CanUseNativeLocalFunctionGroup(
                 List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> component)
             {
@@ -2576,6 +2602,68 @@ public sealed partial class CSharpToGSharpTranslator
                         || statementList[indexes[^1] + 1] is not LocalFunctionStatementSyntax);
             }
 
+            bool CapturesOuterValue(
+                (LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol) candidate)
+            {
+                using IDisposable modelScope = this.context.UseSemanticModelFor(candidate.Syntax.SyntaxTree);
+                foreach (IdentifierNameSyntax identifier in candidate.Syntax.DescendantNodes()
+                    .OfType<IdentifierNameSyntax>())
+                {
+                    ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+                    if (symbol is not ILocalSymbol and not IParameterSymbol
+                        || symbol.DeclaringSyntaxReferences.Any(reference =>
+                            candidate.Syntax.Span.Contains(reference.Span)))
+                    {
+                        continue;
+                    }
+
+                    for (ISymbol owner = candidate.Symbol.ContainingSymbol;
+                        owner is IMethodSymbol;
+                        owner = owner.ContainingSymbol)
+                    {
+                        if (SymbolEqualityComparer.Default.Equals(symbol.ContainingSymbol, owner))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            }
+
+            bool ReferencesEnclosingTypeParameter(
+                (LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol) candidate)
+            {
+                var enclosingTypeParameters = new HashSet<ITypeParameterSymbol>(
+                    SymbolEqualityComparer.Default);
+                for (ISymbol owner = candidate.Symbol.ContainingSymbol;
+                    owner != null;
+                    owner = owner.ContainingSymbol)
+                {
+                    if (owner is IMethodSymbol method)
+                    {
+                        enclosingTypeParameters.UnionWith(method.TypeParameters);
+                    }
+                    else if (owner is INamedTypeSymbol type)
+                    {
+                        enclosingTypeParameters.UnionWith(type.TypeParameters);
+                    }
+                }
+
+                using IDisposable modelScope = this.context.UseSemanticModelFor(candidate.Syntax.SyntaxTree);
+                return candidate.Syntax.DescendantNodes()
+                    .Select(node => this.context.GetSymbolInfo(node).Symbol)
+                    .Any(symbol =>
+                        (symbol is ITypeParameterSymbol typeParameter
+                            && enclosingTypeParameters.Contains(typeParameter))
+                        || (symbol is ILocalSymbol local
+                            && enclosingTypeParameters.Any(enclosing =>
+                                TypeContainsTypeParameter(local.Type, enclosing)))
+                        || (symbol is IParameterSymbol parameter
+                            && enclosingTypeParameters.Any(enclosing =>
+                                TypeContainsTypeParameter(parameter.Type, enclosing))));
+            }
+
             var toLift = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             foreach (var pair in localFunctions)
             {
@@ -2597,6 +2685,27 @@ public sealed partial class CSharpToGSharpTranslator
                 bool forceLift = forceLiftGroup(component.Select(candidate => candidate.Symbol).ToList());
                 if (processOnlyForcedGroups && !forceLift)
                 {
+                    continue;
+                }
+
+                List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> dependencyClosure =
+                    GetDependencyClosure(component);
+
+                // A member fallback cannot name an enclosing method type parameter,
+                // while native generic closure lowering rejects this shape with GS0468.
+                // Include the callee closure because calling a capturing local captures
+                // that binding even when the recursive SCC does not name the value itself.
+                bool unsupportedCapturingGeneric =
+                    (component.Count > 1
+                        || ownDependencies.Any(dependency =>
+                            SymbolEqualityComparer.Default.Equals(dependency, pair.Symbol)))
+                    && component.Any(candidate => candidate.Syntax.TypeParameterList != null)
+                    && dependencyClosure.Any(CapturesOuterValue)
+                    && dependencyClosure.Any(ReferencesEnclosingTypeParameter);
+                if (unsupportedCapturingGeneric)
+                {
+                    this.state.UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions.UnionWith(
+                        component.Select(candidate => candidate.Symbol));
                     continue;
                 }
 
@@ -2626,7 +2735,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                 foreach (IMethodSymbol dependency in dependencies)
                 {
-                    if (toLift.Add(dependency))
+                    if (!this.state.UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions.Contains(
+                            dependency)
+                        && toLift.Add(dependency))
                     {
                         pending.Push(dependency);
                     }
@@ -2645,6 +2756,8 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (this.state.LiftedStaticLocalFunctions.ContainsKey(pair.Symbol)
                     || !toLift.Contains(pair.Symbol)
+                    || this.state.UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions.Contains(
+                        pair.Symbol)
                     || IsCapturingRecursiveGroupMember(pair.Symbol))
                 {
                     continue;
@@ -2658,6 +2771,8 @@ public sealed partial class CSharpToGSharpTranslator
             var capturingLocals = localFunctions
                 .Where(pair => !pair.Symbol.IsStatic
                     && toLift.Contains(pair.Symbol)
+                    && !this.state.UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions.Contains(
+                        pair.Symbol)
                     && !IsCapturingRecursiveGroupMember(pair.Symbol))
                 .ToList();
             if (capturingLocals.Count == 0)
