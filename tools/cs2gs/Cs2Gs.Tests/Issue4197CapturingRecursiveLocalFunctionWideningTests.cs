@@ -605,6 +605,86 @@ namespace Demo
     }
 
     [Fact]
+    public void SelfRecursiveLocalCalledFromEarlierSwitchSection_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                return First(value);
+                            case 1:
+                                static int First(int n) => n == 0 ? 0 : First(n - 1);
+                                return First(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void SelfRecursiveLocalForcedAcrossSwitchWithMethodTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth, int mode) {
+                        switch (mode) {
+                            case 0:
+                                return First(value, depth);
+                            case 1:
+                                static int First(T item, int n) =>
+                                    n == 0 ? 0 : First(item, n - 1);
+                                return First(value, depth);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConstrainedGenericRecursiveGroup_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(System.IDisposable value, int depth) {
+                        return First<System.IDisposable>(value, depth);
+
+                        static int First<T>(T item, int n) where T : System.IDisposable {
+                            item.Dispose();
+                            return n == 0 ? 0 : Second<T>(item, n - 1);
+                        }
+
+                        static int Second<U>(U item, int n) where U : System.IDisposable {
+                            item.Dispose();
+                            return n == 0 ? 0 : First<U>(item, n - 1);
+                        }
+                    }
+                }
+            }
+            """);
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        Assert.Contains("// lifted static local function Second", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void MixedRecursiveGroupSplitAcrossSwitchSections_UsesMemberFallback()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""

@@ -239,6 +239,98 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_AvoidsStaticImportsFromOtherDocuments()
+        {
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                new[]
+                {
+                    ("C.Import.cs", """
+                        using static System.Math;
+
+                        public partial class C
+                        {
+                            public int Existing() => Max(3, 4);
+                        }
+                        """),
+                    ("C.Helper.cs", """
+                        public partial class C
+                        {
+                            public int Run(int value)
+                            {
+                                return Max(value, value);
+                                static int Max(int left, int right) =>
+                                    left == 0 ? right : Other<int>(left - 1, right);
+                                static int Other<T>(int left, int right) => Max(left, right);
+                            }
+                        }
+                        """),
+                });
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+            var printed = new List<string>();
+            var translator = new CSharpToGSharpTranslator();
+            foreach (LoadedDocument document in project.Documents)
+            {
+                var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+                printed.Add(GSharpPrinter.Print(translator.TranslateDocument(document, context)));
+            }
+
+            string combined = string.Join(Environment.NewLine, printed);
+            Assert.Contains("func Max_2(", combined, StringComparison.Ordinal);
+            Assert.Contains("Max(3, 4)", combined, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed.ToArray());
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_AndSuffixedBackingFieldSharePartialTypeRegistry()
+        {
+            var sources = new[]
+            {
+                ("C.Property.cs", """
+                    public partial class C
+                    {
+                        private int _foo;
+
+                        public C(int value)
+                        {
+                            Foo = value;
+                        }
+
+                        public virtual int Foo { get; }
+                    }
+                    """),
+                ("C.Helper.cs", """
+                    public partial class C
+                    {
+                        public int Run(int value)
+                        {
+                            return _foo2(value);
+                            static int _foo2(int n) => n == 0 ? 0 : Other<int>(n - 1);
+                            static int Other<T>(int n) => _foo2(n);
+                        }
+                    }
+                    """),
+            };
+
+            foreach (bool reverse in new[] { false, true })
+            {
+                LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                    reverse ? sources.Reverse().ToArray() : sources);
+                Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+                var printed = new List<string>();
+                var translator = new CSharpToGSharpTranslator();
+                foreach (LoadedDocument document in project.Documents)
+                {
+                    var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+                    printed.Add(GSharpPrinter.Print(translator.TranslateDocument(document, context)));
+                }
+
+                TranslationTestValidation.AssertBinds(printed.ToArray());
+            }
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReusesNameAcrossUnrelatedTypes()
         {
             string printed = Translate("""

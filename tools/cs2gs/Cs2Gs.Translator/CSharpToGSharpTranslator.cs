@@ -87,6 +87,8 @@ public sealed partial class CSharpToGSharpTranslator
     // Keep their readable names unique across the whole compilation.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, LiftedLocalFunctionNameAllocator> LiftedLocalFunctionNames = new();
 
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, HashSet<INamedTypeSymbol>> AllStaticUsingTargetsCache = new();
+
     // ADR-0145 (§C/§D) / issue #3410: preserve each C# `partial` declaration as
     // a standalone G# `partial` part by default. This keeps members in the G#
     // file corresponding to their declaring C# file and lets the G# compiler's
@@ -1643,6 +1645,43 @@ public sealed partial class CSharpToGSharpTranslator
 
         return targets;
     }
+
+    private static HashSet<INamedTypeSymbol> GetOrCollectAllStaticUsingTargets(Compilation compilation) =>
+        AllStaticUsingTargetsCache.GetValue(
+            compilation,
+            static current =>
+            {
+                var targets = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+                foreach (SyntaxTree tree in current.SyntaxTrees)
+                {
+                    if (tree.GetRoot() is not CompilationUnitSyntax root)
+                    {
+                        continue;
+                    }
+
+                    SemanticModel model = current.GetSemanticModel(tree);
+                    IEnumerable<UsingDirectiveSyntax> usings = root.Usings
+                        .Concat(root.DescendantNodes()
+                            .OfType<BaseNamespaceDeclarationSyntax>()
+                            .SelectMany(declaration => declaration.Usings));
+                    foreach (UsingDirectiveSyntax directive in usings)
+                    {
+                        if (directive.StaticKeyword.IsKind(SyntaxKind.None)
+                            || directive.Name is null
+                            || directive.Alias != null)
+                        {
+                            continue;
+                        }
+
+                        if (model.GetSymbolInfo(directive.Name).Symbol is INamedTypeSymbol type)
+                        {
+                            targets.Add(type.OriginalDefinition);
+                        }
+                    }
+                }
+
+                return targets;
+            });
 
     /// <summary>
     /// The step-6 declaration dispatcher: a <see cref="CSharpSyntaxVisitor{TResult}"/>
