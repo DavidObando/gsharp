@@ -147,7 +147,12 @@ instance, embed, generate-directive, dependency, feature, diagnostic, and
 blocker records whose identity inputs are fully serialized. Package and symbol
 identities also depend on canonical loader/type ownership inputs not duplicated
 into their records, so validation instead enforces their uniqueness, references,
-and ownership. These checks do not authenticate recorded executables or
+and ownership. Schema-v1 file roles are limited to `compiled`, `active`, `test`,
+`ignored`, `native`, and `embed`, with exact native/embed flag agreement.
+Serialized syntax nodes must belong to compiled files, and each node-bearing
+file must be one parent-linked `*ast.File` tree without detached nodes or
+cycles. Incomplete artifacts may omit trees; complete artifacts require one for
+every compiled file. These checks do not authenticate recorded executables or
 content.
 
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed

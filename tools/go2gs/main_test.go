@@ -4469,7 +4469,7 @@ func TestValidateAnalysisRequiresCompleteLoadedOwnershipGraph(t *testing.T) {
 					value.Packages[index].CompiledFileIDs = []string{}
 				}
 			}
-		}, "owned source and compiled files"},
+		}, "belongs to noncompiled file"},
 		{"typed-file-root", func(value *Analysis) {
 			for index := range value.Packages {
 				value.Packages[index].InitializationOrder = []InitializationRecord{}
@@ -4507,6 +4507,103 @@ func TestValidateAnalysisRequiresCompleteLoadedOwnershipGraph(t *testing.T) {
 			if err := validateAnalysis(mutated); err == nil ||
 				(test.want != "" && !strings.Contains(err.Error(), test.want)) {
 				t.Fatalf("invalid complete artifact was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateAnalysisRejectsInvalidFileRolesAndNodeTrees(t *testing.T) {
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("build complete validation fixture: complete=%v err=%v", complete, err)
+	}
+	clone := func(value Analysis) Analysis {
+		data, marshalErr := json.Marshal(value)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var result Analysis
+		if unmarshalErr := json.Unmarshal(data, &result); unmarshalErr != nil {
+			t.Fatal(unmarshalErr)
+		}
+		return result
+	}
+	nonRootNodes := func(value *Analysis) []int {
+		var indexes []int
+		for index, node := range value.Nodes {
+			if node.Kind != "*ast.File" {
+				indexes = append(indexes, index)
+			}
+		}
+		return indexes
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Analysis)
+		want   string
+	}{
+		{"unknown-file-role", func(value *Analysis) {
+			value.Files[0].Role = "future"
+		}, "unsupported schema-v1 role"},
+		{"native-role-flag", func(value *Analysis) {
+			value.Files[0].Native = !value.Files[0].Native
+		}, "disagrees with native/embed flags"},
+		{"embed-role-flag", func(value *Analysis) {
+			value.Files[0].Embed = !value.Files[0].Embed
+		}, "disagrees with native/embed flags"},
+		{"tree-on-noncompiled-file", func(value *Analysis) {
+			for packageIndex := range value.Packages {
+				if len(value.Packages[packageIndex].CompiledFileIDs) < 2 {
+					continue
+				}
+				fileID := value.Packages[packageIndex].CompiledFileIDs[0]
+				value.Packages[packageIndex].CompiledFileIDs = value.Packages[packageIndex].CompiledFileIDs[1:]
+				for fileIndex := range value.Files {
+					if value.Files[fileIndex].ID == fileID {
+						value.Files[fileIndex].Role = "ignored"
+						value.Files[fileIndex].Native = false
+						value.Files[fileIndex].Embed = false
+						return
+					}
+				}
+			}
+			t.Fatal("validation fixture has no package with multiple compiled files")
+		}, "belongs to noncompiled file"},
+		{"detached-parentless-node", func(value *Analysis) {
+			indexes := nonRootNodes(value)
+			if len(indexes) == 0 {
+				t.Fatal("validation fixture has no non-root node")
+			}
+			value.Nodes[indexes[0]].ParentID = ""
+		}, "detached parentless non-*ast.File node"},
+		{"self-cycle", func(value *Analysis) {
+			indexes := nonRootNodes(value)
+			if len(indexes) == 0 {
+				t.Fatal("validation fixture has no non-root node")
+			}
+			value.Nodes[indexes[0]].ParentID = value.Nodes[indexes[0]].ID
+		}, "self-cycle"},
+		{"multi-node-cycle", func(value *Analysis) {
+			indexes := nonRootNodes(value)
+			for _, first := range indexes {
+				for _, second := range indexes {
+					if first != second && value.Nodes[first].FileID == value.Nodes[second].FileID {
+						value.Nodes[first].ParentID = value.Nodes[second].ID
+						value.Nodes[second].ParentID = value.Nodes[first].ID
+						return
+					}
+				}
+			}
+			t.Fatal("validation fixture has no two non-root nodes in one file")
+		}, "parent cycle"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := clone(analysis)
+			test.mutate(&mutated)
+			err := validateAnalysis(mutated)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("schema-v1 mutation was accepted, want %q: %v", test.want, err)
 			}
 		})
 	}

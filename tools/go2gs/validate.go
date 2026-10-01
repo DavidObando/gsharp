@@ -708,8 +708,15 @@ func validateRecordFields(a Analysis) error {
 	}
 	for _, value := range a.Files {
 		data, err := base64.StdEncoding.DecodeString(value.ContentBase64)
+		native, embed, validRole := fileRoleFlags(value.Role)
+		if !validRole {
+			return fmt.Errorf("file %q has unsupported schema-v1 role %q", value.ID, value.Role)
+		}
+		if value.Native != native || value.Embed != embed {
+			return fmt.Errorf("file %q role %q disagrees with native/embed flags", value.ID, value.Role)
+		}
 		if value.ID == "" || value.PackageID == "" || !validPortableLocation(value.Path) ||
-			value.Role == "" || value.Provenance == "" ||
+			value.Provenance == "" ||
 			!validSHA256(value.SHA256) || value.Bytes < 0 || err != nil ||
 			int64(len(data)) != value.Bytes || hashBytes(data) != value.SHA256 ||
 			value.ValidUTF8 != utf8.Valid(data) {
@@ -864,6 +871,7 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 	symbols := make(map[string]SymbolRecord, len(a.Symbols))
 	packagePaths := make(map[string]bool, len(a.Packages))
 	fileListings := map[string]map[string]int{}
+	compiledFileListings := map[string]map[string]bool{}
 	positionMaps := map[string]*sourcePositionMap{}
 	for _, pkg := range a.Packages {
 		packages[pkg.ID] = pkg
@@ -886,6 +894,7 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 				return fmt.Errorf("package %q compiled file %q is not listed exactly once", pkg.ID, fileID)
 			}
 		}
+		compiledFileListings[pkg.ID] = compiled
 	}
 	for _, file := range a.Files {
 		if _, ok := packages[file.PackageID]; !ok {
@@ -903,33 +912,24 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 			}
 		}
 	}
+	nodesByFile := map[string][]string{}
+	var nodeFileOrder []string
 	for _, node := range a.Nodes {
 		file, ok := files[node.FileID]
 		if !ok || file.PackageID != node.PackageID {
 			return fmt.Errorf("node %q package/file ownership is inconsistent", node.ID)
 		}
+		if !compiledFileListings[node.PackageID][node.FileID] {
+			return fmt.Errorf("node %q belongs to noncompiled file %q", node.ID, node.FileID)
+		}
 		if err := validateSpanForFile(node.Span, file, node.ID+".span", positionMaps); err != nil {
 			return err
 		}
 		nodes[node.ID] = node
-	}
-	if a.InventoryComplete {
-		astFiles := map[string]int{}
-		for _, node := range a.Nodes {
-			if node.Kind == "*ast.File" {
-				if node.ParentID != "" {
-					return fmt.Errorf("complete analysis *ast.File node %q has a parent", node.ID)
-				}
-				astFiles[node.FileID]++
-			}
+		if len(nodesByFile[node.FileID]) == 0 {
+			nodeFileOrder = append(nodeFileOrder, node.FileID)
 		}
-		for _, pkg := range a.Packages {
-			for _, fileID := range pkg.CompiledFileIDs {
-				if astFiles[fileID] != 1 {
-					return fmt.Errorf("complete analysis compiled file %q requires exactly one *ast.File node", fileID)
-				}
-			}
-		}
+		nodesByFile[node.FileID] = append(nodesByFile[node.FileID], node.ID)
 	}
 	for _, node := range a.Nodes {
 		if node.ParentID == "" {
@@ -938,6 +938,18 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 		parent, ok := nodes[node.ParentID]
 		if !ok || parent.PackageID != node.PackageID || parent.FileID != node.FileID {
 			return fmt.Errorf("node %q parent %q ownership is inconsistent", node.ID, node.ParentID)
+		}
+	}
+	if err := validateNodeTrees(nodeFileOrder, nodesByFile, nodes); err != nil {
+		return err
+	}
+	if a.InventoryComplete {
+		for _, pkg := range a.Packages {
+			for _, fileID := range pkg.CompiledFileIDs {
+				if len(nodesByFile[fileID]) == 0 {
+					return fmt.Errorf("complete analysis compiled file %q requires exactly one *ast.File node", fileID)
+				}
+			}
 		}
 	}
 	for _, symbol := range a.Symbols {
@@ -1094,6 +1106,52 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 	for _, value := range a.Types {
 		if value.Package != "" && !packagePaths[value.Package] {
 			return fmt.Errorf("type %q has unknown package path %q", value.ID, value.Package)
+		}
+	}
+	return nil
+}
+
+func validateNodeTrees(fileOrder []string, nodesByFile map[string][]string, nodes map[string]NodeRecord) error {
+	for _, fileID := range fileOrder {
+		nodeIDs := nodesByFile[fileID]
+		roots := make([]string, 0, 1)
+		for _, nodeID := range nodeIDs {
+			node := nodes[nodeID]
+			if node.ParentID == "" {
+				if node.Kind != "*ast.File" {
+					return fmt.Errorf("node %q is a detached parentless non-*ast.File node", node.ID)
+				}
+				roots = append(roots, node.ID)
+			} else if node.Kind == "*ast.File" {
+				return fmt.Errorf("*ast.File node %q has a parent", node.ID)
+			}
+		}
+
+		state := make(map[string]uint8, len(nodeIDs))
+		for _, startID := range nodeIDs {
+			if state[startID] == 2 {
+				continue
+			}
+			var path []string
+			currentID := startID
+			for currentID != "" && state[currentID] == 0 {
+				state[currentID] = 1
+				path = append(path, currentID)
+				currentID = nodes[currentID].ParentID
+			}
+			if currentID != "" && state[currentID] == 1 {
+				if nodes[currentID].ParentID == currentID {
+					return fmt.Errorf("node %q has a self-cycle", currentID)
+				}
+				return fmt.Errorf("node graph for file %q contains a parent cycle at node %q", fileID, currentID)
+			}
+			for _, nodeID := range path {
+				state[nodeID] = 2
+			}
+		}
+
+		if len(roots) != 1 {
+			return fmt.Errorf("node graph for file %q requires exactly one parentless *ast.File root; found %d", fileID, len(roots))
 		}
 	}
 	return nil

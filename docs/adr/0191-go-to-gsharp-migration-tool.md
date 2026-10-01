@@ -237,6 +237,12 @@ ownership inputs that schema v1 does not duplicate into those records, so their
 uniqueness, references, and ownership are validated without claiming payload
 recomputation. Deterministic output IDs come from canonical declarations/types,
 not dictionary traversal or absolute cache paths.
+Schema-v1 file roles are closed to `compiled`, `active`, `test`, `ignored`,
+`native`, and `embed`; the serialized native/embed flags must agree with the
+role. Every serialized syntax node belongs to a compiled file, and each
+node-bearing file is exactly one `*ast.File`-rooted parent tree with no
+detached nodes or cycles. Incomplete inventories may omit a compiled file's
+tree, while complete inventories require one for every compiled file.
 Blocker messages redact machine-local source, mirror, replacement, temporary,
 and output roots, normalize invalid UTF-8, and apply the profile string limit
 before stable-ID derivation, deduplication, counting, sorting, or publication.
@@ -807,6 +813,9 @@ bounded read, rejects initially oversized inputs before decoding, and rejects
 growth that crosses the ceiling while reading. Producer and validator also
 share the payload-derived record-ID formulas listed above, so a payload edit
 cannot retain a stale deterministic ID and still pass structural validation.
+The validator also closes the schema-v1 file-role vocabulary and verifies each
+serialized per-file AST as one bounded, iterative parent walk rather than
+trusting producer-only tree construction.
 This is an internal consistency check, not artifact authentication.
 
 Canonicalize output paths under declared roots, reject traversal and symlink
