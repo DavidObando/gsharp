@@ -2013,8 +2013,9 @@ public sealed partial class CSharpToGSharpTranslator
                             .Select(this.context.GetDeclaredSymbol)
                             .Where(symbol =>
                                 symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
-                                || (symbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction }
-                                    && !SymbolEqualityComparer.Default.Equals(symbol, localFunction)))
+                                || (symbol is IMethodSymbol method
+                                    && method.MethodKind == MethodKind.LocalFunction
+                                    && !SymbolEqualityComparer.Default.Equals(method, localFunction)))
                             .Select(symbol => this.EmittedName(symbol, symbol.Name)));
                 }
             }
