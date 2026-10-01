@@ -68,6 +68,9 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
         public interface IEv { static abstract event System.Action Changed; }
         public interface IEv2 : IEv { }
 
+        public interface IM2<T> { static abstract int M<U>(T x, U y); }
+        public interface IInst<T> { int N<U>(T x, U y); }
+
         public static class Probe
         {
             public static int Z<T>() where T : IS => T.Z();
@@ -75,6 +78,7 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
             public static int P<T>() where T : IP => T.P;
             public static int Count<T>() where T : IGen => T.Count<string>("abc");
             public static void Hook<T>(System.Action a) where T : IEv => T.Changed += a;
+            public static int N<T, U>(IInst<T> i, T x, U y) => i.N(x, y);
         }
         """;
 
@@ -227,6 +231,37 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
             Console.WriteLine(Probe.P[PP2]())
             """,
             new[] { "9", "10" },
+        };
+
+        // A slot generic at both the interface and the method level, over a G#
+        // type: the method-owned `U` is matched against the candidate's own
+        // type parameter, never against the interface's `Shape`. The instance
+        // counterpart shares the matcher (it reported GS0187 before).
+        yield return new object[]
+        {
+            "symbolic-interface-with-a-generic-method",
+            """
+            package P
+            import System
+            import System.Linq
+            import Clib
+
+            class Shape { }
+            struct GM : IM2[Shape] {
+                shared {
+                    func M[U](x Shape, y U) int32 { return 77 }
+                }
+            }
+            class GI : IInst[Shape] {
+                func N[U](x Shape, y U) int32 { return 88 }
+            }
+
+            let iface = typeof(GM).GetInterfaces().Where((i Type) -> i.Name == "IM2`1").First()
+            let target = typeof(GM).GetInterfaceMap(iface).TargetMethods[0].MakeGenericMethod(typeof(string))
+            Console.WriteLine(target.Invoke(nil, []object?{Shape(), "s"}))
+            Console.WriteLine(Probe.N[Shape, string](GI(), Shape(), "s"))
+            """,
+            new[] { "77", "88" },
         };
 
         // A static abstract event binds through its accessors: custom accessors
@@ -455,6 +490,57 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
     [MemberData(nameof(ExplicitClauseCases))]
     public void ExplicitClauseMember_IsNotAnImplicitImplementation(string name, string source, string[] expectedLines)
         => CompileVerifyAndRun(name, source, expectedLines);
+
+    /// <summary>
+    /// A type that declares only an explicit-clause member for another
+    /// interface does not implement this one: the binder reports the missing
+    /// static-virtual implementation (GS0331), because it applies the same
+    /// implicit-candidate rule the emitter does. Before, the explicit member
+    /// was silently bound to this interface's slot.
+    /// </summary>
+    [Fact]
+    public void ExplicitClauseMemberOnly_ReportsTheMissingImplementation()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4614_missing_").FullName;
+        try
+        {
+            var appPath = Path.Combine(tempDir, "missing.dll");
+            var log = Compile(
+                tempDir,
+                "App.gs",
+                """
+                package P
+                import System
+
+                interface IA {
+                    shared {
+                        func Z() int32;
+                    }
+                }
+                interface IB {
+                    shared {
+                        func Z() int32;
+                    }
+                }
+                struct W : IA, IB {
+                    shared {
+                        func (IB) Z() int32 { return 4 }
+                    }
+                }
+
+                Console.WriteLine("ran")
+                """,
+                appPath,
+                "/target:exe");
+            Assert.Contains("GS0331", log, StringComparison.Ordinal);
+            Assert.Contains("'IA", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("'IB", log, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
 
     /// <summary>
     /// Shapes without a member keep their inherited or default binding.

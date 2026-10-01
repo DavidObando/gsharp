@@ -1031,7 +1031,7 @@ internal sealed class InterfaceImplEmitter
                 {
                     foreach (var candidate in structSymbol.GetStaticMethods(slot.Name))
                     {
-                        if (IsImplicitStaticImplementationCandidate(candidate)
+                        if (MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
                             && StaticVirtualSignatureEquals(slot, candidate))
                         {
                             implMatch = candidate;
@@ -1154,7 +1154,7 @@ internal sealed class InterfaceImplEmitter
                 foreach (var candidate in structSymbol.StaticProperties)
                 {
                     if (candidate.Name == slotProperty.Name
-                        && IsImplicitStaticImplementationCandidate(candidate)
+                        && MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
                         && (slotGetter == null || candidate.HasGetter)
                         && (slotSetter == null || candidate.HasSetter)
                         && MemberLookup.PropertyMatchesClrInterfaceSignature(candidate, slotOwnerSymbol, slotProperty))
@@ -1228,7 +1228,7 @@ internal sealed class InterfaceImplEmitter
             foreach (var candidate in structSymbol.StaticEvents)
             {
                 if (candidate.Name == slotEvent.Name
-                    && IsImplicitStaticImplementationCandidate(candidate)
+                    && MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
                     && DeclarationBinder.ConformanceSignaturesEquivalent(slotType, candidate.Type))
                 {
                     implementation = candidate;
@@ -1259,39 +1259,6 @@ internal sealed class InterfaceImplEmitter
             }
         }
     }
-
-    /// <summary>
-    /// Issue #4614: whether a static method may implement an interface slot
-    /// IMPLICITLY, by name. An explicit-interface-clause member
-    /// (<c>func (IMine) Z()</c>) keeps the plain symbol name <c>Z</c>, but it
-    /// implements only the interface its clause names (it is linked to that
-    /// slot through <c>ExplicitInterfaceMember</c>); matching it by name would
-    /// bind it to another interface's slot, as csc never does. Every
-    /// name-based static-virtual scan, for G#-declared and imported
-    /// interfaces alike, goes through this predicate.
-    /// </summary>
-    /// <param name="candidate">The candidate static method.</param>
-    /// <returns><see langword="true"/> when it may match by name.</returns>
-    private static bool IsImplicitStaticImplementationCandidate(FunctionSymbol candidate)
-        => !candidate.HasExplicitInterfaceClause;
-
-    /// <summary>
-    /// Issue #4614: the property counterpart of
-    /// <see cref="IsImplicitStaticImplementationCandidate(FunctionSymbol)"/>.
-    /// </summary>
-    /// <param name="candidate">The candidate static property.</param>
-    /// <returns><see langword="true"/> when it may match by name.</returns>
-    private static bool IsImplicitStaticImplementationCandidate(PropertySymbol candidate)
-        => !candidate.HasExplicitInterfaceClause;
-
-    /// <summary>
-    /// Issue #4614: the event counterpart of
-    /// <see cref="IsImplicitStaticImplementationCandidate(FunctionSymbol)"/>.
-    /// </summary>
-    /// <param name="candidate">The candidate static event.</param>
-    /// <returns><see langword="true"/> when it may match by name.</returns>
-    private static bool IsImplicitStaticImplementationCandidate(EventSymbol candidate)
-        => !candidate.HasExplicitInterfaceClause;
 
     /// <summary>
     /// Issue #4614: the static method declared on <paramref name="structSymbol"/>
@@ -1332,7 +1299,7 @@ internal sealed class InterfaceImplEmitter
 
         foreach (var candidate in structSymbol.GetStaticMethods(slot.Name))
         {
-            if (!IsImplicitStaticImplementationCandidate(candidate))
+            if (!MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate))
             {
                 continue;
             }
@@ -1504,7 +1471,7 @@ internal sealed class InterfaceImplEmitter
                     foreach (var candidate in structSymbol.StaticProperties)
                     {
                         if (candidate.Name == slotProp.Name
-                            && IsImplicitStaticImplementationCandidate(candidate)
+                            && MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
                             && DeclarationBinder.IsInterfacePropertyTypeCompatible(
                                 candidate.Type,
                                 slotProp.Type,

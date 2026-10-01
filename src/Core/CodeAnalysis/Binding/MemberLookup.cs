@@ -4067,6 +4067,11 @@ internal sealed class MemberLookup
         MethodInfo openMethod,
         ImmutableArray<TypeSymbol> symbolicArgs)
     {
+        if (!TryGetMethodTypeArguments(candidate, openMethod, out var methodTypeArgs))
+        {
+            return false;
+        }
+
         var clrParams = openMethod.GetParameters();
         var callable = GetCallableParameters(candidate);
         if (callable.Length != clrParams.Length)
@@ -4076,7 +4081,7 @@ internal sealed class MemberLookup
 
         // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
         if (candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(openMethod)
-            || !ReturnTypeMatchesSubstituted(candidate.Type, openMethod.ReturnType.IsByRef ? openMethod.ReturnType.GetElementType()! : openMethod.ReturnType, symbolicArgs))
+            || !ReturnTypeMatchesSubstituted(candidate.Type, openMethod.ReturnType.IsByRef ? openMethod.ReturnType.GetElementType()! : openMethod.ReturnType, symbolicArgs, methodTypeArgs))
         {
             return false;
         }
@@ -4089,13 +4094,13 @@ internal sealed class MemberLookup
             if (clrParamType.IsByRef)
             {
                 if (gsParam.RefKind == RefKind.None
-                    || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType.GetElementType(), symbolicArgs))
+                    || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType.GetElementType(), symbolicArgs, methodTypeArgs))
                 {
                     return false;
                 }
             }
             else if (gsParam.RefKind != RefKind.None
-                || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType, symbolicArgs))
+                || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType, symbolicArgs, methodTypeArgs))
             {
                 return false;
             }
@@ -4288,6 +4293,11 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the method satisfies the slot.</returns>
     public static bool MethodSatisfiesClrSlot(FunctionSymbol method, ClrInterfaceSlot slot)
     {
+        if (!TryGetMethodTypeArguments(method, slot.Method, out var methodTypeArgs))
+        {
+            return false;
+        }
+
         var clrParams = slot.Method.GetParameters();
         var callable = GetCallableParameters(method);
         if (callable.Length != clrParams.Length)
@@ -4297,7 +4307,7 @@ internal sealed class MemberLookup
 
         // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
         if (method.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot.Method)
-            || !ReturnTypeMatchesSubstituted(method.Type, slot.Method.ReturnType.IsByRef ? slot.Method.ReturnType.GetElementType()! : slot.Method.ReturnType, slot.SymbolicArgs))
+            || !ReturnTypeMatchesSubstituted(method.Type, slot.Method.ReturnType.IsByRef ? slot.Method.ReturnType.GetElementType()! : slot.Method.ReturnType, slot.SymbolicArgs, methodTypeArgs))
         {
             return false;
         }
@@ -4310,7 +4320,7 @@ internal sealed class MemberLookup
             if (clrParamType.IsByRef)
             {
                 if (gsParam.RefKind == RefKind.None
-                    || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType.GetElementType(), slot.SymbolicArgs))
+                    || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType.GetElementType(), slot.SymbolicArgs, methodTypeArgs))
                 {
                     return false;
                 }
@@ -4318,7 +4328,7 @@ internal sealed class MemberLookup
             else
             {
                 if (gsParam.RefKind != RefKind.None
-                    || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType, slot.SymbolicArgs))
+                    || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType, slot.SymbolicArgs, methodTypeArgs))
                 {
                     return false;
                 }
@@ -4665,6 +4675,15 @@ internal sealed class MemberLookup
             && property.ExplicitInterfaceMember == null
             && property.ExplicitInterfaceGetterSlot == null
             && property.ExplicitInterfaceSetterSlot == null;
+
+    /// <summary>Returns whether an event may satisfy an interface slot implicitly.</summary>
+    /// <param name="ev">The candidate event.</param>
+    /// <returns><see langword="true"/> when the event has no explicit interface linkage.</returns>
+    public static bool IsImplicitInterfaceImplementationCandidate(EventSymbol ev)
+        => !ev.HasExplicitInterfaceClause
+            && ev.ExplicitInterfaceMember == null
+            && ev.ExplicitInterfaceAddSlot == null
+            && ev.ExplicitInterfaceRemoveSlot == null;
 
     // ----- Indexer / Nullable<> / extension-method probes (instance helpers) -----
 
@@ -7517,17 +7536,68 @@ internal sealed class MemberLookup
     private static Type? ResolveErasedValueTupleOpenDefinition(Type contextObject, int arity)
         => arity is < 1 or > 8 ? null : TupleTypeSymbol.GetOpenClrType(arity, contextObject);
 
+    /// <summary>
+    /// Issue #4614: pairs a generic slot's method-owned type parameters with
+    /// the candidate's own, positionally. The arities must agree (a generic
+    /// slot is never implemented by a non-generic method, nor the reverse).
+    /// </summary>
+    /// <param name="candidate">The candidate G# method.</param>
+    /// <param name="slot">The interface slot.</param>
+    /// <param name="methodTypeArgs">The candidate's type parameters, or default for a non-generic slot.</param>
+    /// <returns><see langword="false"/> when the arities differ.</returns>
+    private static bool TryGetMethodTypeArguments(
+        FunctionSymbol candidate,
+        MethodInfo slot,
+        out ImmutableArray<TypeSymbol> methodTypeArgs)
+    {
+        var slotArity = slot.IsGenericMethodDefinition ? slot.GetGenericArguments().Length : 0;
+        var candidateArity = candidate.TypeParameters.IsDefaultOrEmpty ? 0 : candidate.TypeParameters.Length;
+        methodTypeArgs = slotArity == 0
+            ? default
+            : ImmutableArray<TypeSymbol>.CastUp(candidate.TypeParameters);
+        return slotArity == candidateArity;
+    }
+
     private static bool ReturnTypeMatchesSubstituted(TypeSymbol candidateReturn, Type openReturn, ImmutableArray<TypeSymbol> symbolicArgs)
+        => ReturnTypeMatchesSubstituted(candidateReturn, openReturn, symbolicArgs, default);
+
+    private static bool ReturnTypeMatchesSubstituted(
+        TypeSymbol candidateReturn,
+        Type openReturn,
+        ImmutableArray<TypeSymbol> symbolicArgs,
+        ImmutableArray<TypeSymbol> methodTypeArgs)
     {
         if (openReturn.IsSameAs(typeof(void)))
         {
             return candidateReturn == TypeSymbol.Void;
         }
 
-        return ParameterTypeMatchesSubstituted(candidateReturn, openReturn, symbolicArgs);
+        return ParameterTypeMatchesSubstituted(candidateReturn, openReturn, symbolicArgs, methodTypeArgs);
     }
 
     private static bool ParameterTypeMatchesSubstituted(TypeSymbol candidate, Type? openType, ImmutableArray<TypeSymbol> symbolicArgs)
+        => ParameterTypeMatchesSubstituted(candidate, openType, symbolicArgs, default);
+
+    /// <summary>
+    /// Whether the candidate's type at one signature position matches the
+    /// contract's, with the interface's generic parameters substituted.
+    /// </summary>
+    /// <param name="candidate">The candidate's type at this position.</param>
+    /// <param name="openType">The contract's type at this position, over the open definition.</param>
+    /// <param name="symbolicArgs">The interface's symbolic type arguments, by the interface's generic-parameter position.</param>
+    /// <param name="methodTypeArgs">
+    /// Issue #4614: the candidate method's own type parameters, matched by a
+    /// METHOD-owned generic parameter's position (<c>U</c> in
+    /// <c>I&lt;T&gt;.M&lt;U&gt;(T x, U y)</c>); default when the slot is not a
+    /// generic method. A method-owned parameter's position is NOT an index
+    /// into <paramref name="symbolicArgs"/>.
+    /// </param>
+    /// <returns><see langword="true"/> when the position matches.</returns>
+    private static bool ParameterTypeMatchesSubstituted(
+        TypeSymbol candidate,
+        Type? openType,
+        ImmutableArray<TypeSymbol> symbolicArgs,
+        ImmutableArray<TypeSymbol> methodTypeArgs)
     {
         if (openType == null)
         {
@@ -7547,12 +7617,13 @@ internal sealed class MemberLookup
         if (openType.IsGenericParameter)
         {
             var position = openType.GenericParameterPosition;
-            if (position < 0 || position >= symbolicArgs.Length)
+            var owners = openType.DeclaringMethod != null ? methodTypeArgs : symbolicArgs;
+            if (owners.IsDefault || position < 0 || position >= owners.Length)
             {
                 return false;
             }
 
-            return SameTypeSymbol(candidate, symbolicArgs[position]);
+            return SameTypeSymbol(candidate, owners[position]);
         }
 
         // Issue #2380 follow-up: a contract position of `Nullable<T>` (e.g.
@@ -7569,7 +7640,7 @@ internal sealed class MemberLookup
             && openType.GetGenericTypeDefinition().IsSameAs(typeof(Nullable<>))
             && candidate is NullableTypeSymbol nullableCandidate)
         {
-            return ParameterTypeMatchesSubstituted(nullableCandidate.UnderlyingType, openType.GetGenericArguments()[0], symbolicArgs);
+            return ParameterTypeMatchesSubstituted(nullableCandidate.UnderlyingType, openType.GetGenericArguments()[0], symbolicArgs, methodTypeArgs);
         }
 
         // Issue #985: the contract position may itself be a *constructed
@@ -7594,7 +7665,7 @@ internal sealed class MemberLookup
                 {
                     for (var i = 0; i < openArgs.Length; i++)
                     {
-                        if (!ParameterTypeMatchesSubstituted(candidateTypeArguments[i], openArgs[i], symbolicArgs))
+                        if (!ParameterTypeMatchesSubstituted(candidateTypeArguments[i], openArgs[i], symbolicArgs, methodTypeArgs))
                         {
                             return false;
                         }
