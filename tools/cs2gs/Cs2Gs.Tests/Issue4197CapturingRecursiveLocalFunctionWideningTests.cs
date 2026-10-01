@@ -692,6 +692,29 @@ namespace Demo
     }
 
     [Fact]
+    public void CaptureFreeRecursiveFunctionValue_UsesRenamedLiftedHelper()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private int First(int value) => -value;
+
+                    public int Run(int value) {
+                        System.Func<int, int> callback = First;
+                        return callback(value);
+                        int First(int n) => n == 0 ? 0 : Second<int>(n - 1);
+                        int Second<T>(int n) => First(n);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("func First_2(", printed, StringComparison.Ordinal);
+        Assert.Contains("= First_2", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void ClaimedRecursiveGroup_StillLiftsUnsafeRefReturningDependency()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
