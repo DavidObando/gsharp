@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
@@ -281,8 +282,132 @@ public sealed class TupleTypeSymbol : TypeSymbol
             _ => throw new ArgumentOutOfRangeException(nameof(arity)),
         };
 
+    /// <summary>
+    /// Issue #4591: the open <c>ValueTuple`N</c> definition in the load
+    /// context <paramref name="contextObject"/> belongs to. The host
+    /// <c>typeof(ValueTuple&lt;,&gt;)</c> is right only for the host context;
+    /// for a <c>MetadataLoadContext</c> the definition is looked up from that
+    /// context's own core assembly, which is where its <c>System.Object</c>
+    /// lives.
+    /// </summary>
+    /// <param name="arity">The CLR tuple-node arity (1–8).</param>
+    /// <param name="contextObject">The <c>System.Object</c> of the target load context.</param>
+    /// <returns>The open definition, or <see langword="null"/> when the context does not define it.</returns>
+    internal static Type? GetOpenClrType(int arity, Type contextObject)
+    {
+        var hostDefinition = GetOpenClrType(arity);
+        if (ReferenceEquals(contextObject.Assembly, typeof(object).Assembly))
+        {
+            return hostDefinition;
+        }
+
+        return contextObject.Assembly.GetType(
+            ValueTupleDefinitionPrefix + arity.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            throwOnError: false);
+    }
+
+    /// <summary>
+    /// Builds the closed <c>ValueTuple&lt;...&gt;</c> CLR type over
+    /// <paramref name="elementTypes"/>.
+    /// </summary>
+    /// <remarks>
+    /// Issue #4591: the G# primitives are host <c>typeof(...)</c> types, but
+    /// every other imported type comes from the compiler's
+    /// <c>MetadataLoadContext</c>. Closing the HOST <c>ValueTuple</c> over such
+    /// an element does not throw: <c>RuntimeType.MakeGenericType</c> silently
+    /// returns a <c>TypeBuilderInstantiation</c> that throws
+    /// <see cref="NotSupportedException"/> from <c>GetInterfaces</c> and every
+    /// member lookup, which surfaced as GS9998 on an array-to-
+    /// <c>IEnumerable</c> conversion and as a silently lost generic overload
+    /// candidate. When every such element (or, for a host generic already
+    /// closed over context types such as a function type's
+    /// <c>Func&lt;…&gt;</c>, every part of it) provably belongs to one
+    /// <c>MetadataLoadContext</c>, the tuple is therefore closed in that
+    /// context, with host types remapped into it. Every other shape —
+    /// all-host elements, or an element whose context cannot be proven —
+    /// keeps the previous host construction exactly.
+    /// </remarks>
+    /// <param name="elementTypes">The element CLR types, in order.</param>
+    /// <returns>The closed CLR type.</returns>
     internal static Type? BuildClrType(Type[] elementTypes)
-        => BuildClrType(elementTypes, 0, elementTypes.Length);
+        => BuildClrType(elementTypes, new bool[elementTypes.Length]);
+
+    /// <summary>
+    /// Issue #4591: <see cref="BuildClrType(Type[])"/> with nullable value-type
+    /// elements passed as their UNDERLYING type plus a flag. A pre-built
+    /// <c>Nullable&lt;T&gt;</c> over a <c>MetadataLoadContext</c> struct would
+    /// itself be a host <c>TypeBuilderInstantiation</c> (the #4035 trap), so
+    /// the wrapper is built only once the context is known, from that
+    /// context's own <c>Nullable&lt;&gt;</c>.
+    /// </summary>
+    /// <param name="elementTypes">The element CLR types, nullable value types unwrapped.</param>
+    /// <param name="liftToNullable">Per element, whether to wrap it in <c>Nullable&lt;&gt;</c>.</param>
+    /// <returns>The closed CLR type.</returns>
+    private static Type? BuildClrType(Type[] elementTypes, bool[] liftToNullable)
+    {
+        var hostObject = typeof(object);
+        var contextObject = ResolveLoadContextObject(elementTypes);
+        if (!ReferenceEquals(contextObject, hostObject)
+            && TryBuildClrTypeInContext(elementTypes, liftToNullable, contextObject) is { } inContext)
+        {
+            return inContext;
+        }
+
+        // The previous construction, unchanged: host `Nullable<>` and host
+        // `ValueTuple<…>` (what `GetEffectiveClrType` and the old builder did).
+        var arguments = new Type[elementTypes.Length];
+        for (var i = 0; i < elementTypes.Length; i++)
+        {
+            arguments[i] = liftToNullable[i]
+                ? typeof(Nullable<>).MakeGenericType(elementTypes[i])
+                : elementTypes[i];
+        }
+
+        return BuildClrType(arguments, 0, arguments.Length, hostObject);
+    }
+
+    /// <summary>
+    /// Issue #4591: closes the tuple in the <c>MetadataLoadContext</c>
+    /// <paramref name="contextObject"/> belongs to, remapping host primitives
+    /// into it and building each nullable value type's <c>Nullable&lt;&gt;</c>
+    /// from that context.
+    /// </summary>
+    /// <param name="elementTypes">The element CLR types, nullable value types unwrapped.</param>
+    /// <param name="liftToNullable">Per element, whether to wrap it in <c>Nullable&lt;&gt;</c>.</param>
+    /// <param name="contextObject">The context's <c>System.Object</c>.</param>
+    /// <returns>The closed CLR type, or <see langword="null"/> when the context cannot build it.</returns>
+    private static Type? TryBuildClrTypeInContext(Type[] elementTypes, bool[] liftToNullable, Type contextObject)
+    {
+        try
+        {
+            var arguments = new Type[elementTypes.Length];
+            for (var i = 0; i < elementTypes.Length; i++)
+            {
+                var argument = ClrTypeUtilities.RemapHostCoreTypeToContext(elementTypes[i], contextObject);
+                if (liftToNullable[i])
+                {
+                    var nullableOpen = contextObject.Assembly.GetType("System.Nullable`1", throwOnError: false);
+                    if (nullableOpen == null)
+                    {
+                        return null;
+                    }
+
+                    argument = nullableOpen.MakeGenericType(argument);
+                }
+
+                arguments[i] = argument;
+            }
+
+            return BuildClrType(arguments, 0, arguments.Length, contextObject);
+        }
+        catch (ArgumentException)
+        {
+            // An element the remap could not move into the context (a host
+            // type outside the core assembly) is rejected by the context's
+            // MakeGenericType; the caller falls back to the host build.
+            return null;
+        }
+    }
 
     private static TypeSymbol StripNames(TypeSymbol type) => type switch
     {
@@ -324,25 +449,165 @@ public sealed class TupleTypeSymbol : TypeSymbol
             return null;
         }
 
-        var clrTypes = elementTypes
-            .Select(t => Invariant.Required(
-                NullableTypeSymbol.GetEffectiveClrType(t),
-                "a CLR-backed tuple element has a CLR type"))
-            .ToArray();
-        return BuildClrType(clrTypes);
+        // Issue #4591: a nullable value type is handed down as its underlying
+        // type plus a flag, never as `GetEffectiveClrType`'s host-built
+        // `Nullable<T>`; see BuildClrType(Type[], bool[]).
+        var clrTypes = new Type[elementTypes.Length];
+        var liftToNullable = new bool[elementTypes.Length];
+        for (var i = 0; i < elementTypes.Length; i++)
+        {
+            if (elementTypes[i] is NullableTypeSymbol { UnderlyingType.ClrType: { IsValueType: true } underlying })
+            {
+                clrTypes[i] = underlying;
+                liftToNullable[i] = true;
+            }
+            else
+            {
+                clrTypes[i] = Invariant.Required(
+                    NullableTypeSymbol.GetEffectiveClrType(elementTypes[i]),
+                    "a CLR-backed tuple element has a CLR type");
+            }
+        }
+
+        return BuildClrType(clrTypes, liftToNullable);
     }
 
-    private static Type BuildClrType(Type[] elementTypes, int start, int count)
+    private static Type? BuildClrType(Type[] elementTypes, int start, int count, Type contextObject)
     {
         if (count <= 7)
         {
-            return GetOpenClrType(count).MakeGenericType(elementTypes[start..(start + count)]);
+            return GetOpenClrType(count, contextObject)?.MakeGenericType(elementTypes[start..(start + count)]);
+        }
+
+        var open = GetOpenClrType(8, contextObject);
+        var rest = BuildClrType(elementTypes, start + 7, count - 7, contextObject);
+        if (open == null || rest == null)
+        {
+            return null;
         }
 
         var arguments = new Type[8];
         Array.Copy(elementTypes, start, arguments, 0, 7);
-        arguments[7] = BuildClrType(elementTypes, start + 7, count - 7);
-        return GetOpenClrType(8).MakeGenericType(arguments);
+        arguments[7] = rest;
+        return open.MakeGenericType(arguments);
+    }
+
+    /// <summary>
+    /// Issue #4591: the <c>System.Object</c> of the one
+    /// <c>MetadataLoadContext</c> every non-host element of
+    /// <paramref name="elementTypes"/> provably belongs to. Host
+    /// <c>RuntimeType</c> elements fit any context (they are remapped). The
+    /// answer is the host <c>typeof(object)</c>, meaning "keep the previous
+    /// host construction", whenever that cannot be proven: no element needs a
+    /// context, some part's context cannot be determined, or two parts
+    /// disagree. A host generic already closed over context types (a
+    /// function type's <c>Func&lt;…&gt;</c> over an imported parameter type is
+    /// a <c>TypeBuilderInstantiation</c>) is decided by its parts, which
+    /// <see cref="ClrTypeUtilities.RemapHostCoreTypeToContext"/> then rebuilds
+    /// in the context.
+    /// </summary>
+    /// <param name="elementTypes">The element CLR types.</param>
+    /// <returns>The proven context's <c>System.Object</c>, otherwise the host <c>typeof(object)</c>.</returns>
+    private static Type ResolveLoadContextObject(Type[] elementTypes)
+    {
+        var hostObject = typeof(object);
+        var contextObjects = new List<Type>();
+        foreach (var element in elementTypes)
+        {
+            if (!TryCollectLoadContextObjects(element, contextObjects))
+            {
+                return hostObject;
+            }
+        }
+
+        if (contextObjects.Count == 0)
+        {
+            return hostObject;
+        }
+
+        var contextObject = contextObjects[0];
+        foreach (var other in contextObjects)
+        {
+            if (!ReferenceEquals(other, contextObject))
+            {
+                return hostObject;
+            }
+        }
+
+        return contextObject;
+    }
+
+    /// <summary>
+    /// Issue #4591: adds the non-host load contexts <paramref name="type"/>
+    /// draws on to <paramref name="contextObjects"/>. A host
+    /// <c>RuntimeType</c> needs none; a context type contributes its own; a
+    /// host composite that is not a <c>RuntimeType</c> (a host generic or
+    /// array over context types) contributes its parts'.
+    /// </summary>
+    /// <param name="type">A CLR type.</param>
+    /// <param name="contextObjects">The collected context <c>System.Object</c>s.</param>
+    /// <returns><see langword="false"/> when some part's context cannot be determined.</returns>
+    private static bool TryCollectLoadContextObjects(Type type, List<Type> contextObjects)
+    {
+        if (type.IsRuntimeProvidedType())
+        {
+            return true;
+        }
+
+        var typeObject = FindLoadContextObject(type);
+        if (typeObject == null)
+        {
+            return false;
+        }
+
+        if (!ReferenceEquals(typeObject.Assembly, typeof(object).Assembly))
+        {
+            contextObjects.Add(typeObject);
+            return true;
+        }
+
+        if (type.HasElementType)
+        {
+            return type.GetElementType() is { } elementType
+                && TryCollectLoadContextObjects(elementType, contextObjects);
+        }
+
+        if (!type.IsConstructedGenericType)
+        {
+            return false;
+        }
+
+        foreach (var argument in type.GetGenericArguments())
+        {
+            if (!TryCollectLoadContextObjects(argument, contextObjects))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4591: the <c>System.Object</c> of <paramref name="type"/>'s load
+    /// context. Every context builds an array over its own types with its own
+    /// <c>System.Array</c> as the base type, whose base is that context's
+    /// <c>System.Object</c>; unlike walking <paramref name="type"/>'s own base
+    /// chain this also answers for an interface.
+    /// </summary>
+    /// <param name="type">A CLR type.</param>
+    /// <returns>The context's <c>System.Object</c>, or <see langword="null"/> when it cannot be determined.</returns>
+    private static Type? FindLoadContextObject(Type type)
+    {
+        try
+        {
+            var root = type.MakeArrayType().BaseType?.BaseType;
+            return root is { FullName: "System.Object" } ? root : null;
+        }
+        catch (Exception ex) when (ex is NotSupportedException || ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return null;
+        }
     }
 
     /// <summary>
