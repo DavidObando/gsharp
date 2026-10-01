@@ -1824,9 +1824,12 @@ public sealed partial class CSharpToGSharpTranslator
                     out LiftedRecursiveLocalFunction recursiveLift))
             {
                 if (recursiveLift.Captures.Count > 0
-                    && this.IsLocalFunctionReferencedAsValue(
-                        recursiveLocal,
-                        GetLocalFunctionSiblingStatements(localFunction)))
+                    && (this.IsLocalFunctionReferencedAsValue(
+                            recursiveLocal,
+                            GetLocalFunctionSiblingStatements(localFunction))
+                        || this.IsLocalFunctionReferencedFromAnotherSwitchSection(
+                            recursiveLocal,
+                            localFunction)))
                 {
                     this.context.ReportUnsupported(
                         localFunction,

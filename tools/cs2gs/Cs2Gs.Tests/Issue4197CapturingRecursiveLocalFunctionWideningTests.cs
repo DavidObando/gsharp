@@ -521,6 +521,62 @@ namespace Demo
     }
 
     [Fact]
+    public void MixedRecursiveGroupDeclaredInLaterSwitchSection_IsPreRegistered()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                return First(value);
+                            case 1:
+                                static int First(int n) => n == 0 ? 0 : Second<int>(n - 1);
+                                static int Second<T>(int n) => First(n);
+                                return First(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void CapturingRecursiveLocalUsedAsDelegateFromSiblingSwitchSection_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int offset = 1;
+                        switch (value) {
+                            case 0:
+                                int First(int n) => n == 0 ? offset : Second<int>(n - 1);
+                                int Second<T>(int n) => n == 0 ? offset : First(n - 1);
+                                return First(value);
+                            case 1:
+                                System.Func<int, int> callback = First;
+                                return callback(value);
+                            default:
+                                return offset;
+                        }
+                    }
+                }
+            }
+            """, "capturing recursive member helpers require explicit capture arguments");
+
+        Assert.Contains(
+            "// unsupported: capturing recursive local function value 'First'",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ClaimedRecursiveGroup_StillLiftsUnsafeRefReturningDependency()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
