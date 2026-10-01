@@ -65,8 +65,14 @@ drive and UNC paths without rewriting unrelated message text. Non-`file:`
 URIs are never interpreted as filesystem paths. Absolute Unix, Windows-drive,
 case-insensitive `localhost`, drive-authority, and configured UNC `file:` URIs
 redact their path roots. Unknown authorities, percent-encoded or relative
-forms, and ambiguous noncanonical separator counts are not decoded or guessed
-and collapse to `file:<private-path>`.
+non-drive forms, and ambiguous noncanonical separator counts are not decoded
+or guessed and collapse to `file:<private-path>`. Absolute drive paths redact
+with zero, one, or three separators after `file:`; unmatched drive-shaped
+paths fail closed. A query and fragment are retained only when each is
+nonempty, ordered as `?query#fragment`, and contains ASCII letters, digits,
+`-._~=&` only; path separators, drive colons, percent encoding, extra
+delimiters, and all other suffix bytes collapse the complete URI to the same
+stable placeholder.
 
 The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,
