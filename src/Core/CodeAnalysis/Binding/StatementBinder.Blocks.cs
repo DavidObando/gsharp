@@ -25,6 +25,7 @@ internal sealed partial class StatementBinder
     private BoundStatement BindSwitchStatement(SwitchStatementSyntax syntax)
     {
         var discriminant = bindExpression(syntax.Expression);
+        ApplyHeaderCallableEffects(discriminant);
         var switchType = discriminant.Type;
         if (switchType == TypeSymbol.Error)
         {
@@ -163,6 +164,7 @@ internal sealed partial class StatementBinder
                 guard = BindGuardExpressionWithNarrowing(
                     Invariant.Required(guardSyntax, "a guarded switch case has a guard expression"),
                     frame);
+                ApplyHeaderCallableEffects(guard);
             }
 
             // ADR-0166: the arm body runs only when the guard was true, so the
@@ -411,6 +413,7 @@ internal sealed partial class StatementBinder
                 : bindLocalVariable(catchSyntax.Identifier, isReadOnly: true, type: catchType);
 
             var filter = BindCatchFilter(catchSyntax);
+            ApplyHeaderCallableEffects(filter);
             var (filterWhenTrue, _) = PatternVariables.Classify(filter);
 
             exceptionHandlerRegions.Push(catchSyntax);

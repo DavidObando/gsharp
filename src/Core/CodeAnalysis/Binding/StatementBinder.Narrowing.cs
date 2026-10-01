@@ -1948,6 +1948,28 @@ internal sealed partial class StatementBinder
                 && (path.HasMembers || !path.Root.IsReadOnly))
             || (mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path));
 
+    // Binding a header expression (an `if` condition, a switch discriminant or
+    // guard, a catch filter) never runs the post-statement alias update, but
+    // the expression can create or invoke a closure that reassigns a callable
+    // alias before the nested bodies are bound. Fold its effects into the alias
+    // state now: an alias the header assigns, or that an unknown callable in the
+    // header can assign, is no longer known to be external (fail-safe).
+    private void ApplyHeaderCallableEffects(BoundExpression? header)
+    {
+        if (header == null || externalCallableAliases.Count == 0)
+        {
+            return;
+        }
+
+        var collector = new AssignedRootsCollector(null, externalCallableAliases);
+        collector.VisitExpression(header);
+        externalCallableAliases.ExceptWith(collector.Roots);
+        if (collector.MayMutateAnyRoot)
+        {
+            externalCallableAliases.RemoveWhere(binderCtx.MayBeAssignedByClosure);
+        }
+    }
+
     private void EnsureClosureAssignedNames(SyntaxNode anchor)
         => binderCtx.EnsureClosureAssignedNames(() => ComputeClosureAssignedNames(anchor));
 

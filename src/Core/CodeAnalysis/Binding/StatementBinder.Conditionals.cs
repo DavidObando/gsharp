@@ -27,6 +27,7 @@ internal sealed partial class StatementBinder
         if (syntax.Initializer == null)
         {
             var condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
+            ApplyHeaderCallableEffects(condition);
 
             // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
             // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
@@ -102,6 +103,7 @@ internal sealed partial class StatementBinder
 
         var initStatement = BindStatement(syntax.Initializer);
         var initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
+        ApplyHeaderCallableEffects(initCondition);
 
         Dictionary<AccessPath, TypeSymbol>? initThenNarrow;
         Dictionary<AccessPath, TypeSymbol>? initElseNarrow;

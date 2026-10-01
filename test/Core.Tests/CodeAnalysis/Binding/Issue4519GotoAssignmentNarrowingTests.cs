@@ -3707,6 +3707,68 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_ConditionInvokedClosureChangesExternalCallableAlias()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = callback
+                if func() bool { action = clear; return true }() {
+                    try {
+                        goto Done
+                    }
+                    finally {
+                        action()
+                    }
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { })
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_SwitchDiscriminantClosureChangesExternalCallableAlias()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), choose int32) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = callback
+                switch func() int32 { action = clear; return 1 }() {
+                    case 1 {
+                        try {
+                            goto Done
+                        }
+                        finally {
+                            action()
+                        }
+                    }
+                    default {
+                    }
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { }, 1)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_MemberNotNullAfterLabelReestablishesNarrowing()
     {
         AssertRuns("""
