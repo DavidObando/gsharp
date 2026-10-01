@@ -7643,6 +7643,27 @@ internal sealed class MemberLookup
             return ParameterTypeMatchesSubstituted(nullableCandidate.UnderlyingType, openType.GetGenericArguments()[0], symbolicArgs, methodTypeArgs);
         }
 
+        // Issue #4614: an array position that mentions a generic parameter
+        // (`T[] xs`, or a method's own `U[] us`) is matched element-wise
+        // with the same substitutions; the erased CLR comparison below can
+        // never succeed for it (a G# slice over a same-compilation or
+        // type-parameter element has no CLR type). Concrete arrays keep that
+        // comparison.
+        if (openType.IsArray && openType.ContainsGenericParameters)
+        {
+            var openElement = openType.GetElementType();
+            return candidate switch
+            {
+                SliceTypeSymbol slice when openType.IsSZArray
+                    => ParameterTypeMatchesSubstituted(slice.ElementType, openElement, symbolicArgs, methodTypeArgs),
+                ArrayTypeSymbol fixedArray when openType.IsSZArray
+                    => ParameterTypeMatchesSubstituted(fixedArray.ElementType, openElement, symbolicArgs, methodTypeArgs),
+                RectangularArrayTypeSymbol rectangular when !openType.IsSZArray && rectangular.Rank == openType.GetArrayRank()
+                    => ParameterTypeMatchesSubstituted(rectangular.ElementType, openElement, symbolicArgs, methodTypeArgs),
+                _ => false,
+            };
+        }
+
         // Issue #985: the contract position may itself be a *constructed
         // generic* that mentions the interface's generic parameters — e.g.
         // `IEnumerable<T>.GetEnumerator()` returns `IEnumerator<T>`. The erased

@@ -70,6 +70,8 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
 
         public interface IM2<T> { static abstract int M<U>(T x, U y); }
         public interface IInst<T> { int N<U>(T x, U y); }
+        public interface IMA<T> { static abstract int M<U>(U[] us, T x); }
+        public interface IArr<T> { int A(T[] xs); int B<U>(U[] us, T x); }
 
         public static class Probe
         {
@@ -79,6 +81,8 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
             public static int Count<T>() where T : IGen => T.Count<string>("abc");
             public static void Hook<T>(System.Action a) where T : IEv => T.Changed += a;
             public static int N<T, U>(IInst<T> i, T x, U y) => i.N(x, y);
+            public static int A<T>(IArr<T> i, T[] xs) => i.A(xs);
+            public static int B<T, U>(IArr<T> i, U[] us, T x) => i.B(us, x);
         }
         """;
 
@@ -262,6 +266,38 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
             Console.WriteLine(Probe.N[Shape, string](GI(), Shape(), "s"))
             """,
             new[] { "77", "88" },
+        };
+
+        // Array positions that mention a generic parameter, at the interface
+        // level (`T[]`) and the method level (`U[]`), over a G# type: matched
+        // element-wise (both reported GS0187 before for the instance shape).
+        yield return new object[]
+        {
+            "symbolic-array-positions",
+            """
+            package P
+            import System
+            import System.Linq
+            import Clib
+
+            class Shape { }
+            class AR : IArr[Shape] {
+                func A(xs []Shape) int32 { return xs.Length }
+                func B[U](us []U, x Shape) int32 { return us.Length * 10 }
+            }
+            struct MA : IMA[Shape] {
+                shared {
+                    func M[U](us []U, x Shape) int32 { return us.Length * 100 }
+                }
+            }
+
+            Console.WriteLine(Probe.A[Shape](AR(), []Shape{Shape(), Shape()}))
+            Console.WriteLine(Probe.B[Shape, string](AR(), []string{"a", "b", "c"}, Shape()))
+            let iface = typeof(MA).GetInterfaces().Where((i Type) -> i.Name == "IMA`1").First()
+            let target = typeof(MA).GetInterfaceMap(iface).TargetMethods[0].MakeGenericMethod(typeof(string))
+            Console.WriteLine(target.Invoke(nil, []object?{[]string{"a"}, Shape()}))
+            """,
+            new[] { "2", "30", "100" },
         };
 
         // A static abstract event binds through its accessors: custom accessors
