@@ -213,16 +213,27 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 }
 
 func (b *inventoryBuilder) sanitizeDiagnosticMessage(pkg *packages.Package, message string) string {
-	message = overlayDiagnosticPath.ReplaceAllString(message, "<overlay>/$1")
-	message = strings.ReplaceAll(message, b.sourceRoot, "<source>")
-	message = strings.ReplaceAll(message, b.goroot, "<goroot>")
-	for _, redaction := range b.diagnosticRedactions {
-		message = strings.ReplaceAll(message, redaction, "<private-path>")
-	}
+	message = b.sanitizeRecordedMessage(message)
 	if pkg.Module != nil && pkg.Module.Dir != "" {
 		message = strings.ReplaceAll(message, pkg.Module.Dir, "<module>")
 		if pkg.Module.Replace != nil && pkg.Module.Replace.Dir != "" {
 			message = strings.ReplaceAll(message, pkg.Module.Replace.Dir, "<replacement>")
+		}
+	}
+	return message
+}
+
+func (b *inventoryBuilder) sanitizeRecordedMessage(message string) string {
+	message = overlayDiagnosticPath.ReplaceAllString(message, "<overlay>/$1")
+	if b.sourceRoot != "" {
+		message = strings.ReplaceAll(message, b.sourceRoot, "<source>")
+	}
+	if b.goroot != "" {
+		message = strings.ReplaceAll(message, b.goroot, "<goroot>")
+	}
+	for _, redaction := range b.diagnosticRedactions {
+		if redaction != "" {
+			message = strings.ReplaceAll(message, redaction, "<private-path>")
 		}
 	}
 	return message
@@ -2343,6 +2354,7 @@ func (b *inventoryBuilder) migrationBlock(category, message string, units []stri
 }
 
 func (b *inventoryBuilder) addBlocker(blocks, category, message string, units, diagnostics []string) {
+	message, _ = truncate(b.sanitizeRecordedMessage(message), b.profile.Limits.MaxStringBytes)
 	if units == nil {
 		units = []string{}
 	}

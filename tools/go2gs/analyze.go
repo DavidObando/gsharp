@@ -293,6 +293,8 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	builder := newInventoryBuilder(&analysis, mirror.root, targetGOROOT, profile)
 	builder.ctx = ctx
 	builder.diagnosticRedactions = append(builder.diagnosticRedactions,
+		sourceRoot,
+		outRoot,
 		workRoot,
 		capsule.directory.executionPath(),
 		goExecutable.sourcePath,
@@ -394,7 +396,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		builder.block("pkg-config", "selected package requires #cgo pkg-config, but M0 has no approved pkg-config executable or provenance model", nil, nil)
 	}
 	if loadErr != nil {
-		builder.block("loader", sanitizeMessage(loadErr.Error(), mirror.root, profile.Limits.MaxStringBytes, builder.diagnosticRedactions...), nil, nil)
+		builder.block("loader", loadErr.Error(), nil, nil)
 	}
 	if len(loaded) == 0 {
 		builder.block("loader", "the requested entry patterns selected no loadable packages under the pinned profile", nil, nil)
@@ -413,7 +415,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		if ctx.Err() != nil {
 			return Analysis{}, false, ctx.Err()
 		}
-		builder.block("loader", sanitizeMessage(typedSourceErr.Error(), mirror.root, profile.Limits.MaxStringBytes, builder.diagnosticRedactions...), nil, nil)
+		builder.block("loader", typedSourceErr.Error(), nil, nil)
 	} else {
 		if postLoadContextTestHook != nil {
 			postLoadContextTestHook("typed-source-capture-complete")
@@ -2718,15 +2720,6 @@ func sourceIdentity(commit string, manifests []ManifestRecord) string {
 		parts = append(parts, manifest.Kind+"\x00"+manifest.Path+"\x00"+manifest.SHA256)
 	}
 	return stableID("source", strings.Join(parts, "\x00"))
-}
-
-func sanitizeMessage(message, sourceRoot string, max int, redactions ...string) string {
-	message = strings.ReplaceAll(message, sourceRoot, "<source>")
-	for _, redaction := range redactions {
-		message = strings.ReplaceAll(message, redaction, "<private-path>")
-	}
-	message, _ = truncate(message, max)
-	return message
 }
 
 func copyMap(source map[string]string) map[string]string {
