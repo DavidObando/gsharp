@@ -3681,6 +3681,32 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void UnknownCallableCall_StillDropsNarrowingOfLocalWrittenThroughClosureReferenceArgument()
+    {
+        var result = Evaluate("""
+            func Clear(ref value string?) {
+                value = nil
+            }
+
+            func Run(a string?) int32 {
+                var text = a
+                let reset = func() { Clear(&text) }
+                if text != nil {
+                    reset()
+                    return text.Length
+                }
+                return 0
+            }
+
+            Run("a")
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_MemberNotNullAfterLabelReestablishesNarrowing()
     {
         AssertRuns("""

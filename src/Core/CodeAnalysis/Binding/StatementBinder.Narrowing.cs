@@ -1988,6 +1988,7 @@ internal sealed partial class StatementBinder
             CollectAssignedNamesAndMemberMutation(node, names);
             CollectNullCoalescingTargetNames(node, names);
             CollectRefArgumentNames(node, names);
+            CollectAddressOfNames(node, names);
             return;
         }
 
@@ -2023,6 +2024,21 @@ internal sealed partial class StatementBinder
         foreach (var child in node.GetChildren())
         {
             CollectRefArgumentNames(child, names);
+        }
+    }
+
+    // Inside a closure every `&x` (including a by-reference call argument) lets
+    // the callee write the local while the closure runs.
+    private static void CollectAddressOfNames(SyntaxNode node, HashSet<string> names)
+    {
+        if (node is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.AmpersandToken } addressOf)
+        {
+            CollectAllNames(addressOf.Operand, names);
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectAddressOfNames(child, names);
         }
     }
 
