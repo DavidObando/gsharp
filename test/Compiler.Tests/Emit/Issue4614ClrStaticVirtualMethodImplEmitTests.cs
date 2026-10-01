@@ -60,6 +60,7 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
         public interface IP { static abstract int P { get; } }
         public interface IP2 : IP { }
         public interface IPV { static virtual int P { get => 1; set { } } }
+        public interface IPS { static abstract int Q { get; set; } }
 
         public interface IGen { static abstract int Count<U>(U u); }
 
@@ -80,6 +81,7 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
             public static int V<T>() where T : ISV => T.V();
             public static int P<T>() where T : IP => T.P;
             public static int PV<T>() where T : IPV => T.P;
+            public static int SetThenGet<T>(int value) where T : IPS { T.Q = value; return T.Q; }
             public static int Count<T>() where T : IGen => T.Count<string>("abc");
             public static void Hook<T>(System.Action a) where T : IEv => T.Changed += a;
             public static int N<T, U>(IInst<T> i, T x, U y) => i.N(x, y);
@@ -193,6 +195,31 @@ public class Issue4614ClrStaticVirtualMethodImplEmitTests
             Console.WriteLine(Probe.V[VD]())
             """,
             new[] { "5" },
+        };
+
+        // A static abstract get/set property: both accessors bind (the setter
+        // through its own MethodImpl).
+        yield return new object[]
+        {
+            "static-abstract-get-set-property",
+            """
+            package P
+            import System
+            import Clib
+
+            struct QS : IPS {
+                shared {
+                    var store int32 = 0
+                    prop Q int32 {
+                        get { return store }
+                        set { store = value * 2 }
+                    }
+                }
+            }
+
+            Console.WriteLine(Probe.SetThenGet[QS](21))
+            """,
+            new[] { "42" },
         };
 
         // A get-only property overrides just the getter of a defaulted get/set
