@@ -89,6 +89,35 @@ namespace Demo
     }
 
     [Fact]
+    public void ForEachOverSuppressedPromotedIteratorCall_AssertsBinding()
+    {
+        // A C# `!` on the collection changes only its flow state; the element
+        // is still `Node?`, whatever the mix of parentheses and suppressions.
+        string printed = TranslateOblivious(Prelude + @"
+        public int Run(Node root)
+        {
+            int total = 0;
+            foreach (Node item in Items(root)!)
+            {
+                total += Use(item) + item.Start;
+            }
+
+            foreach (Node other in ((Items(root))!))
+            {
+                total += other.Start;
+            }
+
+            return total;
+        }
+    }
+}");
+
+        Assert.Contains("Use(item!!)", printed);
+        Assert.Contains("item!!.Start", printed);
+        Assert.Contains("other!!.Start", printed);
+    }
+
+    [Fact]
     public void LambdaCapturingPromotedIteratorBinding_InOfTypeWhereChain_Binds()
     {
         // #4577: the exact `.OfType<T>().Where(lambda)` shape; the lambda's
