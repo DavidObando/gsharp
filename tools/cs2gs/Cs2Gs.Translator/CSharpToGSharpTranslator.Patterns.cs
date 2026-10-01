@@ -3178,8 +3178,10 @@ public sealed partial class CSharpToGSharpTranslator
                     array.ElementType,
                     out var mappedElement))
             {
+                // Issue #4556: only the element's shape is read here; the
+                // mapping is never printed, so it must not synthesize imports.
                 mappedElement =
-                    (this.typeMapper.Map(array, this.context, expression.GetLocation())
+                    (this.typeMapper.MapWithoutImportTracking(array, this.context, expression.GetLocation())
                         as ArrayTypeReference)?.ElementType;
                 this.state.ManagedReferenceArrayNullable.MappedArrayElementByElementType.Add(
                     array.ElementType,

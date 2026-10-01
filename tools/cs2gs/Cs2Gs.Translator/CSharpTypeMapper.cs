@@ -198,6 +198,14 @@ public sealed class CSharpTypeMapper
     private IMethodSymbol topLevelStatementsEntryPoint;
 
     /// <summary>
+    /// Issue #4556: how many <see cref="MapWithoutImportTracking"/> calls are
+    /// active. While it is non-zero, a mapping records no namespace into
+    /// <see cref="shortenedNamespaces"/> and registers no new synthesized type
+    /// alias, because nothing it returns is printed.
+    /// </summary>
+    private int importTrackingSuppression;
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="CSharpTypeMapper"/> class
     /// with a private, unshared anonymous-type registry (every prior call
     /// site's behavior — used by standalone/single-file callers such as
@@ -440,6 +448,35 @@ public sealed class CSharpTypeMapper
             && Analyzers.RoslynAnalyzerApiMap.IsNamespaceSymbolType(type);
         GTypeReference mapped = this.MapCore(type, context, location);
         return nullableReference || analyzerNamespaceString ? WithNullable(mapped, true) : mapped;
+    }
+
+    /// <summary>
+    /// Issue #4556: maps <paramref name="type"/> like <see cref="Map"/> for a
+    /// caller that only inspects the result's shape and never prints it, so it
+    /// adds no namespace import and no synthesized type alias (an ambiguous
+    /// type is spelled namespace-qualified instead). A printed reference is
+    /// what needs an <c>import</c>; recording the namespace of an analysis-only
+    /// mapping synthesizes an import no name uses, and that import can make an
+    /// unrelated bare name ambiguous (GS0547:
+    /// shape analysis of a <c>ParameterInfo[]</c> receiver imported
+    /// <c>System.Reflection</c>, so the file's bare compiler <c>Binder</c>
+    /// collided with <c>System.Reflection.Binder</c>).
+    /// </summary>
+    /// <param name="type">The type to map.</param>
+    /// <param name="context">The translation context.</param>
+    /// <param name="location">The location for any diagnostic the mapping reports.</param>
+    /// <returns>The mapped G# type reference.</returns>
+    public GTypeReference MapWithoutImportTracking(ITypeSymbol type, TranslationContext context, Location location)
+    {
+        this.importTrackingSuppression++;
+        try
+        {
+            return this.Map(type, context, location);
+        }
+        finally
+        {
+            this.importTrackingSuppression--;
+        }
     }
 
     /// <summary>
@@ -1160,6 +1197,14 @@ public sealed class CSharpTypeMapper
         if (reuseOnly)
         {
             return null;
+        }
+
+        // Issue #4556: an analysis-only mapping prints nothing, so it must not
+        // register an alias import either; the qualified target spells the
+        // same type for whatever shape the caller inspects.
+        if (this.importTrackingSuppression != 0)
+        {
+            return target;
         }
 
         this.sourceDeclaredTypeNames ??= BuildSourceDeclaredTypeNames(
@@ -1984,7 +2029,8 @@ public sealed class CSharpTypeMapper
             string roslynName = $"{named.ContainingNamespace.ToDisplayString()}.{named.Name}";
             if (Analyzers.RoslynAnalyzerApiMap.TryMapType(roslynName, out Analyzers.RoslynAnalyzerApiMap.Entry mapped))
             {
-                if (!string.IsNullOrEmpty(mapped.GsNamespace))
+                if (!string.IsNullOrEmpty(mapped.GsNamespace)
+                    && this.importTrackingSuppression == 0)
                 {
                     this.shortenedNamespaces.Add(mapped.GsNamespace);
                 }
@@ -2214,7 +2260,8 @@ public sealed class CSharpTypeMapper
     /// <param name="outermostType">The outermost containing type of the reference (itself, if not nested).</param>
     private void TrackShortenedNamespace(INamedTypeSymbol outermostType)
     {
-        if (outermostType.ContainingNamespace is { IsGlobalNamespace: false } ns)
+        if (this.importTrackingSuppression == 0
+            && outermostType.ContainingNamespace is { IsGlobalNamespace: false } ns)
         {
             this.shortenedNamespaces.Add(
                 this.nameAllocator?.GetNamespaceName(ns) ?? ns.ToDisplayString());
