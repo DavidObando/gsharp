@@ -1057,6 +1057,13 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression subject = this.TranslateExpression(node.Expression);
             var cases = new List<SwitchStatementCase>();
+            foreach (SwitchSectionSyntax section in node.Sections)
+            {
+                IReadOnlyList<StatementSyntax> ordered =
+                    this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span);
+                this.RegisterCapturingRecursiveLocalFunctions(ordered);
+                this.RegisterRecursiveLocalFunctionLifts(ordered);
+            }
 
             // Issue #1884: a `goto case K;` / `goto default;` anywhere in this
             // switch (but not in a nested switch, whose own gotos target its

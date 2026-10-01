@@ -2025,6 +2025,16 @@ public sealed partial class CSharpToGSharpTranslator
             occupied.UnionWith(this.state.SynthesizedPropertyBackingFieldNames
                 .Where(pair => containingTypes.Contains(pair.Key.ContainingType))
                 .Select(pair => pair.Value));
+            occupied.UnionWith(containingTypes
+                .SelectMany(type => type.GetMembers().OfType<IPropertySymbol>())
+                .Where(this.IsBackingFieldLoweredGetOnlyAutoProperty)
+                .Select(property =>
+                {
+                    string name = property.Name;
+                    return "_" + (name.Length > 0
+                        ? char.ToLowerInvariant(name[0]) + name.Substring(1)
+                        : name);
+                }));
 
             string candidate = LiftedLocalFunctionNames
                 .GetValue(
@@ -2576,7 +2586,8 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.state.PendingStaticSynthHelpers == null
                 && this.state.PendingInstanceSynthHelpers == null)
             {
-                this.state.UnsupportedTopLevelRecursiveLocalFunctions.UnionWith(toLift);
+                this.state.UnsupportedTopLevelRecursiveLocalFunctions.UnionWith(
+                    toLift.Where(symbol => !IsCapturingRecursiveGroupMember(symbol)));
                 return;
             }
 
