@@ -96,6 +96,145 @@ func validIncompleteAnalysis() Analysis {
 	return analysis
 }
 
+func TestEntryPatternGrammarIsClosedAndCanonical(t *testing.T) {
+	for _, patterns := range [][]string{
+		{"."},
+		{"./..."},
+		{"./cmd"},
+		{"./cmd/go2gs"},
+		{"./cmd/..."},
+		{"./internal/foo-bar_baz.v2"},
+		{".", "./cmd/go2gs", "./internal/..."},
+	} {
+		if err := validateEntryPatterns(patterns); err != nil {
+			t.Errorf("valid entry patterns %q rejected: %v", patterns, err)
+		}
+	}
+
+	for _, pattern := range invalidEntryPatterns() {
+		if err := validateEntryPatterns([]string{pattern}); err == nil {
+			t.Errorf("invalid entry pattern %q accepted", pattern)
+		}
+	}
+	if err := validateEntryPatterns([]string{"./cmd", "./cmd"}); err == nil {
+		t.Fatal("duplicate entry pattern accepted")
+	}
+}
+
+func TestEntryPatternsAreValidatedAtEveryBoundary(t *testing.T) {
+	for index, pattern := range invalidEntryPatterns() {
+		t.Run(strconv.Itoa(index), func(t *testing.T) {
+			profile := testProfile()
+			profile.EntryPatterns = []string{pattern}
+			if _, err := readProfile(writeTestProfile(t, profile)); err == nil {
+				t.Fatal("profile ingestion accepted invalid entry pattern")
+			}
+
+			analysis := validIncompleteAnalysis()
+			analysis.Profile.EntryPatterns = []string{pattern}
+			if err := validateAnalysis(analysis); err == nil {
+				t.Fatal("analysis artifact accepted invalid entry pattern")
+			}
+		})
+	}
+
+	profile := testProfile()
+	profile.EntryPatterns = []string{"file=outside.go"}
+	out := filepath.Join(t.TempDir(), "out")
+	if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), out, profile); err == nil {
+		t.Fatal("direct analysis accepted invalid entry pattern")
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("invalid entry pattern mutated output before rejection: %v", err)
+	}
+}
+
+func TestEntryPatternValidationStopsBeforeProductionPackageLoad(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.go")
+	if err := os.WriteFile(outside, []byte("package outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	packageLoadTestHook = func(phase string) {
+		t.Fatalf("invalid entry pattern reached production package load phase %q", phase)
+	}
+	t.Cleanup(func() { packageLoadTestHook = nil })
+
+	config := &packages.Config{
+		Context: t.Context(),
+		Mode:    packages.NeedName,
+		Dir:     t.TempDir(),
+	}
+	patterns := append([]string{"file=" + outside}, invalidEntryPatterns()...)
+	for _, phase := range []string{"preflight", "typed"} {
+		for _, pattern := range patterns {
+			if _, err := loadPackages(config, []string{pattern}, phase); err == nil {
+				t.Errorf("invalid entry pattern %q reached %s packages.Load", pattern, phase)
+			}
+		}
+	}
+}
+
+func TestEntryPatternProfilesRemainDeterministic(t *testing.T) {
+	profile := testProfile()
+	profile.EntryPatterns = []string{"./internal/...", ".", "./cmd/go2gs"}
+	loaded, err := readProfile(writeTestProfile(t, profile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{".", "./cmd/go2gs", "./internal/..."}
+	if !slices.Equal(loaded.EntryPatterns, want) {
+		t.Fatalf("canonical entry patterns = %q, want %q", loaded.EntryPatterns, want)
+	}
+
+	cliamp, err := readProfile(filepath.Join("profiles", "cliamp-m0.json"))
+	if err != nil {
+		t.Fatalf("pinned cliamp profile rejected: %v", err)
+	}
+	if !slices.Equal(cliamp.EntryPatterns, []string{"./..."}) {
+		t.Fatalf("pinned cliamp entry patterns = %q", cliamp.EntryPatterns)
+	}
+}
+
+func invalidEntryPatterns() []string {
+	return []string{
+		"",
+		"file=outside.go",
+		"file=/tmp/outside.go",
+		"pattern=./...",
+		"other=value",
+		"/tmp/package",
+		"C:/outside/package",
+		`C:\outside\package`,
+		`\\server\share\package`,
+		"//server/share/package",
+		"file:///tmp/package",
+		"https://example.invalid/package",
+		"std",
+		"cmd",
+		"all",
+		"...",
+		"example.com/package",
+		"../package",
+		"./../package",
+		"./child/../package",
+		"./%2e%2e/package",
+		"./\uff0e\uff0e/package",
+		"./",
+		"./child/",
+		"./child//package",
+		"././package",
+		"./child/./package",
+		"./child\\package",
+		"./child/.../package",
+		"./child...package",
+		"./....",
+		"./white space",
+		"./tab\tpackage",
+		"./line\npackage",
+		"./nul\x00package",
+	}
+}
+
 func refreshSourceIdentity(analysis *Analysis) {
 	analysis.Profile.SourceRootIdentity = sourceIdentity(analysis.Profile.ActualSourceCommit, analysis.Manifests)
 }

@@ -48,6 +48,9 @@ func readProfile(path string) (Profile, error) {
 	if profile.ID == "" || len(profile.EntryPatterns) == 0 || profile.RequestedGoVersion == "" {
 		return profile, errors.New("profile id, entryPatterns, and requestedGoVersion are required")
 	}
+	if err := validateEntryPatterns(profile.EntryPatterns); err != nil {
+		return profile, err
+	}
 	if profile.CCompilerHelpers == nil {
 		return profile, errors.New("cCompilerHelpers must be an array")
 	}
@@ -100,6 +103,51 @@ func readProfile(path string) (Profile, error) {
 	sort.Strings(profile.ArchitectureFeatures)
 	sort.Strings(profile.BuildTags)
 	return profile, nil
+}
+
+func validateEntryPatterns(patterns []string) error {
+	if len(patterns) == 0 {
+		return errors.New("entryPatterns must contain at least one module-relative package pattern")
+	}
+	seen := make(map[string]struct{}, len(patterns))
+	for index, pattern := range patterns {
+		if _, duplicate := seen[pattern]; duplicate {
+			return fmt.Errorf("entryPatterns[%d] duplicates %q", index, pattern)
+		}
+		seen[pattern] = struct{}{}
+		if pattern == "." {
+			continue
+		}
+		if !strings.HasPrefix(pattern, "./") {
+			return fmt.Errorf("entryPatterns[%d] must be a canonical module-relative package pattern", index)
+		}
+		components := strings.Split(strings.TrimPrefix(pattern, "./"), "/")
+		for componentIndex, component := range components {
+			if component == "..." {
+				if componentIndex != len(components)-1 {
+					return fmt.Errorf("entryPatterns[%d] may use ... only as its final component", index)
+				}
+				continue
+			}
+			if component == "" || component == "." || component == ".." ||
+				strings.Trim(component, ".") == "" {
+				return fmt.Errorf("entryPatterns[%d] contains an invalid path component", index)
+			}
+			if strings.Contains(component, "...") {
+				return fmt.Errorf("entryPatterns[%d] contains an invalid recursive operator", index)
+			}
+			for _, character := range component {
+				if (character >= 'a' && character <= 'z') ||
+					(character >= 'A' && character <= 'Z') ||
+					(character >= '0' && character <= '9') ||
+					character == '-' || character == '_' || character == '.' {
+					continue
+				}
+				return fmt.Errorf("entryPatterns[%d] contains a noncanonical character", index)
+			}
+		}
+	}
+	return nil
 }
 
 func validateGODEBUG(values map[string]string) error {

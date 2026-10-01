@@ -60,6 +60,20 @@ func observeAnalysisOperation(operation, point string) {
 	}
 }
 
+func loadPackages(config *packages.Config, entryPatterns []string, phase string) ([]*packages.Package, error) {
+	if err := validateEntryPatterns(entryPatterns); err != nil {
+		return nil, err
+	}
+	if packageLoadTestHook != nil {
+		packageLoadTestHook(phase + "-before")
+	}
+	loaded, err := packages.Load(config, entryPatterns...)
+	if packageLoadTestHook != nil {
+		packageLoadTestHook(phase + "-after")
+	}
+	return loaded, err
+}
+
 func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (Analysis, bool, error) {
 	return analyzeWithSnapshotHook(ctx, sourceRoot, outRoot, profile, nil)
 }
@@ -87,6 +101,9 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		return Analysis{}, false, err
 	}
 	if err := validateProfileSemanticAuthority(profile); err != nil {
+		return Analysis{}, false, err
+	}
+	if err := validateEntryPatterns(profile.EntryPatterns); err != nil {
 		return Analysis{}, false, err
 	}
 	sourceRoot, err = secureRoot(sourceRoot)
@@ -330,13 +347,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if afterSnapshot != nil {
 		afterSnapshot()
 	}
-	if packageLoadTestHook != nil {
-		packageLoadTestHook("preflight-before")
-	}
-	selectedPreflight, _ := packages.Load(config, profile.EntryPatterns...)
-	if packageLoadTestHook != nil {
-		packageLoadTestHook("preflight-after")
-	}
+	selectedPreflight, _ := loadPackages(config, profile.EntryPatterns, "preflight")
 	selectedPreflight, err = collectPackagesContext(ctx, selectedPreflight)
 	if err != nil {
 		return Analysis{}, false, err
@@ -352,13 +363,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	}
 	builder.sourceSnapshot = sourceSnapshot.data
 	builder.snapshotPortable = sourceSnapshot.portable
-	if packageLoadTestHook != nil {
-		packageLoadTestHook("typed-before")
-	}
-	loaded, loadErr := packages.Load(&metadataConfig, profile.EntryPatterns...)
-	if packageLoadTestHook != nil {
-		packageLoadTestHook("typed-after")
-	}
+	loaded, loadErr := loadPackages(&metadataConfig, profile.EntryPatterns, "typed")
 	if afterLoad != nil {
 		afterLoad()
 	}

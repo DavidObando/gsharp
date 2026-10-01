@@ -128,7 +128,10 @@ Before moving an application to a different compiler version, pin the intended S
   structural and relational consistency. Unsupported labels and nonempty
   `goExperiment`/`goDebug` settings or helper build-time
   `GOEXPERIMENT`/`DefaultGODEBUG` overrides fail bootstrap rather than silently
-  using different in-process parser/type-checker semantics. Source capture and
+  using different in-process parser/type-checker semantics. Entry package
+  patterns are limited to canonical module-relative paths (with an optional
+  final `/...` recursion), preventing `go/packages` query forms or absolute
+  paths from selecting source outside the captured mirror. Source capture and
   verification reject symlinks in every path component, profile and `goFlags`
   tags share one canonical selection set, architecture feature levels expand
   to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
