@@ -1451,6 +1451,16 @@ internal sealed partial class DeclarationBinder
                 var nameMatch = false;
                 foreach (var candidate in structSymbol.GetStaticMethods(imethod.Name))
                 {
+                    // Issue #4614: an explicit-interface-clause member keeps the
+                    // plain name but implements only the interface its clause
+                    // names; it never satisfies another interface's slot by
+                    // name. The emitter applies the same predicate, so a slot
+                    // this check accepts always gets its MethodImpl.
+                    if (!MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate))
+                    {
+                        continue;
+                    }
+
                     nameMatch = true;
                     if (StaticVirtualSignaturesMatch(imethod, candidate))
                     {
@@ -1573,6 +1583,7 @@ internal sealed partial class DeclarationBinder
                 foreach (var candidate in structSymbol.StaticProperties)
                 {
                     if (candidate.Name == iprop.Name
+                        && MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
                         && IsInterfacePropertyTypeCompatible(
                             candidate.Type,
                             iprop.Type,
