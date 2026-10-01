@@ -281,8 +281,77 @@ public sealed class TupleTypeSymbol : TypeSymbol
             _ => throw new ArgumentOutOfRangeException(nameof(arity)),
         };
 
+    /// <summary>
+    /// Issue #4591: the open <c>ValueTuple`N</c> definition in the load
+    /// context <paramref name="contextObject"/> belongs to. The host
+    /// <c>typeof(ValueTuple&lt;,&gt;)</c> is right only for the host context;
+    /// for a <c>MetadataLoadContext</c> the definition is looked up from that
+    /// context's own core assembly, which is where its <c>System.Object</c>
+    /// lives.
+    /// </summary>
+    /// <param name="arity">The CLR tuple-node arity (1–8).</param>
+    /// <param name="contextObject">The <c>System.Object</c> of the target load context.</param>
+    /// <returns>The open definition, or <see langword="null"/> when the context does not define it.</returns>
+    internal static Type? GetOpenClrType(int arity, Type contextObject)
+    {
+        var hostDefinition = GetOpenClrType(arity);
+        if (ReferenceEquals(contextObject.Assembly, typeof(object).Assembly))
+        {
+            return hostDefinition;
+        }
+
+        return contextObject.Assembly.GetType(
+            ValueTupleDefinitionPrefix + arity.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            throwOnError: false);
+    }
+
+    /// <summary>
+    /// Builds the closed <c>ValueTuple&lt;...&gt;</c> CLR type over
+    /// <paramref name="elementTypes"/>.
+    /// </summary>
+    /// <remarks>
+    /// Issue #4591: the G# primitives are host <c>typeof(...)</c> types, but
+    /// every other imported type comes from the compiler's
+    /// <c>MetadataLoadContext</c>. Closing the HOST <c>ValueTuple</c> over such
+    /// an element does not throw: <c>RuntimeType.MakeGenericType</c> silently
+    /// returns a <c>TypeBuilderInstantiation</c> that throws
+    /// <see cref="NotSupportedException"/> from <c>GetInterfaces</c> and every
+    /// member lookup, which surfaced as GS9998 on an array-to-
+    /// <c>IEnumerable</c> conversion and as a silently lost generic overload
+    /// candidate. The tuple is therefore closed in its elements' own load
+    /// context, with host primitives remapped into it. When no single context
+    /// can be determined the result is <see langword="null"/>: the tuple stays
+    /// symbolic, the state a tuple over a same-compilation type already has,
+    /// rather than carrying an instantiation nothing can reflect on.
+    /// </remarks>
+    /// <param name="elementTypes">The element CLR types, in order.</param>
+    /// <returns>The closed CLR type, or <see langword="null"/> when it cannot be built in one load context.</returns>
     internal static Type? BuildClrType(Type[] elementTypes)
-        => BuildClrType(elementTypes, 0, elementTypes.Length);
+    {
+        var contextObject = ResolveLoadContextObject(elementTypes);
+        if (contextObject == null)
+        {
+            return null;
+        }
+
+        var arguments = new Type[elementTypes.Length];
+        for (var i = 0; i < elementTypes.Length; i++)
+        {
+            arguments[i] = ClrTypeUtilities.RemapHostCoreTypeToContext(elementTypes[i], contextObject);
+        }
+
+        try
+        {
+            return BuildClrType(arguments, 0, arguments.Length, contextObject);
+        }
+        catch (ArgumentException)
+        {
+            // An element the remap could not move into the context (a host
+            // type outside the core assembly) is rejected by the context's
+            // MakeGenericType; stay symbolic rather than fail.
+            return null;
+        }
+    }
 
     private static TypeSymbol StripNames(TypeSymbol type) => type switch
     {
@@ -332,17 +401,89 @@ public sealed class TupleTypeSymbol : TypeSymbol
         return BuildClrType(clrTypes);
     }
 
-    private static Type BuildClrType(Type[] elementTypes, int start, int count)
+    private static Type? BuildClrType(Type[] elementTypes, int start, int count, Type contextObject)
     {
         if (count <= 7)
         {
-            return GetOpenClrType(count).MakeGenericType(elementTypes[start..(start + count)]);
+            return GetOpenClrType(count, contextObject)?.MakeGenericType(elementTypes[start..(start + count)]);
+        }
+
+        var open = GetOpenClrType(8, contextObject);
+        var rest = BuildClrType(elementTypes, start + 7, count - 7, contextObject);
+        if (open == null || rest == null)
+        {
+            return null;
         }
 
         var arguments = new Type[8];
         Array.Copy(elementTypes, start, arguments, 0, 7);
-        arguments[7] = BuildClrType(elementTypes, start + 7, count - 7);
-        return GetOpenClrType(8).MakeGenericType(arguments);
+        arguments[7] = rest;
+        return open.MakeGenericType(arguments);
+    }
+
+    /// <summary>
+    /// Issue #4591: the <c>System.Object</c> of the single load context every
+    /// element of <paramref name="elementTypes"/> can be closed in. Host
+    /// <c>RuntimeType</c> elements fit any context (they are remapped), so the
+    /// answer is the host <c>typeof(object)</c> unless some element comes from
+    /// a <c>MetadataLoadContext</c>, in which case it is that context's.
+    /// </summary>
+    /// <param name="elementTypes">The element CLR types.</param>
+    /// <returns>The context's <c>System.Object</c>, or <see langword="null"/> when an element's context is unknown or two elements disagree.</returns>
+    private static Type? ResolveLoadContextObject(Type[] elementTypes)
+    {
+        var hostObject = typeof(object);
+        var contextObject = hostObject;
+        foreach (var element in elementTypes)
+        {
+            if (element.IsRuntimeProvidedType())
+            {
+                continue;
+            }
+
+            var elementObject = FindLoadContextObject(element);
+            if (elementObject == null)
+            {
+                return null;
+            }
+
+            if (ReferenceEquals(elementObject.Assembly, hostObject.Assembly)
+                || ReferenceEquals(elementObject, contextObject))
+            {
+                continue;
+            }
+
+            if (!ReferenceEquals(contextObject, hostObject))
+            {
+                return null;
+            }
+
+            contextObject = elementObject;
+        }
+
+        return contextObject;
+    }
+
+    /// <summary>
+    /// Issue #4591: the <c>System.Object</c> of <paramref name="type"/>'s load
+    /// context. Every context builds an array over its own types with its own
+    /// <c>System.Array</c> as the base type, whose base is that context's
+    /// <c>System.Object</c>; unlike walking <paramref name="type"/>'s own base
+    /// chain this also answers for an interface.
+    /// </summary>
+    /// <param name="type">A CLR type.</param>
+    /// <returns>The context's <c>System.Object</c>, or <see langword="null"/> when it cannot be determined.</returns>
+    private static Type? FindLoadContextObject(Type type)
+    {
+        try
+        {
+            var root = type.MakeArrayType().BaseType?.BaseType;
+            return root is { FullName: "System.Object" } ? root : null;
+        }
+        catch (Exception ex) when (ex is NotSupportedException || ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return null;
+        }
     }
 
     /// <summary>

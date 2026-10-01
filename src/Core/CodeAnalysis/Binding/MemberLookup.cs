@@ -7428,34 +7428,9 @@ internal sealed class MemberLookup
     /// <param name="contextObject">The <c>object</c> placeholder resolved in the target context.</param>
     /// <param name="arity">The CLR tuple-node arity (1–8).</param>
     /// <returns>The open <c>ValueTuple`N</c> definition, or <see langword="null"/> when unsupported/unresolvable.</returns>
+    /// <remarks>Issue #4591: delegates to the rule <see cref="TupleTypeSymbol"/> uses for its own CLR backing.</remarks>
     private static Type? ResolveErasedValueTupleOpenDefinition(Type contextObject, int arity)
-    {
-        Type? hostOpenDefinition = arity switch
-        {
-            1 => typeof(ValueTuple<>),
-            2 => typeof(ValueTuple<,>),
-            3 => typeof(ValueTuple<,,>),
-            4 => typeof(ValueTuple<,,,>),
-            5 => typeof(ValueTuple<,,,,>),
-            6 => typeof(ValueTuple<,,,,,>),
-            7 => typeof(ValueTuple<,,,,,,>),
-            8 => typeof(ValueTuple<,,,,,,,>),
-            _ => null,
-        };
-        if (hostOpenDefinition == null)
-        {
-            return null;
-        }
-
-        if (contextObject == null || contextObject.Assembly == typeof(object).Assembly)
-        {
-            return hostOpenDefinition;
-        }
-
-        return contextObject.Assembly.GetType(
-            hostOpenDefinition.FullName ?? "System.ValueTuple`" + arity,
-            throwOnError: false);
-    }
+        => arity is < 1 or > 8 ? null : TupleTypeSymbol.GetOpenClrType(arity, contextObject);
 
     private static bool ReturnTypeMatchesSubstituted(TypeSymbol candidateReturn, Type openReturn, ImmutableArray<TypeSymbol> symbolicArgs)
     {
