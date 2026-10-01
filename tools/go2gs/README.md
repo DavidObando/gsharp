@@ -157,7 +157,7 @@ before mutation.
 
 The parent captures the selected native `cmd/go` into a bootstrap capsule only
 for handoff. On Linux the captured bytes must be a supported ELF executable or
-static PIE with no `PT_INTERP`, imported libraries or dynamic symbols,
+static PIE with no `PT_INTERP`, imported libraries or imported dynamic symbols,
 `DT_RPATH`, or `DT_RUNPATH`; this check completes before any execution. Every
 analysis worker runs in a private user and mount namespace,
 applies a 2 GiB `RLIMIT_DATA` ceiling before either package load,

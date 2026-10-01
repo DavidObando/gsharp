@@ -94,7 +94,7 @@ authenticate or mediate that peer.
 
 The selected native `cmd/go` is captured into a parent bootstrap capsule only
 for handoff. Linux first validates the captured bytes as a supported static ELF
-executable or static PIE with no interpreter, imported libraries or dynamic
+executable or static PIE with no interpreter, imported libraries or imported dynamic
 symbols, RPATH, or RUNPATH. The Linux worker then enters a private user and mount namespace,
 applies a 2 GiB `RLIMIT_DATA` ceiling before either package load,
 recaptures the handoff by expected SHA-256, and places only `go` in a read-only
