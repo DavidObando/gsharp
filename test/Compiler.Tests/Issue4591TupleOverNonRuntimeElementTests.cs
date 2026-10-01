@@ -49,10 +49,10 @@ namespace GSharp.Compiler.Tests;
 /// <c>Nullable&lt;&gt;</c>) is resolved from that context's core assembly and
 /// any host primitive element is remapped into it (the same rule
 /// <c>MemberLookup.ResolveErasedValueTupleOpenDefinition</c> already applied
-/// to erased inference shapes). Every other shape keeps the previous host
-/// construction exactly, notably a function-type element, whose own
-/// <c>Func&lt;…&gt;</c> is already a host instantiation; the
-/// <c>function-type-element-through-linq</c> green row pins that.</para>
+/// to erased inference shapes). A function-type element's own
+/// <c>Func&lt;…&gt;</c> is a host instantiation over imported types, so its
+/// parts decide the context and it is rebuilt there. Every shape whose
+/// context cannot be proven keeps the previous host construction exactly.</para>
 /// <para><b>Discrimination witness (ADR-0154).</b> Reverting
 /// <c>src/Core/CodeAnalysis/Symbols/TupleTypeSymbol.cs</c> and
 /// <c>src/Core/CodeAnalysis/Binding/MemberLookup.cs</c> to their parent
@@ -252,6 +252,30 @@ public class Issue4591TupleOverNonRuntimeElementTests
             new[] { "1", "1", "b.example" },
         };
 
+        // A direct imported element next to a function type over an imported
+        // type. The function type's own `Func<Uri, int32>` is a host
+        // instantiation over a context type; its parts decide the context, so
+        // the tuple is rebuilt there instead of falling back to a host tuple
+        // over the context `Uri`.
+        yield return new object[]
+        {
+            "imported-element-beside-a-function-over-an-imported-type",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import System.Linq
+            import HelperLib
+
+            let xs = [](Uri, (Uri) -> int32){(Uri("https://example.org:8443/"), (u Uri) -> u.Port)}
+            let e IEnumerable[(Uri, (Uri) -> int32)] = xs
+            Console.WriteLine(e.Count())
+            let one = Picker.Single(xs)
+            Console.WriteLine(one.Item2(one.Item1))
+            """,
+            new[] { "1", "8443" },
+        };
+
         // A NULLABLE imported value type. Its `Nullable<T>` used to be built
         // from the host `typeof(Nullable<>)` before the tuple ever saw it, an
         // instantiation that is already poisoned (the #4035 trap), so the
@@ -340,11 +364,10 @@ public class Issue4591TupleOverNonRuntimeElementTests
             new[] { "String" },
         };
 
-        // A function-type element over an imported type: its own CLR type is
-        // still a host `Func<…>` instantiation, so the tuple keeps the previous
-        // host construction. An earlier draft of the fix made such a tuple
-        // symbolic, which broke exactly this LINQ shape in the code-exploder
-        // migration (`tools.Select(...)`, `tools.FirstOrDefault(...)`).
+        // A function-type element over an imported type, through LINQ. This
+        // is the code-exploder migration's shape (`tools.Select(...)`,
+        // `tools.FirstOrDefault(...)`), which an earlier draft of the fix
+        // broke by making the tuple symbolic.
         yield return new object[]
         {
             "function-type-element-through-linq",

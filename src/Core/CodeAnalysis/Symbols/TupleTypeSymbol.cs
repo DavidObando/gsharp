@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
@@ -318,13 +319,13 @@ public sealed class TupleTypeSymbol : TypeSymbol
     /// <see cref="NotSupportedException"/> from <c>GetInterfaces</c> and every
     /// member lookup, which surfaced as GS9998 on an array-to-
     /// <c>IEnumerable</c> conversion and as a silently lost generic overload
-    /// candidate. When every such element provably belongs to one
+    /// candidate. When every such element (or, for a host generic already
+    /// closed over context types such as a function type's
+    /// <c>Func&lt;…&gt;</c>, every part of it) provably belongs to one
     /// <c>MetadataLoadContext</c>, the tuple is therefore closed in that
-    /// context, with host primitives remapped into it. Every other shape —
-    /// all-host elements, or an element whose context cannot be proven (for
-    /// instance a function type's <c>Func&lt;…&gt;</c>, which is itself already
-    /// a host instantiation) — keeps the previous host construction exactly,
-    /// so no shape that bound before changes.
+    /// context, with host types remapped into it. Every other shape —
+    /// all-host elements, or an element whose context cannot be proven —
+    /// keeps the previous host construction exactly.
     /// </remarks>
     /// <param name="elementTypes">The element CLR types, in order.</param>
     /// <returns>The closed CLR type.</returns>
@@ -498,35 +499,93 @@ public sealed class TupleTypeSymbol : TypeSymbol
     /// <c>RuntimeType</c> elements fit any context (they are remapped). The
     /// answer is the host <c>typeof(object)</c>, meaning "keep the previous
     /// host construction", whenever that cannot be proven: no element needs a
-    /// context, an element's context cannot be determined, an element is
-    /// already a host instantiation over a context type (it answers the host
-    /// context without being a <c>RuntimeType</c>), or two elements disagree.
+    /// context, some part's context cannot be determined, or two parts
+    /// disagree. A host generic already closed over context types (a
+    /// function type's <c>Func&lt;…&gt;</c> over an imported parameter type is
+    /// a <c>TypeBuilderInstantiation</c>) is decided by its parts, which
+    /// <see cref="ClrTypeUtilities.RemapHostCoreTypeToContext"/> then rebuilds
+    /// in the context.
     /// </summary>
     /// <param name="elementTypes">The element CLR types.</param>
     /// <returns>The proven context's <c>System.Object</c>, otherwise the host <c>typeof(object)</c>.</returns>
     private static Type ResolveLoadContextObject(Type[] elementTypes)
     {
         var hostObject = typeof(object);
-        Type? contextObject = null;
+        var contextObjects = new List<Type>();
         foreach (var element in elementTypes)
         {
-            if (element.IsRuntimeProvidedType())
-            {
-                continue;
-            }
-
-            var elementObject = FindLoadContextObject(element);
-            if (elementObject == null
-                || ReferenceEquals(elementObject.Assembly, hostObject.Assembly)
-                || (contextObject != null && !ReferenceEquals(elementObject, contextObject)))
+            if (!TryCollectLoadContextObjects(element, contextObjects))
             {
                 return hostObject;
             }
-
-            contextObject = elementObject;
         }
 
-        return contextObject ?? hostObject;
+        if (contextObjects.Count == 0)
+        {
+            return hostObject;
+        }
+
+        var contextObject = contextObjects[0];
+        foreach (var other in contextObjects)
+        {
+            if (!ReferenceEquals(other, contextObject))
+            {
+                return hostObject;
+            }
+        }
+
+        return contextObject;
+    }
+
+    /// <summary>
+    /// Issue #4591: adds the non-host load contexts <paramref name="type"/>
+    /// draws on to <paramref name="contextObjects"/>. A host
+    /// <c>RuntimeType</c> needs none; a context type contributes its own; a
+    /// host composite that is not a <c>RuntimeType</c> (a host generic or
+    /// array over context types) contributes its parts'.
+    /// </summary>
+    /// <param name="type">A CLR type.</param>
+    /// <param name="contextObjects">The collected context <c>System.Object</c>s.</param>
+    /// <returns><see langword="false"/> when some part's context cannot be determined.</returns>
+    private static bool TryCollectLoadContextObjects(Type type, List<Type> contextObjects)
+    {
+        if (type.IsRuntimeProvidedType())
+        {
+            return true;
+        }
+
+        var typeObject = FindLoadContextObject(type);
+        if (typeObject == null)
+        {
+            return false;
+        }
+
+        if (!ReferenceEquals(typeObject.Assembly, typeof(object).Assembly))
+        {
+            contextObjects.Add(typeObject);
+            return true;
+        }
+
+        if (type.HasElementType)
+        {
+            return type.GetElementType() is { } elementType
+                && TryCollectLoadContextObjects(elementType, contextObjects);
+        }
+
+        if (!type.IsConstructedGenericType)
+        {
+            return false;
+        }
+
+        foreach (var argument in type.GetGenericArguments())
+        {
+            if (!TryCollectLoadContextObjects(argument, contextObjects))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
