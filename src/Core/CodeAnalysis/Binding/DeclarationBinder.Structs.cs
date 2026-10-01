@@ -2169,16 +2169,6 @@ internal sealed partial class DeclarationBinder
                             isOpen: isVirtual || isOverride,
                             isOverride: isOverride);
 
-                        // ADR-0118 / issue #4589: every property accessor,
-                        // indexer or not and explicit-interface or not, is a
-                        // SpecialName method in CLR metadata, as C# emits it and
-                        // as the metadata-only fallback in MemberDefEmitter
-                        // already did. Limiting this to indexers left computed
-                        // accessors looking like ordinary methods to reflection
-                        // (MethodInfo.IsSpecialName), so the implementation and
-                        // reference assemblies disagreed.
-                        getterSymbol.IsSpecialName = true;
-
                         // Issue #3879: the by-ref return lives on the ACCESSOR
                         // symbol as well as the property. The getter's body is
                         // bound with this symbol as its enclosing function, so
@@ -2211,7 +2201,6 @@ internal sealed partial class DeclarationBinder
                             receiverType: structSymbol,
                             isOpen: isVirtual || isOverride,
                             isOverride: isOverride);
-                        setterSymbol.IsSpecialName = true;
                         setterSymbol.IsInitOnlySetter = isInitOnly;
                         setterSymbol.ExternalOverriddenMethod = propertySymbol.ExternalOverriddenSetter;
                         propertySymbol.SetterSymbol = setterSymbol;
@@ -3205,10 +3194,6 @@ internal sealed partial class DeclarationBinder
                         getterSymbol.IsStatic = true;
                         getterSymbol.StaticOwnerType = structSymbol;
 
-                        // Issue #4589: see the instance path; a static
-                        // property accessor is SpecialName too.
-                        getterSymbol.IsSpecialName = true;
-
                         // Issue #3879: see the instance path — the accessor
                         // symbol carries the ref-kind so the body binder and
                         // FunctionEmitter both see it.
@@ -3230,7 +3215,6 @@ internal sealed partial class DeclarationBinder
                             receiverType: (TypeSymbol?)null);
                         setterSymbol.IsStatic = true;
                         setterSymbol.StaticOwnerType = structSymbol;
-                        setterSymbol.IsSpecialName = true;
                         propertySymbol.SetterSymbol = setterSymbol;
                         propertySymbol.SetterBodySyntax = setAccessor.Body;
                     }

@@ -5,11 +5,11 @@
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
@@ -100,8 +100,6 @@ class Holder {
         var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source)));
         var result = compilation.Emit(peStream);
         Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(d => d.Message)));
-        peStream.Position = 0;
-        return new AssemblyLoadContext(nameof(Issue4589ExplicitPropertyAccessorEmitTests), isCollectible: true)
-            .LoadFromStream(peStream);
+        return EmittedFixture.Load(peStream.ToArray());
     }
 }
