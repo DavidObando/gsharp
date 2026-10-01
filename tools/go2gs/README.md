@@ -88,8 +88,10 @@ M0's portable threat boundary. Hashes and schema validation detect provenance
 drift but do not authenticate or mediate that peer.
 Atomic writers flush and close staged files before rename. Unix-like platforms
 then sync the parent directory; Windows reopens the final file with write
-access, verifies its handle identity, flushes it, and verifies the published
-identity again rather than treating a denied directory-handle sync as success.
+access, verifies its handle identity, flushes it, applies the requested
+read-only attribute, closes that handle, and reopens read-only to verify the
+published identity rather than treating a denied directory-handle sync as
+success.
 On Linux and macOS, private temporary trees are removed recursively through
 verified directory descriptors and atomic name exchanges without following
 links; an exchange failure or retained entry makes the command fail. Windows

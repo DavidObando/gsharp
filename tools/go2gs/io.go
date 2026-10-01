@@ -1044,7 +1044,7 @@ func atomicWriteRoot(output *boundOutputRoot, name string, data []byte, mode os.
 			}
 		}
 	}()
-	if err := file.Chmod(mode); err != nil {
+	if err := prepareStagedPublication(file, mode); err != nil {
 		return err
 	}
 	written, err := file.Write(data)
@@ -1084,7 +1084,7 @@ func atomicWriteRoot(output *boundOutputRoot, name string, data []byte, mode os.
 	if err != nil || !same {
 		return errors.New("final output path does not identify the staged file")
 	}
-	if err := syncRootPublication(output.root, name, openedInfo); err != nil {
+	if err := syncRootPublication(output.root, name, openedInfo, mode); err != nil {
 		return err
 	}
 	committed = true
@@ -1194,7 +1194,7 @@ func atomicWriteWithHooks(path string, data []byte, mode os.FileMode, beforeRena
 			}
 		}
 	}()
-	if err := file.Chmod(mode); err != nil {
+	if err := prepareStagedPublication(file, mode); err != nil {
 		return err
 	}
 	written, err := file.Write(data)
@@ -1234,7 +1234,7 @@ func atomicWriteWithHooks(path string, data []byte, mode os.FileMode, beforeRena
 	if err != nil || !same {
 		return errors.New("final output path does not identify the staged file")
 	}
-	if err := syncPathPublication(dir, path, openedInfo); err != nil {
+	if err := syncPathPublication(dir, path, openedInfo, mode); err != nil {
 		return err
 	}
 	committed = true
