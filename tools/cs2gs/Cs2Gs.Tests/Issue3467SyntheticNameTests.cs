@@ -335,6 +335,60 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_AvoidsOuterMethodLocalNames()
+        {
+            string printed = Translate("""
+                public class C
+                {
+                    private int Helper(int value) => -value;
+
+                    public int Run(int value)
+                    {
+                        int Helper_2 = 1;
+                        return Container(value) + Helper_2;
+
+                        int Container(int input)
+                        {
+                            return Helper(input);
+                            static int Helper(int n) => n == 0 ? 0 : Other<int>(n - 1);
+                            static int Other<T>(int n) => Helper(n);
+                        }
+                    }
+                }
+                """);
+
+            Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("func Helper_2(", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_AvoidsSynthesizedPropertyBackingField()
+        {
+            string printed = Translate("""
+                public class C
+                {
+                    public C(int value)
+                    {
+                        Foo = value;
+                    }
+
+                    public virtual int Foo { get; }
+
+                    public int Run(int value)
+                    {
+                        return _foo(value);
+                        static int _foo(int n) => n == 0 ? 0 : Other<int>(n - 1);
+                        static int Other<T>(int n) => _foo(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("func _foo_2(", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
         public void UnreferencedUnderscoreLambdaParameter_KeepsDiscardSpelling()
         {
             string printed = Translate("""

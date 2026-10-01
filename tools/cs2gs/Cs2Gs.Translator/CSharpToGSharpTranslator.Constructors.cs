@@ -2000,16 +2000,31 @@ public sealed partial class CSharpToGSharpTranslator
                 ?? Enumerable.Empty<string>());
             occupied.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
                 ?? Enumerable.Empty<string>());
-            foreach (SyntaxReference reference in localFunction.ContainingSymbol.DeclaringSyntaxReferences)
+            for (ISymbol scope = localFunction.ContainingSymbol;
+                scope is IMethodSymbol;
+                scope = scope.ContainingSymbol)
             {
-                SyntaxNode declaration = reference.GetSyntax();
-                occupied.UnionWith(
-                    declaration
-                        .DescendantNodes()
-                        .Select(this.context.GetDeclaredSymbol)
-                        .Where(symbol => symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol)
-                        .Select(symbol => this.EmittedName(symbol, symbol.Name)));
+                foreach (SyntaxReference reference in scope.DeclaringSyntaxReferences)
+                {
+                    SyntaxNode declaration = reference.GetSyntax();
+                    occupied.UnionWith(
+                        declaration
+                            .DescendantNodes()
+                            .Select(this.context.GetDeclaredSymbol)
+                            .Where(symbol => symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol)
+                            .Select(symbol => this.EmittedName(symbol, symbol.Name)));
+                }
             }
+
+            var containingTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            for (INamedTypeSymbol type = localFunction.ContainingType; type != null; type = type.BaseType)
+            {
+                containingTypes.Add(type);
+            }
+
+            occupied.UnionWith(this.state.SynthesizedPropertyBackingFieldNames
+                .Where(pair => containingTypes.Contains(pair.Key.ContainingType))
+                .Select(pair => pair.Value));
 
             string candidate = LiftedLocalFunctionNames
                 .GetValue(
@@ -2480,6 +2495,22 @@ public sealed partial class CSharpToGSharpTranslator
                     return false;
                 }
 
+                var componentSymbols = new HashSet<IMethodSymbol>(
+                    component.Select(candidate => candidate.Symbol),
+                    SymbolEqualityComparer.Default);
+                int componentStart = component
+                    .Select(candidate => statementList.IndexOf(candidate.Syntax))
+                    .Min();
+                if (component.Any(candidate =>
+                        edges[candidate.Symbol].Any(dependency =>
+                            !componentSymbols.Contains(dependency)
+                            && localFunctions.Any(other =>
+                                SymbolEqualityComparer.Default.Equals(other.Symbol, dependency)
+                                && statementList.IndexOf(other.Syntax) >= componentStart))))
+                {
+                    return false;
+                }
+
                 var indexes = component
                     .Select(candidate => statementList.IndexOf(candidate.Syntax))
                     .OrderBy(index => index)
@@ -2540,6 +2571,13 @@ public sealed partial class CSharpToGSharpTranslator
                         pending.Push(dependency);
                     }
                 }
+            }
+
+            if (this.state.PendingStaticSynthHelpers == null
+                && this.state.PendingInstanceSynthHelpers == null)
+            {
+                this.state.UnsupportedTopLevelRecursiveLocalFunctions.UnionWith(toLift);
+                return;
             }
 
             foreach (var pair in localFunctions.Where(pair => pair.Symbol.IsStatic))

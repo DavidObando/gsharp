@@ -1309,6 +1309,10 @@ public sealed partial class CSharpToGSharpTranslator
         private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section, string injectLabel = null)
         {
             var statements = new List<GStatement>();
+            IReadOnlyList<StatementSyntax> ordered =
+                this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span);
+            this.RegisterCapturingRecursiveLocalFunctions(ordered);
+            this.RegisterRecursiveLocalFunctionLifts(ordered);
 
             // Issue #4262 follow-up (item 2): mirrors TranslateBlock's own
             // per-statement guarded-field-local-capture loop — a direct
@@ -1317,7 +1321,7 @@ public sealed partial class CSharpToGSharpTranslator
             // (AddFollowingStatements explicitly supports SwitchSectionSyntax).
             var activeGuardCaptures = new Dictionary<ISymbol, IfStatementSyntax>(SymbolEqualityComparer.Default);
             var capturedNamesInScope = new HashSet<string>();
-            foreach (StatementSyntax statement in section.Statements)
+            foreach (StatementSyntax statement in ordered)
             {
                 statements.AddRange(this.TranslateStatement(statement));
 

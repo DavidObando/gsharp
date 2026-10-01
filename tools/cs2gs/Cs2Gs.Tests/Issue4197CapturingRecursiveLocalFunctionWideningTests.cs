@@ -495,6 +495,32 @@ namespace Demo
     }
 
     [Fact]
+    public void MixedRecursiveGroupInSwitchSection_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                            case int n when n > 5:
+                                return First(value);
+                                static int First(int n) => n == 0 ? 0 : Second<int>(n - 1);
+                                static int Second<T>(int n) => First(n);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        Assert.Contains("// lifted static local function Second", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void ClaimedRecursiveGroup_StillLiftsUnsafeRefReturningDependency()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
