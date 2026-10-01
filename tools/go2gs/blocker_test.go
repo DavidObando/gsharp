@@ -717,6 +717,36 @@ func TestRecordedMessageURIPathRedaction(t *testing.T) {
 			want:       "file:<private-path>",
 		},
 		{
+			name:       "single separator localhost drive component fails closed",
+			message:    "file:/localhost/C:/Work/Source/file.go",
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "triple separator localhost drive component fails closed",
+			message:    "file:///localhost/C:/Work/Source/file.go",
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "single backslash localhost drive component fails closed",
+			message:    `file:\localhost\C:\Work\Source\file.go`,
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "triple backslash localhost drive component fails closed",
+			message:    `file:\\\localhost\C:\Work\Source\file.go`,
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "file:<private-path>",
+		},
+		{
+			name:       "wrapped path localhost drive component fails closed",
+			message:    "`FiLe:///LOCALHOST/c:/WORK/source/file.go`",
+			redactions: []messagePathRedaction{{`C:\Work\Source`, "<source>"}},
+			want:       "`file:<private-path>`",
+		},
+		{
 			name:       "raw tab path tail fails closed",
 			message:    "file:///public\t/private/source/file.go",
 			redactions: []messagePathRedaction{{"/private/source", "<source>"}},
@@ -998,6 +1028,12 @@ func TestBlockerPathAliasesPublishOneStableIdentity(t *testing.T) {
 	malformedTailAlias := build("C:/Work/Source", "file:///public/C:/Work/Source/file.go")
 	if malformedTail.Message != "file:<private-path>" || malformedTail.ID != malformedTailAlias.ID {
 		t.Fatalf("malformed file URI tails produced unstable blocker identities: %#v != %#v", malformedTail, malformedTailAlias)
+	}
+	pathLocalhostDrive := build(`C:\Work\Source`, "file:/localhost/C:/Work/Source/file.go")
+	pathLocalhostDriveAlias := build("c:/work/source", `FiLe:\\\LOCALHOST\c:\WORK\source\file.go`)
+	if pathLocalhostDrive.Message != "file:<private-path>" ||
+		pathLocalhostDrive.ID != pathLocalhostDriveAlias.ID {
+		t.Fatalf("path-localhost drive aliases produced unstable blocker identities: %#v != %#v", pathLocalhostDrive, pathLocalhostDriveAlias)
 	}
 }
 

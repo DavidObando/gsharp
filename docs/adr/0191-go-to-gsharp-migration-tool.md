@@ -241,7 +241,9 @@ Unicode dot/separator ambiguities collapse the complete URI before matching or
 any unchanged fallback. Path components admit ASCII alphanumerics and `-._~`
 plus ordinary Unicode letters/numbers only. Raw whitespace and unexpected
 punctuation fail closed; a drive component is legal only first or immediately
-after `localhost`. The scanner consumes malformed unwrapped tails as part of
+after `localhost` when it is the parsed authority in an exactly two-separator
+`file://localhost/...` form. Ordinary path components named `localhost` grant
+no drive exception. The scanner consumes malformed unwrapped tails as part of
 the failing file URI, while a recognized quote, parenthesis, bracket, brace,
 or angle wrapper ends the URI and leaves an adjacent path to the ordinary
 redactor.
