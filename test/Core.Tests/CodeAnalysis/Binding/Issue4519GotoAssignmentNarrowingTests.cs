@@ -3769,6 +3769,35 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_LoopHeaderClosureChangesExternalCallableAlias()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = callback
+                for var i = 0; func() bool { action = clear; return i < 2 }(); i++ {
+                    try {
+                        goto Done
+                    }
+                    finally {
+                        action()
+                    }
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { })
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_MemberNotNullAfterLabelReestablishesNarrowing()
     {
         AssertRuns("""

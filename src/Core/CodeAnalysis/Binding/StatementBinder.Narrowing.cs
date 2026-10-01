@@ -70,9 +70,15 @@ internal sealed partial class StatementBinder
         BoundStatement? backEdgeTail,
         BoundLabel breakLabel,
         BoundLabel continueLabel,
-        IReadOnlyCollection<VariableSymbol> entryAliases)
+        IReadOnlyCollection<VariableSymbol> entryAliases,
+        BoundExpression? backEdgeCondition = null)
     {
         var iteration = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (backEdgeCondition != null)
+        {
+            iteration.Add(new BoundExpressionStatement(null, backEdgeCondition));
+        }
+
         iteration.Add(body);
         iteration.Add(new BoundLabelStatement(null, continueLabel));
         if (backEdgeTail != null)
@@ -1954,20 +1960,29 @@ internal sealed partial class StatementBinder
     // alias before the nested bodies are bound. Fold its effects into the alias
     // state now: an alias the header assigns, or that an unknown callable in the
     // header can assign, is no longer known to be external (fail-safe).
-    private void ApplyHeaderCallableEffects(BoundExpression? header)
+    private HashSet<VariableSymbol>? ApplyHeaderCallableEffects(BoundExpression? header)
     {
         if (header == null || externalCallableAliases.Count == 0)
         {
-            return;
+            return null;
         }
 
+        var before = new HashSet<VariableSymbol>(externalCallableAliases);
         var collector = new AssignedRootsCollector(null, externalCallableAliases);
         collector.VisitExpression(header);
+        if (collector.MayMutateAnyRootViaPointer)
+        {
+            externalCallableAliases.Clear();
+        }
+
         externalCallableAliases.ExceptWith(collector.Roots);
         if (collector.MayMutateAnyRoot)
         {
             externalCallableAliases.RemoveWhere(binderCtx.MayBeAssignedByClosure);
         }
+
+        before.ExceptWith(externalCallableAliases);
+        return before;
     }
 
     private void EnsureClosureAssignedNames(SyntaxNode anchor)

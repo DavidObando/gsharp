@@ -101,7 +101,13 @@ internal sealed partial class StatementBinder
         //   }
         scope = new BoundScope(scope);
 
+        var initializerAliasesAtEntry = externalCallableAliases.ToArray();
         var initStatement = BindStatement(syntax.Initializer);
+        if (initStatement != null)
+        {
+            UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry);
+        }
+
         var initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
         ApplyHeaderCallableEffects(initCondition);
 

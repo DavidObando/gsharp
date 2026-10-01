@@ -219,6 +219,7 @@ internal sealed partial class StatementBinder
         Func<VariableSymbol, ImmutableArray<BoundStatement>>? bindLoopPrelude = null)
     {
         var collection = bindExpression(syntax.Collection);
+        ApplyHeaderCallableEffects(collection);
 
         // ADR-0186 §4/§5: a `foreach`/`range` source is one of the positions
         // the ADR names explicitly — "used where the language requires a
@@ -758,6 +759,7 @@ internal sealed partial class StatementBinder
                     boundCondition = conditionSyntax == null
                         ? null
                         : bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
+                    ApplyHeaderCallableEffects(boundCondition);
                     boundPost = postSyntax == null ? null : BindStatement(postSyntax);
                     var (patternWhenTrue, _) = PatternVariables.Classify(boundCondition);
                     var boundBody = PatternVariables.BindInScope(

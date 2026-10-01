@@ -531,7 +531,8 @@ internal sealed partial class StatementBinder
             backEdgeTail,
             firstBreakLabel,
             firstContinueLabel,
-            externalCallableAliasesSnapshot);
+            externalCallableAliasesSnapshot,
+            backEdgeCondition);
         var narrowingInvalidations = CollectInheritedNarrowingInvalidations(
             mutations,
             mutations.MayMutateMemberPaths,

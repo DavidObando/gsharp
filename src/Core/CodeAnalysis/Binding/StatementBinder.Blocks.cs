@@ -164,7 +164,7 @@ internal sealed partial class StatementBinder
                 guard = BindGuardExpressionWithNarrowing(
                     Invariant.Required(guardSyntax, "a guarded switch case has a guard expression"),
                     frame);
-                ApplyHeaderCallableEffects(guard);
+                callableEntry.ExceptWith(ApplyHeaderCallableEffects(guard) ?? new HashSet<VariableSymbol>());
             }
 
             // ADR-0166: the arm body runs only when the guard was true, so the
@@ -413,7 +413,7 @@ internal sealed partial class StatementBinder
                 : bindLocalVariable(catchSyntax.Identifier, isReadOnly: true, type: catchType);
 
             var filter = BindCatchFilter(catchSyntax);
-            ApplyHeaderCallableEffects(filter);
+            callableExceptionalEntry.ExceptWith(ApplyHeaderCallableEffects(filter) ?? new HashSet<VariableSymbol>());
             var (filterWhenTrue, _) = PatternVariables.Classify(filter);
 
             exceptionHandlerRegions.Push(catchSyntax);
