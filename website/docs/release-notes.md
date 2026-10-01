@@ -141,7 +141,9 @@ Before moving an application to a different compiler version, pin the intended S
   inventories remain checkout-independent and each ID names the exact
   published message. Redaction respects path-component boundaries, selects
   nested roots before their parents, and recognizes Windows drive/UNC case and
-  separator aliases without over-redacting lookalike prefixes. Profile and `goFlags`
+  separator aliases without over-redacting lookalike prefixes or remote URIs;
+  absolute `file:` URI paths are redacted without decoding ambiguous encoded
+  forms. Profile and `goFlags`
   tags share one canonical selection set, architecture feature levels expand
   to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
   typed `*ast.File` root for every compiled file. Output locking, invalidation,

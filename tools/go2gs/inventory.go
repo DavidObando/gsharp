@@ -239,6 +239,8 @@ type compiledMessagePathRedaction struct {
 	placeholder string
 	windows     bool
 	filesystem  bool
+	drive       bool
+	unc         bool
 }
 
 func (b *inventoryBuilder) sanitizeMessage(message string, extra ...messagePathRedaction) string {
@@ -275,6 +277,15 @@ func redactMessagePaths(message string, redactions []messagePathRedaction) strin
 
 	var result strings.Builder
 	for offset := 0; offset < len(message); {
+		if schemeEnd, uriEnd, ok := messageURIAt(message, offset, compiled); ok {
+			if strings.EqualFold(message[offset:schemeEnd-1], "file") {
+				result.WriteString(redactFileURI(message[offset:uriEnd], schemeEnd-offset, compiled))
+			} else {
+				result.WriteString(message[offset:uriEnd])
+			}
+			offset = uriEnd
+			continue
+		}
 		matched := false
 		for _, redaction := range compiled {
 			end, replacement, ok := matchMessagePath(message, offset, redaction)
@@ -321,6 +332,8 @@ func compileMessagePathRedaction(redaction messagePathRedaction) (compiledMessag
 		placeholder: redaction.placeholder,
 		windows:     windows,
 		filesystem:  filesystem,
+		drive:       windows && len(normalized) >= 2 && normalized[1] == ':',
+		unc:         windows && strings.HasPrefix(normalized, "//"),
 	}, true
 }
 
@@ -361,7 +374,16 @@ func foldWindowsMessagePath(value string) string {
 }
 
 func matchMessagePath(message string, offset int, redaction compiledMessagePathRedaction) (int, string, bool) {
-	if !messagePathBoundaryBefore(message, offset) {
+	return matchMessagePathWithBoundary(message, offset, redaction, true)
+}
+
+func matchMessagePathWithBoundary(
+	message string,
+	offset int,
+	redaction compiledMessagePathRedaction,
+	requireBoundary bool,
+) (int, string, bool) {
+	if requireBoundary && !messagePathBoundaryBefore(message, offset) {
 		return 0, "", false
 	}
 	end := offset
@@ -409,6 +431,175 @@ func matchMessagePath(message string, offset int, redaction compiledMessagePathR
 		}
 	}
 	return end, redaction.placeholder, true
+}
+
+func messageURIAt(
+	message string,
+	offset int,
+	redactions []compiledMessagePathRedaction,
+) (int, int, bool) {
+	if offset > 0 {
+		previous, _ := utf8.DecodeLastRuneInString(message[:offset])
+		if !isMessagePathDelimiter(previous) {
+			return 0, 0, false
+		}
+	}
+	if offset >= len(message) || !isASCIIAlpha(message[offset]) {
+		return 0, 0, false
+	}
+	schemeEnd := offset + 1
+	for schemeEnd < len(message) && isURISchemeByte(message[schemeEnd]) {
+		schemeEnd++
+	}
+	if schemeEnd >= len(message) || message[schemeEnd] != ':' {
+		return 0, 0, false
+	}
+	if schemeEnd == offset+1 && schemeEnd+1 < len(message) &&
+		isPathSeparator(rune(message[schemeEnd+1])) {
+		for _, redaction := range redactions {
+			if !redaction.drive {
+				continue
+			}
+			if _, _, ok := matchMessagePathWithBoundary(message, offset, redaction, true); ok {
+				return 0, 0, false
+			}
+		}
+	}
+	schemeEnd++
+	uriEnd := schemeEnd
+	opening, closing := messageURIWrapper(message, offset)
+	depth := 0
+	for uriEnd < len(message) {
+		current, size := utf8.DecodeRuneInString(message[uriEnd:])
+		if current == utf8.RuneError && size == 1 || unicode.IsSpace(current) {
+			break
+		}
+		if closing != 0 {
+			if current == closing {
+				if depth == 0 {
+					break
+				}
+				depth--
+			} else if current == opening && opening != closing {
+				depth++
+			}
+		} else if strings.ContainsRune("\"`<>", current) {
+			break
+		}
+		uriEnd += size
+	}
+	return schemeEnd, uriEnd, true
+}
+
+func messageURIWrapper(message string, offset int) (rune, rune) {
+	if offset == 0 {
+		return 0, 0
+	}
+	previous, _ := utf8.DecodeLastRuneInString(message[:offset])
+	switch previous {
+	case '"', '\'', '`':
+		return previous, previous
+	case '(':
+		return previous, ')'
+	case '[':
+		return previous, ']'
+	case '{':
+		return previous, '}'
+	case '<':
+		return previous, '>'
+	default:
+		return 0, 0
+	}
+}
+
+func isURISchemeByte(value byte) bool {
+	return isASCIIAlpha(value) || value >= '0' && value <= '9' ||
+		value == '+' || value == '-' || value == '.'
+}
+
+func redactFileURI(
+	uri string,
+	schemeEnd int,
+	redactions []compiledMessagePathRedaction,
+) string {
+	if schemeEnd >= len(uri) {
+		return uri
+	}
+	prefix := uri[:schemeEnd]
+	remainder := uri[schemeEnd:]
+	if strings.Contains(remainder, "%") {
+		return prefix + "<private-path>"
+	}
+	pathEnd := len(remainder)
+	if index := strings.IndexAny(remainder, "?#"); index >= 0 {
+		pathEnd = index
+	}
+	path, suffix := remainder[:pathEnd], remainder[pathEnd:]
+	if path == "" {
+		return uri
+	}
+
+	leadingSeparators := countLeadingSeparators(path)
+	if leadingSeparators >= 3 {
+		if redacted, ok := redactFileURIPath(path, leadingSeparators, path[:leadingSeparators], redactions, func(value compiledMessagePathRedaction) bool {
+			return value.drive
+		}); ok {
+			return prefix + redacted + suffix
+		}
+		if redacted, ok := redactFileURIPath(path, leadingSeparators-1, path[:leadingSeparators-1], redactions, func(value compiledMessagePathRedaction) bool {
+			return !value.windows
+		}); ok {
+			return prefix + redacted + suffix
+		}
+		if leadingSeparators > 3 {
+			return prefix + "<private-path>"
+		}
+		return uri
+	}
+	if leadingSeparators == 2 {
+		if redacted, ok := redactFileURIPath(path, 0, path[:2], redactions, func(value compiledMessagePathRedaction) bool {
+			return value.unc
+		}); ok {
+			return prefix + redacted + suffix
+		}
+		return uri
+	}
+	if isPathSeparator(rune(path[0])) {
+		if redacted, ok := redactFileURIPath(path, 0, "", redactions, func(value compiledMessagePathRedaction) bool {
+			return !value.windows
+		}); ok {
+			return prefix + redacted + suffix
+		}
+		return uri
+	}
+	return prefix + "<private-path>"
+}
+
+func redactFileURIPath(
+	path string,
+	offset int,
+	preservedPrefix string,
+	redactions []compiledMessagePathRedaction,
+	accept func(compiledMessagePathRedaction) bool,
+) (string, bool) {
+	for _, redaction := range redactions {
+		if !accept(redaction) {
+			continue
+		}
+		end, replacement, ok := matchMessagePathWithBoundary(path, offset, redaction, false)
+		if ok {
+			return preservedPrefix + replacement + path[end:], true
+		}
+	}
+	return "", false
+}
+
+func countLeadingSeparators(value string) int {
+	count := 0
+	for count < len(value) && isPathSeparator(rune(value[count])) {
+		count++
+	}
+	return count
 }
 
 func equalFoldRune(left, right rune) bool {
