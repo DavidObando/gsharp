@@ -3195,6 +3195,26 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        // Issue #4611: yield a block's operations followed by its branch value,
+        // only when it has one. Appending the possibly-null BranchValue and
+        // filtering it afterwards stores a null in a sequence of IOperation;
+        // the migration bridges that argument with a fail-fast `!!` (the
+        // settled policy for nil entering generic storage), so the migrated
+        // translator threw on the first block without a branch value.
+        private static IEnumerable<IOperation> BlockOperationsAndBranchValue(
+            Microsoft.CodeAnalysis.FlowAnalysis.BasicBlock block)
+        {
+            foreach (IOperation operation in block.Operations)
+            {
+                yield return operation;
+            }
+
+            if (block.BranchValue is { } branchValue)
+            {
+                yield return branchValue;
+            }
+        }
+
         private Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph CreateControlFlowGraph(
             SyntaxNode executable)
         {
@@ -3214,9 +3234,7 @@ public sealed partial class CSharpToGSharpTranslator
                     this.CreateControlFlowGraph(FindEnclosingExecutable(executable));
                 Microsoft.CodeAnalysis.FlowAnalysis.IFlowAnonymousFunctionOperation operation =
                     parent.Blocks
-                        .SelectMany(block => block.Operations
-                            .Append(block.BranchValue)
-                            .Where(candidate => candidate != null))
+                        .SelectMany(BlockOperationsAndBranchValue)
                         .SelectMany(operation => operation.DescendantsAndSelf())
                         .OfType<Microsoft.CodeAnalysis.FlowAnalysis
                             .IFlowAnonymousFunctionOperation>()
