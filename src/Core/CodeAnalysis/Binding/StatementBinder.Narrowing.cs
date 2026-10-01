@@ -1983,6 +1983,8 @@ internal sealed partial class StatementBinder
     private static void CollectClosureAssignedNames(SyntaxNode node, SyntaxNode root, HashSet<string> names)
     {
         if (node is FunctionLiteralExpressionSyntax
+            or LambdaExpressionSyntax
+            or AnonymousClassExpressionSyntax
             || (node is FunctionDeclarationSyntax && !ReferenceEquals(node, root)))
         {
             CollectAssignedNamesAndMemberMutation(node, names);
