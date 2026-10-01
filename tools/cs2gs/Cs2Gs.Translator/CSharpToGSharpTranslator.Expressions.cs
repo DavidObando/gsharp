@@ -45,6 +45,15 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
         {
+            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol recursiveLiftedLocal
+                && recursiveLiftedLocal.MethodKind == MethodKind.LocalFunction
+                && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
+                    recursiveLiftedLocal.OriginalDefinition,
+                    out LiftedRecursiveLocalFunction recursiveLift))
+            {
+                return new IdentifierExpression(recursiveLift.Name);
+            }
+
             if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol localFunction
                 && localFunction.MethodKind == MethodKind.LocalFunction
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction.OriginalDefinition, out string liftedName)
