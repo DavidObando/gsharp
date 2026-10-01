@@ -2872,33 +2872,22 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
-            // Issue #4601: every CLR interface row this type gets, keyed so a
-            // row is emitted once. Concrete interfaces are keyed by CLR type,
-            // symbolic generic ones (`IList[Shape]`, `IList[T]`) by the bytes
-            // of their TypeSpec signature: equal bytes are the same row, and a
-            // display name would conflate same-named types (`Shape` vs
+            // Issue #4601: every CLR interface row this type gets, keyed on
+            // its emitted metadata identity so a row is emitted exactly once
+            // and two distinct interfaces are never conflated. Concrete
+            // interfaces use the assembly-qualified comparer the emitter's own
+            // TypeRef/TypeSpec token caches use (a same-named interface from
+            // another assembly is a different row). Symbolic generic ones
+            // (`IList[Shape]`, `IList[T]`) use the bytes of their TypeSpec
+            // signature (a display name would conflate `Shape` with
             // `Outer.Shape`). The #985 bridge rows below share the same sets.
-            var emittedClrInterfaces = new System.Collections.Generic.List<System.Type>();
+            var emittedClrInterfaces = new System.Collections.Generic.HashSet<System.Type>(TypeIdentityComparer.Instance);
             var emittedSymbolicInterfaces = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
-
-            bool IsClrInterfaceRowEmitted(System.Type clrIface)
-            {
-                foreach (var emitted in emittedClrInterfaces)
-                {
-                    if (ClrTypeUtilities.AreSame(emitted, clrIface))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            }
 
             void EmitClrInterfaceRow(System.Type clrIface)
             {
-                if (!IsClrInterfaceRowEmitted(clrIface))
+                if (emittedClrInterfaces.Add(clrIface))
                 {
-                    emittedClrInterfaces.Add(clrIface);
                     this.emitCtx.Metadata.AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
                         this.memberRefs.GetTypeHandleForMember(clrIface));

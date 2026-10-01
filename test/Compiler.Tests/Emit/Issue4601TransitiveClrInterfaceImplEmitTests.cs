@@ -410,6 +410,82 @@ public class Issue4601TransitiveClrInterfaceImplEmitTests
         }
     }
 
+    /// <summary>
+    /// Two referenced assemblies that each define a <c>Shared.IBase</c>: the
+    /// two base interfaces have the same full name but are different types,
+    /// so both rows must be emitted (a full-name comparison would drop one).
+    /// </summary>
+    [Fact]
+    public void SameNamedBaseInterfacesFromTwoAssemblies_KeepBothRows()
+    {
+        const string TwinSource = """
+            namespace Shared { public interface IBase { int V(); } }
+            namespace NAME { public interface IFACE : Shared.IBase { } public static class Probe { public static int V(Shared.IBase b) => b.V(); } }
+            """;
+        var tempDir = Directory.CreateTempSubdirectory("gs_4601_twins_").FullName;
+        try
+        {
+            var one = CompileCSharpLibrary(tempDir, "TwinOne", TwinSource.Replace("NAME", "One").Replace("IFACE", "IA"));
+            var two = CompileCSharpLibrary(tempDir, "TwinTwo", TwinSource.Replace("NAME", "Two").Replace("IFACE", "IB"));
+            var appPath = Path.Combine(tempDir, "twins.dll");
+            var log = Compile(
+                tempDir,
+                "App.gs",
+                """
+                package P
+                import System
+
+                class C : One.IA, Two.IB {
+                    func V() int32 { return 5 }
+                }
+
+                Console.WriteLine(One.Probe.V(C()))
+                Console.WriteLine(Two.Probe.V(C()))
+                """,
+                appPath,
+                "/target:exe",
+                "/reference:" + one,
+                "/reference:" + two);
+            Assert.DoesNotContain(" error ", log, StringComparison.Ordinal);
+            Assert.True(File.Exists(appPath), $"must compile. Log:\n{log}");
+
+            using (var stream = File.OpenRead(appPath))
+            using (var peReader = new PEReader(stream))
+            {
+                var reader = peReader.GetMetadataReader();
+                var type = reader.TypeDefinitions
+                    .Select(reader.GetTypeDefinition)
+                    .Single(t => reader.GetString(t.Name) == "C");
+                var baseScopes = new List<string>();
+                foreach (var implHandle in type.GetInterfaceImplementations())
+                {
+                    var iface = reader.GetInterfaceImplementation(implHandle).Interface;
+                    if (iface.Kind == HandleKind.TypeReference)
+                    {
+                        var typeRef = reader.GetTypeReference((TypeReferenceHandle)iface);
+                        if (reader.GetString(typeRef.Name) == "IBase"
+                            && typeRef.ResolutionScope.Kind == HandleKind.AssemblyReference)
+                        {
+                            var scope = reader.GetAssemblyReference((AssemblyReferenceHandle)typeRef.ResolutionScope);
+                            baseScopes.Add(reader.GetString(scope.Name));
+                        }
+                    }
+                }
+
+                Assert.Equal(new[] { "TwinOne", "TwinTwo" }, baseScopes.OrderBy(n => n, StringComparer.Ordinal));
+            }
+
+            IlVerifier.Verify(appPath, new[] { one, two });
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, $"must run to completion. Exit {exit}:\n{output}");
+            Assert.Equal(new[] { "5", "5" }, output.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToArray());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static List<string> ReadInterfaceRows(string assemblyPath, string typeName)
     {
         using var stream = File.OpenRead(assemblyPath);
@@ -472,17 +548,20 @@ public class Issue4601TransitiveClrInterfaceImplEmitTests
     }
 
     private static string CompileCSharpLibrary(string tempDir)
+        => CompileCSharpLibrary(tempDir, "Clib", LibrarySource);
+
+    private static string CompileCSharpLibrary(string tempDir, string assemblyName, string source)
     {
         var references = TrustedPlatformAssemblies()
             .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
             .ToList();
         var compilation = CSharpCompilation.Create(
-            "Clib",
-            new[] { CSharpSyntaxTree.ParseText(LibrarySource) },
+            assemblyName,
+            new[] { CSharpSyntaxTree.ParseText(source) },
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithNullableContextOptions(NullableContextOptions.Enable));
-        var libPath = Path.Combine(tempDir, "Clib.dll");
+        var libPath = Path.Combine(tempDir, assemblyName + ".dll");
         var result = compilation.Emit(libPath);
         Assert.True(
             result.Success,
