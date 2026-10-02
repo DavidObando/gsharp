@@ -1727,6 +1727,7 @@ internal sealed partial class DeclarationBinder
         if (!syntax.Properties.IsDefaultOrEmpty || (structSymbol.IsData && structSymbol.HasPrimaryConstructor))
         {
             var propertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
+            var positionalPropertyIndices = new Dictionary<string, int>(StringComparer.Ordinal);
             if (structSymbol.IsData && structSymbol.HasPrimaryConstructor)
             {
                 foreach (var parameter in structSymbol.PrimaryConstructorParameters)
@@ -1770,6 +1771,7 @@ internal sealed partial class DeclarationBinder
                         property.SetAttributes(propertyAttributes);
                     }
 
+                    positionalPropertyIndices[parameter.Name] = propertiesBuilder.Count;
                     propertiesBuilder.Add(property);
                     existingNames.Add(parameter.Name);
                 }
@@ -1828,6 +1830,10 @@ internal sealed partial class DeclarationBinder
                 }
 
                 var propName = isIndexer ? "Item" : propSyntax.Identifier.ValueText;
+                int positionalPropertyIndex = -1;
+                bool replacesPositionalProperty = !isIndexer
+                    && !propSyntax.HasExplicitInterfaceClause
+                    && positionalPropertyIndices.TryGetValue(propName, out positionalPropertyIndex);
 
                 // Check for duplicate names (fields + methods + other properties).
                 // ADR-0149: exempt when either the new property, or ANY
@@ -1845,7 +1851,7 @@ internal sealed partial class DeclarationBinder
                 // #944 / #2362 follow-up): this also lets a type declare more
                 // than one explicit-interface indexer implementation, closing
                 // a gap the old mangled-name convention only partially covered.
-                var propAlreadyDeclared = existingNames.Contains(propName);
+                var propAlreadyDeclared = existingNames.Contains(propName) && !replacesPositionalProperty;
                 if (isIndexer
                     && propAlreadyDeclared
                     && !propSyntax.HasExplicitInterfaceClause
@@ -1872,7 +1878,11 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                existingNames.Add(propName);
+                if (!replacesPositionalProperty)
+                {
+                    existingNames.Add(propName);
+                }
+
                 if (isIndexer && !propSyntax.HasExplicitInterfaceClause)
                 {
                     declaredIndexerSignatures.Add(indexerParameters);
@@ -2241,7 +2251,19 @@ internal sealed partial class DeclarationBinder
                     ValidateUnscopedRefPlacement(propertySymbol, structSymbol);
                 }
 
-                propertiesBuilder.Add(propertySymbol);
+                if (replacesPositionalProperty)
+                {
+                    if (propertySymbol.IsAutoProperty)
+                    {
+                        propertySymbol.BackingField = propertiesBuilder[positionalPropertyIndex].BackingField;
+                    }
+
+                    propertiesBuilder[positionalPropertyIndex] = propertySymbol;
+                }
+                else
+                {
+                    propertiesBuilder.Add(propertySymbol);
+                }
             }
 
             structSymbol.SetProperties(propertiesBuilder.ToImmutable());

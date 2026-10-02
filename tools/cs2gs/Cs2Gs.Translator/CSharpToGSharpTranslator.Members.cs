@@ -138,6 +138,7 @@ public sealed partial class CSharpToGSharpTranslator
                             property.Identifier.Text,
                             StringComparer.Ordinal) == true
                         && propertySymbol is { IsStatic: false }
+                        && propertySymbol.SetMethod?.IsInitOnly == true
                         && property.AccessorList?.Accessors.All(accessor =>
                             accessor.Body == null
                             && accessor.ExpressionBody == null) == true)
@@ -2875,7 +2876,12 @@ public sealed partial class CSharpToGSharpTranslator
             // TranslateExpression's FieldExpressionSyntax case) resolves to it.
             string fieldKeywordBackingName = this.TryRegisterFieldKeywordBackingField(
                 node, symbol, primaryCtorParamNames, out IFieldSymbol fieldKeywordBackingSymbol);
-            bool lowersToBackingField = symbol != null && this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol);
+            bool isInitializedPositionalRecordProperty = symbol?.ContainingType?.IsRecord == true
+                && primaryCtorParamNames?.Contains(node.Identifier.ValueText, StringComparer.Ordinal) == true
+                && node.Initializer != null
+                && IsGetOnlyAutoProperty(node);
+            bool lowersToBackingField = symbol != null
+                && (this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol) || isInitializedPositionalRecordProperty);
             if (fieldKeywordBackingName == null && lowersToBackingField)
             {
                 fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(

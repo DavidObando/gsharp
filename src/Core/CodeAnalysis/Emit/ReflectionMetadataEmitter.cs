@@ -1198,6 +1198,7 @@ internal sealed class ReflectionMetadataEmitter
             this.cache,
             this.wellKnown,
             this.conversionEmitter,
+            this.ctorBodies.EmitDataStructPrimaryConstructorBodyBytes,
             this.signatures.EncodeTypeSymbol,
             this.memberRefs.GetElementTypeToken,
             this.memberRefs.GetTypeReference,
