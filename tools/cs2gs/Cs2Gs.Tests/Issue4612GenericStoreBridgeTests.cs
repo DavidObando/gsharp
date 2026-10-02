@@ -974,6 +974,39 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void ForgivenValues_ThroughNullPreservingOperators_ReachNullableArrayElements()
+    {
+        string source = """
+            #nullable enable
+            public static class C
+            {
+                public static string?[] Cast(object? cast) => new string?[] { cast! as string };
+                public static object?[] Coalesce(object? coalesced) => new object?[] { coalesced! ?? null };
+                public static string?[] Fallback(string? fallback) => new string?[] { null ?? fallback! };
+                public static string?[] Checked(string? checkedValue) => new string?[] { checked(checkedValue!) };
+                public static string?[] Unchecked(string? uncheckedValue) => new string?[] { unchecked(uncheckedValue!) };
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source);
+
+        Assert.Contains("cast!!", printed, StringComparison.Ordinal);
+        Assert.Contains("coalesced!!", printed, StringComparison.Ordinal);
+        Assert.Contains("fallback!!", printed, StringComparison.Ordinal);
+        Assert.Contains("checkedValue!!", printed, StringComparison.Ordinal);
+        Assert.Contains("uncheckedValue!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "cast!") + " kind=forgiven,array-element | target=string?[] | slot-type=string?",
+                Expected(source, "coalesced!") + " kind=forgiven,array-element | target=object?[] | slot-type=object?",
+                Expected(source, "fallback!") + " kind=forgiven,array-element | target=string?[] | slot-type=string?",
+                Expected(source, "checkedValue!") + " kind=forgiven,array-element | target=string?[] | slot-type=string?",
+                Expected(source, "uncheckedValue!") + " kind=forgiven,array-element | target=string?[] | slot-type=string?",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });

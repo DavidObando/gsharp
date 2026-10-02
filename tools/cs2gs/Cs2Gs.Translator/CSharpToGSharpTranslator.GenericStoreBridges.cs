@@ -480,8 +480,9 @@ public sealed partial class CSharpToGSharpTranslator
                 : null;
 
         // The single definition of "transparent" for the store bridges: the
-        // stored value seen through parentheses, casts, a C# `!`, a conditional
-        // or switch arm, and a tuple element. Every classification that needs
+        // stored value seen through parentheses, casts, checked wrappers, a C#
+        // `!`, null-preserving operators, conditional/switch arms, and tuple
+        // elements. Every classification that needs
         // the enclosing store or argument starts here.
         private static SyntaxNode OutermostTransparentNode(ExpressionSyntax value)
         {
@@ -493,8 +494,14 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     case ParenthesizedExpressionSyntax:
                     case CastExpressionSyntax:
+                    case CheckedExpressionSyntax:
                     case PostfixUnaryExpressionSyntax forgiving
                         when forgiving.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                        node = parent;
+                        break;
+                    case BinaryExpressionSyntax binary
+                        when binary.IsKind(SyntaxKind.CoalesceExpression)
+                            || (binary.IsKind(SyntaxKind.AsExpression) && binary.Left == node):
                         node = parent;
                         break;
                     case ConditionalExpressionSyntax conditional when conditional.Condition != node:
