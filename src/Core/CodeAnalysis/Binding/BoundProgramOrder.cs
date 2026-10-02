@@ -29,6 +29,21 @@ internal static class BoundProgramOrder
             .ToImmutableArray();
 
     /// <summary>
+    /// Gets a field-initializer map's entries in <see cref="SymbolSourceOrderComparer"/>
+    /// order. The maps are identity-keyed <c>ImmutableDictionary</c> instances, so a
+    /// pass that numbers temporaries while rewriting each initializer (the
+    /// <c>&lt;&gt;interpN</c> / <c>&lt;&gt;holeN</c> locals land in the Portable PDB)
+    /// must walk this view instead of the map.
+    /// </summary>
+    /// <param name="initializers">A struct's or interface's field-initializer map.</param>
+    /// <returns>The initializer entries, deterministically ordered by field.</returns>
+    public static ImmutableArray<KeyValuePair<FieldSymbol, BoundExpression>> FieldInitializers(
+        ImmutableDictionary<FieldSymbol, BoundExpression> initializers) =>
+        initializers
+            .OrderBy(pair => pair.Key, SymbolSourceOrderComparer.Instance)
+            .ToImmutableArray();
+
+    /// <summary>
     /// Gets the program's initialization plans ordered by owner
     /// (<see cref="SymbolSourceOrderComparer"/>), instance plan before static.
     /// </summary>

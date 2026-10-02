@@ -146,7 +146,10 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
         var containing = symbol.ContainingType;
         if (containing is null)
         {
-            return string.Empty;
+            // A top-level symbol is told apart by its package: same-shaped
+            // functions in packages A and B tie on every other key when the
+            // trees share a file name (or have none).
+            return symbol.ContainingNamespace ?? string.Empty;
         }
 
         var builder = new StringBuilder(containing.ContainingNamespace ?? string.Empty);
