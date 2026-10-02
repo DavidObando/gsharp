@@ -966,7 +966,7 @@ internal sealed partial class StatementBinder
                 Diagnostics.ReportRefReturnRequiresLvalue(
                     Invariant.Required(syntax.Expression, "a ref return expression is present").Location);
             }
-            else if (HasFunctionLocalRefScope(expression) || IsRootedAtCapturedReceiver(expression, function))
+            else if (HasFunctionLocalRefScope(expression))
             {
                 // ADR-0184 (the CS8170 analogue): when the reference is rooted at
                 // the enclosing struct member's own receiver, generic GS0254
@@ -985,11 +985,10 @@ internal sealed partial class StatementBinder
                     // struct member's receiver CAPTURED BY VALUE into the
                     // closure, so a reference into it aliases the closure's
                     // private copy, never the caller's storage — even when the
-                    // enclosing member is `@UnscopedRef` (whose receiver
-                    // HasFunctionLocalRefScope otherwise treats as caller-
-                    // scoped). Marking anything `@UnscopedRef` cannot make
-                    // that copy the caller's storage, so GS0589's remedy would
-                    // mislead; report the generic escaping-storage error.
+                    // enclosing member is `@UnscopedRef` (HasFunctionLocalRefScope
+                    // makes that call). Marking anything `@UnscopedRef` cannot
+                    // make that copy the caller's storage, so GS0589's remedy
+                    // would mislead; report the generic escaping-storage error.
                     Diagnostics.ReportRefReturnEscapesLocalScope(location);
                 }
                 else if (IsRootedAtReceiver(expression))
@@ -1178,7 +1177,7 @@ internal sealed partial class StatementBinder
     /// expression rooted in those is rejected. Returning a parameter (non-<c>scoped</c>) or
     /// a field/element of one is permitted (the caller's slot outlives the callee).
     /// </summary>
-    private static bool HasFunctionLocalRefScope(BoundExpression expr)
+    private bool HasFunctionLocalRefScope(BoundExpression expr)
     {
         switch (expr)
         {
@@ -1196,8 +1195,19 @@ internal sealed partial class StatementBinder
                     // is NOT a function-local by-value slot — the CLR passes a
                     // struct's `this` as `ref S`, so its ref-safe-context is the
                     // caller's once the member opts out of the implicit `scoped`.
+                    //
+                    // Issue #4580: that holds only for the CURRENT function's own
+                    // receiver. Inside a function literal, the enclosing struct
+                    // member's `this` is CAPTURED BY VALUE into the closure, so
+                    // its storage is the closure's private copy, never the
+                    // caller's, whatever the member's opt-out says. Deciding it
+                    // here (rather than at each return shape) makes every walk
+                    // that reaches the receiver agree: a direct `this.n`, a
+                    // forwarding call `this.Slot()` / `Forward(ref this.n)`, and
+                    // a ref local initialised from one.
                     return p.GetEffectiveRefScope() == ParameterRefScope.FunctionLocal
-                        || (p.RefKind == RefKind.None && !p.IsUnscopedRefReceiver);
+                        || (p.RefKind == RefKind.None
+                            && !(p.IsUnscopedRefReceiver && ReferenceEquals(p, function?.ThisParameter)));
                 }
 
                 if (v.Variable is GlobalVariableSymbol)
@@ -1401,7 +1411,7 @@ internal sealed partial class StatementBinder
     /// encapsulated reference was constructed (e.g. <c>stackalloc</c> vs.
     /// wrapping a heap array) with C#'s full precision.
     /// </summary>
-    private static bool HasFunctionLocalReferentScope(BoundExpression expr)
+    private bool HasFunctionLocalReferentScope(BoundExpression expr)
     {
         // This is the by-ref-like value's encapsulated referent scope, not
         // the parameter reference's effective ref scope.

@@ -47,6 +47,44 @@ public class Issue4580CapturedStructReceiverRefReturnTests
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0589");
     }
 
+    /// <summary>
+    /// The captured receiver must be function-local on EVERY walk that
+    /// reaches it, not only a direct <c>this.n</c>: forwarding it through an
+    /// <c>@UnscopedRef</c> member call, through a ref argument of a
+    /// ref-returning function, or through a ref local initialised from it.
+    /// </summary>
+    /// <param name="body">The literal's body.</param>
+    [Theory]
+    [InlineData("return ref this.Slot()")]
+    [InlineData("return ref Forward(ref this.n)")]
+    [InlineData("var ref a = this.n\nreturn ref a")]
+    public void LiteralInUnscopedRefStructMember_ForwardingCapturedThis_ReportsGS0254(string body)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            import System.Diagnostics.CodeAnalysis
+
+            func Forward(ref x int32) ref int32 { return ref x }
+
+            struct Holder {
+                var n int32
+                @UnscopedRef
+                func Slot() ref int32 { return ref this.n }
+                @UnscopedRef
+                func Run() int32 {
+                    let S = func () ref int32 {
+                        {{body}}
+                    }
+                    let v = S()
+                    return v
+                }
+            }
+
+            var h = Holder{}
+            h.Run()
+            """);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0254");
+    }
+
     [Fact]
     public void LiteralInPlainStructMember_ReturningRefIntoCapturedThis_ReportsGS0254NotGS0589()
     {

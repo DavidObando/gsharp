@@ -171,10 +171,11 @@ public sealed class Issue4580CapturingRefReturningLocalFunctionTests
     [Fact]
     public void StructEncloser_CaptureFreeAndCapturingLiterals_WriteThroughAlias()
     {
-        // A capture-free literal inside a struct member is hosted on a
-        // synthesized `<lambda_host_*>` display class, a capturing one on a
-        // `<closure_*>` class; both Invoke methods come from the same
-        // synthesis and must both carry the by-ref return.
+        // The capturing literal is emitted as a `<closure_*>` Invoke method
+        // nested in the struct, and is the half this test discriminates on.
+        // The capture-free literal is a control: it is hosted on
+        // `<local_host_*>` as the literal's own function symbol, which
+        // already carried the by-ref return before #4580.
         const string Source = """
             package Issue4580Struct
 
