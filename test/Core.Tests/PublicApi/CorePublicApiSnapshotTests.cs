@@ -77,7 +77,8 @@ public sealed class CorePublicApiSnapshotTests
     [Fact]
     public void Renderer_TracksPublicShape_AndIgnoresPrivateMembers()
     {
-        string baseline = string.Join("\n", RenderPublicApi(typeof(SnapshotFixture).Assembly.Location)
+        IReadOnlyList<string> rendered = RenderPublicApi(typeof(SnapshotFixture).Assembly.Location);
+        string baseline = string.Join("\n", rendered
             .SkipWhile(line => !line.StartsWith("type class GSharp.Core.Tests.PublicApi.SnapshotFixture", StringComparison.Ordinal))
             .TakeWhile((line, index) => index == 0 || !line.StartsWith("type ", StringComparison.Ordinal)));
 
@@ -88,7 +89,7 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("  method public static Int32 Peek(in Int32 value)", baseline, StringComparison.Ordinal);
         Assert.Contains(
             "type protected internal sealed class GSharp.Core.Tests.PublicApi.SnapshotFixture+Nested : System.Object",
-            RenderPublicApi(typeof(SnapshotFixture).Assembly.Location));
+            rendered);
         Assert.Contains("  property public String Name { get; protected set; }", baseline, StringComparison.Ordinal);
         Assert.Contains("  property public Int32 Fixed { get; init; }", baseline, StringComparison.Ordinal);
 
@@ -108,7 +109,7 @@ public sealed class CorePublicApiSnapshotTests
         // An enum records its underlying type: changing it changes the enum's size.
         Assert.Contains(
             "type enum GSharp.Core.Tests.PublicApi.SnapshotByteEnum : Byte",
-            RenderPublicApi(typeof(SnapshotFixture).Assembly.Location));
+            rendered);
     }
 
     internal static IReadOnlyList<string> RenderPublicApi(string assemblyPath)
