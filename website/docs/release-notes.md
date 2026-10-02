@@ -109,6 +109,13 @@ Before moving an application to a different compiler version, pin the intended S
   - `cs2gs validate` now requires the oracle, or an explicit
     `--count-only-test-parity`.
   - The mirrored test budget ceiling is now 120 minutes (was 90).
+- **`cs2gs migrate --sdk-version <v>` and `--sdk-pin global-json`** (issue
+  [#4631](https://github.com/DavidObando/gsharp/issues/4631)). A repository
+  migration can now pin an exact `Gsharp.NET.Sdk` version, such as a published
+  release, instead of the newest locally built package, and can write that pin
+  once under `msbuild-sdks` in the migrated repository's `global.json` instead
+  of into every generated project file. `cs2gs validate` follows the pin
+  recorded in the migrated tree, and accepts `--sdk-version` to check it.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values

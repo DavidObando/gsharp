@@ -111,6 +111,16 @@ internal static class ValidateCommand
                 case "--gsgen":
                     options.GsgenPath = Next(args, ref i, arg);
                     break;
+                case "--sdk-version":
+                    options.SdkVersion = Next(args, ref i, arg);
+                    if (!SdkPinArguments.IsValidVersion(options.SdkVersion))
+                    {
+                        Console.Error.WriteLine(
+                            $"cs2gs: --sdk-version expects a version such as 0.4.1200, not '{options.SdkVersion}'.");
+                        return 1;
+                    }
+
+                    break;
                 default:
                     Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
                     PrintUsage();
@@ -403,6 +413,9 @@ internal static class ValidateCommand
         Console.WriteLine("  --config <name>    Build config used to find gsc and the SDK package (default: Release).");
         Console.WriteLine("  --gsc <path>       Override gsc.dll.");
         Console.WriteLine("  --gsgen <path>     Override gsgen.dll.");
+        Console.WriteLine("  --sdk-version <v>  Pin Gsharp.NET.Sdk to exactly <v>. A tree whose global.json pins the");
+        Console.WriteLine("                     SDK (migrate --sdk-pin global-json) is validated with that pin;");
+        Console.WriteLine("                     a disagreeing --sdk-version is an error.");
         Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list (issue #3885); default:");
         Console.WriteLine("                     <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.");
         Console.WriteLine("  --csharp-test-oracle <dir>  C# test-case names from `cs2gs capture-test-oracle`; every");

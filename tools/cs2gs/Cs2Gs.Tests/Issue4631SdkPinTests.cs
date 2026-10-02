@@ -1,0 +1,468 @@
+// <copyright file="Issue4631SdkPinTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Xml.Linq;
+using Cs2Gs.Pipeline;
+using Xunit;
+
+namespace Cs2Gs.Tests;
+
+/// <summary>
+/// Issue #4631 (C1): a repository migration can pin an exact
+/// <c>Gsharp.NET.Sdk</c> version (<c>--sdk-version</c>) that no newer local
+/// build displaces, and can write that pin ONCE under <c>global.json</c>
+/// <c>msbuild-sdks</c> (<c>--sdk-pin global-json</c>) instead of into every
+/// generated project. MSBuild lets a versioned <c>Sdk="Name/Version"</c>
+/// attribute silently override a <c>global.json</c> pin, so in global-json
+/// mode every project in the mirror must carry the bare name, and
+/// <c>validate</c> must follow the tree's pin rather than re-resolve one.
+/// </summary>
+public sealed class Issue4631SdkPinTests : IDisposable
+{
+    // Deliberately a version no build ever produces, so the assertions can
+    // only pass if the explicit value (not the newest local nupkg) was used.
+    private const string PinnedVersion = "0.0.1-issue4631";
+
+    private const string SourceGlobalJson = """
+        {
+          // The repository's .NET SDK selection must survive the pin.
+          "sdk": {
+            "version": "10.0.300",
+            "rollForward": "latestFeature"
+          }
+        }
+        """;
+
+    private readonly string root;
+
+    /// <summary>Initializes a new isolated test directory.</summary>
+    public Issue4631SdkPinTests()
+    {
+        this.root = Path.Combine(Path.GetTempPath(), "issue-4631-sdk-pin", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(this.root);
+    }
+
+    /// <summary>Removes the isolated test directory.</summary>
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(this.root, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>The pin preserves every other <c>global.json</c> setting and holds exactly one entry.</summary>
+    [Fact]
+    public void WriteGlobalJsonPin_PreservesSdkSection_AndReplacesCaseVariantKey()
+    {
+        File.WriteAllText(
+            Path.Combine(this.root, "global.json"),
+            """
+            {
+              "sdk": { "version": "10.0.300", "rollForward": "latestFeature" },
+              "msbuild-sdks": { "gsharp.net.sdk": "0.0.0", "Other.Sdk": "1.2.3" },
+            }
+            """);
+
+        bool created = SdkPin.WriteGlobalJsonPin(this.root, PinnedVersion);
+
+        Assert.False(created);
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(Path.Combine(this.root, "global.json")));
+        JsonElement sdk = document.RootElement.GetProperty("sdk");
+        Assert.Equal("10.0.300", sdk.GetProperty("version").GetString());
+        Assert.Equal("latestFeature", sdk.GetProperty("rollForward").GetString());
+        var pins = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (JsonProperty pin in document.RootElement.GetProperty("msbuild-sdks").EnumerateObject())
+        {
+            pins.Add(pin.Name, pin.Value.GetString());
+        }
+
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Other.Sdk"] = "1.2.3",
+                ["Gsharp.NET.Sdk"] = PinnedVersion,
+            },
+            pins);
+        Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(this.root));
+    }
+
+    /// <summary>A repository without <c>global.json</c> gets one holding only the pin.</summary>
+    [Fact]
+    public void WriteGlobalJsonPin_CreatesTheFileWhenAbsent()
+    {
+        Assert.Null(SdkPin.ReadGlobalJsonPin(this.root));
+
+        Assert.True(SdkPin.WriteGlobalJsonPin(this.root, PinnedVersion));
+
+        Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(this.root));
+    }
+
+    /// <summary>A malformed pin in a tree is an error, not "no pin".</summary>
+    [Fact]
+    public void ReadGlobalJsonPin_RejectsAMalformedVersion()
+    {
+        File.WriteAllText(
+            Path.Combine(this.root, "global.json"),
+            """{ "msbuild-sdks": { "Gsharp.NET.Sdk": "latest" } }""");
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => SdkPin.ReadGlobalJsonPin(this.root));
+        Assert.Contains("'latest'", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>The version is written verbatim into XML and JSON, so only well-formed versions pass.</summary>
+    /// <param name="version">The candidate version.</param>
+    /// <param name="valid">Whether it must be accepted.</param>
+    [Theory]
+    [InlineData("0.4.1200", true)]
+    [InlineData("0.4.1129-g6c4824cbc0", true)]
+    [InlineData("0.4", false)]
+    [InlineData("0.4.1200/x", false)]
+    [InlineData("0.4.1200\"", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void SdkVersionArgument_IsValidatedStrictly(string version, bool valid)
+    {
+        Assert.Equal(valid, SdkPinArguments.IsValidVersion(version));
+    }
+
+    /// <summary><c>--sdk-pin</c> accepts exactly the two documented spellings.</summary>
+    [Fact]
+    public void SdkPinArgument_ParsesOnlyTheDocumentedLocations()
+    {
+        Assert.True(SdkPinArguments.TryParseLocation("project", out SdkPinLocation project));
+        Assert.Equal(SdkPinLocation.ProjectFile, project);
+        Assert.True(SdkPinArguments.TryParseLocation("global-json", out SdkPinLocation globalJson));
+        Assert.Equal(SdkPinLocation.GlobalJson, globalJson);
+        Assert.False(SdkPinArguments.TryParseLocation("globaljson", out _));
+        Assert.False(SdkPinArguments.TryParseLocation("Project", out _));
+    }
+
+    /// <summary>
+    /// An explicit version is what every generated project pins, whatever
+    /// newer nupkg the local build left behind; no <c>global.json</c> pin is
+    /// written in the default per-project mode.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Migrate_ExplicitSdkVersion_IsPinnedInsteadOfTheNewestLocalBuild()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            // The pipeline cannot run without a built gsc (issue #1749).
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+
+        RunResult run = await new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+
+        Assert.True(run.Succeeded);
+        Assert.Equal("Gsharp.NET.Sdk/" + PinnedVersion, SdkAttribute(fixture.MirroredWidget));
+        Assert.Equal("Gsharp.NET.Sdk/" + PinnedVersion, SdkAttribute(fixture.MirroredExtensions));
+        Assert.False(File.Exists(Path.Combine(fixture.Destination, "global.json")));
+    }
+
+    /// <summary>
+    /// Global-json mode: one pin in the mirror's <c>global.json</c> (the
+    /// source's <c>sdk</c> section kept), and the bare SDK name on every
+    /// project — translated ones AND the excluded already-G# project the
+    /// mirror rebinds — because a versioned attribute would override the pin.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Migrate_GlobalJsonPin_WritesOnePin_AndBareSdkAttributes()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(SourceGlobalJson);
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+        options.SdkPinLocation = SdkPinLocation.GlobalJson;
+
+        RunResult run = await new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+
+        Assert.True(run.Succeeded);
+        Assert.Equal("Gsharp.NET.Sdk", SdkAttribute(fixture.MirroredWidget));
+        Assert.Equal("Gsharp.NET.Sdk", SdkAttribute(fixture.MirroredExtensions));
+        Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(fixture.Destination));
+        using JsonDocument globalJson = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(fixture.Destination, "global.json")));
+        Assert.Equal(
+            "10.0.300",
+            globalJson.RootElement.GetProperty("sdk").GetProperty("version").GetString());
+    }
+
+    /// <summary>
+    /// A source without <c>global.json</c> still gets the pin, and the mirror's
+    /// completeness check accepts the file the run created.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Migrate_GlobalJsonPin_CreatesGlobalJson_AndTheMirrorStaysComplete()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+        options.SdkPinLocation = SdkPinLocation.GlobalJson;
+
+        RunResult run = await new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+
+        Assert.True(run.Succeeded);
+        Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(fixture.Destination));
+        Assert.Equal("Gsharp.NET.Sdk", SdkAttribute(fixture.MirroredWidget));
+    }
+
+    /// <summary>
+    /// A source <c>global.json</c> that already pins the SDK cannot be mixed
+    /// with versioned project attributes: that would build projects against
+    /// different SDKs without a word.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Migrate_PerProjectPin_OverASourceGlobalJsonPin_FailsLoudly()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(
+            """{ "msbuild-sdks": { "Gsharp.NET.Sdk": "0.0.2-source" } }""");
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+                .RunAsync(fixture.Apps));
+        Assert.Contains("--sdk-pin global-json", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <c>validate</c> over a global-json tree builds with the tree's pin and
+    /// the bare attribute, without being told: it must never re-resolve a
+    /// versioned moniker that would override the tree.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Validate_FollowsTheMigratedTreesGlobalJsonPin()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(SourceGlobalJson);
+        PipelineOptions migrate = this.RepositoryOptions(compiler, fixture);
+        migrate.SdkVersion = PinnedVersion;
+        migrate.SdkPinLocation = SdkPinLocation.GlobalJson;
+        RunResult migrated = await new MigrationPipeline(migrate, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+        Assert.True(migrated.Succeeded);
+
+        var probe = new PinProbeStage();
+        PipelineOptions validate = this.ValidateOptions(compiler, fixture);
+        RunResult validated = await new MigrationPipeline(validate, new IMigrationStage[] { probe })
+            .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId));
+
+        Assert.True(validated.Succeeded);
+        PinObservation observation = Assert.Single(probe.Observations);
+        Assert.Equal("Gsharp.NET.Sdk", observation.SdkMoniker);
+        Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
+    }
+
+    /// <summary>An explicit <c>validate --sdk-version</c> that disagrees with the tree is an error, never a tie-break.</summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Validate_SdkVersionThatDisagreesWithTheTree_Throws()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        PipelineOptions migrate = this.RepositoryOptions(compiler, fixture);
+        migrate.SdkVersion = PinnedVersion;
+        migrate.SdkPinLocation = SdkPinLocation.GlobalJson;
+        RunResult migrated = await new MigrationPipeline(migrate, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+        Assert.True(migrated.Succeeded);
+
+        PipelineOptions validate = this.ValidateOptions(compiler, fixture);
+        validate.SdkVersion = "0.0.3-other";
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(validate, new IMigrationStage[] { new PinProbeStage() })
+                .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId)));
+        Assert.Contains(PinnedVersion, error.Message, StringComparison.Ordinal);
+        Assert.Contains("0.0.3-other", error.Message, StringComparison.Ordinal);
+    }
+
+    private static string SdkAttribute(string projectPath) =>
+        XDocument.Load(projectPath).Root?.Attribute("Sdk")?.Value;
+
+    private static string FindCompiler()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            foreach (string config in new[] { "Release", "Debug" })
+            {
+                string candidate = Path.Combine(dir.FullName, "out", "bin", config, "Compiler", "gsc.dll");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
+    }
+
+    private PipelineOptions RepositoryOptions(string compiler, Fixture fixture)
+    {
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            SourceRoot = fixture.Source,
+            OutputRoot = fixture.Destination,
+            ArtifactRoot = Path.Combine(this.root, "runs"),
+            OutputLayout = MigrationOutputLayout.Repository,
+            Config = "Release",
+        };
+        options.ExcludedProjectPaths.Add(fixture.SourceExtensions);
+        return options;
+    }
+
+    private PipelineOptions ValidateOptions(string compiler, Fixture fixture)
+    {
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            SourceRoot = fixture.Source,
+            OutputRoot = fixture.Destination,
+            ArtifactRoot = Path.Combine(this.root, "validate-runs"),
+            Config = "Release",
+        };
+        options.ExcludedProjectPaths.Add(fixture.SourceExtensions);
+        return options;
+    }
+
+    // One translated library plus one excluded, already-G# project built with
+    // an imported bootstrap SDK (the src/Sdk/Gsharp.Extensions shape the
+    // mirror rebinds onto the pinned SDK).
+    private Fixture CreateFixture(string sourceGlobalJson)
+    {
+        string source = Path.Combine(this.root, "source");
+        string widgetDirectory = Path.Combine(source, "src", "Widget");
+        string extensionsDirectory = Path.Combine(source, "src", "Extensions");
+        Directory.CreateDirectory(widgetDirectory);
+        Directory.CreateDirectory(extensionsDirectory);
+
+        string widget = Path.Combine(widgetDirectory, "Widget.csproj");
+        File.WriteAllText(
+            widget,
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+            "<TargetFramework>net10.0</TargetFramework>" +
+            "<Nullable>enable</Nullable>" +
+            "</PropertyGroup></Project>");
+        File.WriteAllText(
+            Path.Combine(widgetDirectory, "Widget.cs"),
+            "namespace Widget { public static class Answer { public static int Value() => 42; } }");
+
+        string extensions = Path.Combine(extensionsDirectory, "Extensions.csproj");
+        File.WriteAllText(
+            extensions,
+            "<Project><Import Project=\"bootstrap.targets\" /><PropertyGroup>" +
+            "<TargetFramework>net10.0</TargetFramework>" +
+            "</PropertyGroup></Project>");
+        File.WriteAllText(Path.Combine(extensionsDirectory, "bootstrap.targets"), "<Project />");
+        File.WriteAllText(
+            Path.Combine(extensionsDirectory, "Extensions.gs"),
+            "namespace Extensions\n\npublic func Two() int {\n    return 2\n}\n");
+
+        if (sourceGlobalJson is not null)
+        {
+            File.WriteAllText(Path.Combine(source, "global.json"), sourceGlobalJson);
+        }
+
+        string destination = Path.Combine(this.root, "destination");
+        return new Fixture(
+            source,
+            destination,
+            extensions,
+            Path.Combine(destination, "src", "Widget", "Widget.gsproj"),
+            Path.Combine(destination, "src", "Extensions", "Extensions.csproj"),
+            new[]
+            {
+                new CorpusApp(
+                    "src/Widget/Widget.csproj",
+                    widget,
+                    TargetKind.Library,
+                    relativeProjectPath: Path.Combine("src", "Widget", "Widget.csproj")),
+            });
+    }
+
+    private sealed record Fixture(
+        string Source,
+        string Destination,
+        string SourceExtensions,
+        string MirroredWidget,
+        string MirroredExtensions,
+        IReadOnlyList<CorpusApp> Apps);
+
+    private readonly record struct PinObservation(string SdkMoniker, string AnalyzerVerifierPackageVersion);
+
+    /// <summary>Records the SDK pin a validate run hands its stages.</summary>
+    private sealed class PinProbeStage : IMigrationStage
+    {
+        public MigrationStageKind Kind => MigrationStageKind.Compile;
+
+        internal List<PinObservation> Observations { get; } = new List<PinObservation>();
+
+        public Task<StageOutcome> ExecuteAsync(
+            StageExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            this.Observations.Add(new PinObservation(
+                context.Options.RepositorySdkMoniker,
+                context.Options.RepositoryAnalyzerVerifierPackageVersion));
+            return Task.FromResult(StageOutcome.Passed());
+        }
+    }
+}

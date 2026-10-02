@@ -681,6 +681,26 @@ internal static class Program
                     case "--allow-conditional-compilation":
                         options.ConditionalCompilation = Cs2Gs.Translator.ConditionalCompilationPolicy.Warn;
                         break;
+                    case "--sdk-version":
+                        options.SdkVersion = NextValue(args, ref i, arg);
+                        if (!SdkPinArguments.IsValidVersion(options.SdkVersion))
+                        {
+                            Console.Error.WriteLine(
+                                $"cs2gs: --sdk-version expects a version such as 0.4.1200, not '{options.SdkVersion}'.");
+                            return null;
+                        }
+
+                        break;
+                    case "--sdk-pin":
+                        string pin = NextValue(args, ref i, arg);
+                        if (!SdkPinArguments.TryParseLocation(pin, out SdkPinLocation location))
+                        {
+                            Console.Error.WriteLine($"cs2gs: --sdk-pin expects 'project' or 'global-json', not '{pin}'.");
+                            return null;
+                        }
+                        options.SdkPinLocation = location;
+                        options.SdkPinLocation = location;
+                        break;
                     default:
                         Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
                         PrintUsage();
@@ -693,6 +713,13 @@ internal static class Program
                 PrintUsage();
                 return null;
             }
+        }
+
+        if (options.OutputLayout == MigrationOutputLayout.DiagnosticRun
+            && (options.SdkVersion is not null || options.SdkPinLocation != SdkPinLocation.ProjectFile))
+        {
+            Console.Error.WriteLine("cs2gs: --sdk-version and --sdk-pin apply to repository migration only.");
+            return null;
         }
 
         if (string.IsNullOrEmpty(corpus))
@@ -813,6 +840,12 @@ internal static class Program
         Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE");
         Console.WriteLine("                    repository and stop, writing a per-app validation-context.json so");
         Console.WriteLine("                    'cs2gs validate' shards can run stages 2-4 in parallel elsewhere.");
+        Console.WriteLine("  --sdk-version <v> Repository migration only: pin Gsharp.NET.Sdk to exactly <v> (default:");
+        Console.WriteLine("                    the newest local nupkg). A local nupkg of <v> is staged into .nugs;");
+        Console.WriteLine("                    otherwise <v> must be on a configured feed (e.g. a published release).");
+        Console.WriteLine("  --sdk-pin <where> Repository migration only: 'project' (default) writes the version into");
+        Console.WriteLine("                    every generated project's Sdk attribute; 'global-json' writes it once");
+        Console.WriteLine("                    under msbuild-sdks in the mirror's global.json and keeps Sdk bare.");
         Console.WriteLine("  --format          Run the ADR-0179 gsfmt post-pass (default).");
         Console.WriteLine("  --no-format       Keep the printer layout instead (A/B measurement only).");
         Console.WriteLine();

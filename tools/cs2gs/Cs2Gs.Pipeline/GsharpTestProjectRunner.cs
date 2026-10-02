@@ -231,6 +231,49 @@ public class GsharpTestProjectRunner
         return null;
     }
 
+    /// <summary>
+    /// Finds a local nupkg of exactly <paramref name="version"/> for
+    /// <paramref name="packageId"/>: under <c>out/bin/&lt;Config&gt;/nupkgs/</c>
+    /// (the probed config first, then Release, then Debug), then in the repo's
+    /// <c>.nugs</c> feed. Unlike <see cref="ResolveLocalPackage"/> it never
+    /// substitutes a different version.
+    /// </summary>
+    /// <param name="repoRoot">The repository root.</param>
+    /// <param name="packageId">The NuGet package id.</param>
+    /// <param name="version">The exact version required.</param>
+    /// <param name="config">The build config to probe first.</param>
+    /// <returns>The nupkg path, or <see langword="null"/> when no local copy exists.</returns>
+    internal static string FindLocalPackageVersion(
+        string repoRoot, string packageId, string version, string config = "Release")
+    {
+        if (string.IsNullOrEmpty(repoRoot))
+        {
+            return null;
+        }
+
+        string fileName = packageId + "." + version + ".nupkg";
+        var directories = new List<string>();
+        foreach (string cfg in new[] { config, "Release", "Debug" })
+        {
+            if (!string.IsNullOrEmpty(cfg))
+            {
+                directories.Add(Path.Combine(repoRoot, "out", "bin", cfg, "nupkgs"));
+            }
+        }
+
+        directories.Add(Path.Combine(repoRoot, ".nugs"));
+        foreach (string directory in directories.Distinct(StringComparer.Ordinal))
+        {
+            string candidate = Path.Combine(directory, fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     internal static (string NupkgPath, string Version)? ResolveNewestSdkPackage(string directory)
         => ResolveNewestPackage(directory, SdkPackageId);
 

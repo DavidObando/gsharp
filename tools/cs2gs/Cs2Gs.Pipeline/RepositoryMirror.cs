@@ -411,9 +411,11 @@ internal static class RepositoryMirror
             return;
         }
 
-        // The Sdk ATTRIBUTE, not <Import Sdk="…"/>: only the attribute form
-        // carries a "Name/Version" moniker, and the mirror has to pin the exact
-        // package it built the rest of the tree against.
+        // The Sdk ATTRIBUTE, not <Import Sdk="…"/>: the attribute carries the
+        // run's moniker exactly as every generated project does — "Name/Version"
+        // under a per-project pin, or the bare name under a global.json pin
+        // (SdkPin), where a versioned attribute would silently override the
+        // tree's single pin.
         project.Root.SetAttributeValue("Sdk", sdkMoniker);
 
         foreach (XElement import in project.Root.Descendants()

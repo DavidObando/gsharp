@@ -227,13 +227,33 @@ public sealed class MigrationPipeline
             : null;
         if (repositoryLayout)
         {
-            string sdkMoniker = SdkCompileRunner.ResolveSdkMoniker(this.options.Config);
-            if (sdkMoniker is null)
+            string sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, this.options.SdkVersion);
+            if (sdkVersion is null)
             {
                 throw new InvalidOperationException(
                     "Could not resolve a local Gsharp.NET.Sdk package for the mirrored projects.");
             }
 
+            string sourcePin = SdkPin.ReadGlobalJsonPin(destinationRoot);
+            if (this.options.SdkPinLocation == SdkPinLocation.GlobalJson)
+            {
+                if (SdkPin.WriteGlobalJsonPin(destinationRoot, sdkVersion))
+                {
+                    this.options.RepositoryAdditionalFiles.Add(SdkPin.GlobalJsonFileName);
+                }
+            }
+            else if (sourcePin is not null)
+            {
+                // A versioned Sdk attribute silently overrides a global.json
+                // msbuild-sdks pin, and validate takes a pinned global.json to
+                // mean the tree is in global-json mode. Mixing the two would
+                // build different projects against different SDKs.
+                throw new InvalidOperationException(
+                    "The source global.json already pins Gsharp.NET.Sdk " + sourcePin +
+                    "; migrate with --sdk-pin global-json.");
+            }
+
+            string sdkMoniker = SdkPin.ProjectSdkAttribute(sdkVersion, this.options.SdkPinLocation);
             this.options.RepositorySdkMoniker = sdkMoniker;
 
             // Issue #3780: resolved once, up front, like sdkMoniker above.
@@ -242,7 +262,7 @@ public sealed class MigrationPipeline
             // only an error if TranslateStage later needs it for a specific
             // project and finds this null.
             this.options.RepositoryAnalyzerVerifierPackageVersion =
-                SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion(this.options.Config);
+                SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion(this.options.Config, this.options.SdkVersion);
 
             foreach (CorpusApp app in apps)
             {
@@ -460,6 +480,7 @@ public sealed class MigrationPipeline
         }
 
         this.options.OutputLayout = MigrationOutputLayout.Repository;
+        this.ResolveValidationSdkPin(migratedRoot);
 
         string gscPath = GscInvoker.Resolve(
             this.options.GscPath,
@@ -676,6 +697,42 @@ public sealed class MigrationPipeline
         }
 
         return ordered;
+    }
+
+    /// <summary>
+    /// Resolves the SDK pin a <c>validate</c> run builds the migrated tree
+    /// with. The tree is the source of truth: when its <c>global.json</c> pins
+    /// <c>Gsharp.NET.Sdk</c>, every project is re-transformed with the bare
+    /// <c>Sdk</c> attribute and that version is staged, because a versioned
+    /// attribute would silently override the tree's pin. An explicit
+    /// <see cref="PipelineOptions.SdkVersion"/> that disagrees with the tree is
+    /// an error, never a tie-break. Without a pinned <c>global.json</c> the
+    /// per-project moniker is resolved as <c>migrate</c> resolves it.
+    /// </summary>
+    /// <param name="migratedRoot">The migrated tree.</param>
+    private void ResolveValidationSdkPin(string migratedRoot)
+    {
+        string treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
+        if (treePin is not null
+            && this.options.SdkVersion is not null
+            && !string.Equals(treePin, this.options.SdkVersion, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "--sdk-version " + this.options.SdkVersion + " disagrees with the migrated tree's global.json pin (" +
+                treePin + ").");
+        }
+
+        SdkPinLocation location = treePin is null ? SdkPinLocation.ProjectFile : SdkPinLocation.GlobalJson;
+        string requestedVersion = treePin ?? this.options.SdkVersion;
+        string sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, requestedVersion);
+
+        // A null version is not thrown here: each app's compile reports the
+        // missing package as an unavailable stage, as it always has.
+        this.options.RepositorySdkMoniker = sdkVersion is null
+            ? null
+            : SdkPin.ProjectSdkAttribute(sdkVersion, location);
+        this.options.RepositoryAnalyzerVerifierPackageVersion =
+            SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion(this.options.Config, requestedVersion);
     }
 
     private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> LoadEvaluatedProjectReferencesAsync(
