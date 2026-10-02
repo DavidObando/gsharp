@@ -93,6 +93,7 @@ internal sealed class DataStructSynthesizer
     private readonly MetadataTokenCache cache;
     private readonly WellKnownReferences wellKnown;
     private readonly ConversionEmitter conversionEmitter;
+    private readonly Func<StructSymbol, int> emitPrimaryConstructorBody;
     private readonly Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol;
     private readonly Func<TypeSymbol, EntityHandle> getElementTypeToken;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
@@ -119,6 +120,7 @@ internal sealed class DataStructSynthesizer
         MetadataTokenCache cache,
         WellKnownReferences wellKnown,
         ConversionEmitter conversionEmitter,
+        Func<StructSymbol, int> emitPrimaryConstructorBody,
         Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
         Func<TypeSymbol, EntityHandle> getElementTypeToken,
         Func<Type, TypeReferenceHandle> getTypeReference,
@@ -136,6 +138,7 @@ internal sealed class DataStructSynthesizer
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.wellKnown = wellKnown ?? throw new ArgumentNullException(nameof(wellKnown));
         this.conversionEmitter = conversionEmitter ?? throw new ArgumentNullException(nameof(conversionEmitter));
+        this.emitPrimaryConstructorBody = emitPrimaryConstructorBody ?? throw new ArgumentNullException(nameof(emitPrimaryConstructorBody));
         this.encodeTypeSymbol = encodeTypeSymbol ?? throw new ArgumentNullException(nameof(encodeTypeSymbol));
         this.getElementTypeToken = getElementTypeToken ?? throw new ArgumentNullException(nameof(getElementTypeToken));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
@@ -683,7 +686,7 @@ internal sealed class DataStructSynthesizer
         var signature = new BlobBuilder();
         new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
-        var visibility = IsDataObjectOverrideFinal(structSym) ? MethodAttributes.Private : MethodAttributes.Family;
+        var visibility = structSym.IsOpen ? MethodAttributes.Family : MethodAttributes.Private;
         var copyConstructor = this.emitCtx.Metadata.AddMethodDefinition(
             visibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
             MethodImplAttributes.IL | MethodImplAttributes.Managed,
@@ -903,23 +906,28 @@ internal sealed class DataStructSynthesizer
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {
-            var il = new InstructionEncoder(new BlobBuilder());
-            for (var i = 0; i < parameters.Length; i++)
+            if (!structSym.InstanceFieldInitializers.IsEmpty)
             {
-                if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(structSym, parameters[i].Name, out var field))
+                bodyOffset = this.emitPrimaryConstructorBody(structSym);
+            }
+            else
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                for (var i = 0; i < parameters.Length; i++)
                 {
-                    throw new InvalidOperationException($"Data struct '{structSym.Name}' has no field for primary ctor parameter '{parameters[i].Name}'.");
+                    if (ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(structSym, parameters[i].Name, out var field))
+                    {
+                        var fieldHandle = this.resolveUserFieldToken(structSym, field);
+                        il.LoadArgument(0);
+                        il.LoadArgument(i + 1);
+                        il.OpCode(ILOpCode.Stfld);
+                        il.Token(fieldHandle);
+                    }
                 }
 
-                var fieldHandle = this.resolveUserFieldToken(structSym, field);
-                il.LoadArgument(0);
-                il.LoadArgument(i + 1);
-                il.OpCode(ILOpCode.Stfld);
-                il.Token(fieldHandle);
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
-
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
         }
 
         var sig = new BlobBuilder();
@@ -1126,9 +1134,14 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
 
+        var attributes = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig;
+        if (IsDataObjectOverrideFinal(structSym))
+        {
+            attributes |= MethodAttributes.Final;
+        }
+
         return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.NewSlot
-                | (IsDataObjectOverrideFinal(structSym) ? MethodAttributes.Final : MethodAttributes.PrivateScope),
+            attributes: attributes,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),

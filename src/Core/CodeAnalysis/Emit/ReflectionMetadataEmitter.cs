@@ -1225,7 +1225,27 @@ internal sealed class ReflectionMetadataEmitter
         // not need a hard back-reference to this emitter.
         this.conversionEmitter = new ConversionEmitter(this.emitCtx, this.cache, this.wellKnown, this.memberRefs.GetElementTypeToken);
 
-        // PR-E-7: MemberDefEmitter wires up after ConversionEmitter.
+        // PR-E-6: DataStructSynthesizer wires up after ConversionEmitter
+        // because it needs `conversionEmitter.EmitBoxIfNeeded` for every
+        // field load. Like ConversionEmitter and SlotPlanner, it consumes
+        // the remaining root-emitter helpers it depends on as delegates so
+        // it does not need a hard back-reference to this emitter.
+        this.dataStructSynth = new DataStructSynthesizer(
+            this.emitCtx,
+            this.cache,
+            this.wellKnown,
+            this.conversionEmitter,
+            this.ctorBodies.EmitDataStructPrimaryConstructorBodyBytes,
+            this.signatures.EncodeTypeSymbol,
+            this.memberRefs.GetElementTypeToken,
+            this.memberRefs.GetTypeReference,
+            this.customAttrEncoder.NextParameterHandle,
+            this.userTokens.ResolveUserTypeToken,
+            this.userTokens.ResolveFieldToken,
+            this.userTokens.GetUserStructMethodRef,
+            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType));
+
+        // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
         // trio and threads delegate callbacks for the five root-emitter
         // helpers it uses (EmitFunction, EncodeTypeSymbol, NextParameterHandle,

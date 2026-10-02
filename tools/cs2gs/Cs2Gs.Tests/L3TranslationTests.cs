@@ -402,13 +402,10 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B.4: a fieldless C# record with NO positional parameter list
-    /// at all (<c>record ShapeBase;</c>, as opposed to an explicit-but-empty
-    /// <c>record ShapeBase();</c> — see issue #2363, which preserves `data
-    /// class` for the latter) maps to a zero-field <c>data class</c>; the C#
-    /// <c>abstract</c> modifier is kept (ADR-0195: <c>abstract data class</c>,
-    /// which implies <c>open</c>) and the synthesized
-    /// <c>IEquatable&lt;Self&gt;</c> interface is preserved as an actual CLR contract.
+    /// ADR-0115 §B.4: a fieldless C# record with no positional parameters
+    /// maps to a zero-field <c>data class</c> and is marked <c>open</c> when
+    /// subclassed. The C# <c>abstract</c> modifier is dropped; the generated
+    /// <c>IEquatable&lt;Self&gt;</c> interface is preserved for ABI parity.
     /// </summary>
     [Fact]
     public void FieldlessRecord_MapsToOpenDataClass()
@@ -420,9 +417,9 @@ namespace Demo
     public sealed record Dot(double X) : ShapeBase;
 }");
 
-        // ADR-0195 / issue #4674: abstractness is kept (`abstract` implies `open`).
-        Assert.Contains("abstract data class ShapeBase : IEquatable[ShapeBase] {", printed);
-        Assert.DoesNotContain("open data class ShapeBase", printed);
+        Assert.Contains("open data class ShapeBase", printed);
+        Assert.DoesNotContain("abstract", printed);
+        Assert.Contains("IEquatable[ShapeBase]", printed);
         Assert.Contains("IEquatable[Dot]", printed);
         Assert.Contains("data class Dot(X float64) : ShapeBase", printed);
     }

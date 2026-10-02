@@ -796,6 +796,14 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (INamedTypeSymbol iface in symbol.Interfaces)
             {
+                // A `data` type already synthesizes structural equality, but
+                // keep the C# record's interface clause for CLR ABI parity.
+                if (symbol.IsRecord && IsIEquatableOf(iface, symbol))
+                {
+                    interfaces.Add(this.typeMapper.Map(iface, this.context, location));
+                    continue;
+                }
+
                 // Interface inheritance is supported by the G# parser since
                 // issue #1006 (`interface B : A, C { ... }`); the printer emits
                 // base interfaces via the same base-clause path as a class, so
@@ -804,6 +812,15 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return (baseType, interfaces);
+        }
+
+        private static bool IsIEquatableOf(INamedTypeSymbol iface, INamedTypeSymbol self)
+        {
+            return iface.IsGenericType &&
+                iface.Name == "IEquatable" &&
+                iface.ContainingNamespace?.ToDisplayString() == "System" &&
+                iface.TypeArguments.Length == 1 &&
+                SymbolEqualityComparer.Default.Equals(iface.TypeArguments[0], self);
         }
 
         /// <summary>

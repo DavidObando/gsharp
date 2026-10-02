@@ -479,7 +479,8 @@ internal sealed class ConstructorBodyEmitter
     /// <returns>The method-body stream offset.</returns>
     internal int EmitValueStructDefaultConstructorBodyBytes(StructSymbol structSym)
     {
-        if (TryEmitInitialization(structSym, false, default, default, out var planned))
+        if (!structSym.HasPrimaryConstructor
+            && TryEmitInitialization(structSym, false, default, default, out var planned))
         {
             return planned;
         }
@@ -487,8 +488,11 @@ internal sealed class ConstructorBodyEmitter
         // Synthesize a `this` parameter for the field-initializer receiver.
         var thisParam = new ParameterSymbol("this", structSym);
 
-        // Synthesize field-initializer assignment statements.
-        var statements = BuildInstanceFieldInitializerStatements(structSym, thisParam);
+        // A primary-constructor struct's initializers can read its parameters;
+        // they run in the primary constructor, not this parameterless one.
+        var statements = structSym.HasPrimaryConstructor
+            ? ImmutableArray<BoundStatement>.Empty
+            : BuildInstanceFieldInitializerStatements(structSym, thisParam);
         var body = new BoundBlockStatement(null, statements);
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
@@ -516,6 +520,70 @@ internal sealed class ConstructorBodyEmitter
         il.Token(this.outer.userTokens.ResolveUserTypeToken(structSym));
 
         // Instance field initializers
+        try
+        {
+            emitter.EmitBlock(body);
+        }
+        catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+        {
+            var anchor = emitter.CurrentAnchor ?? structSym.Declaration;
+            EmitDiagnosticException.Wrap(anchor, ex);
+        }
+
+        return this.AddCompletedMethodBody(il, emitter, localsSignature);
+    }
+
+    /// <summary>
+    /// Emits a data struct's primary constructor, including primary-parameter
+    /// field stores and instance field initializers.
+    /// </summary>
+    /// <param name="structSym">The data struct whose primary constructor is being emitted.</param>
+    /// <returns>The resulting method-body stream offset.</returns>
+    internal int EmitDataStructPrimaryConstructorBodyBytes(StructSymbol structSym)
+    {
+        if (TryEmitInitialization(structSym, false, default, default, out var planned))
+        {
+            return planned;
+        }
+
+        var parameters = structSym.PrimaryConstructorParameters;
+        var thisParam = new ParameterSymbol("this", structSym);
+        var body = Lowerer.Lower(
+            new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(structSym, thisParam)),
+            structSym);
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var session = new ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il);
+        session.Plan(body);
+
+        var parameterSlots = new Dictionary<ParameterSymbol, int>
+        {
+            [thisParam] = 0,
+        };
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            parameterSlots[parameters[i]] = i + 1;
+        }
+
+        var localsSignature = session.BuildLocalsSignature();
+        var emitter = session.CreateEmitter(parameterSlots, structThisParameter: thisParam);
+
+        il.LoadArgument(0);
+        il.OpCode(ILOpCode.Initobj);
+        il.Token(this.outer.userTokens.ResolveUserTypeToken(structSym));
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var parameter = parameters[i];
+            if (ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(structSym, parameter.Name, out var field))
+            {
+                il.LoadArgument(0);
+                il.LoadArgument(i + 1);
+                il.OpCode(ILOpCode.Stfld);
+                il.Token(this.outer.userTokens.ResolveFieldToken(structSym, field));
+            }
+        }
+
         try
         {
             emitter.EmitBlock(body);
