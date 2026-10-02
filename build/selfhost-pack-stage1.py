@@ -49,7 +49,6 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 import zipfile
 from pathlib import Path
 
@@ -183,14 +182,16 @@ def strip_json_comments(text: str) -> str:
 
 def pin_global_json(tree: Path, version: str) -> None:
     path = tree / "global.json"
-    document = json.loads(strip_json_comments(path.read_text(encoding="utf-8-sig"))) if path.exists() else {}
+    raw = path.read_bytes() if path.exists() else b""
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    document = json.loads(strip_json_comments(raw.decode("utf-8-sig"))) if path.exists() else {}
     if not isinstance(document, dict):
         raise SelfHostError(f"{path} is not a JSON object")
     sdks = document.setdefault("msbuild-sdks", {})
     for key in [k for k in sdks if k.lower() == SDK_ID.lower()]:
         del sdks[key]
     sdks[SDK_ID] = version
-    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + (json.dumps(document, indent=2) + "\n").encode("utf-8"))
 
 
 def stage_feed(tree: Path, nupkgs: list[Path]) -> Path:
@@ -283,12 +284,13 @@ def pack(tree: Path, version: str, out: Path, work: Path, config: str) -> Path:
     # A stage-1 package must never be satisfied from (or poison) the global
     # package cache, which is keyed by id+version only.
     env["NUGET_PACKAGES"] = str(work / "nuget-packages")
-    env["TMPDIR"] = str(work / "tmp")
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        env[name] = str(work / "tmp")
     (work / "tmp").mkdir(parents=True, exist_ok=True)
     env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
     log = work / "pack.log"
     log.write_text("", encoding="utf-8")
-    started = time.time() - 1
+    before = set(out.glob(SDK_ID + ".*.nupkg"))
     commands = [["dotnet", "restore", str(tree / project), "-nodeReuse:false"]
                 for project in NESTED_PROJECTS if (tree / project).is_file()]
     commands.append(["dotnet", "pack", str(tree / SDK_PROJECT), "-c", config,
@@ -302,7 +304,7 @@ def pack(tree: Path, version: str, out: Path, work: Path, config: str) -> Path:
             tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
             raise SelfHostError(f"{' '.join(command[:2])} failed (exit {result.returncode}); see {log}\n"
                                 + "\n".join(tail))
-    produced = sorted(path for path in out.glob(SDK_ID + ".*.nupkg") if path.stat().st_mtime >= started)
+    produced = sorted(set(out.glob(SDK_ID + ".*.nupkg")) - before)
     if len(produced) != 1:
         raise SelfHostError(f"dotnet pack succeeded but produced {len(produced)} {SDK_ID} packages in {out}")
     return reversion(produced[0], version)
@@ -320,6 +322,15 @@ def reversion(nupkg: Path, version: str) -> Path:
     target = nupkg.with_name(f"{SDK_ID}.{version}.nupkg")
     if nupkg == target:
         return target
+    stamp_package(nupkg, target, version, required=True)
+    symbols = nupkg.with_suffix(".snupkg")
+    if symbols.exists():
+        # The symbol package travels with the package, under the same version.
+        stamp_package(symbols, target.with_suffix(".snupkg"), version, required=False)
+    return target
+
+
+def stamp_package(nupkg: Path, target: Path, version: str, required: bool) -> None:
     temporary = target.with_suffix(".tmp")
     stamped = 0
     with zipfile.ZipFile(nupkg) as source, zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as sink:
@@ -331,15 +342,11 @@ def reversion(nupkg: Path, version: str) -> Path:
                 stamped += count if info.filename.endswith(".nuspec") else 0
                 data = text.encode("utf-8")
             sink.writestr(info, data)
-    if stamped != 1:
+    if stamped != 1 and required:
         temporary.unlink()
         raise SelfHostError(f"{nupkg.name} has no nuspec <version> to stamp")
     temporary.replace(target)
     nupkg.unlink()
-    symbols = nupkg.with_suffix(".snupkg")
-    if symbols.exists():
-        symbols.unlink()
-    return target
 
 
 def main(argv: list[str]) -> int:

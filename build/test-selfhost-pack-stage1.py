@@ -13,7 +13,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location("selfhost_pack_stage1", REPO / "build" / "selfhost-pack-stage1.py")
-assert SPEC and SPEC.loader
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load build/selfhost-pack-stage1.py")
 packer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(packer)
 
@@ -109,6 +110,13 @@ class GlobalJsonTests(unittest.TestCase):
             self.assertEqual("10.0.300", document["sdk"]["version"])
             self.assertEqual({"X": "1.0.0", "Gsharp.NET.Sdk": "0.4.1129-g6c4824cbc0"}, document["msbuild-sdks"])
 
+    def test_a_bom_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tree = make_tree(Path(temp))
+            (tree / "global.json").write_bytes(b"\xef\xbb\xbf{ \"sdk\": { \"version\": \"10.0.300\" } }")
+            packer.pin_global_json(tree, "1.0.0")
+            self.assertTrue((tree / "global.json").read_bytes().startswith(b"\xef\xbb\xbf"))
+
     def test_comment_markers_inside_strings_are_kept(self) -> None:
         self.assertEqual('{"a": "http://x/*y*/"} ', packer.strip_json_comments('{"a": "http://x/*y*/"} // c'))
 
@@ -164,12 +172,17 @@ class ReversionTests(unittest.TestCase):
             produced = nupkg(root / "Gsharp.NET.Sdk.0.4.0-g.nupkg", {
                 "Gsharp.NET.Sdk.nuspec": b"<package><metadata><id>Gsharp.NET.Sdk</id><version>0.4.0-g</version></metadata></package>",
                 "tools/compiler/gsc.dll": b"MZ"})
-            (root / "Gsharp.NET.Sdk.0.4.0-g.snupkg").write_bytes(b"")
+            nupkg(root / "Gsharp.NET.Sdk.0.4.0-g.snupkg", {
+                "Gsharp.NET.Sdk.nuspec": b"<package><metadata><version>0.4.0-g</version></metadata></package>"})
 
             stamped = packer.reversion(produced, "0.4.1129-stage1")
 
             self.assertEqual("Gsharp.NET.Sdk.0.4.1129-stage1.nupkg", stamped.name)
-            self.assertEqual([stamped.name], sorted(p.name for p in root.iterdir()))
+            self.assertEqual(
+                ["Gsharp.NET.Sdk.0.4.1129-stage1.nupkg", "Gsharp.NET.Sdk.0.4.1129-stage1.snupkg"],
+                sorted(p.name for p in root.iterdir()))
+            with zipfile.ZipFile(root / "Gsharp.NET.Sdk.0.4.1129-stage1.snupkg") as archive:
+                self.assertIn(b"<version>0.4.1129-stage1</version>", archive.read("Gsharp.NET.Sdk.nuspec"))
             with zipfile.ZipFile(stamped) as archive:
                 self.assertIn(b"<version>0.4.1129-stage1</version>", archive.read("Gsharp.NET.Sdk.nuspec"))
                 self.assertEqual(b"MZ", archive.read("tools/compiler/gsc.dll"))

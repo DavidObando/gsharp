@@ -29,7 +29,7 @@ The script changes the tree in place, idempotently, and records every change in 
 
 It restores the projects that the SDK's `Pack*` targets build through nested `<MSBuild>` calls, then runs `dotnet pack` on the SDK project.
 Nerdbank.GitVersioning ignores `-p:PackageVersion` (and outside git it packs as `<major>.<minor>.0-g`), so the script stamps
-the stage-1 version (default `<major.minor.patch>-stage1`) into the nuspec afterwards. That version must differ from the
+the stage-1 version (default `<major.minor.patch>-stage1`) into the nuspec of the package and its `.snupkg` afterwards. That version must differ from the
 bootstrap version, because NuGet package caches are keyed by id and version.
 
 The package is verified before the script succeeds:
@@ -39,7 +39,7 @@ The package is verified before the script succeeds:
 
 Measured on the nightly 36930275716 tree (main `6c4824cbc`):
 
-- Stage-0 pack: 25 minutes.
+- Stage-1 pack (the migrated tree compiled and packed with stage 0): 25 minutes.
 - Package payload: 150 entries.
 - Extras over stage 0: G#-built executables also ship `Gsharp.Extensions`, `Gsharp.Runtime.Channels` and `Gsharp.Runtime.Values`.
 - Missing docs: the XML documentation of the three executables.
