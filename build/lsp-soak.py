@@ -116,7 +116,7 @@ ICE_CODE = "GS9998"
 # FileLogger writes one JSON object per line. System.Text.Json escapes every quote inside the
 # message text, so this raw substring only occurs as a real key/value; it is a cheap prefilter,
 # and the Level field of the parsed entry decides.
-LOG_ERROR_MARKER = b'"Level":"Error"'
+LOG_ERROR_MARKER = re.compile(rb'"Level"\s*:\s*"Error"')
 
 GARBAGE = [
     '"unterminated',
@@ -313,7 +313,7 @@ def plan_file(path: Path, seed: int, truncations: int, line_deletions: int, brac
         "path": str(path.resolve()),
         "name": path.name,
         "bytes": len(raw),
-        "lines": text.count("\n") + 1,
+        "lines": len(text.splitlines()),
         "sha256": hashlib.sha256(raw).hexdigest(),
         "steps": steps,
     }
@@ -576,9 +576,9 @@ class LspClient:
 class LogScanner:
     """Reads Error-level entries appended to the server's FileLogger output.
 
-    Entries are one JSON object per line with a fixed key order (Timestamp, Level,
-    Message, ...). Only the line prefix is inspected: debug traffic echoes whole
-    documents into the log, and a document may contain any text.
+    Entries are one JSON object per line (Timestamp, Level, Message, ...). A line is a candidate only if it carries a raw `"Level": "Error"` pair
+    (quotes inside message text are escaped, so debug echoes of documents never do), and the
+    parsed entry's Level field decides.
     """
 
     def __init__(self, path: Path | None) -> None:
@@ -598,7 +598,7 @@ class LogScanner:
         lines = data.split(b"\n")
         self.partial = lines.pop()
         for line in lines:
-            if LOG_ERROR_MARKER not in line:
+            if not LOG_ERROR_MARKER.search(line):
                 continue
             try:
                 entry = json.loads(line.decode("utf-8", "replace"))
@@ -956,7 +956,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "noLog": args.no_log,
         "skippedMethods": args.skip_method,
         "finished": datetime.now(timezone.utc).isoformat(),
-        "files": [{k: v for k, v in r.items() if k != "steps"} | {"stepCrashes": {
+        "files": [{**{k: v for k, v in r.items() if k != "steps"}, "stepCrashes": {
             s["id"]: sorted({c["signature"] for c in s["crashes"]}) for s in r["steps"] if s["crashes"]}}
             for r in results],
     }
@@ -969,10 +969,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 1 if crashes or timeouts else 0
 
 
+def plan_identity(summary: dict[str, Any]) -> Any:
+    """The plan hash, or for summaries written before it was recorded, every file's content and step count."""
+    if summary.get("planSha256"):
+        return summary["planSha256"]
+    return (summary["seed"], sorted((file_id(f), f["sha256"], f["summary"]["steps"]) for f in summary["files"]))
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     left = json.loads(Path(args.left).expanduser().read_text(encoding="utf-8"))
     right = json.loads(Path(args.right).expanduser().read_text(encoding="utf-8"))
-    if left.get("planSha256", left["seed"]) != right.get("planSha256", right["seed"]):
+    if plan_identity(left) != plan_identity(right):
         raise HarnessError("the two runs used different plans")
     rows = [f"# LSP soak comparison: {left['label']} vs {right['label']}", "",
             f"| file | steps | {left['label']} crash steps | {right['label']} crash steps | "

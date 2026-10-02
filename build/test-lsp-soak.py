@@ -198,10 +198,12 @@ class LspSoakTests(unittest.TestCase):
             '{"Timestamp":"t","Level":"Debug","Message":"[IN] \\"Level\\":\\"Error\\",\\"Message\\":","Exception":null}\n'
             '{"Timestamp":"t","Level":"Info","Message":"m","Extra":{"Level":"Error"}}\n'
             '{"Timestamp":"t","Level":"Error","Message":"HoverAsync failed: boom","Exception":null}\n'
-            '{"Level":"Error","Timestamp":"t","Message":"fields reordered"}\n',
+            '{"Level":"Error","Timestamp":"t","Message":"fields reordered"}\n'
+            '{ "Timestamp": "t", "Level": "Error", "Message": "spaced out" }\n',
             encoding="utf-8")
         errors = soak.LogScanner(log).new_errors()
-        self.assertEqual(["HoverAsync failed: boom", "fields reordered"], [e["Message"] for e in errors])
+        self.assertEqual(["HoverAsync failed: boom", "fields reordered", "spaced out"],
+                         [e["Message"] for e in errors])
 
     def test_line_counting_matches_the_band_definition(self) -> None:
         cases = {"a.gs": "", "b.gs": "one", "c.gs": "one\n", "d.gs": "one\ntwo", "e.gs": "1\n2\n3\n4\n"}
@@ -323,6 +325,19 @@ class LspSoakTests(unittest.TestCase):
         self.assertEqual(0, soak.main(["run", "--plan", str(self.plan), "--label", "relative", "--out", str(out),
                                        "--server", f"{sys.executable} {relative_stub}",
                                        "--server-env", f"STUB_FLAG={out}.fired"]))
+
+    def test_compare_refuses_summaries_of_different_plans_without_a_plan_hash(self) -> None:
+        self.run_stub("clean")
+        base = json.loads((SCRATCH / "run-clean" / "summary.json").read_text(encoding="utf-8"))
+        del base["planSha256"]
+        old = SCRATCH / "old.json"
+        old.write_text(json.dumps(base), encoding="utf-8")
+        self.assertEqual(0, soak.main(["compare", str(old), str(old)]))
+        other = json.loads(json.dumps(base))
+        other["files"][0]["id"] = "00-Other"  # a different file set under the same seed
+        changed = SCRATCH / "changed.json"
+        changed.write_text(json.dumps(other), encoding="utf-8")
+        self.assertEqual(2, soak.main(["compare", str(old), str(changed)]))
 
     def test_utf16_positions(self) -> None:
         index = soak.LineIndex("ab\n\U0001F600x\n")
