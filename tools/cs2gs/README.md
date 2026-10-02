@@ -322,9 +322,12 @@ cases and stay green.
   (`TEST-ORACLE-MISSING`), an unreadable oracle or TRX, and zero migrated
   results all fail the app. The failure allow-list excuses a failing case, never
   a missing one.
-* **The baseline** names each understood difference: `missing` (one C# name),
-  `extra` (one migrated name), or `rows` (one theory method whose rows render
-  differently but are equally many). `reason` and `issue` are mandatory, and an
+* **The baseline** names each understood difference: `missing` (one C# name,
+  optionally `count` times), `extra` (one migrated name), `rows` (one theory
+  method whose rows render differently but pair up by argument names), or
+  `renamed-argument` (one theory method whose parameter `argument` is named
+  `renamedTo` in the migrated build; a row is excused only when that rename
+  alone turns it into a migrated row). `reason` and `issue` are mandatory, and an
   entry that stops matching is reported as stale. A difference caused by a
   cs2gs or gsc defect is a P0 self-migration bug, and its entry cites that issue.
 * **Auditable.** Every completed mirrored run records `testNameParity` (mode,

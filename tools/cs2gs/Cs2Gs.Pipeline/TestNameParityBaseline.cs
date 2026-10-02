@@ -38,6 +38,13 @@ namespace Cs2Gs.Pipeline;
 /// <c>(x: …, y: …)</c>), so it covers a value rendering differently between
 /// C# and G# and never a lost row hidden behind an unrelated added one.
 /// </description></item>
+/// <item><description>
+/// <c>renamed-argument</c>: one theory METHOD whose parameter <c>argument</c>
+/// is named <c>renamedTo</c> in the migrated build. It pairs a missing row
+/// with an extra row only when renaming that one argument label turns the
+/// first into exactly the second, so every value and every other label must
+/// still match.
+/// </description></item>
 /// </list>
 /// <para>
 /// Every entry needs a substantive <c>reason</c> and an <c>issue</c>. Entries
@@ -60,6 +67,9 @@ public sealed class TestNameParityBaseline
 
     /// <summary>The <c>rows</c> entry kind.</summary>
     public const string RowsKind = "rows";
+
+    /// <summary>The <c>renamed-argument</c> entry kind.</summary>
+    public const string RenamedArgumentKind = "renamed-argument";
 
     private static readonly Regex IssueReference = new Regex(
         @"^#[0-9]+$", RegexOptions.CultureInvariant);
@@ -191,10 +201,18 @@ public sealed class TestNameParityBaseline
                     "path the gate reports (e.g. 'test/Core.Tests/Core.Tests.csproj').");
             }
 
-            if (kind != MissingKind && kind != ExtraKind && kind != RowsKind)
+            if (kind != MissingKind && kind != ExtraKind && kind != RowsKind && kind != RenamedArgumentKind)
             {
                 errors.Add(where + " ('" + test + "'): 'kind' must be '" + MissingKind + "', '" +
-                    ExtraKind + "' or '" + RowsKind + "'.");
+                    ExtraKind + "', '" + RowsKind + "' or '" + RenamedArgumentKind + "'.");
+            }
+
+            if (kind == RenamedArgumentKind &&
+                (!IsIdentifier(entry.Argument) || !IsIdentifier(entry.RenamedTo) ||
+                 string.Equals(entry.Argument, entry.RenamedTo, StringComparison.Ordinal)))
+            {
+                errors.Add(where + " ('" + test + "'): a '" + RenamedArgumentKind + "' entry needs " +
+                    "'argument' and 'renamedTo', two different argument names.");
             }
 
             // Matching is exact, so `*` and `?` are literal characters here (a
@@ -205,7 +223,7 @@ public sealed class TestNameParityBaseline
                 errors.Add(where + " ('" + test + "'): 'test' must be one fully qualified test " +
                     "display name (matched exactly).");
             }
-            else if (kind == RowsKind && test.IndexOf('(') >= 0)
+            else if ((kind == RowsKind || kind == RenamedArgumentKind) && test.IndexOf('(') >= 0)
             {
                 errors.Add(where + " ('" + test + "'): a 'rows' entry names a theory method " +
                     "('Ns.Class.Method'), without an argument list.");
@@ -224,7 +242,7 @@ public sealed class TestNameParityBaseline
                     "reference to the issue that tracks this difference.");
             }
 
-            if (entry.Count is int count && (count < 1 || kind == RowsKind))
+            if (entry.Count is int count && (count < 1 || kind == RowsKind || kind == RenamedArgumentKind))
             {
                 errors.Add(where + " ('" + test + "'): 'count' must be at least 1, and only applies to " +
                     "'missing' and 'extra' entries.");
@@ -263,16 +281,38 @@ public sealed class TestNameParityBaseline
         // parity is a multiset, so a second identical missing row is a second
         // difference, not the same one.
         var remaining = scoped
-            .Where(entry => entry.Kind.Trim() != RowsKind)
+            .Where(entry => entry.Kind.Trim() == MissingKind || entry.Kind.Trim() == ExtraKind)
             .ToDictionary(entry => entry, entry => entry.Count ?? 1);
+
+        // `renamed-argument`: pair each missing row with the extra row it
+        // becomes when one argument label is renamed. Paired rows leave the
+        // pools; everything else is judged by the other kinds below.
+        var explained = new List<string>();
+        var missingPool = result.Missing.ToList();
+        var extraPool = result.Extra.ToList();
+        foreach (TestNameParityBaselineEntry entry in scoped.Where(e => e.Kind.Trim() == RenamedArgumentKind))
+        {
+            string method = entry.Test.Trim();
+            var label = new Regex(@"(?<=\(|, )" + Regex.Escape(entry.Argument) + ": ", RegexOptions.CultureInvariant);
+            foreach (string name in missingPool.Where(name => IsRowOf(name, method)).ToList())
+            {
+                string renamed = label.Replace(name, entry.RenamedTo + ": ");
+                if (!string.Equals(renamed, name, StringComparison.Ordinal) && extraPool.Remove(renamed))
+                {
+                    missingPool.Remove(name);
+                    explained.Add("renamed-argument: " + name);
+                    fired.Add(entry);
+                }
+            }
+        }
 
         // `rows` first: a method whose missing and extra row counts are equal.
         var rowMethods = new HashSet<string>(StringComparer.Ordinal);
         foreach (TestNameParityBaselineEntry entry in scoped.Where(e => e.Kind.Trim() == RowsKind))
         {
             string method = entry.Test.Trim();
-            List<string> missingShapes = result.Missing.Where(name => IsRowOf(name, method)).Select(ArgumentShape).ToList();
-            List<string> extraShapes = result.Extra.Where(name => IsRowOf(name, method)).Select(ArgumentShape).ToList();
+            List<string> missingShapes = missingPool.Where(name => IsRowOf(name, method)).Select(ArgumentShape).ToList();
+            List<string> extraShapes = extraPool.Where(name => IsRowOf(name, method)).Select(ArgumentShape).ToList();
             missingShapes.Sort(StringComparer.Ordinal);
             extraShapes.Sort(StringComparer.Ordinal);
             if (missingShapes.Count > 0 && missingShapes.SequenceEqual(extraShapes, StringComparer.Ordinal))
@@ -282,16 +322,15 @@ public sealed class TestNameParityBaseline
             }
         }
 
-        var explained = new List<string>();
         foreach (string method in rowMethods.OrderBy(name => name, StringComparer.Ordinal))
         {
-            int rows = result.Missing.Count(name => IsRowOf(name, method));
+            int rows = missingPool.Count(name => IsRowOf(name, method));
             explained.Add("rows: " + method + " (" + rows.ToString(CultureInfo.InvariantCulture) +
                 " row(s) render differently)");
         }
 
         var unexplainedMissing = new List<string>();
-        foreach (string name in result.Missing)
+        foreach (string name in missingPool)
         {
             TestNameParityBaselineEntry match = Match(scoped, remaining, MissingKind, name, rowMethods);
             if (match is null)
@@ -305,7 +344,7 @@ public sealed class TestNameParityBaseline
         }
 
         var unexplainedExtra = new List<string>();
-        foreach (string name in result.Extra)
+        foreach (string name in extraPool)
         {
             TestNameParityBaselineEntry match = Match(scoped, remaining, ExtraKind, name, rowMethods);
             if (match is null)
@@ -362,6 +401,9 @@ public sealed class TestNameParityBaseline
     private static string ArgumentShape(string row) =>
         string.Join(",", ArgumentNamePattern.Matches(row.Substring(row.IndexOf('(') + 1)).Select(match => match.Groups[1].Value));
 
+    private static bool IsIdentifier(string value) =>
+        !string.IsNullOrEmpty(value) && value.All(c => char.IsLetterOrDigit(c) || c == '_');
+
     private static bool IsRowOf(string name, string method) =>
         name.Length > method.Length &&
         name.StartsWith(method, StringComparison.Ordinal) &&
@@ -403,6 +445,16 @@ public sealed class TestNameParityBaselineEntry
     [JsonPropertyName("count")]
     [JsonPropertyOrder(5)]
     public int? Count { get; set; }
+
+    /// <summary>Gets or sets, for <c>renamed-argument</c>, the C# argument name.</summary>
+    [JsonPropertyName("argument")]
+    [JsonPropertyOrder(6)]
+    public string Argument { get; set; }
+
+    /// <summary>Gets or sets, for <c>renamed-argument</c>, the migrated argument name.</summary>
+    [JsonPropertyName("renamedTo")]
+    [JsonPropertyOrder(7)]
+    public string RenamedTo { get; set; }
 
     /// <summary>Gets a one-line description used in run records and logs.</summary>
     /// <returns>The description.</returns>

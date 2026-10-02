@@ -359,6 +359,28 @@ public sealed class Issue4633TestNameParityTests
         Assert.Equal(new[] { "Own.Tests.A.Ask(q: \"whyX\")" }, verdict.UnexplainedMissing);
     }
 
+    /// <summary>
+    /// A renamed-argument entry pairs a row with its renamed twin and nothing
+    /// else: a row whose VALUE also differs stays unexplained.
+    /// </summary>
+    [Fact]
+    public void Baseline_RenamedArgument_PairsOnlyRenamedTwins()
+    {
+        TestNameParityBaselineEntry entry = Entry("renamed-argument", "Own.Tests.A.Narrow");
+        entry.Argument = "scope";
+        entry.RenamedTo = "scope_";
+        string[] oracle = { "Own.Tests.A.Narrow(shape: \"x\", scope: \"function\")", "Own.Tests.A.Narrow(shape: \"y\", scope: \"top\")" };
+
+        TestNameParityVerdict verdict = Baseline(entry).Evaluate(AppId, TestNameParity.Compare(
+            oracle,
+            Passed("Own.Tests.A.Narrow(shape: \"x\", scope_: \"function\")", "Own.Tests.A.Narrow(shape: \"y\", scope_: \"OTHER\")")));
+
+        Assert.Equal(new[] { "Own.Tests.A.Narrow(shape: \"y\", scope: \"top\")" }, verdict.UnexplainedMissing);
+        Assert.Equal(new[] { "Own.Tests.A.Narrow(shape: \"y\", scope_: \"OTHER\")" }, verdict.UnexplainedExtra);
+        Assert.Contains("renamed-argument: Own.Tests.A.Narrow(shape: \"x\", scope: \"function\")", verdict.Explained);
+        Assert.Empty(verdict.StaleEntries);
+    }
+
     /// <summary>The checked-in baseline loads: every entry in it is justified and tracked.</summary>
     [Fact]
     public void CheckedInBaseline_IsValid()
