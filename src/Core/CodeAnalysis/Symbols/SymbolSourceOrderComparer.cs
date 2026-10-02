@@ -103,6 +103,9 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
             return cmp;
         }
 
+        // Equal on every source fact above means two symbols with the same
+        // declaration, name, signature, file, position and container chain:
+        // they could not coexist as distinct emitted members.
         return x.Kind.CompareTo(y.Kind);
     }
 
@@ -123,6 +126,7 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
 
     private static string FileName(SyntaxNode? node) => node?.SyntaxTree?.Text?.FileName ?? string.Empty;
 
+    // The full containing-type chain, so `A.Inner` and `B.Inner` differ.
     private static string ContainingTypeName(Symbol symbol)
     {
         var containing = symbol.ContainingType;
@@ -131,7 +135,19 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
             return string.Empty;
         }
 
-        return (containing.ContainingNamespace ?? string.Empty) + "." + containing.Name;
+        var builder = new StringBuilder(containing.ContainingNamespace ?? string.Empty);
+        var chain = new List<string>();
+        for (var type = containing; type is not null && chain.Count < 64; type = type.ContainingType)
+        {
+            chain.Add(type.Name);
+        }
+
+        for (int i = chain.Count - 1; i >= 0; i--)
+        {
+            builder.Append('.').Append(chain[i]);
+        }
+
+        return builder.ToString();
     }
 
     private static string FormatSignature(FunctionSymbol function)
