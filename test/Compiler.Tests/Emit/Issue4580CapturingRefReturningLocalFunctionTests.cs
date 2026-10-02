@@ -272,7 +272,18 @@ public sealed class Issue4580CapturingRefReturningLocalFunctionTests
         }
         finally
         {
-            Directory.Delete(directory, recursive: true);
+            // Best-effort cleanup: a transiently locked file must not turn a
+            // passing run red or mask the original assertion failure.
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
     }
 }

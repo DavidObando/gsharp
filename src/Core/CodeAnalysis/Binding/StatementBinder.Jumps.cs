@@ -1065,7 +1065,7 @@ internal sealed partial class StatementBinder
     /// <param name="expr">The bound <c>return ref</c> operand.</param>
     /// <returns><see langword="true"/> when the reference is rooted at the receiver.</returns>
     private static bool IsRootedAtReceiver(BoundExpression expr)
-        => IsRootedAtReceiverWhere(expr, static _ => true);
+        => IsRootedAtReceiverWhere(expr, capturedOnly: false, ownReceiver: null);
 
     /// <summary>
     /// Issue #4580: true when <paramref name="expr"/> is rooted (per
@@ -1080,19 +1080,21 @@ internal sealed partial class StatementBinder
     /// <param name="function">The function whose <c>return ref</c> is being bound.</param>
     /// <returns><see langword="true"/> when the reference is rooted at a captured receiver.</returns>
     private static bool IsRootedAtCapturedReceiver(BoundExpression expr, FunctionSymbol? function)
-        => IsRootedAtReceiverWhere(expr, receiver => !ReferenceEquals(receiver, function?.ThisParameter));
+        => IsRootedAtReceiverWhere(expr, capturedOnly: true, ownReceiver: function?.ThisParameter);
 
-    private static bool IsRootedAtReceiverWhere(BoundExpression expr, Func<ParameterSymbol, bool> isMatch)
+    private static bool IsRootedAtReceiverWhere(BoundExpression expr, bool capturedOnly, ParameterSymbol? ownReceiver)
         => expr switch
         {
-            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } receiver } => isMatch(receiver),
+            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } receiver } =>
+                !capturedOnly || !ReferenceEquals(receiver, ownReceiver),
             BoundFieldAccessExpression { Receiver: { } fieldReceiver } =>
-                !Binder.IsReferenceTypeForConstraint(fieldReceiver.Type) && IsRootedAtReceiverWhere(fieldReceiver, isMatch),
+                !Binder.IsReferenceTypeForConstraint(fieldReceiver.Type) && IsRootedAtReceiverWhere(fieldReceiver, capturedOnly, ownReceiver),
             BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo, Receiver: { } clrReceiver } =>
-                !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) && IsRootedAtReceiverWhere(clrReceiver, isMatch),
-            BoundBlockExpression block => IsRootedAtReceiverWhere(block.Expression, isMatch),
+                !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) && IsRootedAtReceiverWhere(clrReceiver, capturedOnly, ownReceiver),
+            BoundBlockExpression block => IsRootedAtReceiverWhere(block.Expression, capturedOnly, ownReceiver),
             BoundConditionalAddressExpression conditional =>
-                IsRootedAtReceiverWhere(conditional.WhenTrueOperand, isMatch) || IsRootedAtReceiverWhere(conditional.WhenFalseOperand, isMatch),
+                IsRootedAtReceiverWhere(conditional.WhenTrueOperand, capturedOnly, ownReceiver)
+                    || IsRootedAtReceiverWhere(conditional.WhenFalseOperand, capturedOnly, ownReceiver),
             _ => false,
         };
 
