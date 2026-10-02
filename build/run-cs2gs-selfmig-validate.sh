@@ -12,6 +12,8 @@
 #
 # Inputs (from the migrate artifact, unpacked under $SELFMIG_GATE_ROOT):
 #   migrated/               the migrated tree
+#   csharp-tests/           the C# test-case lists per-test-name parity compares
+#                           against (issue #4633)
 #   runs/<runId>/           per-app validation-context.json manifests
 #   migrate-run-dir.txt     the manifest run directory
 # Outputs under $SELFMIG_GATE_ROOT/shard-<name>/:
@@ -77,6 +79,7 @@ dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate \
   --artifacts "$shard_out/runs" \
   --manifests "$manifest_run_dir" \
   --config Release \
+  --csharp-test-oracle "$work_root/csharp-tests" \
   "${selfmig_project_filters[@]}" \
   "${app_args[@]}" \
   | tee "$shard_out/validate.log"

@@ -30,7 +30,17 @@ public static class TrxParser
     /// <returns>The parsed test outcomes, sorted by name.</returns>
     /// <exception cref="FileNotFoundException">The TRX file does not exist.</exception>
     /// <exception cref="InvalidOperationException">The TRX file is malformed.</exception>
-    public static IReadOnlyList<TestCaseOutcome> ParseFile(string path)
+    public static IReadOnlyList<TestCaseOutcome> ParseFile(string path) => ParseFile(path, requireNames: false);
+
+    /// <summary>
+    /// Parses a TRX file from disk; with <paramref name="requireNames"/>, a
+    /// result without a test name or outcome is an error rather than skipped
+    /// (issue #4633: per-name parity must not compare a silently shrunk set).
+    /// </summary>
+    /// <param name="path">The absolute path to the <c>.trx</c> file.</param>
+    /// <param name="requireNames">Whether a nameless result is an error.</param>
+    /// <returns>The parsed test outcomes, sorted by name.</returns>
+    public static IReadOnlyList<TestCaseOutcome> ParseFile(string path, bool requireNames)
     {
         if (path is null)
         {
@@ -42,7 +52,7 @@ public static class TrxParser
             throw new FileNotFoundException($"TRX result file not found: {path}", path);
         }
 
-        return Parse(File.ReadAllText(path));
+        return Parse(File.ReadAllText(path), requireNames);
     }
 
     /// <summary>
@@ -51,7 +61,13 @@ public static class TrxParser
     /// <param name="trxXml">The TRX XML text.</param>
     /// <returns>The parsed test outcomes, sorted by name.</returns>
     /// <exception cref="InvalidOperationException">The TRX XML is malformed.</exception>
-    public static IReadOnlyList<TestCaseOutcome> Parse(string trxXml)
+    public static IReadOnlyList<TestCaseOutcome> Parse(string trxXml) => Parse(trxXml, requireNames: false);
+
+    /// <summary>Parses TRX XML text; see <see cref="ParseFile(string, bool)"/>.</summary>
+    /// <param name="trxXml">The TRX XML text.</param>
+    /// <param name="requireNames">Whether a nameless result is an error.</param>
+    /// <returns>The parsed test outcomes, sorted by name.</returns>
+    public static IReadOnlyList<TestCaseOutcome> Parse(string trxXml, bool requireNames)
     {
         if (string.IsNullOrEmpty(trxXml))
         {
@@ -74,8 +90,13 @@ public static class TrxParser
         {
             string name = (string)element.Attribute("testName");
             string outcome = (string)element.Attribute("outcome");
-            if (name is null || outcome is null)
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(outcome))
             {
+                if (requireNames)
+                {
+                    throw new InvalidOperationException("TRX holds a UnitTestResult without a testName or outcome.");
+                }
+
                 continue;
             }
 
