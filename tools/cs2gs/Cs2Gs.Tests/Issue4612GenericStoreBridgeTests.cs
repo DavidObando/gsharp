@@ -833,6 +833,147 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void ForgivenCollectionInitializerArguments_ResolveTheirAddParameters()
+    {
+        string source = """
+            #nullable enable
+            using System.Collections;
+            using System.Collections.Generic;
+
+            public class Rows<T> : IEnumerable
+            {
+                public void Add(int key, T value, bool enabled) { }
+                public IEnumerator GetEnumerator() => throw new System.NotImplementedException();
+            }
+
+            public static class C
+            {
+                public static List<string> List(string? a) => new List<string> { a! };
+                public static Dictionary<string, string> Map(string? b, string? c) =>
+                    new Dictionary<string, string> { { b!, c! } };
+                public static Rows<string> Row(bool flag, string? d) =>
+                    new Rows<string> { { 1, flag ? d! : "ok", true } };
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source);
+
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "a!") + " kind=forgiven,constructed-generic-member | target=List<string>.Add(string) parameter 'item'",
+                Expected(source, "b!") + " kind=forgiven,constructed-generic-member | target=Dictionary<string, string>.Add(string, string) parameter 'key'",
+                Expected(source, "c!") + " kind=forgiven,constructed-generic-member | target=Dictionary<string, string>.Add(string, string) parameter 'value'",
+                Expected(source, "d!") + " kind=forgiven,constructed-generic-member | target=Rows<string>.Add(int, string, bool) parameter 'value'",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" | slot-type", StringComparison.Ordinal))));
+        foreach (string value in new[] { "a", "b", "c", "d" })
+        {
+            Assert.Contains(value + "!!", printed, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("IEnumerable<string>", "", "")]
+    [InlineData("IEnumerator<string>", "", "")]
+    [InlineData("IAsyncEnumerable<string>", "async ", "await System.Threading.Tasks.Task.Yield();")]
+    [InlineData("IAsyncEnumerator<string>", "async ", "await System.Threading.Tasks.Task.Yield();")]
+    public void ForgivenIteratorElementBridges_AreReported(
+        string returnType,
+        string modifier,
+        string awaitStatement)
+    {
+        string source = $$"""
+            #nullable enable
+            using System.Collections.Generic;
+
+            public static class C
+            {
+                public static {{modifier}}{{returnType}} Read(string? forgiven)
+                {
+                    {{awaitStatement}}
+                    yield return forgiven!;
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("yield forgiven!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "forgiven!"), Position(site));
+        Assert.StartsWith(
+            "kind=forgiven,iterator-element | target=C.Read(string?) | slot-type=string",
+            site.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("IEnumerable<(string, bool)>", "", "")]
+    [InlineData("IEnumerator<(string, bool)>", "", "")]
+    [InlineData("IAsyncEnumerable<(string, bool)>", "async ", "await System.Threading.Tasks.Task.Yield();")]
+    [InlineData("IAsyncEnumerator<(string, bool)>", "async ", "await System.Threading.Tasks.Task.Yield();")]
+    public void TupleIteratorElementBridges_ReportTheBridgedElementType(
+        string returnType,
+        string modifier,
+        string awaitStatement)
+    {
+        string source = $$"""
+            #nullable enable
+            using System.Collections.Generic;
+
+            public static class C
+            {
+                public static {{modifier}}{{returnType}} Read(string? line)
+                {
+                    {{awaitStatement}}
+                    yield return (line, true);
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("yield (line!!, true)", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "line, true"), Position(site));
+        Assert.StartsWith(
+            "kind=iterator-element | target=C.Read(string?) | slot-type=string",
+            site.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ForgivenCollectionInitializerParams_OnlyExpandedValuesAreElements()
+    {
+        string source = """
+            #nullable enable
+            using System.Collections;
+
+            public class Bag<T> : IEnumerable
+            {
+                public void Add(int key, params T[] values) { }
+                public IEnumerator GetEnumerator() => throw new System.NotImplementedException();
+            }
+
+            public static class C
+            {
+                public static Bag<string> Make(string? a, string? b, string[]? items) =>
+                    new Bag<string> { { 1, a!, b! }, { 2, items! } };
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source);
+
+        Assert.Contains("a!!", printed, StringComparison.Ordinal);
+        Assert.Contains("b!!", printed, StringComparison.Ordinal);
+        Assert.Contains("items!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "a!") + " kind=forgiven,constructed-generic-member,params-element | target=Bag<string>.Add(int, params string[]) parameter 'values' | slot-type=string",
+                Expected(source, "b!") + " kind=forgiven,constructed-generic-member,params-element | target=Bag<string>.Add(int, params string[]) parameter 'values' | slot-type=string",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
@@ -915,14 +1056,21 @@ public class Issue4612GenericStoreBridgeTests
 
     private static (string Printed, List<TranslationDiagnostic> Sites) Translate(
         string source,
-        IReadOnlyList<MetadataReference> references = null)
+        IReadOnlyList<MetadataReference> references = null,
+        NullableContextOptions nullableContext = NullableContextOptions.Disable)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", source) }, references);
         Assert.True(
             project.BoundWithoutErrors,
             "Source should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        LoadedDocument originalDocument = Assert.Single(project.Documents);
+        CSharpCompilation compilation = project.Compilation.WithOptions(
+            project.Compilation.Options.WithNullableContextOptions(nullableContext));
+        var document = new LoadedDocument(
+            originalDocument.FilePath,
+            originalDocument.SyntaxTree,
+            compilation.GetSemanticModel(originalDocument.SyntaxTree));
+        var context = new TranslationContext(compilation, document.SemanticModel, document.FilePath);
         string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         List<TranslationDiagnostic> sites = context.Diagnostics
             .Where(d => d.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)

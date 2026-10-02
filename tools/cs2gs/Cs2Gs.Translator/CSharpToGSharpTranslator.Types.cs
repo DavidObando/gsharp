@@ -1495,7 +1495,8 @@ public sealed partial class CSharpToGSharpTranslator
                         tupleLiteral.Elements[i],
                         tupleTarget.TupleElements[i].Type,
                         enclosingIterator,
-                        includePromotedValue: true));
+                        includePromotedValue: true,
+                        reportedSlotType: tupleTarget.TupleElements[i].Type));
                 }
 
                 value = new TupleLiteralExpression(bridged);
