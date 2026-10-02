@@ -286,8 +286,7 @@ def plan_file(path: Path, seed: int, truncations: int, line_deletions: int, brac
                       "focus": start, "keystroke": False})
 
     braces = [i for i, ch in enumerate(text) if ch == "}"]
-    for i in range(min(brace_deletions, len(braces))):
-        at = rng.choice(braces)
+    for i, at in enumerate(rng.sample(braces, min(brace_deletions, len(braces)))):
         steps.append({"kind": f"delete-brace-{i}", "edits": [[at, 1, ""]], "focus": at, "keystroke": False})
     tail_start = len(text) * 95 // 100
     tail_edits = [[at, 1, ""] for at in reversed(braces) if at >= tail_start]
@@ -709,7 +708,12 @@ class FileRun:
                 "workspace": {"diagnostics": {"refreshSupport": True}},
             },
         }
-        self.client.request("initialize", init, self.args.request_timeout)
+        try:
+            self.client.request("initialize", init, self.args.request_timeout)
+        except RequestTimeout as exc:
+            # No step can run against a server that never initializes; fail the run loudly.
+            self.client.kill()
+            raise HarnessError(f"server did not answer initialize: {exc}") from exc
         self.client.notify("initialized", {})
         self.version += 1
         self.client.notify("textDocument/didOpen", {"textDocument": {

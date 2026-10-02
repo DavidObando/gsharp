@@ -95,6 +95,8 @@ while True:
         continue
     result = None
     if method == "initialize":
+        if mode == "hang-initialize":
+            time.sleep(30)
         result = {"capabilities": {}}
     elif method == "textDocument/diagnostic":
         diagnostics += 1
@@ -256,6 +258,20 @@ class LspSoakTests(unittest.TestCase):
         hung = result["steps"][1]
         self.assertEqual(1, len(hung["timeouts"]))
         self.assertEqual(1, result["restarts"])
+
+    def test_server_that_never_initializes_is_a_harness_error(self) -> None:
+        code, _ = self.run_stub("hang-initialize", timeout="2")
+        self.assertEqual(2, code)
+
+    def test_brace_deletions_pick_distinct_braces(self) -> None:
+        many = SCRATCH / "Braces.gs"
+        many.write_text("package P\n" + "func F() {\n}\n" * 6, encoding="utf-8")
+        plan = SCRATCH / "braces.json"
+        for seed in range(20):
+            soak.main(["plan", str(many), "--seed", str(seed), "--brace-deletions", "5", "--out", str(plan)])
+            steps = json.loads(plan.read_text(encoding="utf-8"))["files"][0]["steps"]
+            sites = [s["edits"][0][0] for s in steps if s["kind"].startswith("delete-brace-") and s["kind"] != "delete-brace-tail"]
+            self.assertEqual(len(sites), len(set(sites)), f"seed {seed}")
 
     def test_method_not_found_is_a_harness_error(self) -> None:
         code, _ = self.run_stub("no-hover")
