@@ -121,9 +121,13 @@ internal static class DeclaredProjectItems
         IReadOnlyList<LoadedCSharpProject> loaded =
             await CSharpProjectLoader.LoadProjectWithReferencesAsync(projectPath, cancellationToken)
                 .ConfigureAwait(false);
+
+        // Issue #4612: a project without a path maps to the empty string the
+        // next filter already drops; a null lambda result would throw in the
+        // migrated G#.
         return loaded
             .Skip(1)
-            .Select(project => project.ProjectPath)
+            .Select(project => project.ProjectPath ?? string.Empty)
             .Where(path => !string.IsNullOrEmpty(path))
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)

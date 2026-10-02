@@ -1146,9 +1146,12 @@ public sealed class SdkCompileRunner
     /// <returns>The mirrored repo root, or <see langword="null"/> when it cannot be determined.</returns>
     internal static string ResolveMirrorRoot(IEnumerable<string> generatedProjectPaths)
     {
+        // Issue #4612: GetDirectoryName returns null for a root path. It maps
+        // to the empty string the next filter already drops; a null lambda
+        // result would throw in the migrated G#.
         List<string> directories = (generatedProjectPaths ?? Enumerable.Empty<string>())
             .Where(path => !string.IsNullOrEmpty(path))
-            .Select(path => Path.GetDirectoryName(Path.GetFullPath(path)))
+            .Select(path => Path.GetDirectoryName(Path.GetFullPath(path)) ?? string.Empty)
             .Where(directory => !string.IsNullOrEmpty(directory))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
