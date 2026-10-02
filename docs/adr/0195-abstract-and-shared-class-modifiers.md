@@ -68,7 +68,9 @@ abstract data class DocInline { … }
   checked abstractness; for a class that is abstract only through its members
   that gap is unchanged and tracked separately).
 - The implicit default constructor of a declared-abstract class is `family`
-  (C#'s default for an abstract class), not `public`.
+  (C#'s default for an abstract class), not `public`; so is the implicit
+  parameterless constructor that chains to a base initializer
+  (`abstract class D : Base(1) { }`). A primary constructor stays public.
 - With `partial`, one part stating `abstract` makes the whole type abstract, as
   in C#.
 
@@ -109,7 +111,8 @@ static members, ADR-0053).
   constructor, a primary constructor, a `deinit` or a `shared { }` block of its
   own (`GS0617`), and it cannot have a base class or interface (`GS0619`).
   It cannot be combined with `open`, `sealed`, `abstract` or `data` (`GS0618`,
-  reported on the conflicting modifier). `protected` is not allowed on its
+  reported on the conflicting modifier, also when the other modifier is on a
+  different part of a partial type). `protected` is not allowed on its
   members (`GS0380`, it is not inheritable).
 - With `partial`, **every part carries `shared`** (`GS0479` otherwise): a part is
   the body of the type, and `shared` decides what each part's members mean.
@@ -136,6 +139,9 @@ A C# `abstract class`/`abstract record` is emitted `abstract class`/`abstract
 data class` (no `open`). A C# `static class` is emitted `shared class` with its
 members flat (no `shared { }` block), including nested static classes, every
 part of a partial static class, and a C# static constructor as a flat `init { }`.
+A static class the author wrote empty (`public static class Marker { }`) is kept,
+since it is a declared type of the API; only an extension holder whose members
+were all lifted away is still elided (ADR-0115 §B.19).
 A non-static class keeps its trailing `shared { }` block. The two Info
 diagnostics that recorded the dropped abstractness and the lost static no
 longer fire.

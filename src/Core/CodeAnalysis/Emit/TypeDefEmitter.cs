@@ -1737,8 +1737,15 @@ internal sealed class TypeDefEmitter
         // (parallel to the explicit `init(...)` emit path).
         var firstParamHandle = this.AddPrimaryCtorParameterRows(parameters, out var paramHandles);
 
+        // ADR-0195 / issue #4674: the implicit parameterless constructor that chains to an
+        // explicit base initializer (`abstract class D : Base(1) { }`) is `family`, like
+        // the plain implicit constructor of a declared-abstract class (see
+        // EmitClassDefaultConstructor); a primary constructor stays public.
+        var forwardingVisibility = classSym.IsDeclaredAbstract && !classSym.HasPrimaryConstructor
+            ? MethodAttributes.Family
+            : MethodAttributes.Public;
         var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+            attributes: forwardingVisibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),

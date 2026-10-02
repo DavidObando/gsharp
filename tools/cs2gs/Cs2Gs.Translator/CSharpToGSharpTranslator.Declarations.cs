@@ -1880,8 +1880,14 @@ public sealed partial class CSharpToGSharpTranslator
             // point of keeping it is to give the self-hosted MethodDef this
             // class's CLR identity back (matching the native assembly's
             // metadata shape), not the package's `<Program>`.
+            //
+            // Issue #4674 (ADR-0195): only a class that HAD members, all lifted, is elided. A
+            // static class the author wrote empty (`public static class Marker { }`) is a
+            // declared type of the assembly's API and now has a direct form, a
+            // `shared class`, so it is kept.
             if (isStaticClass &&
                 members.Count == 0 &&
+                mergedMembers.Count > 0 &&
                 !hostedAnyExtensionOnStaticClass &&
                 !IsTypeOfReferenced(this.context.Compilation, symbol, this.retainedFilePaths))
             {

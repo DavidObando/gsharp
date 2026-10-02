@@ -61,6 +61,10 @@ namespace Corpus.Adr0195
     {
     }
 
+    public static class Marker
+    {
+    }
+
     public class WithStatics
     {
         public static int Count;
@@ -146,6 +150,18 @@ namespace Corpus.Adr0195
         Assert.DoesNotContain(builder.Members, member => member is SharedBlock);
         Assert.Contains(builder.Members.OfType<MethodDeclaration>(), method => method.Name == "Build");
         Assert.Contains(builder.Members.OfType<FieldDeclaration>(), field => field.Name == "calls");
+    }
+
+    [Fact]
+    public void EmptyStaticClass_IsKept_AsAnEmptySharedClass()
+    {
+        // `Marker` is a declared type of the assembly's API; only a static class whose
+        // members were all lifted away (extension holders) is elided.
+        TypeDeclaration marker = Declaration("Marker");
+
+        Assert.True(marker.IsShared);
+        Assert.Empty(marker.Members);
+        Assert.Contains("shared class Marker", GSharpPrinter.Print(Translate()), StringComparison.Ordinal);
     }
 
     [Fact]

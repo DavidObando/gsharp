@@ -44,6 +44,15 @@ public class Adr0195AbstractAndSharedClassEmitTests
         open abstract class Both {
         }
 
+        open class Seed(N int32) {
+        }
+
+        abstract class Forwarding : Seed(1) {
+        }
+
+        open class Leaf : Forwarding {
+        }
+
         abstract data class Shape(Sides int32) {
         }
 
@@ -65,6 +74,7 @@ public class Adr0195AbstractAndSharedClassEmitTests
             Console.WriteLine(Helpers.Triple(5))
             Console.WriteLine(Helpers.Triple(2) + Helpers.calls)
             Console.WriteLine(Square(2).Sides + Square(2).Side)
+            Console.WriteLine(Leaf().N)
         }
         """;
 
@@ -83,6 +93,12 @@ public class Adr0195AbstractAndSharedClassEmitTests
                     MethodAttributes.Family,
                     GetMethodAttributes(dll, name, ".ctor") & MethodAttributes.MemberAccessMask);
             }
+
+            // The implicit constructor that chains to a base initializer is family too (a
+            // primary constructor stays public).
+            Assert.Equal(
+                MethodAttributes.Family,
+                GetMethodAttributes(dll, "Forwarding", ".ctor") & MethodAttributes.MemberAccessMask);
 
             // A concrete subclass is neither.
             var counting = GetTypeAttributes(dll, "Counting");
@@ -144,7 +160,7 @@ public class Adr0195AbstractAndSharedClassEmitTests
             string stderr = proc.StandardError.ReadToEnd();
             proc.WaitForExit();
             Assert.True(proc.ExitCode == 0, "exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
-            Assert.Equal("3\n15\n8\n6\n", stdout.ReplaceLineEndings("\n"));
+            Assert.Equal("3\n15\n8\n6\n1\n", stdout.ReplaceLineEndings("\n"));
         }
         finally
         {

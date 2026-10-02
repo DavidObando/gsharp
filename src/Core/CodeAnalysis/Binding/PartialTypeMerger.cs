@@ -261,6 +261,25 @@ internal static class PartialTypeMerger
             part => part.SharedModifier != null;
         RequireOnEveryPart(parts, hasShared, "shared", name, diagnostics);
 
+        // GS0618 across parts: the parser reports `shared` combined with `open`,
+        // `sealed`, `abstract` or `data` on ONE head, but `shared partial class C` in
+        // one file and `abstract partial class C` in another would merge into a node
+        // with both. Report the conflicting modifier of every part that sits beside
+        // a `shared` part (a part carrying both is the parser's).
+        if (parts.Any(part => part.SharedModifier != null))
+        {
+            foreach (var part in parts.Where(part => part.SharedModifier == null))
+            {
+                foreach (var conflicting in new[] { part.OpenModifier, part.SealedKeyword, part.AbstractModifier, part.DataKeyword })
+                {
+                    if (conflicting != null)
+                    {
+                        diagnostics.ReportSharedClassModifierConflict(conflicting.Location, conflicting.Text);
+                    }
+                }
+            }
+        }
+
         // GS0480: identical type-parameter lists (names + arity + constraints).
         var primaryTypeParams = NormalizeNodeText(primary.TypeParameterList);
         var typeParametersMatch = true;

@@ -291,6 +291,24 @@ var a = A()
     }
 
     [Fact]
+    public void PartialParts_SharedBesideAnotherPartsConflictingModifier_ReportsGS0618()
+    {
+        // `shared` and `abstract` each parse cleanly on their own head; only the merge of the
+        // two parts into one type sees the conflict.
+        var result = EmittedOracle.Evaluate(@"
+shared partial class C {
+    func F() int32 { return 1 }
+}
+abstract partial class C { }
+sealed partial class D { }
+shared partial class D { }
+0
+");
+        var conflicts = result.Diagnostics.Where(d => d.Id == "GS0618").Select(d => d.Location.StartLine + 1).OrderBy(l => l).ToArray();
+        Assert.Equal(new[] { 5, 6 }, conflicts);
+    }
+
+    [Fact]
     public void PartialSharedParts_AllCarryingShared_MergeIntoOneSharedClass()
     {
         var result = EmittedOracle.Evaluate(@"
