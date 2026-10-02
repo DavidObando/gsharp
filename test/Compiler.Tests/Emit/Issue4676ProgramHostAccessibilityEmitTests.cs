@@ -76,6 +76,32 @@ public class Issue4676ProgramHostAccessibilityEmitTests
     }
 
     [Fact]
+    public void LibraryPackageWithOnlyInternalFunctionsAndFunctionLiterals_HasNoPublicProgramHost()
+    {
+        // A zero-capture function literal is hosted on `<Program>` as a static method whose
+        // symbol is public by default; it is not something another assembly can name, so
+        // it must not keep the host public.
+        var dll = CompileLibrary(
+            """
+            package Lib.Literals
+
+            internal func Hidden() int32 {
+                let double = (x int32) -> x * 2
+                let next = (y int32) -> y + 1
+                return double(next(20))
+            }
+            """);
+        try
+        {
+            Assert.Equal(TypeAttributes.NotPublic, GetProgramHostVisibility(dll));
+        }
+        finally
+        {
+            TryDeleteDir(Path.GetDirectoryName(dll));
+        }
+    }
+
+    [Fact]
     public void LibraryPackageWithAPublicFunction_KeepsAPublicProgramHost_AndAConsumerCallsIt()
     {
         var lib = CompileLibrary(
@@ -222,8 +248,19 @@ public class Issue4676ProgramHostAccessibilityEmitTests
             Console.SetError(prevErr);
         }
 
-        Assert.True(compileExit == 0, $"compile failed ({compileExit}): {compileOut}{compileErr}");
-        IlVerifier.Verify(outPath, reference == null ? Array.Empty<string>() : new[] { reference });
+        try
+        {
+            Assert.True(compileExit == 0, $"compile failed ({compileExit}): {compileOut}{compileErr}");
+            IlVerifier.Verify(outPath, reference == null ? Array.Empty<string>() : new[] { reference });
+        }
+        catch
+        {
+            // The caller owns the directory only once this returns; a failure here would
+            // otherwise leak it.
+            TryDeleteDir(tempDir);
+            throw;
+        }
+
         return outPath;
     }
 

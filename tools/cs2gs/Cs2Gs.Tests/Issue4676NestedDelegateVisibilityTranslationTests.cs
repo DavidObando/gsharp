@@ -42,6 +42,10 @@ namespace Corpus.Issue4676
 
         private delegate bool Hidden(int x);
 
+        protected delegate bool Derived(int x);
+
+        protected internal delegate bool DerivedOrFriend(int x);
+
         public sealed class Inner
         {
             public delegate void DeepReachable();
@@ -67,11 +71,14 @@ namespace Corpus.Issue4676
     [InlineData("PublicHost_Reachable", Visibility.Default)]
     [InlineData("PublicHost_Friend", Visibility.Internal)]
     [InlineData("PublicHost_Hidden", Visibility.Internal)]
+    [InlineData("PublicHost_Derived", Visibility.Internal)]
+    [InlineData("PublicHost_DerivedOrFriend", Visibility.Internal)]
     [InlineData("TopLevel", Visibility.Default)]
-    public void LiftedDelegate_VisibilityIsBoundedByItsContainers(string suffix, Visibility expected)
+    public void LiftedDelegate_VisibilityIsBoundedByItsContainers(string name, Visibility expected)
     {
-        NamedDelegateDeclaration lifted = LiftedDelegates()
-            .Single(d => d.Name == suffix || d.Name.StartsWith(suffix, StringComparison.Ordinal));
+        // A lifted delegate has no container left to be `protected` in (a top-level
+        // `protected` is GS0380), so a protected one is internal too.
+        NamedDelegateDeclaration lifted = LiftedDelegates().Single(d => d.Name == name);
 
         Assert.Equal(expected, lifted.Visibility);
     }

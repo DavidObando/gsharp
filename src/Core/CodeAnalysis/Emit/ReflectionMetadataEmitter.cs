@@ -3354,8 +3354,9 @@ internal sealed class ReflectionMetadataEmitter
     /// Issue #4676: the accessibility of a package's synthesized <c>&lt;Program&gt;</c>
     /// host type. The host is how a package exposes its top-level functions and
     /// globals to other assemblies, so it stays <c>public</c> whenever it carries
-    /// a member another assembly can reach, and for an executable's entry-point
-    /// package. A LIBRARY package that hosts no such member (every GSharp.Core
+    /// a member another assembly can reach, and in an executable (every package of
+    /// an executable keeps its host public, to leave application behaviour alone).
+    /// A LIBRARY package that hosts no such member (every GSharp.Core
     /// namespace whose code is all types, say) is a compiler-generated detail,
     /// like the C# compiler's own generated types, and is emitted NotPublic so it
     /// is not part of the assembly's API (reflection-based tooling such as an
@@ -3382,8 +3383,16 @@ internal sealed class ReflectionMetadataEmitter
         static bool IsReachableFromOtherAssemblies(Accessibility accessibility)
             => accessibility is Accessibility.Public or Accessibility.Protected;
 
+        // Only AUTHORED top-level functions count. The package's bucket also holds the
+        // zero-capture function literals and hoisted local functions the emitter hosts on
+        // `<Program>`, whose symbols default to public accessibility but which no other
+        // assembly can name.
         if (packageMethods.FunctionsByPackage.TryGetValue(pkg, out var functions)
-            && functions.Any(function => IsReachableFromOtherAssemblies(function.Accessibility)))
+            && functions.Any(function =>
+                !function.IsFunctionLiteral
+                && !function.IsLocalFunction
+                && function.LocalDeclaration is null
+                && IsReachableFromOtherAssemblies(function.Accessibility)))
         {
             return TypeAttributes.Public;
         }
