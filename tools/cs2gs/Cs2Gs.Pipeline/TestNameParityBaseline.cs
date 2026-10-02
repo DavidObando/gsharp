@@ -248,7 +248,9 @@ public sealed class TestNameParityBaseline
                     "'missing' and 'extra' entries.");
             }
 
-            if (!seen.Add(app + "\n" + kind + "\n" + test))
+            // The same normalization the matcher applies, so two entries that
+            // would match the same name are caught as duplicates here.
+            if (!seen.Add(NormalizeAppId(app) + "\n" + kind + "\n" + TestParityComparison.NormalizeTestName(test)))
             {
                 errors.Add(where + " ('" + test + "'): duplicate entry.");
             }

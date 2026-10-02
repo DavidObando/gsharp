@@ -85,8 +85,9 @@ public static class TestNameParity
             }
 
             // Each outstanding bare occurrence needs at least one row of its
-            // own (a multi-targeted listing repeats the bare name); only the
-            // rows beyond that are the theory's non-enumerated surplus.
+            // own (a multi-targeted listing repeats the bare name). Every row
+            // of the method is consumed and counted in theoryRows, the number
+            // of executed rows attributed to non-enumerated theories.
             int available = rows.Sum(row => row.Remaining);
             int satisfied = Math.Min(bare.Remaining, available);
             foreach (NameTally row in rows)
