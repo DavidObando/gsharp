@@ -32,12 +32,14 @@ The check has four parts:
                 the path, the exact version and the reason it is intentionally
                 not the latest release. An ALLOWED entry that matches nothing
                 is itself an error, so the list cannot rot.
-  4. downloads  website/static/downloads holds exactly the release's Trail and
-                concurrency-pattern zips, no older ones.
+  4. downloads  website/static/downloads holds the release's Trail and
+                concurrency-pattern zips and no Trail or pattern zip for any
+                other version. Other files there are not checked.
 
 Usage: check-release-version-refs.py [--root DIR]
 
-Exit status 0 when everything agrees, 1 with one line per finding otherwise.
+Exit status 0 when everything agrees, 1 with one line per finding otherwise,
+2 when the files cannot be listed (not a Git working tree, or no git).
 build/test-check-release-version-refs.py proves each part can fail.
 """
 
@@ -355,6 +357,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
     args = parser.parse_args(argv)
     tree = Tree(args.root.resolve())
+    try:
+        tree.paths()
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"Cannot list the files to check under {tree.root}: this check needs a Git "
+              f"working tree and the git executable ({error}).")
+        return 2
     problems = check(tree)
     found = re.search(r'"version"\s*:\s*"([^"]*)"', tree.read(RELEASE_JSON) or "")
     release = found.group(1) if found else "?"

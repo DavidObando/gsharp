@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Regression tests for build/check-release-version-refs.py.
 
-Each test edits one reference in memory (the checkout is never written) and
+Each test edits one reference in memory (the checkout is never written; the
+two filesystem tests use a temporary directory outside it) and
 asserts the check reports it, so every part of the check is shown to fail
 when it should (ADR-0154).
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -166,16 +170,20 @@ class ReleaseVersionRefsTests(unittest.TestCase):
 
     def test_crlf_checkout_reads_like_lf(self) -> None:
         self.assertEqual(refs._scan("a\r\nGsharp.NET.Sdk/0.0.1\r\n"), (("0.0.1", 2),))
-        root = REPO / "out" / "test-check-release-version-refs"
-        root.mkdir(parents=True, exist_ok=True)
-        try:
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
             (root / "notes.md").write_bytes(f"## {VERSION} at a glance\r\nnext\r\n".encode())
             text = refs._read(root, "notes.md")
-            self.assertRegex(text or "", refs.re.compile(rf"^## {refs.re.escape(VERSION)} at a glance$",
-                                                         refs.re.MULTILINE))
-        finally:
-            (root / "notes.md").unlink(missing_ok=True)
-            root.rmdir()
+        self.assertRegex(text or "", refs.re.compile(rf"^## {refs.re.escape(VERSION)} at a glance$",
+                                                     refs.re.MULTILINE))
+
+    def test_missing_git_working_tree_is_a_clear_error(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = refs.main(["--root", scratch])
+        self.assertEqual(status, 2)
+        self.assertIn("needs a Git working tree", output.getvalue())
 
     def test_release_json_tag_must_match_version(self) -> None:
         problems = self.problems_with(self.replaced(refs.RELEASE_JSON, f"v{VERSION}", f"v{OTHER}"))
