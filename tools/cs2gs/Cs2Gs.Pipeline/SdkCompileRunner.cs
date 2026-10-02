@@ -924,7 +924,7 @@ public sealed class SdkCompileRunner
     /// nupkg (the historical behaviour). With one, that exact version is used
     /// and nothing newer can displace it: a matching local nupkg, if any, is
     /// staged into the <c>.nugs</c> feed; otherwise the version must come from
-    /// a configured feed (nuget.org for a published release), and restore
+    /// nuget.org (the mirror's generated nuget.config lists only nuget.org and the local .nugs feed), and restore
     /// fails loudly if it cannot.
     /// </summary>
     /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>

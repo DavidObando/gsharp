@@ -842,7 +842,7 @@ internal static class Program
         Console.WriteLine("                    'cs2gs validate' shards can run stages 2-4 in parallel elsewhere.");
         Console.WriteLine("  --sdk-version <v> Repository migration only: pin Gsharp.NET.Sdk to exactly <v> (default:");
         Console.WriteLine("                    the newest local nupkg). A local nupkg of <v> is staged into .nugs;");
-        Console.WriteLine("                    otherwise <v> must be on a configured feed (e.g. a published release).");
+        Console.WriteLine("                    otherwise <v> must be on nuget.org (e.g. a published release).");
         Console.WriteLine("  --sdk-pin <where> Repository migration only: 'project' (default) writes the version into");
         Console.WriteLine("                    every generated project's Sdk attribute; 'global-json' writes it once");
         Console.WriteLine("                    under msbuild-sdks in the mirror's global.json and keeps Sdk bare.");

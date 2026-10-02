@@ -95,7 +95,7 @@ dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
 | `--gsc <path>` | Override `gsc.dll` (default `out/bin/<Config>/Compiler/gsc.dll`). |
 | `--config <name>` | Build config used to locate `gsc` (default `Release`). |
 | `--translate-only` | Repository mode: run stage 1 only, then stop (see `validate`). |
-| `--sdk-version <v>` | Repository mode: pin `Gsharp.NET.Sdk` to exactly `<v>` (default: the newest local nupkg). A local nupkg of `<v>` is staged into `.nugs`; otherwise `<v>` must be on a configured feed, such as a published release (issue #4631). |
+| `--sdk-version <v>` | Repository mode: pin `Gsharp.NET.Sdk` to exactly `<v>` (default: the newest local nupkg). A local nupkg of `<v>` is staged into `.nugs`; otherwise `<v>` must be on nuget.org, such as a published release; the mirror's generated `nuget.config` lists only nuget.org and the local `.nugs` feed (issue #4631). |
 | `--sdk-pin <where>` | Repository mode: `project` (default) writes `Sdk="Gsharp.NET.Sdk/<v>"` into every generated project; `global-json` writes the version once under `msbuild-sdks` in the mirror's `global.json` and leaves every `Sdk` attribute bare. |
 
 **SDK pinning (issue #4631).** MSBuild lets a versioned `Sdk="Name/Version"`
