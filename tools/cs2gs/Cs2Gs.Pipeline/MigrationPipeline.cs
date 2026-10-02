@@ -249,7 +249,7 @@ public sealed class MigrationPipeline
                 // mean the tree is in global-json mode. Mixing the two would
                 // build different projects against different SDKs.
                 throw new InvalidOperationException(
-                    "The source global.json already pins Gsharp.NET.Sdk " + sourcePin +
+                    "The repository global.json (mirrored from the source) already pins Gsharp.NET.Sdk " + sourcePin +
                     "; migrate with --sdk-pin global-json.");
             }
 

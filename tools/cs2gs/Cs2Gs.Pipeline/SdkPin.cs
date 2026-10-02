@@ -12,6 +12,8 @@ using System.Xml.Linq;
 
 namespace Cs2Gs.Pipeline;
 
+#nullable enable annotations
+
 /// <summary>
 /// Where a repository migration pins the <c>Gsharp.NET.Sdk</c> version its
 /// generated projects build with.
@@ -59,7 +61,7 @@ internal static class SdkPin
     /// <summary>Returns whether <paramref name="version"/> is an acceptable SDK version.</summary>
     /// <param name="version">The candidate version.</param>
     /// <returns><see langword="true"/> when the version is well-formed.</returns>
-    internal static bool IsValidVersion(string version) =>
+    internal static bool IsValidVersion(string? version) =>
         !string.IsNullOrEmpty(version) && VersionPattern.IsMatch(version);
 
     /// <summary>
@@ -85,7 +87,7 @@ internal static class SdkPin
     /// </summary>
     /// <param name="sdkAttribute">The attribute value.</param>
     /// <returns><see langword="true"/> for <c>Gsharp.NET.Sdk</c> and <c>Gsharp.NET.Sdk/&lt;version&gt;</c>.</returns>
-    internal static bool IsGsharpSdkAttribute(string sdkAttribute) =>
+    internal static bool IsGsharpSdkAttribute(string? sdkAttribute) =>
         string.Equals(sdkAttribute, PackageId, StringComparison.OrdinalIgnoreCase)
         || (sdkAttribute is not null
             && sdkAttribute.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase));
@@ -98,7 +100,7 @@ internal static class SdkPin
     /// <param name="projectPaths">The generated project files (missing files are skipped).</param>
     /// <returns>The recorded version, or <see langword="null"/> when no project carries one.</returns>
     /// <exception cref="InvalidOperationException">The projects record more than one version.</exception>
-    internal static string ReadProjectPin(IEnumerable<string> projectPaths)
+    internal static string? ReadProjectPin(IEnumerable<string> projectPaths)
     {
         var versions = new SortedSet<string>(StringComparer.Ordinal);
         foreach (string path in projectPaths)
@@ -108,7 +110,7 @@ internal static class SdkPin
                 continue;
             }
 
-            string sdk = XDocument.Load(path).Root?.Attribute("Sdk")?.Value;
+            string? sdk = XDocument.Load(path).Root?.Attribute("Sdk")?.Value;
             if (sdk is not null && sdk.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase))
             {
                 versions.Add(sdk.Substring(PackageId.Length + 1));
@@ -134,7 +136,7 @@ internal static class SdkPin
     /// <exception cref="InvalidOperationException">
     /// The file exists but is not a JSON object, or the pin is not a valid version.
     /// </exception>
-    internal static string ReadGlobalJsonPin(string root)
+    internal static string? ReadGlobalJsonPin(string root)
     {
         string path = Path.Combine(root, GlobalJsonFileName);
         if (!File.Exists(path))
@@ -155,7 +157,7 @@ internal static class SdkPin
                 continue;
             }
 
-            string version = entry.Value is JsonValue value && value.TryGetValue<string>(out string text)
+            string? version = entry.Value is JsonValue value && value.TryGetValue<string>(out string? text)
                 ? text
                 : null;
             if (!IsValidVersion(version))
@@ -190,7 +192,7 @@ internal static class SdkPin
         string path = Path.Combine(root, GlobalJsonFileName);
         bool created = !File.Exists(path);
         JsonObject document = created ? new JsonObject() : ParseGlobalJson(path);
-        JsonObject sdks = document[MsbuildSdksProperty] as JsonObject;
+        JsonObject? sdks = document[MsbuildSdksProperty] as JsonObject;
         if (sdks is null)
         {
             sdks = new JsonObject();
@@ -215,13 +217,13 @@ internal static class SdkPin
 
         sdks[PackageId] = JsonValue.Create(version);
         string text = document.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(path, text.Replace("\r\n", "\n") + "\n");
+        File.WriteAllText(path, text.ReplaceLineEndings("\n") + "\n");
         return created;
     }
 
     private static JsonObject ParseGlobalJson(string path)
     {
-        JsonNode node;
+        JsonNode? node;
         try
         {
             node = JsonNode.Parse(
