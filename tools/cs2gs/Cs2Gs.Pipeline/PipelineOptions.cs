@@ -131,6 +131,10 @@ public sealed class PipelineOptions
     /// <c>--allow-conditional-compilation</c> downgrades each one to a
     /// forwarded <c>CS2GS-CONDITIONAL-COMPILATION</c> warning; it exists only
     /// for a pinned external corpus that this repository cannot edit.
+    /// It applies to the Translate stage's project sources only. Every other
+    /// translation (a library's <c>.Tests</c> project in test parity, an
+    /// orphan source, an analyzer test snippet) still rejects <c>#if</c>, so
+    /// no path keeps one arm without a diagnostic.
     /// </summary>
     public Cs2Gs.Translator.ConditionalCompilationPolicy ConditionalCompilation { get; set; }
 

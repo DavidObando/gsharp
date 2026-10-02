@@ -277,13 +277,52 @@ namespace Two
     }
 
     /// <summary>
+    /// Issue #4632: an <c>#if</c> inside an analyzer test snippet fails the
+    /// translation like one in ordinary source. The generic snippet re-report
+    /// would otherwise turn it into a non-fatal CS2GS-ANALYZER-SNIPPET warning
+    /// and keep only the active arm.
+    /// </summary>
+    [Fact]
+    public void ConditionalCompilationInASnippet_StaysATranslationError()
+    {
+        IReadOnlyList<TranslationDiagnostic> diagnostics = TranslateTestsDiagnostics(@"
+namespace Sample.Tests.Cases;
+
+public sealed class Tests
+{
+    public System.Threading.Tasks.Task Reports()
+    {
+        const string Source = ""class C {\n#if DEBUG\n void M() { }\n#endif\n}"";
+        return Sample.Tests.AnalyzerTestHelper.AssertDiagnosticsAsync(new Sample.SampleAnalyzer(), Source, ""TEST0001"");
+    }
+}
+");
+
+        TranslationDiagnostic error = Assert.Single(
+            diagnostics,
+            d => d.DiagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId);
+        Assert.Equal(TranslationSeverity.Unsupported, error.Severity);
+        Assert.StartsWith("in an analyzer test snippet: '#if DEBUG'", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            diagnostics,
+            d => d.DiagnosticId == SnippetTranslator.SnippetDiagnosticId
+                && d.Message.Contains("#if", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// Translates a two-file analyzer TEST project (harness + cases) in
     /// analyzer mode with the snippet translator wired in, exactly as
     /// <c>TranslateStage</c> does, and returns the printed cases file.
     /// </summary>
     /// <param name="testsSource">The C# test-case source.</param>
     /// <returns>The printed G#.</returns>
-    private static string TranslateTests(string testsSource)
+    private static string TranslateTests(string testsSource) =>
+        TranslateTestsCore(testsSource).Printed;
+
+    private static IReadOnlyList<TranslationDiagnostic> TranslateTestsDiagnostics(string testsSource) =>
+        TranslateTestsCore(testsSource).Diagnostics;
+
+    private static (string Printed, IReadOnlyList<TranslationDiagnostic> Diagnostics) TranslateTestsCore(string testsSource)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Harness.cs", HarnessSource), ("Analyzer.cs", AnalyzerSource), ("Tests.cs", testsSource) });
@@ -299,6 +338,6 @@ namespace Two
             TranslateAnalyzerSnippet = SnippetTranslator.Translate,
         };
         CompilationUnit unit = translator.TranslateDocument(document, context);
-        return GSharpPrinter.Print(unit);
+        return (GSharpPrinter.Print(unit), context.Diagnostics);
     }
 }

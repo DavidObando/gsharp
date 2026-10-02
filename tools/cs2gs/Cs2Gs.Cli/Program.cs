@@ -777,6 +777,8 @@ internal static class Program
         Console.WriteLine("                    CS2GS-CONDITIONAL-COMPILATION warning and translate the active arm,");
         Console.WriteLine("                    instead of failing translation. Only for a pinned external corpus");
         Console.WriteLine("                    that cannot be edited; G# has no conditional compilation.");
+        Console.WriteLine("                    Applies to the Translate stage only: test-parity, orphan-source");
+        Console.WriteLine("                    and analyzer-snippet translation still reject #if.");
         Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE");
         Console.WriteLine("                    repository and stop, writing a per-app validation-context.json so");
         Console.WriteLine("                    'cs2gs validate' shards can run stages 2-4 in parallel elsewhere.");

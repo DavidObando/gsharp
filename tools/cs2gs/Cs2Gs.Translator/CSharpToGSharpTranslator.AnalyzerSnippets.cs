@@ -132,6 +132,25 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                // Issue #4632: an #if in the snippet stays a translation
+                // error. Downgrading it would keep one arm of the snippet and
+                // drop the other without failing anything.
+                if (inner.DiagnosticId == ConditionalCompilationDiagnosticId
+                    && inner.Severity == TranslationSeverity.Unsupported)
+                {
+                    this.context.Report(new TranslationDiagnostic(
+                        inner.ConstructKind,
+                        "in an analyzer test snippet: " + inner.Message,
+                        expression.GetLocation(),
+                        TranslationSeverity.Unsupported)
+                    {
+                        DiagnosticId = ConditionalCompilationDiagnosticId,
+                        Classification = inner.Classification,
+                        Rationale = inner.Rationale,
+                    });
+                    continue;
+                }
+
                 this.context.Report(new TranslationDiagnostic(
                     "analyzer-snippet",
                     inner.Message,
