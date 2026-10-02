@@ -204,7 +204,7 @@ public static class IncrementalGlobalScopeReuse
                 continue;
             }
 
-            if (!structMap.TryGetValue(declaration, out var updated))
+            if (!TryMapStruct(declaration, structMap, out var updated))
             {
                 return false;
             }
@@ -252,7 +252,7 @@ public static class IncrementalGlobalScopeReuse
                     // ADR-0185: a primary-constructor parameter never comes
                     // from the destructured arrow-lambda path.
                     ParameterSyntax when structSymbol.Declaration is { } structDeclaration
-                        && structMap.TryGetValue(structDeclaration, out var updatedStruct)
+                        && TryMapStruct(structDeclaration, structMap, out var updatedStruct)
                         => updatedStruct.PrimaryConstructorParameters?.FirstOrDefault(
                             parameter => parameter.Identifier!.ValueText == field.Name),
                     _ => null,
@@ -564,6 +564,53 @@ public static class IncrementalGlobalScopeReuse
 
         return false;
     }
+
+    /// <summary>
+    /// Maps a symbol's type declaration onto the edited tree's. A <c>shared class</c> (or a
+    /// type nesting one) is bound from the copy <see cref="SharedClassNormalizer"/> made of
+    /// the parsed declaration, so the positional map, which is keyed by parsed
+    /// declarations, is consulted through the copy's source and the edited declaration is
+    /// normalized the same way. A copy that normalization alone does not reproduce (one
+    /// made by another pre-pass) is not mapped, which falls back to a full bind.
+    /// </summary>
+    private static bool TryMapStruct(
+        StructDeclarationSyntax declaration,
+        Dictionary<StructDeclarationSyntax, StructDeclarationSyntax> structMap,
+        out StructDeclarationSyntax updated)
+    {
+        var source = declaration.DocumentationSource ?? declaration;
+        if (!structMap.TryGetValue(source, out var updatedSource))
+        {
+            updated = declaration;
+            return false;
+        }
+
+        if (ReferenceEquals(source, declaration))
+        {
+            updated = updatedSource;
+            return true;
+        }
+
+        var scratch = new DiagnosticBag();
+        if (!HasSameShape(SharedClassNormalizer.Normalize(source, scratch), declaration))
+        {
+            updated = declaration;
+            return false;
+        }
+
+        updated = SharedClassNormalizer.Normalize(updatedSource, scratch);
+        return true;
+    }
+
+    private static bool HasSameShape(StructDeclarationSyntax left, StructDeclarationSyntax right) =>
+        left.Fields.Length == right.Fields.Length
+        && left.Properties.Length == right.Properties.Length
+        && left.Events.Length == right.Events.Length
+        && left.Methods.Length == right.Methods.Length
+        && left.NestedTypes.Length == right.NestedTypes.Length
+        && left.SharedInitializers.Length == right.SharedInitializers.Length
+        && (left.SharedBlock?.Methods.Length ?? -1) == (right.SharedBlock?.Methods.Length ?? -1)
+        && (left.SharedBlock?.Fields.Length ?? -1) == (right.SharedBlock?.Fields.Length ?? -1);
 
     private static bool TryBuildPositionalMap<TNode>(
         SyntaxTree previousTree,
