@@ -21,7 +21,7 @@ namespace Cs2Gs.Translator;
 /// <c>items.Append(x)</c>, <c>Func&lt;T, R&gt;.Invoke(x)</c>, <c>dict[k] = v</c>,
 /// a lambda result returned into <c>Func&lt;..., TResult&gt;</c>), an array or
 /// collection-expression element (<c>new[] { a, b }</c>, <c>arr[i] = v</c>,
-/// <c>[a, b]</c>), and a user-written C# <c>value!</c> on a type-parameter
+/// <c>[a, b]</c>), an iterator element, and a user-written C# <c>value!</c> on a type-parameter
 /// value. C# lets a maybe-null value reach any of them and stores the null. cs2gs keeps its fail-fast policy
 /// there: the translation asserts the value, so the migrated program throws
 /// where the C# ran. Translation, compilation and IL verification all pass, so
@@ -212,13 +212,12 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else
             {
-                // A forgiven value stored into an array or collection element
-                // has no target symbol of its own; classify it against the
-                // element store that receives it.
-                ITypeSymbol knownSlotType = null;
-                if (targetSymbol == null)
+                // Element stores own the value, not the surrounding local or
+                // method that receives the initialized collection.
+                (ISymbol elementStore, ITypeSymbol knownSlotType) = this.ResolveElementStore(forgiving);
+                if (elementStore != null)
                 {
-                    (targetSymbol, knownSlotType) = this.ResolveElementStore(forgiving);
+                    targetSymbol = elementStore;
                 }
 
                 kind = this.ClassifyGenericStoreSlot(forgiving, targetSymbol, knownSlotType, out slotType, out resultDependsOnSlot);
@@ -274,7 +273,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// The array or collection a value is stored into as an element, seen
         /// through parentheses and conditional arms: an array initializer
         /// element, a collection-expression element, or the right-hand side of
-        /// an array element assignment.
+        /// an array element assignment, a collection initializer's Add argument,
+        /// or an iterator yield.
         /// </summary>
         /// <param name="value">The stored value.</param>
         /// <returns>The store (an array or collection type) and, for a collection, its element type; nulls when the value is not an element store.</returns>
@@ -285,6 +285,28 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 case InitializerExpressionSyntax initializer when initializer.IsKind(SyntaxKind.ArrayInitializerExpression):
                     return (this.ArrayTypeOfInitializer(initializer), null);
+
+                case InitializerExpressionSyntax initializer
+                    when initializer.IsKind(SyntaxKind.CollectionInitializerExpression)
+                        || (initializer.IsKind(SyntaxKind.ComplexElementInitializerExpression)
+                            && initializer.Parent.IsKind(SyntaxKind.CollectionInitializerExpression)):
+                {
+                    bool complex = initializer.IsKind(SyntaxKind.ComplexElementInitializerExpression);
+                    ExpressionSyntax element = complex ? initializer : (ExpressionSyntax)node;
+                    IMethodSymbol addMethod = this.context.SemanticModel
+                        .GetCollectionInitializerSymbolInfo(element).Symbol as IMethodSymbol;
+                    int index = complex ? initializer.Expressions.IndexOf((ExpressionSyntax)node) : 0;
+                    return addMethod != null
+                        && this.TryGetCollectionInitializerArgumentTarget(
+                            (ExpressionSyntax)node,
+                            index,
+                            addMethod,
+                            addMethod,
+                            out ITypeSymbol targetType,
+                            out IParameterSymbol parameter)
+                        ? (parameter, targetType)
+                        : (null, null);
+                }
 
                 case ExpressionElementSyntax { Parent: CollectionExpressionSyntax collection }:
                 {
@@ -298,6 +320,11 @@ public sealed partial class CSharpToGSharpTranslator
                 case AssignmentExpressionSyntax assignment
                     when assignment.Right == node && assignment.Left is ElementAccessExpressionSyntax elementAccess:
                     return (this.context.GetTypeInfo(elementAccess.Expression).Type as IArrayTypeSymbol, null);
+
+                case YieldStatementSyntax yielded:
+                    return (
+                        this.context.SemanticModel.GetEnclosingSymbol(yielded.SpanStart),
+                        this.context.GetTypeInfo(value).ConvertedType);
 
                 default:
                     return (null, null);
@@ -330,9 +357,11 @@ public sealed partial class CSharpToGSharpTranslator
                     // tests). A collection-initializer element or a value nested
                     // in a tuple or conditional is therefore classified by the
                     // element slot rather than dropped.
-                    bool directArgument = EnclosingInvocationArgument(value) is { } argument
+                    bool directArgument = (EnclosingInvocationArgument(value) is { } argument
                         && this.context.SemanticModel.GetOperation(argument) is IArgumentOperation operation
-                        && operation.ArgumentKind == ArgumentKind.Explicit;
+                        && operation.ArgumentKind == ArgumentKind.Explicit)
+                        || (knownSlotType != null
+                            && SymbolEqualityComparer.Default.Equals(knownSlotType, parameter.Type));
                     bool expandedParams = parameter.IsParams && !directArgument;
                     return ClassifyParameterSlot(parameter, value, expandedParams, out slotType, out resultDependsOnSlot);
                 }
@@ -358,6 +387,12 @@ public sealed partial class CSharpToGSharpTranslator
                     // A local declared as an in-scope type parameter (`T copy`).
                     slotType = local.Type;
                     return "type-parameter-local";
+
+                case IMethodSymbol iterator when OutermostTransparentNode(value).Parent is YieldStatementSyntax yielded:
+                    // Roslyn's converted yield type is the iterator element
+                    // contract, including async/enumerator and tuple forms.
+                    slotType = knownSlotType ?? this.context.GetTypeInfo(yielded.Expression).ConvertedType;
+                    return "iterator-element";
 
                 case IMethodSymbol returning
                     when returning.MethodKind != MethodKind.AnonymousFunction
