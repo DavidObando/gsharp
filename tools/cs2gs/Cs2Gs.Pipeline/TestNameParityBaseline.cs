@@ -19,7 +19,7 @@ namespace Cs2Gs.Pipeline;
 /// strict per-name check can land green while the differences it found are
 /// tracked rather than hidden.
 /// <para>
-/// Three kinds of entry exist, and each excuses as little as possible:
+/// Four kinds of entry exist, and each excuses as little as possible:
 /// </para>
 /// <list type="bullet">
 /// <item><description>
@@ -273,7 +273,7 @@ public sealed class TestNameParityBaseline
 
         List<TestNameParityBaselineEntry> scoped = this.entries
             .Where(entry => string.Equals(
-                (entry.App ?? string.Empty).Trim(), (appId ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
+                NormalizeAppId(entry.App), NormalizeAppId(appId), StringComparison.OrdinalIgnoreCase))
             .ToList();
         var fired = new HashSet<TestNameParityBaselineEntry>();
 
@@ -401,6 +401,10 @@ public sealed class TestNameParityBaseline
     private static string ArgumentShape(string row) =>
         string.Join(",", ArgumentNamePattern.Matches(row.Substring(row.IndexOf('(') + 1)).Select(match => match.Groups[1].Value));
 
+    // App ids are repository-relative with '/' (as the gate reports them); an
+    // entry written with '\' must still match.
+    private static string NormalizeAppId(string appId) => (appId ?? string.Empty).Trim().Replace('\\', '/');
+
     private static bool IsIdentifier(string value) =>
         !string.IsNullOrEmpty(value) && value.All(c => char.IsLetterOrDigit(c) || c == '_');
 
@@ -418,7 +422,7 @@ public sealed class TestNameParityBaselineEntry
     [JsonPropertyOrder(0)]
     public string App { get; set; }
 
-    /// <summary>Gets or sets the kind: <c>missing</c>, <c>extra</c> or <c>rows</c>.</summary>
+    /// <summary>Gets or sets the kind: <c>missing</c>, <c>extra</c>, <c>rows</c> or <c>renamed-argument</c>.</summary>
     [JsonPropertyName("kind")]
     [JsonPropertyOrder(1)]
     public string Kind { get; set; }
