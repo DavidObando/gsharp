@@ -312,6 +312,13 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static void Main() => Console.WriteLine(Owner.Run("ok"));
                 }
 
+                public sealed class Outer<T>
+                {
+                    public sealed class Inner
+                    {
+                    }
+                }
+
                 [AttributeUsage(AttributeTargets.Method | AttributeTargets.ReturnValue | AttributeTargets.Parameter)]
                 public sealed class MarkerAttribute : Attribute
                 {
@@ -371,6 +378,8 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
 
                     private static Box Make(this string value, Box seed) => seed;
 
+                    private static int Deep(this string value, Outer<Box>.Inner arg) => 8;
+
                     private static int Count(this string value, List<Box> boxes) => boxes.Count;
 
                     private static int Sum(this string value, Box[] boxes) => boxes.Length;
@@ -378,7 +387,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static string Echo(this string value) => value;
 
                     public static int Run(string value) =>
-                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.PublicReturnTagged() + value.PublicParameterTagged(1) + value.NullArray();
+                        value.Make(new Box()).N + value.Deep(new Outer<Box>.Inner()) + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.PublicReturnTagged() + value.PublicParameterTagged(1) + value.NullArray();
                 }
             }
             """;
@@ -390,7 +399,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             .Single(type => type.Name == "Owner");
         IReadOnlyList<GMember> shared = Assert.Single(owner.Members.OfType<SharedBlock>()).Members;
 
-        foreach (string name in new[] { "Make", "Count", "Sum", "Tagged", "Moded", "Nested" })
+        foreach (string name in new[] { "Make", "Count", "Sum", "Deep", "Tagged", "Moded", "Nested" })
         {
             Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == name);
             Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == name);

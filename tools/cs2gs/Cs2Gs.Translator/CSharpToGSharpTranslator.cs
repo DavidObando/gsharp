@@ -1146,6 +1146,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                 return false;
             case INamedTypeSymbol named:
+                // Every type in the containing chain: it may be an owner-private nested type
+                // itself, and it may carry type arguments (`Outer<Box>.Inner` names `Box`
+                // through the CONTAINING type's arguments, not Inner's own).
                 for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
                 {
                     if (SymbolEqualityComparer.Default.Equals(current.ContainingType, owner)
@@ -1153,13 +1156,13 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         return true;
                     }
-                }
 
-                foreach (ITypeSymbol argument in named.TypeArguments)
-                {
-                    if (NamesPrivateNestedType(argument, owner))
+                    foreach (ITypeSymbol argument in current.TypeArguments)
                     {
-                        return true;
+                        if (NamesPrivateNestedType(argument, owner))
+                        {
+                            return true;
+                        }
                     }
                 }
 
