@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shlex
 import shutil
 import struct
 import subprocess
@@ -62,6 +63,21 @@ class DecideTests(unittest.TestCase):
         self.assertEqual((True, False), stage2.decide(report))
 
 
+class RunTests(unittest.TestCase):
+    def test_logged_command_preserves_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            log = work / "build.log"
+            command = ["dotnet", "test", "path with spaces/Test.gsproj", "--filter",
+                       "FullyQualifiedName~First|FullyQualifiedName~Second"]
+            with patch.object(stage2.subprocess, "run", return_value=subprocess.CompletedProcess(command, 0)) as run:
+                code, _ = stage2.run(command, work, {}, log)
+
+            self.assertEqual(0, code)
+            self.assertEqual(command, run.call_args.args[0])
+            self.assertEqual(command, shlex.split(log.read_text(encoding="utf-8").removeprefix("$ ")))
+
+
 class CleanOutputsTests(unittest.TestCase):
     def test_configured_outputs_are_clean_before_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -109,7 +125,7 @@ class CompareTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_the_same_assembly_is_equal(self) -> None:
-        copy = self.work / "copy.dll"
+        copy = self.work / "copy with  two spaces.dll"
         shutil.copy2(CORE, copy)
         row = stage2.compare(stage(CORE), stage(copy), self.work)[0]
         self.assertTrue(row["contentEqual"])

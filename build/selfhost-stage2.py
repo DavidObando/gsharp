@@ -31,6 +31,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -56,7 +57,7 @@ class Stage2Error(Exception):
 def run(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
     started = time.monotonic()
     with log.open("a", encoding="utf-8") as handle:
-        handle.write("$ " + " ".join(command) + "\n")
+        handle.write("$ " + shlex.join(command) + "\n")
         handle.flush()
         result = subprocess.run(command, cwd=cwd, env=env, stdout=handle, stderr=subprocess.STDOUT)
     return result.returncode, time.monotonic() - started

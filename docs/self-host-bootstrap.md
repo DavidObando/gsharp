@@ -54,6 +54,10 @@ python3 build/selfhost-stage2.py \
   [--test 'test/Core.Tests/Core.Tests.gsproj::FullyQualifiedName~RefactoringBaselineTests' ...]
 ```
 
+The PE helpers use .NET 10 file-based apps (`dotnet run <helper.cs> -- ...`), supported by the SDK
+selected by this repository's `global.json`. They run from `build/selfhost`, which has no project file
+and isolates them from the repository's build props and targets.
+
 How it works:
 - It builds the projects twice in the **same tree path**: first pinned to stage 0 (which yields the stage-1 assemblies), then pinned to stage 1 (which yields the stage-2 assemblies). Each stage gets its own isolated package cache.
 - For each assembly pair it compares the full-file SHA-256 and the IL+metadata hash with the MVID zeroed. `build/selfhost/PeContentHash.cs` computes that hash the same way RefactoringBaselineTests does.
