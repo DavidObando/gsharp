@@ -84,6 +84,7 @@ set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
   --corpus "$repo_root" \
   --out "$work_root/csharp-tests" \
+  --manifests "$run_dir" \
   "${selfmig_project_filters[@]}" \
   2>&1 | tee "$work_root/capture-test-oracle.log"
 capture_exit=${PIPESTATUS[0]}

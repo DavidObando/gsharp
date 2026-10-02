@@ -39,6 +39,7 @@ internal static class CaptureTestOracleCommand
         string corpus = null;
         string outDir = null;
         string config = "Release";
+        string manifests = null;
         bool build = true;
         var appIds = new List<string>();
         var options = new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository };
@@ -60,6 +61,9 @@ internal static class CaptureTestOracleCommand
                     break;
                 case "--config":
                     config = Next(args, ref i, arg);
+                    break;
+                case "--manifests":
+                    manifests = Next(args, ref i, arg);
                     break;
                 case "--no-build":
                     build = false;
@@ -93,7 +97,7 @@ internal static class CaptureTestOracleCommand
         IReadOnlyList<CorpusApp> testApps = ValidateCommand
             .ApplyExclusions(RepositoryDiscovery.Discover(root), options)
             .Where(app => appIds.Count == 0 || appIds.Contains(app.Id, StringComparer.Ordinal))
-            .Where(app => TestParityStage.IsMirroredTestProject(app.ProjectPath))
+            .Where(app => TestParityStage.IsMirroredTestProject(EvaluatedIsTestProject(manifests, app.Id), app.ProjectPath))
             .OrderBy(app => app.Id, StringComparer.Ordinal)
             .ToList();
         if (testApps.Count == 0)
@@ -177,6 +181,23 @@ internal static class CaptureTestOracleCommand
         return null;
     }
 
+    /// <summary>
+    /// The translate pass's evaluated MSBuild <c>IsTestProject</c> for an app,
+    /// read from its validation manifest; <see langword="false"/> when no
+    /// manifest directory was given or the app has none.
+    /// </summary>
+    private static bool EvaluatedIsTestProject(string manifests, string appId)
+    {
+        if (string.IsNullOrEmpty(manifests))
+        {
+            return false;
+        }
+
+        ValidationManifest manifest = ValidationManifest.Read(Path.Combine(
+            manifests, MigrationPipeline.ArtifactDirectoryName(appId, MigrationOutputLayout.Repository)));
+        return manifest is not null && manifest.IsTestProject;
+    }
+
     private static string Tail(string output)
     {
         string text = (output ?? string.Empty).Trim();
@@ -204,6 +225,8 @@ internal static class CaptureTestOracleCommand
         Console.WriteLine("  --corpus <dir>     The C# repository root (required).");
         Console.WriteLine("  --out <dir>        Where to write one <app>" + CSharpTestOracle.FileSuffix + " per test project (required).");
         Console.WriteLine("  --config <name>    Build configuration (default: Release).");
+        Console.WriteLine("  --manifests <dir>  The migrate run directory; its validation manifests add the evaluated");
+        Console.WriteLine("                     MSBuild IsTestProject to the classification (recommended).");
         Console.WriteLine("  --no-build         List already-built test assemblies.");
         Console.WriteLine("  --app <id>         Capture only this app (repeatable).");
         Console.WriteLine("  --exclude <path>   Same meaning as for migrate/validate.");

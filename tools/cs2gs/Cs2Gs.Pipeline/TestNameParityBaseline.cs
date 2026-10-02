@@ -23,10 +23,12 @@ namespace Cs2Gs.Pipeline;
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-/// <c>missing</c>: one exact C# display name the migrated run may lack.
+/// <c>missing</c>: one exact C# display name the migrated run may lack, once
+/// (or <c>count</c> times, for a name that legitimately occurs more than once).
 /// </description></item>
 /// <item><description>
-/// <c>extra</c>: one exact migrated display name the C# oracle may lack.
+/// <c>extra</c>: one exact migrated display name the C# oracle may lack, once
+/// (or <c>count</c> times).
 /// </description></item>
 /// <item><description>
 /// <c>rows</c>: one theory METHOD (<c>Ns.Class.Method</c>, no argument list)
@@ -214,6 +216,12 @@ public sealed class TestNameParityBaseline
                     "reference to the issue that tracks this difference.");
             }
 
+            if (entry.Count is int count && (count < 1 || kind == RowsKind))
+            {
+                errors.Add(where + " ('" + test + "'): 'count' must be at least 1, and only applies to " +
+                    "'missing' and 'extra' entries.");
+            }
+
             if (!seen.Add(app + "\n" + kind + "\n" + test))
             {
                 errors.Add(where + " ('" + test + "'): duplicate entry.");
@@ -243,6 +251,13 @@ public sealed class TestNameParityBaseline
             .ToList();
         var fired = new HashSet<TestNameParityBaselineEntry>();
 
+        // An exact entry excuses ONE occurrence of its name (or `count`): name
+        // parity is a multiset, so a second identical missing row is a second
+        // difference, not the same one.
+        var remaining = scoped
+            .Where(entry => entry.Kind.Trim() != RowsKind)
+            .ToDictionary(entry => entry, entry => entry.Count ?? 1);
+
         // `rows` first: a method whose missing and extra row counts are equal.
         var rowMethods = new HashSet<string>(StringComparer.Ordinal);
         foreach (TestNameParityBaselineEntry entry in scoped.Where(e => e.Kind.Trim() == RowsKind))
@@ -261,7 +276,7 @@ public sealed class TestNameParityBaseline
         var unexplainedMissing = new List<string>();
         foreach (string name in result.Missing)
         {
-            TestNameParityBaselineEntry match = Match(scoped, MissingKind, name, rowMethods);
+            TestNameParityBaselineEntry match = Match(scoped, remaining, MissingKind, name, rowMethods);
             if (match is null)
             {
                 unexplainedMissing.Add(name);
@@ -275,7 +290,7 @@ public sealed class TestNameParityBaseline
         var unexplainedExtra = new List<string>();
         foreach (string name in result.Extra)
         {
-            TestNameParityBaselineEntry match = Match(scoped, ExtraKind, name, rowMethods);
+            TestNameParityBaselineEntry match = Match(scoped, remaining, ExtraKind, name, rowMethods);
             if (match is null)
             {
                 unexplainedExtra.Add(name);
@@ -286,19 +301,29 @@ public sealed class TestNameParityBaseline
             fired.Add(match);
         }
 
-        List<TestNameParityBaselineEntry> stale = scoped.Where(entry => !fired.Contains(entry)).ToList();
+        // Unused, or used fewer times than its `count` claims: either way the
+        // entry overstates the difference and should shrink.
+        List<TestNameParityBaselineEntry> stale = scoped
+            .Where(entry => !fired.Contains(entry) || (remaining.TryGetValue(entry, out int left) && left > 0))
+            .ToList();
         return new TestNameParityVerdict(unexplainedMissing, unexplainedExtra, explained, stale);
     }
 
     private static TestNameParityBaselineEntry Match(
-        List<TestNameParityBaselineEntry> scoped, string kind, string name, HashSet<string> rowMethods)
+        List<TestNameParityBaselineEntry> scoped,
+        Dictionary<TestNameParityBaselineEntry, int> remaining,
+        string kind,
+        string name,
+        HashSet<string> rowMethods)
     {
         string normalized = TestParityComparison.NormalizeTestName(name);
         TestNameParityBaselineEntry exact = scoped.FirstOrDefault(entry =>
             entry.Kind.Trim() == kind &&
+            remaining.TryGetValue(entry, out int left) && left > 0 &&
             string.Equals(TestParityComparison.NormalizeTestName(entry.Test.Trim()), normalized, StringComparison.Ordinal));
         if (exact is not null)
         {
+            remaining[exact] = remaining[exact] - 1;
             return exact;
         }
 
@@ -345,6 +370,14 @@ public sealed class TestNameParityBaselineEntry
     [JsonPropertyName("issue")]
     [JsonPropertyOrder(4)]
     public string Issue { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many occurrences of the exact name this entry excuses
+    /// (<see langword="null"/> means one). Only for <c>missing</c>/<c>extra</c>.
+    /// </summary>
+    [JsonPropertyName("count")]
+    [JsonPropertyOrder(5)]
+    public int? Count { get; set; }
 
     /// <summary>Gets a one-line description used in run records and logs.</summary>
     /// <returns>The description.</returns>

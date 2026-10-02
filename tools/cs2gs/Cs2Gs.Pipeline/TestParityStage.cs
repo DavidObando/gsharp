@@ -86,7 +86,7 @@ public sealed partial class TestParityStage : IMigrationStage
         }
 
         if (context.Options.OutputLayout == MigrationOutputLayout.Repository &&
-            (context.IsTestProject || IsTestProject(context.App.ProjectPath)))
+            IsMirroredTestProject(context.IsTestProject, context.App.ProjectPath))
         {
             return this.RunMirroredTestProject(context);
         }
@@ -272,15 +272,18 @@ public sealed partial class TestParityStage : IMigrationStage
             // count, and no silent drop against the C# original's [Fact] count.
             int minimumExpected = CountCSharpFactMethods(context);
             string hollow = DescribeHollowTestRun(result.Output ?? string.Empty, minimumExpected);
+
+            // Issue #4633: the count is a floor, not parity. Every case the C#
+            // original discovers must have run, and nothing else. Checked (and
+            // recorded) whether or not the floor held, so every exit-0 run has
+            // a per-name summary in the run record.
+            TriageArtifact namesDiffer = this.CheckTestNames(context);
             if (hollow is null)
             {
                 string ranNote = $"mirrored test run: {ExecutedTestCount(result.Output)} case(s) executed " +
                     $"(>= {minimumExpected} expected from the C# original's [Fact] methods).";
                 this.Note(context, ranNote);
 
-                // Issue #4633: the count is a floor, not parity. Every case the
-                // C# original discovers must have run, and nothing else.
-                TriageArtifact namesDiffer = this.CheckTestNames(context);
                 if (namesDiffer is not null)
                 {
                     return StageOutcome.Failed(new[] { namesDiffer });
@@ -296,11 +299,17 @@ public sealed partial class TestParityStage : IMigrationStage
             }
 
             this.Note(context, "mirrored test-parity FAILED: " + hollow);
-            return StageOutcome.Failed(new[]
+            var hollowFailures = new List<TriageArtifact>
             {
                 context.Triage.TestParityNoTestsRan(
                     hollow, result.Output ?? string.Empty, EmittedGsRelative(context)),
-            });
+            };
+            if (namesDiffer is not null)
+            {
+                hollowFailures.Add(namesDiffer);
+            }
+
+            return StageOutcome.Failed(hollowFailures);
         }
 
         // Issue #2867: a non-zero `dotnet test` exit means EITHER the project

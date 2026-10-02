@@ -25,14 +25,16 @@ public sealed partial class TestParityStage
     private const int ListedDifferences = 50;
 
     /// <summary>
-    /// Issue #4633: whether the repository project at
-    /// <paramref name="projectPath"/> is a test project by the same rule the
-    /// mirrored test path uses, so <c>cs2gs capture-test-oracle</c> selects the
-    /// projects this stage will look up.
+    /// Issue #4633: whether a repository project takes the mirrored test path,
+    /// by the one rule both this stage and <c>cs2gs capture-test-oracle</c>
+    /// use: the evaluated MSBuild <c>IsTestProject</c> (from the translate
+    /// pass's validation manifest), or the project file itself saying so.
     /// </summary>
+    /// <param name="evaluatedIsTestProject">The evaluated MSBuild classification, when known.</param>
     /// <param name="projectPath">The C# project path.</param>
     /// <returns><see langword="true"/> for a test project.</returns>
-    public static bool IsMirroredTestProject(string projectPath) => IsTestProject(projectPath);
+    public static bool IsMirroredTestProject(bool evaluatedIsTestProject, string projectPath) =>
+        evaluatedIsTestProject || IsTestProject(projectPath);
 
     /// <summary>
     /// Issue #4633: checks a COMPLETED mirrored test run name for name against

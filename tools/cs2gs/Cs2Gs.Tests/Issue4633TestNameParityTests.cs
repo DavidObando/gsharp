@@ -197,6 +197,35 @@ public sealed class Issue4633TestNameParityTests
             () => CSharpTestOracle.LoadOrNull(dir, "test/Other.Tests/Other.Tests.csproj"));
     }
 
+    /// <summary>
+    /// Review finding: two app ids that sanitize to the same string must not
+    /// share an oracle file, or one app would be checked against the other's
+    /// cases.
+    /// </summary>
+    [Fact]
+    public void Oracle_FileNames_DoNotCollideForIdsThatSanitizeAlike()
+    {
+        Assert.NotEqual(
+            CSharpTestOracle.FileNameFor("a/b_c/X.Tests.csproj"),
+            CSharpTestOracle.FileNameFor("a_b/c/X.Tests.csproj"));
+    }
+
+    /// <summary>
+    /// Review finding: capture and the stage share one classification, and the
+    /// evaluated MSBuild <c>IsTestProject</c> alone makes a project a mirrored
+    /// test project even when its file does not say so.
+    /// </summary>
+    [Fact]
+    public void MirroredTestClassification_HonoursTheEvaluatedProperty()
+    {
+        string dir = NewDirectory();
+        string plain = Path.Combine(dir, "Plain.csproj");
+        File.WriteAllText(plain, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+        Assert.False(TestParityStage.IsMirroredTestProject(false, plain));
+        Assert.True(TestParityStage.IsMirroredTestProject(true, plain));
+    }
+
     // ---------------------------------------------------------------------
     // The baseline of justified differences.
     // ---------------------------------------------------------------------
@@ -261,6 +290,26 @@ public sealed class Issue4633TestNameParityTests
         Assert.Empty(rendered.StaleEntries);
         Assert.False(lost.IsMatch);
         Assert.Equal(2, lost.UnexplainedMissing.Count);
+    }
+
+    /// <summary>
+    /// Review finding: names are a multiset, so one exact entry excuses ONE
+    /// occurrence. A second identical missing row needs <c>count</c>.
+    /// </summary>
+    [Fact]
+    public void Baseline_ExactEntry_ExcusesOneOccurrenceUnlessCounted()
+    {
+        string[] oracle = { "Own.Tests.A.Long(s: \"aaa\"···)", "Own.Tests.A.Long(s: \"aaa\"···)", "Own.Tests.A.Works" };
+        TestNameParityResult result = TestNameParity.Compare(oracle, Passed("Own.Tests.A.Works"));
+
+        TestNameParityVerdict once = Baseline(Entry("missing", "Own.Tests.A.Long(s: \"aaa\"···)")).Evaluate(AppId, result);
+        TestNameParityBaselineEntry twice = Entry("missing", "Own.Tests.A.Long(s: \"aaa\"···)");
+        twice.Count = 2;
+        TestNameParityVerdict counted = Baseline(twice).Evaluate(AppId, result);
+
+        Assert.Single(once.UnexplainedMissing);
+        Assert.True(counted.IsMatch);
+        Assert.Empty(counted.StaleEntries);
     }
 
     /// <summary>The checked-in baseline loads: every entry in it is justified and tracked.</summary>
@@ -334,6 +383,29 @@ public sealed class Issue4633TestNameParityTests
 
         Assert.Equal(StageStatus.Passed, outcome.Status);
         Assert.Equal(TestNameParitySummary.CountOnlyMode, context.TestNameParity.Mode);
+    }
+
+    /// <summary>
+    /// Review finding: a run that misses the [Fact] floor still gets its
+    /// per-name summary and diff, so every completed run is auditable.
+    /// </summary>
+    [Fact]
+    public void Stage_BelowTheFactFloor_StillRecordsNameParity()
+    {
+        StageExecutionContext context = Context(withOracle: true);
+        WriteTrx(context, "Own.Tests.A.Works");
+        const string output = """
+            Passed!  - Failed:     0, Passed:     1, Skipped:     0, Total:     1, Duration: 1 s - Own.Tests.dll (net10.0)
+            """;
+
+        StageOutcome outcome = new TestParityStage().EvaluateMirroredTestRun(
+            context, new ProcessRunResult(0, output, string.Empty, false));
+
+        Assert.Equal(StageStatus.Failed, outcome.Status);
+        Assert.Contains(outcome.Artifacts, a => a.Diagnostic.Id == "NO-TESTS-RAN");
+        Assert.Contains(outcome.Artifacts, a => a.Diagnostic.Id == "TEST-NAME-PARITY");
+        Assert.NotNull(context.TestNameParity);
+        Assert.Equal(3, context.TestNameParity.Missing);
     }
 
     /// <summary>A configured oracle directory with no file for this app fails; it never falls back.</summary>

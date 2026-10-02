@@ -65,8 +65,10 @@ public sealed class CSharpTestOracle
     public List<string> Tests { get; set; } = new List<string>();
 
     /// <summary>
-    /// The oracle file name for an app: the sanitized app id plus
-    /// <see cref="FileSuffix"/>.
+    /// The oracle file name for an app: the app's hashed artifact-directory
+    /// name (<see cref="MigrationPipeline.ArtifactDirectoryName"/>, so two ids
+    /// that sanitize alike, such as <c>a/b_c</c> and <c>a_b/c</c>, cannot share
+    /// a file) plus <see cref="FileSuffix"/>.
     /// </summary>
     /// <param name="appId">The corpus app id.</param>
     /// <returns>The file name (no directory).</returns>
@@ -77,7 +79,7 @@ public sealed class CSharpTestOracle
             throw new ArgumentException("An app id is required.", nameof(appId));
         }
 
-        return MigrationPipeline.SanitizeAppId(appId) + FileSuffix;
+        return MigrationPipeline.ArtifactDirectoryName(appId, MigrationOutputLayout.Repository) + FileSuffix;
     }
 
     /// <summary>
