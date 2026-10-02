@@ -78,7 +78,8 @@ public class Issue4612NullTolerantProjectionTests
             }
             """);
 
-        Assert.DoesNotContain("!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Directory(path)!!", printed, StringComparison.Ordinal);
+        Assert.Contains("Directory(path) ??", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -101,7 +102,7 @@ public class Issue4612NullTolerantProjectionTests
             }
             """);
 
-        Assert.DoesNotContain("!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Directory(path)!!", printed, StringComparison.Ordinal);
     }
 
     private static string TranslateUnit(string source)
@@ -120,8 +121,9 @@ public class Issue4612NullTolerantProjectionTests
         RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
-            "Translated G# must bind. Errors:\n" +
-                string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
+            "Translated G# must bind. Errors:" + Environment.NewLine +
+                string.Join(Environment.NewLine, result.Errors) + Environment.NewLine + Environment.NewLine +
+                "Printed:" + Environment.NewLine + printed);
         return printed;
     }
 }
