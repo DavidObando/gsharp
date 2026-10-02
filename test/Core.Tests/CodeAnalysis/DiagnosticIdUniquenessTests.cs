@@ -14,6 +14,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 using CoreDiagnosticDescriptor = GSharp.Core.CodeAnalysis.DiagnosticDescriptor;
+using GSharpSyntax = GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.Tests.CodeAnalysis;
 
@@ -39,11 +40,18 @@ public class DiagnosticIdUniquenessTests
                 idToShapes);
         }
 
-        foreach (var file in Directory.EnumerateFiles(
-                     Path.Combine(repoRoot, "src"),
-                     "*.cs",
-                     SearchOption.AllDirectories))
+        // Issue #4656: the tree's own language (C# before the cut-over, G#
+        // after), and a scan that finds nothing fails. The NotEmpty below is
+        // satisfied by the reflected descriptors alone, so it never proved the
+        // scan read anything.
+        foreach (var file in TestSource.SourceFiles(SearchOption.AllDirectories, "src"))
         {
+            if (TestSource.IsGSharp)
+            {
+                RecordGSharpLiteralCallSites(file, repoRoot, idToShapes);
+                continue;
+            }
+
             var text = File.ReadAllText(file);
             var root = CSharpSyntaxTree.ParseText(text, path: file).GetCompilationUnitRoot();
             foreach (var creation in root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
@@ -78,18 +86,23 @@ public class DiagnosticIdUniquenessTests
     [Fact]
     public void Every_Report_Uses_A_Descriptor_And_Every_Descriptor_Is_Used()
     {
-        var repoRoot = FindRepoRoot();
-        var reportDirectory = Path.Combine(repoRoot, "src", "Core", "CodeAnalysis");
         var descriptorNames = GetDescriptorFields()
             .Select(field => field.Name)
             .ToHashSet(StringComparer.Ordinal);
         var referencedDescriptors = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var file in Directory.EnumerateFiles(
-                     reportDirectory,
-                     "DiagnosticBag.Reports.*.cs",
-                     SearchOption.TopDirectoryOnly))
+        // Issue #4656: the tree's own language, and an empty scan throws.
+        foreach (var file in TestSource.SourceFilesMatching(
+                     "DiagnosticBag.Reports.*",
+                     SearchOption.TopDirectoryOnly,
+                     "src/Core/CodeAnalysis"))
         {
+            if (TestSource.IsGSharp)
+            {
+                CheckGSharpReportFile(file, referencedDescriptors);
+                continue;
+            }
+
             var root = CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file)
                 .GetCompilationUnitRoot();
 
@@ -122,11 +135,24 @@ public class DiagnosticIdUniquenessTests
             }
         }
 
-        foreach (var file in Directory.EnumerateFiles(
-                     Path.Combine(repoRoot, "src"),
-                     "*.cs",
-                     SearchOption.AllDirectories))
+        foreach (var file in TestSource.SourceFiles(SearchOption.AllDirectories, "src"))
         {
+            if (TestSource.IsGSharp)
+            {
+                foreach (var access in GSharpSourceSyntax.Parse(file).Root.DescendantNodes()
+                             .OfType<GSharpSyntax.AccessorExpressionSyntax>()
+                             .Where(access => GSharpSourceSyntax.SimpleName(access.LeftPart) == "DiagnosticDescriptors"))
+                {
+                    var descriptorName = GSharpSourceSyntax.SimpleName(access.RightPart);
+                    if (descriptorNames.Contains(descriptorName))
+                    {
+                        referencedDescriptors.Add(descriptorName);
+                    }
+                }
+
+                continue;
+            }
+
             var root = CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file)
                 .GetCompilationUnitRoot();
             foreach (var access in root.DescendantNodes().OfType<MemberAccessExpressionSyntax>()
@@ -456,4 +482,70 @@ public class DiagnosticIdUniquenessTests
     }
 
     private static string FindRepoRoot() => TestSource.Root;
+
+    /// <summary>
+    /// Issue #4656: the G# form of the literal call-site scan. G# constructs a
+    /// diagnostic with a call, <c>Diagnostic(location, "GS0190", ...)</c>.
+    /// </summary>
+    private static void RecordGSharpLiteralCallSites(
+        string file, string repoRoot, Dictionary<string, Dictionary<string, string>> idToShapes)
+    {
+        var tree = GSharpSourceSyntax.Parse(file);
+        foreach (var call in tree.Root.DescendantNodes().OfType<GSharpSyntax.CallExpressionSyntax>()
+                     .Where(call => GSharpSourceSyntax.SimpleName(call) == "Diagnostic"))
+        {
+            var id = call.Arguments.Select(argument => GSharpSourceSyntax.StringLiteral(argument))
+                .FirstOrDefault(value => value != null && IsGsId(value));
+            if (id == null)
+            {
+                continue;
+            }
+
+            var line = tree.Text.GetLineIndex(call.Span.Start) + 1;
+            RecordShape(
+                id,
+                GSharpSourceSyntax.NearestMemberName(call),
+                $"{Path.GetRelativePath(repoRoot, file).Replace('\\', '/')}:{line}",
+                idToShapes);
+        }
+    }
+
+    /// <summary>
+    /// Issue #4656: the G# form of the report-file check. Each
+    /// <c>Report</c>/<c>ReportWithErrorPromotion</c> call passes
+    /// <c>DiagnosticDescriptors.X</c> second, where <c>X</c> is the reporting
+    /// function's name without <c>Report</c>, and every <c>Report*</c>
+    /// function routes to such a call.
+    /// </summary>
+    private static void CheckGSharpReportFile(string file, HashSet<string> referencedDescriptors)
+    {
+        var root = GSharpSourceSyntax.Parse(file).Root;
+        foreach (var call in root.DescendantNodes().OfType<GSharpSyntax.CallExpressionSyntax>())
+        {
+            var name = GSharpSourceSyntax.SimpleName(call);
+            if (name is not ("Report" or "ReportWithErrorPromotion"))
+            {
+                continue;
+            }
+
+            Assert.True(call.Arguments.Count >= 2, $"{file}: malformed {name} call");
+            var descriptorAccess = Assert.IsType<GSharpSyntax.AccessorExpressionSyntax>(call.Arguments[1]);
+            Assert.Equal("DiagnosticDescriptors", GSharpSourceSyntax.SimpleName(descriptorAccess.LeftPart));
+            var descriptorName = GSharpSourceSyntax.SimpleName(descriptorAccess.RightPart);
+            var reportFunction = call.Ancestors().OfType<GSharpSyntax.FunctionDeclarationSyntax>()
+                .FirstOrDefault(function => function.Identifier.Text.StartsWith("Report", StringComparison.Ordinal));
+            Assert.True(reportFunction != null, $"{file}: {name} is called outside a Report* function");
+            Assert.Equal(reportFunction.Identifier.Text["Report".Length..], descriptorName);
+            referencedDescriptors.Add(descriptorName);
+        }
+
+        foreach (var function in root.DescendantNodes().OfType<GSharpSyntax.FunctionDeclarationSyntax>()
+                     .Where(function => function.Identifier.Text.StartsWith("Report", StringComparison.Ordinal)))
+        {
+            var routesToDiagnostic = function.DescendantNodes()
+                .OfType<GSharpSyntax.CallExpressionSyntax>()
+                .Any(call => GSharpSourceSyntax.SimpleName(call).StartsWith("Report", StringComparison.Ordinal));
+            Assert.True(routesToDiagnostic, $"{function.Identifier.Text} does not route to a diagnostic descriptor.");
+        }
+    }
 }

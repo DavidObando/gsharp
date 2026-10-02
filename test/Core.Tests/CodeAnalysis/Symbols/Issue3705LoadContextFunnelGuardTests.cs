@@ -42,7 +42,7 @@ public class Issue3705LoadContextFunnelGuardTests
         // #3708, fixed separately: the disposal predicate in
         // TryBuildEnumeratorDisposeCall. Listed so this guard can land
         // alongside that fix rather than racing it.
-        ["src/Core/CodeAnalysis/Lowering/Lowerer.cs"] = "#3708 — enumerator disposal predicate, fixed under its own issue",
+        ["src/Core/CodeAnalysis/Lowering/Lowerer"] = "#3708 — enumerator disposal predicate, fixed under its own issue",
     };
 
     private static readonly string[] ScannedRoots = new[]
@@ -67,33 +67,25 @@ public class Issue3705LoadContextFunnelGuardTests
     [Fact]
     public void No_Host_TypeofIsAssignableFrom_In_Binding_Lowering_Emit_Or_Symbols()
     {
-        var repoRoot = LocateRepoRoot();
         var offenders = new List<string>();
 
-        foreach (var root in ScannedRoots)
+        // Issue #4656: the tree's own language (C# before the cut-over, G#
+        // after), and a scan that finds nothing fails instead of passing.
+        foreach (var file in TestSource.SourceFiles(SearchOption.AllDirectories, ScannedRoots))
         {
-            var rootDir = Path.Combine(repoRoot, root);
-            if (!Directory.Exists(rootDir))
+            var relative = TestSource.RelativeStem(file);
+            if (AllowedFiles.ContainsKey(relative))
             {
                 continue;
             }
 
-            foreach (var file in Directory.EnumerateFiles(rootDir, "*.cs", SearchOption.AllDirectories))
+            var lines = File.ReadAllLines(file);
+            for (var i = 0; i < lines.Length; i++)
             {
-                var relative = Path.GetRelativePath(repoRoot, file).Replace('\\', '/');
-                if (AllowedFiles.ContainsKey(relative))
+                var code = StripCommentAndStrings(lines[i]);
+                if (ForbiddenPattern.IsMatch(code))
                 {
-                    continue;
-                }
-
-                var lines = File.ReadAllLines(file);
-                for (var i = 0; i < lines.Length; i++)
-                {
-                    var code = StripCommentAndStrings(lines[i]);
-                    if (ForbiddenPattern.IsMatch(code))
-                    {
-                        offenders.Add($"{relative}:{i + 1}: {lines[i].Trim()}");
-                    }
+                    offenders.Add($"{relative}:{i + 1}: {lines[i].Trim()}");
                 }
             }
         }
@@ -126,6 +118,4 @@ public class Issue3705LoadContextFunnelGuardTests
         var code = commentIndex >= 0 ? line.Substring(0, commentIndex) : line;
         return Regex.Replace(code, "\"[^\"]*\"", "\"\"");
     }
-
-    private static string LocateRepoRoot() => TestSource.Root;
 }
