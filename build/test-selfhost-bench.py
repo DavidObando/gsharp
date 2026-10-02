@@ -65,6 +65,16 @@ class RedirectTests(unittest.TestCase):
         self.assertIn('/out:"/work dir/run/a.dll"', redirected)
 
 
+class BuildTaskSpellingTests(unittest.TestCase):
+    def test_a_whole_token_quoted_output_option_is_redirected(self) -> None:
+        # The SDK's BuildTask writes "/out:path with spaces" as one quoted token.
+        rsp = '"/out:/tree/my out/obj/GSharp.Core.dll"\n"/pdb:/tree/my out/obj/GSharp.Core.pdb"\n/r:/a.dll\n'
+        redirected = bench.redirect_outputs(rsp, Path("/work/run"))
+        self.assertIn("/out:/work/run/GSharp.Core.dll", redirected)
+        self.assertIn("/pdb:/work/run/GSharp.Core.pdb", redirected)
+        self.assertNotIn("/tree/", redirected)
+
+
 class VerdictTests(unittest.TestCase):
     def summary(self, wall: float, cpu: float, rss: float) -> dict:
         return {"wallSeconds": {"median": wall}, "cpuSeconds": {"median": cpu}, "maxRssMb": {"median": rss}}

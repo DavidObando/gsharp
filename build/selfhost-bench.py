@@ -41,15 +41,21 @@ class BenchError(Exception):
 
 
 def redirect_outputs(rsp_text: str, directory: Path) -> str:
-    """Points every output option of a gsc response file into `directory`."""
+    """Points every output option of a gsc response file into `directory`.
+
+    Recognizes both spellings a response file uses for a path with whitespace:
+    `/out:"a b"` and the whole-token form `"/out:a b"` the SDK's BuildTask writes.
+    """
     lines = []
     for line in rsp_text.splitlines():
         stripped = line.strip()
-        option = next((o for o in OUTPUT_OPTIONS if stripped.lower().startswith(o)), None)
+        whole_token_quoted = stripped.startswith('"')
+        probe = stripped[1:] if whole_token_quoted else stripped
+        option = next((o for o in OUTPUT_OPTIONS if probe.lower().startswith(o)), None)
         if option is None:
             lines.append(line)
             continue
-        name = Path(stripped[len(option):].strip('"')).name
+        name = Path(probe[len(option):].strip('"')).name
         target = str(directory / ("ref-" + name if option == "/refout:" else name))
         # Quote a path with whitespace so the response-file parser keeps it whole.
         lines.append(f'{option}"{target}"' if any(c.isspace() for c in target) else f"{option}{target}")
