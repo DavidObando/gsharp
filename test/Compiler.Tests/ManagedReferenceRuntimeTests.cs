@@ -14,6 +14,25 @@ namespace GSharp.Compiler.Tests;
 
 public sealed class ManagedReferenceRuntimeTests
 {
+    /// <summary>
+    /// The size of one array-location handle (<c>ArrayLocation</c>: object
+    /// header, method table, owner, index and the lazily filled location-key
+    /// slot). Each measured loop below may allocate at most one per iteration.
+    /// </summary>
+    private const long BytesPerHandle = 40;
+
+    /// <summary>
+    /// Issue #4630: allocations the runtime makes ONCE on this thread while a
+    /// measured loop runs, independent of the iteration count. A 20,000-trip loop
+    /// in a Tier-0 method is promoted by on-stack replacement mid-loop, and that
+    /// transition can allocate on the current thread. CI measured exactly
+    /// 20,000 x 40 + 24,624 bytes twice, failing a bound that had no slack. 64 KiB
+    /// is more than twice that observation, and still far below what ONE extra
+    /// object per iteration costs (20,000 x 24 = 480,000 bytes), so a regression
+    /// that allocates per operation still fails.
+    /// </summary>
+    private const long OneTimeRuntimeAllowanceBytes = 64 * 1024;
+
     private readonly ITestOutputHelper output;
 
     public ManagedReferenceRuntimeTests(ITestOutputHelper output) => this.output = output;
@@ -96,10 +115,11 @@ public sealed class ManagedReferenceRuntimeTests
         Parallel.For(0, concurrentlyObserved.Length, i => concurrentlyObserved[i] = readOnly[0].GetLocation());
 
         Assert.Equal(Iterations * 7, checksum);
-        Assert.InRange(immediateBytes, 1, Iterations * 40L);
-        Assert.InRange(retainedBytes, 1, Iterations * 40L);
-        Assert.InRange(readOnlyBytes, 1, Iterations * 40L);
-        Assert.InRange(firstIdentityBytes, 1, Iterations * 40L);
+        const long AllocationCeiling = (Iterations * BytesPerHandle) + OneTimeRuntimeAllowanceBytes;
+        Assert.InRange(immediateBytes, 1, AllocationCeiling);
+        Assert.InRange(retainedBytes, 1, AllocationCeiling);
+        Assert.InRange(readOnlyBytes, 1, AllocationCeiling);
+        Assert.InRange(firstIdentityBytes, 1, AllocationCeiling);
         Assert.Equal(0, warmedIdentityBytes);
         Assert.All(concurrentlyObserved, key => Assert.Same(concurrentlyObserved[0], key));
         this.output.WriteLine(
