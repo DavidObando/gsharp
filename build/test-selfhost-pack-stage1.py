@@ -99,6 +99,23 @@ class NormalizePinsTests(unittest.TestCase):
             self.assertIn("src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", str(raised.exception))
 
 
+    def test_a_failed_prepare_still_records_the_mutations_already_made(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            write(tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", project('Sdk="Gsharp.NET.Sdk/0.4.7"'))
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.0.4.1129.nupkg", {"x": b""})
+            report: dict = {}
+
+            with self.assertRaises(packer.SelfHostError):
+                packer.prepare_tree(tree, bootstrap, report)
+
+            # The generated pin was rewritten and global.json pinned before the check failed.
+            self.assertIn("src/Core/Core.gsproj", report["rewrittenPins"])
+            self.assertTrue(report["globalJsonUpdated"])
+            self.assertEqual("0.4.1129", json.loads((tree / "global.json").read_text())["msbuild-sdks"]["Gsharp.NET.Sdk"])
+
+
 class GlobalJsonTests(unittest.TestCase):
     def test_pin_is_merged_into_commented_global_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -189,6 +206,20 @@ class VersionTests(unittest.TestCase):
             bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
             report = packer.prepare_tree(tree, bootstrap)
             self.assertEqual(["GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg"], report["missingSiblings"])
+
+    def test_a_missing_sibling_is_an_error_when_the_tree_restores_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            write(tree / "test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj",
+                  project('Sdk="Gsharp.NET.Sdk"', '<ItemGroup><PackageReference Include="GSharp.CodeAnalysis.Analyzers.Testing" Version="0.4.1129" /></ItemGroup>'))
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            with self.assertRaises(packer.SelfHostError) as raised:
+                packer.prepare_tree(tree, bootstrap)
+            self.assertIn("GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg", str(raised.exception))
+            # With the sibling beside the bootstrap, the same tree prepares.
+            nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg", {"x": b""})
+            self.assertEqual([], packer.prepare_tree(tree, bootstrap)["missingSiblings"])
 
     def test_stage1_version_equal_to_bootstrap_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
