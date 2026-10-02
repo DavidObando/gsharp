@@ -312,6 +312,22 @@ public sealed class Issue4633TestNameParityTests
         Assert.Empty(counted.StaleEntries);
     }
 
+    /// <summary>
+    /// Review finding: names are matched exactly, so `?` and `*` in a theory
+    /// row's argument are literal characters; an entry never matches anything
+    /// but the one name it spells.
+    /// </summary>
+    [Fact]
+    public void Baseline_WildcardCharactersAreLiteral()
+    {
+        TestNameParityBaseline baseline = Baseline(Entry("missing", "Own.Tests.A.Ask(q: \"why?\")"));
+        string[] oracle = { "Own.Tests.A.Ask(q: \"why?\")", "Own.Tests.A.Ask(q: \"whyX\")" };
+
+        TestNameParityVerdict verdict = baseline.Evaluate(AppId, TestNameParity.Compare(oracle, Passed()));
+
+        Assert.Equal(new[] { "Own.Tests.A.Ask(q: \"whyX\")" }, verdict.UnexplainedMissing);
+    }
+
     /// <summary>The checked-in baseline loads: every entry in it is justified and tracked.</summary>
     [Fact]
     public void CheckedInBaseline_IsValid()

@@ -246,7 +246,9 @@ public sealed class StageExecutionContext
     /// the run record PASS or FAIL. <see langword="null"/> when no completed
     /// mirrored run happened.
     /// </summary>
-    public TestNameParitySummary TestNameParity { get; set; }
+#nullable enable annotations
+    public TestNameParitySummary? TestNameParity { get; set; }
+#nullable restore
 }
 
 /// <summary>

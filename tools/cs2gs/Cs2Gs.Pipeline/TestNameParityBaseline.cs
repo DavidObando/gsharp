@@ -192,10 +192,13 @@ public sealed class TestNameParityBaseline
                     ExtraKind + "' or '" + RowsKind + "'.");
             }
 
-            if (test.Length == 0 || test.IndexOf('.') < 0 || test.IndexOf('*') >= 0)
+            // Matching is exact, so `*` and `?` are literal characters here (a
+            // theory row's string argument may contain either); no entry can
+            // name more than the one display name it spells.
+            if (test.Length == 0 || test.IndexOf('.') < 0)
             {
                 errors.Add(where + " ('" + test + "'): 'test' must be one fully qualified test " +
-                    "display name (no wildcards).");
+                    "display name (matched exactly).");
             }
             else if (kind == RowsKind && test.IndexOf('(') >= 0)
             {

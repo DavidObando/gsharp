@@ -71,7 +71,7 @@ public sealed partial class TestParityStage
         {
             oracle = CSharpTestOracle.LoadOrNull(oracleDirectory, context.App.Id);
         }
-        catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
+        catch (Exception ex) when (IsReadFailure(ex))
         {
             return this.NameParityFailure(context, "TEST-ORACLE-INVALID", ex.Message);
         }
@@ -92,7 +92,7 @@ public sealed partial class TestParityStage
         {
             actual = TrxParser.ParseFile(trxPath);
         }
-        catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
+        catch (Exception ex) when (IsReadFailure(ex))
         {
             string unreadable = "the migrated run's TRX could not be read, so its cases cannot be compared " +
                 "with the C# original's " + oracle.Tests.Count.ToString(CultureInfo.InvariantCulture) +
@@ -148,6 +148,17 @@ public sealed partial class TestParityStage
         return this.NameParityFailure(context, "TEST-NAME-PARITY", message.ToString());
     }
 
+    /// <summary>
+    /// Every way reading (or writing) a parity file can fail that must turn
+    /// into a named verdict rather than an unhandled exception: malformed
+    /// content, I/O, and access or security refusals.
+    /// </summary>
+    private static bool IsReadFailure(Exception ex) =>
+        ex is InvalidOperationException
+        || ex is IOException
+        || ex is UnauthorizedAccessException
+        || ex is System.Security.SecurityException;
+
     private static void AppendDifferences(StringBuilder message, string label, IReadOnlyList<string> names)
     {
         if (names.Count == 0)
@@ -199,7 +210,7 @@ public sealed partial class TestParityStage
                 Path.Combine(context.ArtifactDir, TestNameParityFileName),
                 JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch (IOException)
+        catch (Exception ex) when (IsReadFailure(ex))
         {
             // Diagnostic detail only; the verdict and its counts are already on
             // the context and in the stage log.

@@ -145,12 +145,18 @@ internal static class ValidateCommand
         // Issue #4633: per-test-name parity is the default the gate relies on,
         // so it cannot be lost by dropping a flag. A shard must either name the
         // C# test oracle or opt out of name parity explicitly.
-        if (string.IsNullOrEmpty(options.CSharpTestOracleDirectory) == !countOnlyParity)
+        bool hasOracle = !string.IsNullOrEmpty(options.CSharpTestOracleDirectory);
+        if (hasOracle && countOnlyParity)
         {
-            Console.Error.WriteLine(countOnlyParity
-                ? "cs2gs: --csharp-test-oracle and --count-only-test-parity are mutually exclusive."
-                : "cs2gs: validate requires --csharp-test-oracle <dir> (see `cs2gs capture-test-oracle`), " +
-                  "or --count-only-test-parity to knowingly skip per-test-name parity (#4633).");
+            Console.Error.WriteLine("cs2gs: --csharp-test-oracle and --count-only-test-parity are mutually exclusive.");
+            return 1;
+        }
+
+        if (!hasOracle && !countOnlyParity)
+        {
+            Console.Error.WriteLine(
+                "cs2gs: validate requires --csharp-test-oracle <dir> (see `cs2gs capture-test-oracle`), " +
+                "or --count-only-test-parity to knowingly skip per-test-name parity (#4633).");
             return 1;
         }
 
