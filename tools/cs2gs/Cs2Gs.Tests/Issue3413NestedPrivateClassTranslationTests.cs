@@ -304,7 +304,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal(Visibility.Private, cache.Visibility);
         Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
         Assert.Contains(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
-        Assert.Contains("private class Cache[T]", rendered, StringComparison.Ordinal);
+        Assert.Contains("private static class Cache[T]", rendered, StringComparison.Ordinal);
         Assert.Contains("Cache[T].Echo(value)", rendered, StringComparison.Ordinal);
         Assert.Contains("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
         Assert.Contains(

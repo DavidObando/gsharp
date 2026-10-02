@@ -406,9 +406,10 @@ namespace Demo
     /// at all (<c>record ShapeBase;</c>, as opposed to an explicit-but-empty
     /// <c>record ShapeBase();</c> — see issue #2363, which preserves `data
     /// class` for the latter) maps to a plain <c>class</c>, and is marked
-    /// <c>open</c> when subclassed; the C# <c>abstract</c> modifier and the
-    /// synthesized <c>IEquatable&lt;Self&gt;</c> interface are dropped (a
-    /// class cannot name itself in its own base list).
+    /// <c>open</c> when subclassed; the C# <c>abstract</c> modifier is kept
+    /// (ADR-0195: <c>abstract data class</c>) and the synthesized
+    /// <c>IEquatable&lt;Self&gt;</c> interface is dropped (a class cannot name
+    /// itself in its own base list).
     /// </summary>
     [Fact]
     public void FieldlessRecord_MapsToOpenDataClass()
@@ -420,8 +421,9 @@ namespace Demo
     public sealed record Dot(double X) : ShapeBase;
 }");
 
-        Assert.Contains("open data class ShapeBase {", printed);
-        Assert.DoesNotContain("abstract", printed);
+        // ADR-0195 / issue #4674: abstractness is kept (`abstract` implies `open`).
+        Assert.Contains("abstract data class ShapeBase {", printed);
+        Assert.DoesNotContain("open data class ShapeBase", printed);
         Assert.DoesNotContain("IEquatable", printed);
         Assert.Contains("data class Dot(X float64) : ShapeBase", printed);
     }

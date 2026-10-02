@@ -574,7 +574,7 @@ partial class Program {
         Assert.Contains("internal partial func Digits() Regex;", printed, StringComparison.Ordinal);
         Assert.Contains("internal func Describe(s string) string", printed, StringComparison.Ordinal);
         Assert.Contains("internal func Echo(s string) string", printed, StringComparison.Ordinal);
-        Assert.Contains("internal class Box", printed, StringComparison.Ordinal);
+        Assert.Contains("internal static class Box", printed, StringComparison.Ordinal);
         Assert.Contains("func Secret() string", printed, StringComparison.Ordinal);
         Assert.Contains("Program.Digits()", printed, StringComparison.Ordinal);
         Assert.Contains("private func Hidden() string", printed, StringComparison.Ordinal);

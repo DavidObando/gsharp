@@ -249,14 +249,13 @@ internal static class PartialTypeMerger
         RequireOnEveryPart(parts, hasInline, "inline", name, diagnostics);
         RequireOnEveryPart(parts, hasRef, "ref", name, diagnostics);
 
-        // ADR-0195 / issue #4674: `abstract` and `static` change the type's CLR
-        // shape, so every part must agree on them like `data`/`inline`/`ref`.
-        System.Func<StructDeclarationSyntax, bool> hasAbstract =
-            part => part.AbstractModifier != null;
-        System.Func<StructDeclarationSyntax, bool> hasStatic =
-            part => part.StaticModifier != null;
-        RequireOnEveryPart(parts, hasAbstract, "abstract", name, diagnostics);
-        RequireOnEveryPart(parts, hasStatic, "static", name, diagnostics);
+        // ADR-0195 / issue #4674: `abstract` and `static`, unlike `data`/`inline`/
+        // `ref`, need appear on only ONE part, as in C# (a modifier on any part
+        // applies to the whole type). Parts a source generator contributes (the
+        // gsgen output for a `[GeneratedRegex]` partial class, ADR-0145) are
+        // written without knowing the other parts' modifiers, so requiring them
+        // on every part would reject a migrated `static partial class`.
+        // The merged node below takes the first part that states each one.
 
         // GS0480: identical type-parameter lists (names + arity + constraints).
         var primaryTypeParams = NormalizeNodeText(primary.TypeParameterList);

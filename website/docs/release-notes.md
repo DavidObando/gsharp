@@ -97,6 +97,7 @@ Before moving an application to a different compiler version, pin the intended S
 
 ### Added
 
+- **`abstract class` and `static class` modifiers** (ADR-0195, issue [#4674](https://github.com/DavidObando/gsharp/issues/4674)). `abstract class Walker { … }` is inheritable and cannot be instantiated even when it declares no abstract member (`Walker()` and `Walker{}` are `GS0386`); `static class Helpers { shared { … } }` is emitted CLR `abstract sealed` and holds only `shared` members (`GS0617` on an instance member, `GS0618` on `open`/`sealed`/`abstract`/`data`, `GS0619` on a base type). They are contextual and valid only on a `class` head. cs2gs now emits both for C# `abstract class` (previously dropped, leaving an instantiable `open class`) and `static class` (previously an instantiable plain class), so a migrated library keeps the CLR shape of those public types.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values

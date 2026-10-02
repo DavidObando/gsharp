@@ -43,7 +43,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // unconditionally an extension now, so `extension` is an ordinary
   // identifier again — it is deliberately absent from this list.
   const contextualKeywords =
-    /\b(?:add|and|base|checked|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|set|shared|sizeof|stackalloc|this|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
+    /\b(?:abstract|add|and|base|checked|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|set|shared|sizeof|stackalloc|static|this|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
 
   // Built-in primitive type names (TypeSymbol). Width-bearing names are
   // canonical; friendly aliases (`int`, `long`, etc.) are accepted by the

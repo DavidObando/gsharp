@@ -217,15 +217,27 @@ class Derived : Helpers { }
     }
 
     [Fact]
-    public void PartialParts_MustAgreeOnAbstractAndStatic()
+    public void PartialParts_AbstractOrStaticOnOnePartAppliesToTheWholeType()
     {
+        // A part contributed by a source generator cannot know the other parts'
+        // modifiers, so (as in C#) one part stating `abstract`/`static` suffices.
         var result = EmittedOracle.Evaluate(@"
 abstract partial class A { }
-partial class A { }
+partial class A {
+    func F() int32 { return 1 }
+}
+partial class S {
+    shared {
+        func G() int32 { return 1 }
+    }
+}
 static partial class S { }
-partial class S { }
+var a = A()
+var s = S()
 0
 ");
-        Assert.Equal(2, result.Diagnostics.Count(d => d.Id == "GS0479"));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0479");
+        var instantiations = result.Diagnostics.Where(d => d.Id == "GS0386").Select(d => d.Location.StartLine + 1).OrderBy(l => l).ToArray();
+        Assert.Equal(new[] { 12, 13 }, instantiations);
     }
 }
