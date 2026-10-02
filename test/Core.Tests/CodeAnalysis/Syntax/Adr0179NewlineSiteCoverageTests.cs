@@ -59,7 +59,7 @@ public sealed class Adr0179NewlineSiteCoverageTests
 
     private static IEnumerable<string> CSharpSites(string path)
     {
-        var root = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(File.ReadAllText(path)).GetRoot();
+        var root = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path).GetRoot();
         foreach (var invocation in root.DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>())
         {
             string name = invocation.Expression switch

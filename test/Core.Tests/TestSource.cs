@@ -59,7 +59,7 @@ internal static class TestSource
         if (!string.IsNullOrWhiteSpace(configuredRoot))
         {
             var root = Path.GetFullPath(configuredRoot);
-            if (IsSourceRoot(root))
+            if (HasSolution(root) && HasParserInOneLanguage(root))
             {
                 return root;
             }
@@ -72,7 +72,7 @@ internal static class TestSource
         {
             if (HasSolution(directory.FullName))
             {
-                if (IsSourceRoot(directory.FullName))
+                if (HasParserInOneLanguage(directory.FullName))
                 {
                     return directory.FullName;
                 }
@@ -110,8 +110,11 @@ internal static class TestSource
     /// </summary>
     /// <param name="relativePathWithoutExtension">For example <c>src/Core/CodeAnalysis/Emit/SlotPlanner</c>.</param>
     /// <returns>The path in the tree's language.</returns>
-    internal static string SourcePath(string relativePathWithoutExtension) =>
-        Path.Combine(Root, NormalizeRelative(relativePathWithoutExtension) + SourceExtension);
+    internal static string SourcePath(string relativePathWithoutExtension)
+    {
+        RequireNoExtension(relativePathWithoutExtension);
+        return Path.Combine(Root, NormalizeRelative(relativePathWithoutExtension) + SourceExtension);
+    }
 
     /// <summary>
     /// Every compiler source file under the given repository-relative
@@ -136,6 +139,7 @@ internal static class TestSource
     internal static IReadOnlyList<string> SourceFilesMatching(
         string stemPattern, SearchOption option, params string[] relativeDirectories)
     {
+        RequireNoExtension(stemPattern);
         string root = Root;
         string extension = SourceExtension;
         // A set: overlapping directories must not count a file twice. Paths are
@@ -267,6 +271,19 @@ internal static class TestSource
         }
     }
 
+    // The helpers add the tree's extension themselves; a caller passing one
+    // would otherwise build `X.cs.cs` and fail confusingly.
+    private static void RequireNoExtension(string pathOrPattern)
+    {
+        string extension = Path.GetExtension(pathOrPattern);
+        if (extension.Equals(CSharpExtension, StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(GSharpExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"'{pathOrPattern}' must not carry a source extension; the tree's own is added.", nameof(pathOrPattern));
+        }
+    }
+
     // Repository-relative paths may be written with either separator.
     private static string NormalizeRelative(string relative) =>
         relative.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar);
@@ -274,13 +291,9 @@ internal static class TestSource
     private static bool HasSolution(string directory) =>
         File.Exists(Path.Combine(directory, "GSharp.sln")) || File.Exists(Path.Combine(directory, "GSharp.slnx"));
 
-    private static bool IsSourceRoot(string root)
+    // Callers have already established that `root` holds a solution file.
+    private static bool HasParserInOneLanguage(string root)
     {
-        if (!HasSolution(root))
-        {
-            return false;
-        }
-
         bool csharp = File.Exists(Path.Combine(root, ParserWithoutExtension + CSharpExtension));
         bool gsharp = File.Exists(Path.Combine(root, ParserWithoutExtension + GSharpExtension));
         return csharp != gsharp;
