@@ -189,6 +189,9 @@ jobs:
       - name: Verify cs2gs counter contract
         run: build/test-cs2gs-counters.sh
 
+      - name: Verify self-host stage-1 packer contract
+        run: python3 build/test-selfhost-pack-stage1.py
+
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
         with:
