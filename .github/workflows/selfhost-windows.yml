@@ -113,6 +113,10 @@ jobs:
 
       - name: Test migrated Core.Tests
         working-directory: ${{ env.SELFHOST_TREE }}
+        env:
+          # Older nightly artifacts have C#-only source guards. Keep the
+          # stage-4 source-root contract rather than scanning an empty tree.
+          CS2GS_TEST_SOURCE_ROOT: ${{ github.workspace }}
         run: |
           set +e
           dotnet test test/Core.Tests/Core.Tests.gsproj --configuration Release \

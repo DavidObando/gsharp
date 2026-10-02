@@ -54,6 +54,8 @@ a 1 MB stack (Linux: 8 MB), and the frame sizes of G#-compiled code have never b
 - The C# checkout keeps LF line endings, like the migrated artifact, so raw-string theory arguments have matching xUnit test names.
 - It pins the tree to the commit's own C#-built SDK (`selfhost-pack-stage1.py --prepare-only`).
 - It runs the C# and the migrated Core.Tests on the same `windows-latest` runner.
+- The migrated suite receives `CS2GS_TEST_SOURCE_ROOT` pointing to the original C# checkout, matching the stage-4
+  source-root contract. Older nightly artifacts have C#-only source guards and cannot discover it from the downloaded tree.
 
 `build/selfhost-compare-trx.py` compares the two runs by failing-test multiset. Duplicate display names remain separate
 executions, and additional failing rows cannot be hidden by a passing row with the same name. The job fails if the migrated suite fails a test
