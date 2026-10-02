@@ -144,7 +144,7 @@ internal static class TestSource
             }
 
             files.AddRange(Directory.EnumerateFiles(directory, stemPattern + extension, option)
-                .Where(path => !IsBuildOutput(path)));
+                .Where(path => !IsBuildOutput(root, path)));
         }
 
         if (files.Count == 0)
@@ -218,9 +218,12 @@ internal static class TestSource
         return snapshot;
     }
 
-    private static bool IsBuildOutput(string path) =>
-        path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-        || path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal);
+    // Judged on the path BELOW the root: the root itself may sit under a bin/
+    // (a test's temporary tree inside its output directory, for one).
+    private static bool IsBuildOutput(string root, string path) =>
+        Path.GetRelativePath(root, path)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(segment => segment is "obj" or "bin");
 
     private static bool HasSolution(string directory) =>
         File.Exists(Path.Combine(directory, "GSharp.sln")) || File.Exists(Path.Combine(directory, "GSharp.slnx"));
