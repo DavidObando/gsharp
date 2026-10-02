@@ -238,6 +238,14 @@ public sealed class MigrationPipeline
             string? mirroredGlobalJsonPin = SdkPin.ReadGlobalJsonPin(destinationRoot);
             if (this.options.SdkPinLocation == SdkPinLocation.GlobalJson)
             {
+                string? nestedGlobalJson = SdkPin.FindNestedGlobalJson(repositoryFiles);
+                if (nestedGlobalJson is not null)
+                {
+                    throw new InvalidOperationException(
+                        "Cannot pin Gsharp.NET.Sdk in the root global.json because nested global.json " +
+                        "files can override it: '" + nestedGlobalJson + "'.");
+                }
+
                 if (SdkPin.WriteGlobalJsonPin(destinationRoot, sdkVersion))
                 {
                     this.options.RepositoryAdditionalFiles.Add(SdkPin.GlobalJsonFileName);
@@ -717,6 +725,21 @@ public sealed class MigrationPipeline
     private void ResolveValidationSdkPin(string migratedRoot)
     {
         string? treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
+        if (treePin is not null)
+        {
+            string? nestedGlobalJson = SdkPin.FindNestedGlobalJson(
+                Directory.EnumerateFiles(migratedRoot, SdkPin.GlobalJsonFileName, SearchOption.AllDirectories)
+                    .Where(path => !RepositoryFileInventory.HasExcludedDirectory(
+                        Path.GetRelativePath(migratedRoot, path)))
+                    .Select(path => Path.GetRelativePath(migratedRoot, path)));
+            if (nestedGlobalJson is not null)
+            {
+                throw new InvalidOperationException(
+                    "The migrated tree pins Gsharp.NET.Sdk in the root global.json, but nested global.json " +
+                    "files can override it: '" + nestedGlobalJson + "'.");
+            }
+        }
+
         string? projectPin = SdkPin.ReadProjectPin(
             this.options.GeneratedProjectPaths.Values.Concat(
                 Directory.EnumerateFiles(migratedRoot, "*.csproj", SearchOption.AllDirectories)

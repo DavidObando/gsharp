@@ -215,11 +215,10 @@ public sealed class Issue4631SdkPinTests : IDisposable
     /// <summary>An explicit project pin is rejected in diagnostic mode, including when repeated.</summary>
     /// <param name="firstPin">The first pin option.</param>
     /// <param name="secondPin">A later pin option, or an empty string.</param>
-    /// <returns>A task representing the asynchronous test.</returns>
     [Theory]
     [InlineData("project", "")]
     [InlineData("global-json", "project")]
-    public async Task Migrate_DiagnosticRunRejectsExplicitSdkPin(string firstPin, string secondPin)
+    public void Migrate_DiagnosticRunRejectsExplicitSdkPin(string firstPin, string secondPin)
     {
         var args = new List<string>
         {
@@ -367,6 +366,33 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Equal("Gsharp.NET.Sdk", SdkAttribute(fixture.MirroredWidget));
     }
 
+    /// <summary>Global-json mode rejects nested source configuration that can shadow its root pin.</summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Migrate_GlobalJsonPin_RejectsNestedGlobalJson()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        File.WriteAllText(
+            Path.Combine(fixture.Source, "src", "Widget", SdkPin.GlobalJsonFileName),
+            """{ "sdk": { "version": "10.0.300" } }""");
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+        options.SdkPinLocation = SdkPinLocation.GlobalJson;
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+                .RunAsync(fixture.Apps));
+
+        Assert.Contains("nested global.json", error.Message, StringComparison.Ordinal);
+        Assert.Contains("src/Widget/global.json", error.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// A source <c>global.json</c> that already pins the SDK cannot be mixed
     /// with versioned project attributes: that would build projects against
@@ -425,6 +451,36 @@ public sealed class Issue4631SdkPinTests : IDisposable
         PinObservation observation = Assert.Single(probe.Observations);
         Assert.Equal("Gsharp.NET.Sdk", observation.SdkMoniker);
         Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
+    }
+
+    /// <summary>Validation rejects nested configuration that can override the tree's root pin.</summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Validate_RejectsNestedGlobalJsonWithRootPin()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        PipelineOptions migrate = this.RepositoryOptions(compiler, fixture);
+        migrate.SdkVersion = PinnedVersion;
+        migrate.SdkPinLocation = SdkPinLocation.GlobalJson;
+        RunResult migrated = await new MigrationPipeline(migrate, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+        Assert.True(migrated.Succeeded);
+
+        File.WriteAllText(
+            Path.Combine(fixture.Destination, "src", "Widget", SdkPin.GlobalJsonFileName),
+            """{ "sdk": { "version": "10.0.300" } }""");
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { new PinProbeStage() })
+                .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId)));
+
+        Assert.Contains("nested global.json", error.Message, StringComparison.Ordinal);
+        Assert.Contains("src/Widget/global.json", error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Validation checks pins in excluded mirrored projects, not just translated projects.</summary>

@@ -92,6 +92,23 @@ internal static class SdkPin
         || (sdkAttribute is not null
             && sdkAttribute.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>Finds a nested <c>global.json</c> path in a repository file list.</summary>
+    /// <param name="repositoryFiles">Repository-relative file paths.</param>
+    /// <returns>The first nested path, or <see langword="null"/> when only the root file exists.</returns>
+    internal static string? FindNestedGlobalJson(IEnumerable<string> repositoryFiles)
+    {
+        foreach (string path in repositoryFiles)
+        {
+            string normalized = path.Replace('\\', '/');
+            if (normalized.EndsWith("/" + GlobalJsonFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                return path;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Reads the per-project pin a migrated tree recorded: the one version
     /// carried by every versioned <c>Sdk="Gsharp.NET.Sdk/&lt;version&gt;"</c>
