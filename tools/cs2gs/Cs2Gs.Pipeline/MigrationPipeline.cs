@@ -717,7 +717,10 @@ public sealed class MigrationPipeline
     private void ResolveValidationSdkPin(string migratedRoot)
     {
         string? treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
-        string? projectPin = SdkPin.ReadProjectPin(this.options.GeneratedProjectPaths.Values);
+        string? projectPin = SdkPin.ReadProjectPin(
+            Directory.EnumerateFiles(migratedRoot, "*.csproj", SearchOption.AllDirectories)
+                .Where(path => !RepositoryFileInventory.HasExcludedDirectory(
+                    Path.GetRelativePath(migratedRoot, path))));
         if (treePin is not null && projectPin is not null)
         {
             throw new InvalidOperationException(
@@ -737,7 +740,7 @@ public sealed class MigrationPipeline
 
         SdkPinLocation location = treePin is null ? SdkPinLocation.ProjectFile : SdkPinLocation.GlobalJson;
         string? requestedVersion = recordedPin ?? this.options.SdkVersion;
-        string sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, requestedVersion);
+        string? sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, requestedVersion);
 
         // A null version is not thrown here: each app's compile reports the
         // missing package as an unavailable stage, as it always has.

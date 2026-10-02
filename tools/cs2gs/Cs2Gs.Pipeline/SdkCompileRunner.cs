@@ -1681,7 +1681,7 @@ public sealed class SdkCompileRunner
                     nameof(explicitVersion));
             }
 
-            string exactNupkg = GsharpTestProjectRunner.FindLocalPackageVersion(
+            string? exactNupkg = GsharpTestProjectRunner.FindLocalPackageVersion(
                 repoRoot,
                 packageId,
                 explicitVersion,

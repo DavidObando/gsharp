@@ -152,8 +152,7 @@ internal static class SdkPin
         }
 
         JsonObject document = ParseGlobalJson(path);
-        JsonNode? node = document[MsbuildSdksProperty];
-        if (node is null)
+        if (!document.TryGetPropertyValue(MsbuildSdksProperty, out JsonNode? node))
         {
             return null;
         }
@@ -219,9 +218,9 @@ internal static class SdkPin
         string path = Path.Combine(root, GlobalJsonFileName);
         bool created = !File.Exists(path);
         JsonObject document = created ? new JsonObject() : ParseGlobalJson(path);
-        JsonNode? existing = document[MsbuildSdksProperty];
+        bool hasExisting = document.TryGetPropertyValue(MsbuildSdksProperty, out JsonNode? existing);
         JsonObject? sdks = existing as JsonObject;
-        if (existing is not null && sdks is null)
+        if (hasExisting && sdks is null)
         {
             // Never discard configuration we do not understand.
             throw new InvalidOperationException(

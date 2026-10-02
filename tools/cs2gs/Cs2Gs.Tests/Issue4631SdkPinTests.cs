@@ -123,6 +123,19 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => SdkPin.ReadGlobalJsonPin(this.root));
     }
 
+    /// <summary>An explicit JSON null is malformed, not an absent <c>msbuild-sdks</c> property.</summary>
+    [Fact]
+    public void GlobalJsonPin_RejectsExplicitNullMsbuildSdks()
+    {
+        string path = Path.Combine(this.root, "global.json");
+        const string json = """{ "msbuild-sdks": null }""";
+        File.WriteAllText(path, json);
+
+        Assert.Throws<InvalidOperationException>(() => SdkPin.ReadGlobalJsonPin(this.root));
+        Assert.Throws<InvalidOperationException>(() => SdkPin.WriteGlobalJsonPin(this.root, PinnedVersion));
+        Assert.Equal(json, File.ReadAllText(path));
+    }
+
     /// <summary>
     /// Two spellings of the SDK key are one key to MSBuild, so reading must not
     /// silently pick the first; writing still collapses them to one.
@@ -352,6 +365,36 @@ public sealed class Issue4631SdkPinTests : IDisposable
         PinObservation observation = Assert.Single(probe.Observations);
         Assert.Equal("Gsharp.NET.Sdk", observation.SdkMoniker);
         Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
+    }
+
+    /// <summary>Validation checks pins in excluded mirrored projects, not just translated projects.</summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Validate_RejectsAProjectPinInAnExcludedMirroredProject()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        PipelineOptions migrate = this.RepositoryOptions(compiler, fixture);
+        migrate.SdkVersion = PinnedVersion;
+        migrate.SdkPinLocation = SdkPinLocation.GlobalJson;
+        RunResult migrated = await new MigrationPipeline(migrate, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+        Assert.True(migrated.Succeeded);
+
+        System.Xml.Linq.XDocument project = XDocument.Load(fixture.MirroredLegacy);
+        project.Root.SetAttributeValue("Sdk", "Gsharp.NET.Sdk/0.3.1");
+        project.Save(fixture.MirroredLegacy);
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { new PinProbeStage() })
+                .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId)));
+        Assert.Contains("both in global.json", error.Message, StringComparison.Ordinal);
+        Assert.Contains("0.3.1", error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>An explicit <c>validate --sdk-version</c> that disagrees with the tree is an error, never a tie-break.</summary>
