@@ -1,12 +1,13 @@
 // Issue #4631 (C3): hashes the parts of an assembly that the self-host
-// equivalence gate compares. Mirrors RefactoringBaselineTests.HashEmittedContent
-// (test/Core.Tests/CodeAnalysis/Emit): the metadata stream with every copy of
-// the MVID zeroed, then each method body's IL bytes in MethodDef order. The PE
+// equivalence gate compares: the metadata stream with every copy of the MVID
+// zeroed, then each complete method body in MethodDef order (header, IL and
+// exception regions). This is stronger than RefactoringBaselineTests' IL-only
+// body hash; those existing baseline hashes are intentionally unchanged. The PE
 // wrapper (headers, debug directory, checksum, timestamp) is excluded: it is
 // derived from these bytes under deterministic emit.
 //
 // usage: dotnet run build/selfhost/PeContentHash.cs -- <assembly.dll>...
-// prints: <hex sha256>  <methods-with-il>  <path>
+// prints: <hex sha256>  <methods-with-body>  <path>
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
@@ -83,12 +84,9 @@ foreach (string path in args)
             continue;
         }
 
-        byte[]? il = pe.GetMethodBody(rva).GetILBytes();
-        if (il is { Length: > 0 })
-        {
-            sha.AppendData(il);
-            methods++;
-        }
+        MethodBodyBlock body = pe.GetMethodBody(rva);
+        sha.AppendData(pe.GetSectionData(rva).GetContent(0, body.Size).AsSpan());
+        methods++;
     }
 
     Console.WriteLine($"{Convert.ToHexString(sha.GetHashAndReset())}  {methods}  {path}");

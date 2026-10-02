@@ -9,8 +9,8 @@ stage-1 (G#-source, stage-0-built) SDK package, this script:
   2. builds the same projects, in the SAME tree path, with stage 1
                                                 -> the stage-2 assemblies
   3. compares each assembly pair: full-file SHA-256, and the IL+metadata
-     hash with the MVID zeroed (build/selfhost/PeContentHash.cs, the same
-     hash RefactoringBaselineTests pins)
+     hash with the MVID zeroed (build/selfhost/PeContentHash.cs, including
+     complete method bodies: headers, IL and exception regions)
   4. optionally runs test projects while pinned to stage 1, so every
      assembly they compile against is a stage-2 assembly.
 
@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -47,7 +48,6 @@ _SPEC.loader.exec_module(packer)
 
 HASH_TOOL = HERE / "selfhost" / "PeContentHash.cs"
 DEFAULT_PROJECTS = ["src/Core/Core.gsproj"]
-DEFAULT_ASSEMBLIES = ["out/bin/Release/Core/GSharp.Core.dll"]
 
 
 class Stage2Error(Exception):
@@ -65,10 +65,8 @@ def run(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float
 
 def stage_env(work: Path, stage: str) -> dict:
     env = dict(os.environ)
-    # Same cache path in both stages would let stage 2 reuse an extracted
-    # stage-0 package of the same version; the versions differ by
-    # construction, but the caches are separated anyway so a stale extract
-    # can never leak across stages.
+    # Keep the stages separate; build_stage also clears the building stage's
+    # cache so a reused work directory cannot supply an old same-version SDK.
     env["NUGET_PACKAGES"] = str(work / f"nuget-{stage}")
     env["TMPDIR"] = str(work / "tmp")
     env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
@@ -98,6 +96,9 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
     version = pin(tree, nupkg)
     clean_outputs(tree, assemblies)
     env = stage_env(work, stage)
+    cache = Path(env["NUGET_PACKAGES"])
+    if cache.exists():
+        shutil.rmtree(cache)
     log = work / f"{stage}.build.log"
     log.write_text("", encoding="utf-8")
     seconds = 0.0
@@ -162,28 +163,60 @@ def compare(stage1: dict, stage2: dict, work: Path) -> list[dict]:
 def run_tests(tree: Path, tests: list[str], work: Path, config: str) -> list[dict]:
     env = stage_env(work, "stage2")
     results = []
-    for spec in tests:
+    for index, spec in enumerate(tests):
         project, _, test_filter = spec.partition("::")
-        log = work / ("test-" + Path(project).stem + ".log")
+        results_dir = work / f"test-{index}"
+        if results_dir.exists():
+            shutil.rmtree(results_dir)
+        results_dir.mkdir()
+        log = results_dir / "test.log"
         log.write_text("", encoding="utf-8")
         command = ["dotnet", "test", project, "-c", config, "-nodeReuse:false",
-                   "--logger", f"trx;LogFileName={work / (Path(project).stem + '.trx')}"]
+                   "--logger", "trx", "--results-directory", str(results_dir)]
         if test_filter:
             command += ["--filter", test_filter]
         code, elapsed = run(command, tree, env, log)
         summary = [line.strip() for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
                    if line.strip().startswith(("Passed!", "Failed!", "Total tests", "Passed:", "Failed:"))]
+        executed, evidence_error = test_evidence(results_dir)
         results.append({"project": project, "filter": test_filter, "exitCode": code,
-                        "seconds": round(elapsed, 1), "summary": summary[-3:]})
+                        "seconds": round(elapsed, 1), "summary": summary[-3:],
+                        "resultsDirectory": str(results_dir), "executedTests": executed,
+                        "evidenceError": evidence_error})
     return results
+
+
+def test_evidence(results_dir: Path) -> tuple[int, str | None]:
+    files = sorted(results_dir.rglob("*.trx"))
+    if not files:
+        return 0, "no fresh TRX results"
+    total = 0
+    for path in files:
+        try:
+            summary = ET.parse(path).getroot().find("{*}ResultSummary")
+            if summary is None:
+                return total, f"{path.name}: missing test summary"
+            counters = summary.find("{*}Counters")
+            if counters is None:
+                return total, f"{path.name}: missing test counters"
+            executed, passed, failed = (int(counters.attrib[key]) for key in ("executed", "passed", "failed"))
+            if summary.get("outcome") not in ("Completed", "Passed"):
+                return total, f"{path.name}: test run did not complete successfully"
+            if executed <= 0 or passed != executed or failed != 0:
+                return total, f"{path.name}: no tests executed or not all executed tests passed"
+            total += executed
+        except (ET.ParseError, OSError, KeyError, ValueError) as error:
+            return total, f"{path.name}: invalid test evidence ({error})"
+    return total, None
 
 
 def decide(report: dict) -> tuple[bool, bool]:
     """Equivalent only if every compared assembly's IL+metadata matches and
-    at least one assembly was compared; tests pass only if every run exited 0."""
+    at least one assembly was compared; requested tests need positive evidence."""
     rows = report["comparison"]
     equivalent = bool(rows) and all(row["contentEqual"] for row in rows)
-    tests_passed = all(test["exitCode"] == 0 for test in report["tests"])
+    tests_passed = all(test["exitCode"] == 0 and test.get("executedTests", 0) > 0
+                       and not test.get("evidenceError") for test in report["tests"])
     return equivalent, tests_passed
 
 
@@ -203,14 +236,18 @@ def main(argv: list[str]) -> int:
     tree, work = args.tree.resolve(), args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     projects = args.project or DEFAULT_PROJECTS
-    assemblies = args.assembly or DEFAULT_ASSEMBLIES
+    assemblies = args.assembly or [f"out/bin/{args.config}/Core/GSharp.Core.dll"]
     report: dict = {"tree": str(tree), "projects": projects}
     try:
-        report["stage1Build"] = build_stage(tree, "stage1", args.bootstrap.resolve(), projects, assemblies, work, args.config)
-        report["stage2Build"] = build_stage(tree, "stage2", args.stage1.resolve(), projects, assemblies, work, args.config)
+        bootstrap, stage1 = args.bootstrap.resolve(), args.stage1.resolve()
+        if packer.package_version(stage1) == packer.package_version(bootstrap):
+            raise Stage2Error("stage-1 and bootstrap SDK versions must differ")
+        report["stage1PackageVerification"] = packer.verify(stage1, bootstrap)
+        report["stage1Build"] = build_stage(tree, "stage1", bootstrap, projects, assemblies, work, args.config)
+        report["stage2Build"] = build_stage(tree, "stage2", stage1, projects, assemblies, work, args.config)
         report["comparison"] = compare(report["stage1Build"], report["stage2Build"], work)
         report["tests"] = run_tests(tree, args.test, work, args.config)
-    except (Stage2Error, packer.SelfHostError) as error:
+    except (Stage2Error, packer.SelfHostError, OSError) as error:
         report["error"] = str(error)
         (work / "stage2-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(f"selfhost-stage2: {error}", file=sys.stderr)
@@ -225,7 +262,9 @@ def main(argv: list[str]) -> int:
         print(f"{verdict:9} {row['assembly']}: stage1 {row['stage1']['content'][:16]} "
               f"stage2 {row['stage2']['content'][:16]} (bytes {'equal' if row['bytesEqual'] else 'differ'})")
     for test in report["tests"]:
-        print(f"tests {test['project']} [{test['filter']}]: exit {test['exitCode']} {' | '.join(test['summary'])}")
+        print(f"tests {test['project']} [{test['filter']}]: exit {test['exitCode']}, "
+              f"executed {test['executedTests']} {' | '.join(test['summary'])}"
+              + (f"; {test['evidenceError']}" if test["evidenceError"] else ""))
     print("self-host stage 2: " + ("EQUIVALENT" if equivalent else "NOT EQUIVALENT")
           + ("" if tests_passed else "; TESTS FAILED"))
     return 0 if equivalent and tests_passed else 1

@@ -51,7 +51,8 @@ python3 build/selfhost-stage2.py \
   --tree <tree prepared by selfhost-pack-stage1.py> \
   --bootstrap <stage-0 nupkg> --stage1 <stage-1 nupkg> --work <dir> \
   [--project src/Core/Core.gsproj ...] [--assembly out/bin/Release/Core/GSharp.Core.dll ...] \
-  [--test 'test/Core.Tests/Core.Tests.gsproj::FullyQualifiedName~RefactoringBaselineTests' ...]
+  [--test 'test/Core.Tests/Core.Tests.gsproj::FullyQualifiedName~RefactoringBaselineTests' ...] \
+  [--config Release]
 ```
 
 The PE helpers use .NET 10 file-based apps (`dotnet run <helper.cs> -- ...`), supported by the SDK
@@ -59,9 +60,11 @@ selected by this repository's `global.json`. They run from `build/selfhost`, whi
 and isolates them from the repository's build props and targets.
 
 How it works:
-- It builds the projects twice in the **same tree path**: first pinned to stage 0 (which yields the stage-1 assemblies), then pinned to stage 1 (which yields the stage-2 assemblies). Each stage gets its own isolated package cache.
-- For each assembly pair it compares the full-file SHA-256 and the IL+metadata hash with the MVID zeroed. `build/selfhost/PeContentHash.cs` computes that hash the same way RefactoringBaselineTests does.
-- Test projects run while pinned to stage 1, so everything they compile against is a stage-2 assembly.
+- Before building, it verifies the stage-1 package's payload and G# compiler/Core PDB provenance using the stage-1 packer's verifier. Its SDK version must differ from the bootstrap version; supplying stage 0 twice cannot certify self-hosting.
+- It builds the projects twice in the **same tree path**: first pinned to stage 0 (which yields the stage-1 assemblies), then pinned to stage 1 (which yields the stage-2 assemblies). Each stage gets its own isolated package cache, cleared before that stage's build even when `--work` is reused. The stage-2 cache is retained for tests.
+- For each assembly pair it compares the full-file SHA-256 and the IL+metadata hash with the MVID zeroed. `build/selfhost/PeContentHash.cs` includes **complete method bodies** (headers, IL and exception regions), unlike the existing IL-only RefactoringBaselineTests body hash, which is unchanged.
+- Test projects run while pinned to stage 1, so everything they compile against is a stage-2 assembly. Every requested run must exit zero and produce fresh TRX evidence of a positive number of executed, passing tests. Missing, malformed, stale or zero-test evidence fails the gate. Each request has a separate results directory under `--work`; multiple target-framework TRX files are all checked.
+- Default assembly outputs follow `--config` (Release by default); explicit `--assembly` paths are used unchanged.
 - The verdict is "equivalent" only when every IL+metadata hash matches. A full-file difference with matching IL+metadata is reported, not hidden.
 - `build/selfhost/PeDiff.cs` explains a difference: it compares table row counts, heap sizes and per-method IL keyed by type, name and signature.
 
