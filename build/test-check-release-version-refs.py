@@ -144,7 +144,9 @@ class ReleaseVersionRefsTests(unittest.TestCase):
 
     def test_allow_list_is_exact_about_versions(self) -> None:
         path = "src/vs-gsharp/templates/Project/Console/GSharpConsole.gsproj"
-        pinned = "0.3.159"  # kept apart from the package id so the sweep does not read this file as a pin
+        # The sweep also scans this test file; keeping the allow-listed version
+        # apart from the package id stops it reading this line as a stale pin.
+        pinned = "0.3.159"
         problems = self.problems_with(self.replaced(
             path, f"Gsharp.NET.Sdk/{pinned}", f"Gsharp.NET.Sdk/{OTHER}"))
         self.assertReported(problems, path, f"pins {OTHER}")

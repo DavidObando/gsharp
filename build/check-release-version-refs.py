@@ -224,7 +224,7 @@ def _pins(root: Path, path: str) -> tuple[tuple[str, int], ...]:
 def _listed(root: Path) -> tuple[str, ...]:
     listed = subprocess.run(
         ["git", "ls-files", "-z"], cwd=root, check=True, capture_output=True
-    ).stdout.decode("utf-8").split("\0")
+    ).stdout.decode("utf-8", errors="surrogateescape").split("\0")
     return tuple(p for p in listed if p and (root / p).is_file())
 
 
@@ -368,14 +368,14 @@ def main(argv: list[str]) -> int:
               f"working tree and the git executable ({error}).")
         return 2
     problems = check(tree)
-    found = re.search(r'"version"\s*:\s*"([^"]*)"', tree.read(RELEASE_JSON) or "")
-    release = found.group(1) if found else "?"
     if problems:
-        print(f"Release version references disagree with {RELEASE_JSON} ({release}):")
+        print(f"Release version references disagree with {RELEASE_JSON}:")
         for problem in problems:
             print(f"  {problem}")
         print(f"See {CHECKLIST} for what to edit in a release.")
         return 1
+    # No problems means check() parsed release.json successfully.
+    release = json.loads(tree.read(RELEASE_JSON) or "{}")["version"]
     print(f"Release version references agree: {release} "
           f"({len(TRACKED)} tracked references, {len(ALLOWED)} allow-list entries).")
     return 0
