@@ -341,6 +341,11 @@ public class Issue4663EmitOrderIndependenceTests
                 case OperandType.ShortInlineVar:
                     offset += 1;
                     break;
+                case OperandType.InlineNone:
+                    break;
+                default:
+                    // An unhandled operand type would stall the walk; fail with a clear message instead.
+                    throw new InvalidOperationException($"Unhandled IL operand type {opCode.OperandType} for {opCode.Name}.");
             }
         }
 
