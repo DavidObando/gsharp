@@ -282,6 +282,17 @@ jobs:
           python3 build/nullable_hygiene.py \
             --base "origin/${{ github.base_ref || 'main' }}"
 
+      # Shares this job because it is equally cheap (seconds, no build) and the
+      # job is already a required check. Every reference to the latest
+      # published release must agree with website/src/data/release.json; the
+      # checklist is docs/release/version-bump-checklist.md. This only reads
+      # the checkout: it never builds, packs or publishes anything.
+      - name: Test the release version reference check
+        run: python3 build/test-check-release-version-refs.py
+
+      - name: Check release version references
+        run: python3 build/check-release-version-refs.py
+
   cs2gs-corpus:
     # ADR-0138: the C#→G# migration quality gate. Runs the full in-repo corpus
     # (L1–L5 + the conformance grid) through translate → compile → ilverify →
@@ -489,7 +500,8 @@ jobs:
 
       - name: Stamp version (Nerdbank.GitVersioning)
         # The VS Code Marketplace requires a strict major.minor.patch version, so
-        # use nbgv's SimpleVersion (0.1.<git-height>) which is always clean across
+        # use nbgv's SimpleVersion (<version.json base>.<git-height>, e.g. 0.4.1129),
+        # which is always clean across
         # branches and tags. The change is workspace-only and never committed.
         run: |
           dotnet tool install --global nbgv || dotnet tool update --global nbgv

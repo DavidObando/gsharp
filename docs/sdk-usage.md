@@ -49,7 +49,7 @@ If you prefer to pin the SDK version per project rather than via `Sdk="Gsharp.NE
 ```json
 {
   "msbuild-sdks": {
-    "Gsharp.NET.Sdk": "0.1.105-g627f5152b0"
+    "Gsharp.NET.Sdk": "0.4.591"
   }
 }
 ```
