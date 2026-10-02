@@ -85,6 +85,7 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("  method public static Int32 Add(Int32 left, Int32 right)", baseline, StringComparison.Ordinal);
         Assert.Contains("  field public const Int32 Answer = 42", baseline, StringComparison.Ordinal);
         Assert.Contains("  method public static Int32 Take(Int32 count = 3)", baseline, StringComparison.Ordinal);
+        Assert.Contains("  method public static Int32 Peek(in Int32 value)", baseline, StringComparison.Ordinal);
         Assert.Contains("  property public String Name { get; protected set; }", baseline, StringComparison.Ordinal);
         Assert.Contains("  property public Int32 Fixed { get; init; }", baseline, StringComparison.Ordinal);
 
@@ -314,7 +315,7 @@ public sealed class CorePublicApiSnapshotTests
             var line = new StringBuilder("  method ").Append(access).Append(MethodModifiers(method.Attributes))
                 .Append(' ').Append(signature.ReturnType).Append(' ').Append(reader.GetString(method.Name))
                 .Append(RenderGenericParameters(reader, method.GetGenericParameters(), provider));
-            var names = new Dictionary<int, (string Name, string Default, bool Out)>();
+            var names = new Dictionary<int, (string Name, string Default, bool Out, bool In)>();
             foreach (ParameterHandle parameterHandle in method.GetParameters())
             {
                 Parameter parameter = reader.GetParameter(parameterHandle);
@@ -338,7 +339,8 @@ public sealed class CorePublicApiSnapshotTests
                         ? "arg" + parameter.SequenceNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)
                         : reader.GetString(parameter.Name),
                     defaultValue,
-                    (parameter.Attributes & ParameterAttributes.Out) != 0);
+                    (parameter.Attributes & ParameterAttributes.Out) != 0,
+                    (parameter.Attributes & ParameterAttributes.In) != 0);
             }
 
             var parameters = new List<string>();
@@ -347,14 +349,20 @@ public sealed class CorePublicApiSnapshotTests
                 string rendered = signature.ParameterTypes[index];
                 // ECMA-335 allows a parameter without a Param row: name it
                 // positionally so every parameter renders the same shape.
-                if (!names.TryGetValue(index + 1, out (string Name, string Default, bool Out) parameter))
+                if (!names.TryGetValue(index + 1, out (string Name, string Default, bool Out, bool In) parameter))
                 {
-                    parameter = ("arg" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), null, false);
+                    parameter = ("arg" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), null, false, false);
                 }
 
+                // csc marks `out` and `in` with parameter flags; only virtual
+                // methods also carry a modreq for `in`, so the flag decides.
                 if (parameter.Out && rendered.StartsWith("ref ", StringComparison.Ordinal))
                 {
                     rendered = "out " + rendered.Substring("ref ".Length);
+                }
+                else if (parameter.In && rendered.StartsWith("ref ", StringComparison.Ordinal))
+                {
+                    rendered = "in " + rendered.Substring("ref ".Length);
                 }
 
                 rendered += " " + parameter.Name + (parameter.Default is null ? string.Empty : " = " + parameter.Default);
@@ -696,6 +704,11 @@ public class SnapshotFixture
     /// <param name="count">How many.</param>
     /// <returns>The count.</returns>
     public static int Take(int count = 3) => count;
+
+    /// <summary>Takes an <c>in</c> parameter.</summary>
+    /// <param name="value">The value.</param>
+    /// <returns>The value.</returns>
+    public static int Peek(in int value) => value;
 
     /// <summary>A protected virtual hook.</summary>
     protected virtual void OnChanged()
