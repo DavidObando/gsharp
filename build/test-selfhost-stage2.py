@@ -15,6 +15,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -59,6 +60,37 @@ class DecideTests(unittest.TestCase):
     def test_a_failed_test_run_is_reported(self) -> None:
         report = {"comparison": [{"contentEqual": True}], "tests": [{"exitCode": 0}, {"exitCode": 1}]}
         self.assertEqual((True, False), stage2.decide(report))
+
+
+class CleanOutputsTests(unittest.TestCase):
+    def test_configured_outputs_are_clean_before_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory)
+            work = tree / "work"
+            work.mkdir()
+            assembly = tree / "custom" / "Core.dll"
+            assembly.parent.mkdir()
+            assembly.write_bytes(b"stale assembly")
+            assembly.with_suffix(".pdb").write_bytes(b"stale symbols")
+            (tree / "out").mkdir()
+            (tree / "out" / "stale.bin").write_bytes(b"stale output")
+
+            def rebuild(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
+                self.assertEqual(["dotnet", "build", "src/Core.gsproj", "-c", "Release",
+                                  "-t:Rebuild", "-nodeReuse:false"], command)
+                self.assertFalse(assembly.exists())
+                self.assertFalse(assembly.with_suffix(".pdb").exists())
+                self.assertFalse((tree / "out").exists())
+                assembly.write_bytes(b"rebuilt assembly")
+                return 0, 0.0
+
+            with patch.object(stage2, "pin", return_value="10.0"), \
+                    patch.object(stage2, "stage_env", return_value={}), \
+                    patch.object(stage2, "run", side_effect=rebuild):
+                result = stage2.build_stage(tree, "stage1", Path("unused.nupkg"), ["src/Core.gsproj"],
+                                            ["custom/Core.dll"], work, "Release")
+
+            self.assertEqual(b"rebuilt assembly", Path(result["assemblies"]["custom/Core.dll"]).read_bytes())
 
 
 HAVE_BUILD = CORE.exists() and FORMATTING.exists() and shutil.which("dotnet") is not None

@@ -76,9 +76,13 @@ def stage_env(work: Path, stage: str) -> dict:
     return env
 
 
-def clean_outputs(tree: Path) -> None:
+def clean_outputs(tree: Path, assemblies: list[str]) -> None:
     for name in ("out",):
         shutil.rmtree(tree / name, ignore_errors=True)
+    for assembly in assemblies:
+        output = tree / assembly
+        output.unlink(missing_ok=True)
+        output.with_suffix(".pdb").unlink(missing_ok=True)
 
 
 def pin(tree: Path, nupkg: Path) -> str:
@@ -91,13 +95,14 @@ def pin(tree: Path, nupkg: Path) -> str:
 def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemblies: list[str],
                 work: Path, config: str) -> dict:
     version = pin(tree, nupkg)
-    clean_outputs(tree)
+    clean_outputs(tree, assemblies)
     env = stage_env(work, stage)
     log = work / f"{stage}.build.log"
     log.write_text("", encoding="utf-8")
     seconds = 0.0
     for project in projects:
-        code, elapsed = run(["dotnet", "build", project, "-c", config, "-nodeReuse:false"], tree, env, log)
+        code, elapsed = run(
+            ["dotnet", "build", project, "-c", config, "-t:Rebuild", "-nodeReuse:false"], tree, env, log)
         seconds += elapsed
         if code != 0:
             raise Stage2Error(f"{stage}: dotnet build {project} failed (exit {code}); see {log}")
@@ -141,12 +146,14 @@ def compare(stage1: dict, stage2: dict, work: Path) -> list[dict]:
     rows = []
     for assembly, first in stage1["assemblies"].items():
         second = stage2["assemblies"][assembly]
+        first_sha256 = file_sha256(first)
+        second_sha256 = file_sha256(second)
         rows.append({
             "assembly": assembly,
-            "stage1": {"sha256": file_sha256(first), "content": hashes[first][0], "methods": hashes[first][1]},
-            "stage2": {"sha256": file_sha256(second), "content": hashes[second][0], "methods": hashes[second][1]},
+            "stage1": {"sha256": first_sha256, "content": hashes[first][0], "methods": hashes[first][1]},
+            "stage2": {"sha256": second_sha256, "content": hashes[second][0], "methods": hashes[second][1]},
             "contentEqual": hashes[first][0] == hashes[second][0],
-            "bytesEqual": file_sha256(first) == file_sha256(second),
+            "bytesEqual": first_sha256 == second_sha256,
         })
     return rows
 
