@@ -67,8 +67,8 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("Initialized(params_ JsonElement)", rendered, StringComparison.Ordinal);
-        AssertNoStandaloneIdentifier(rendered, "params");
+        Assert.Contains("Initialized($params JsonElement)", rendered, StringComparison.Ordinal);
+        Assert.Contains("$params", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(
             rendered,
             """
@@ -76,6 +76,32 @@ public sealed class Issue3461IdentifierSanitizationTests
 
             struct JsonElement { }
             """);
+    }
+
+    [Fact]
+    public void KeywordParameter_PreservesItsEmittedMetadataName()
+    {
+        string rendered = Render(
+            """
+            public class ScopeParameter
+            {
+            public int Read(int @scope) => @scope;
+            }
+            """);
+
+        Assert.Contains("func Read($scope int32)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("scope_", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        EmittedOracleResult emitted = EmittedOracle.Evaluate(rendered + Environment.NewLine + "1");
+        Assert.Empty(emitted.Diagnostics);
+        Assert.NotNull(emitted.Assembly);
+        var read = emitted.Assembly
+            .GetTypes()
+            .Single(type => type.Name == "ScopeParameter")
+            .GetMethod("Read");
+        Assert.NotNull(read);
+        Assert.Equal("scope", Assert.Single(read.GetParameters()).Name);
     }
 
     [Fact]
@@ -144,8 +170,8 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.Contains("class $defer", rendered, StringComparison.Ordinal);
         Assert.Contains("class defer_", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("defer__", rendered, StringComparison.Ordinal);
-        Assert.Contains("$select(params__ int32, params_ int32", rendered, StringComparison.Ordinal);
-        Assert.Contains("select_(params__ int32, params_ int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("$select($params int32, params_ int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("select_($params int32, params_ int32", rendered, StringComparison.Ordinal);
         Assert.Contains("range_", rendered, StringComparison.Ordinal);
         Assert.Contains("range__", rendered, StringComparison.Ordinal);
         Assert.Contains("guard_", rendered, StringComparison.Ordinal);
@@ -216,7 +242,7 @@ public sealed class Issue3461IdentifierSanitizationTests
     }
 
     [Fact]
-    public void ContextualGrammarNames_AreRenamedOnlyInUnsafeContexts()
+    public void ContextualGrammarNames_UseEscapesForMetadataParameters()
     {
         string rendered = Render(
             """
@@ -274,11 +300,11 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.Contains("class $event", rendered, StringComparison.Ordinal);
         Assert.Contains("class Holder[in_, out_]", rendered, StringComparison.Ordinal);
         Assert.Contains(
-            "Run(params_ int32, scoped_ int32, ref_ int32, out_ int32, in_ int32)",
+            "Run($params int32, $scoped int32, $ref int32, $out int32, $in int32)",
             rendered,
             StringComparison.Ordinal);
         Assert.True(
-            rendered.Split("params_ int32", StringSplitOptions.None).Length >= 3,
+            rendered.Split("$params int32", StringSplitOptions.None).Length >= 3,
             rendered);
         Assert.Contains("func $checked()", rendered, StringComparison.Ordinal);
         Assert.Contains("func $typeof()", rendered, StringComparison.Ordinal);
@@ -469,9 +495,9 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("class C(params__ int32)", rendered, StringComparison.Ordinal);
+        Assert.Contains("class C($params int32)", rendered, StringComparison.Ordinal);
         Assert.Contains("prop params_", rendered, StringComparison.Ordinal);
-        Assert.Contains("params__ + params_", rendered, StringComparison.Ordinal);
+        Assert.Contains("$params + params_", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(
@@ -512,9 +538,9 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("Run(params__ int32)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Run($params int32)", rendered, StringComparison.Ordinal);
         Assert.Contains("let defer__ = 7", rendered, StringComparison.Ordinal);
-        Assert.Contains("params__ + this.params_", rendered, StringComparison.Ordinal);
+        Assert.Contains("$params + this.params_", rendered, StringComparison.Ordinal);
         Assert.Contains("defer__ + this.defer_", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
@@ -954,9 +980,9 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("Read(stackalloc_ []int32, base_ []int32)", rendered, StringComparison.Ordinal);
-        Assert.Contains("stackalloc_[0]", rendered, StringComparison.Ordinal);
-        Assert.Contains("base_[0]", rendered, StringComparison.Ordinal);
+        Assert.Contains("Read($stackalloc []int32, $base []int32)", rendered, StringComparison.Ordinal);
+        Assert.Contains("$stackalloc[0]", rendered, StringComparison.Ordinal);
+        Assert.Contains("$base[0]", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
@@ -1097,7 +1123,7 @@ public sealed class Issue3461IdentifierSanitizationTests
 
         Assert.Contains("class $class", rendered, StringComparison.Ordinal);
         Assert.Contains("var params int32", rendered, StringComparison.Ordinal);
-        Assert.Contains("Read(params_ int32)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Read($params int32)", rendered, StringComparison.Ordinal);
         Assert.Contains("let ordinary", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(@"\u", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
@@ -1114,7 +1140,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("Read(params_ int32)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Read($params int32)", rendered, StringComparison.Ordinal);
         Assert.Contains("\"params\"", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("nameof(", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
@@ -1201,14 +1227,6 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.Contains("class $class", rendered, StringComparison.Ordinal);
         Assert.Contains("@$class(\"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
-    }
-
-    private static void AssertNoStandaloneIdentifier(string rendered, string identifier)
-    {
-        Match match = Regex.Match(
-            rendered,
-            $@"(?<![A-Za-z0-9_]){Regex.Escape(identifier)}(?![A-Za-z0-9_])");
-        Assert.False(match.Success, $"raw identifier '{identifier}' leaked into translated G#:\n{rendered}");
     }
 
     /// <summary>Issue #3610 / ADR-0170 follow-up: the repository-mode
