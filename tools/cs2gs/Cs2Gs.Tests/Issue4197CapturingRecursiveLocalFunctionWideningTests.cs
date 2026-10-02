@@ -478,22 +478,23 @@ namespace Demo
     [Theory]
     [InlineData("x.N = 42;")]
     [InlineData("x.Set(42);")]
+    [InlineData("x[0] = 42;")]
     public void CrossSectionLift_LambdaWriteThroughStructStorage_KeepsSharedStorage(string write)
     {
-        // Issue #4302: writing a field of, or calling a mutating method on, a
-        // captured struct writes the struct's storage, so the lifted helper
+        // Issue #4302: writing a field or indexer of, or calling a mutating
+        // method on, a captured struct writes the struct's storage, so the lifted helper
         // must receive it by ref rather than a stale copy.
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit($$"""
             namespace Demo {
                 public struct S {
                     public int N;
                     public void Set(int value) { N = value; }
+                    public int this[int i] { get => N; set { N = value; } }
                 }
 
                 public class C {
                     public int Run(int value) {
-                        S x = new S();
-                        x.N = 1;
+                        S x = new S { N = 1 };
                         System.Action mutate = () => { {{write}} };
                         switch (value) {
                             case 0:

@@ -2218,11 +2218,22 @@ public sealed partial class CSharpToGSharpTranslator
         // storage of `symbol`.
         private bool WritesStorageOf(ExpressionSyntax target, ISymbol symbol)
         {
-            while (target is MemberAccessExpressionSyntax member
-                && member.IsKind(SyntaxKind.SimpleMemberAccessExpression)
-                && this.context.GetTypeInfo(member.Expression).Type is { IsReferenceType: false })
+            while (true)
             {
-                target = member.Expression;
+                ExpressionSyntax receiver = target switch
+                {
+                    MemberAccessExpressionSyntax member
+                        when member.IsKind(SyntaxKind.SimpleMemberAccessExpression) => member.Expression,
+                    ElementAccessExpressionSyntax element => element.Expression,
+                    _ => null,
+                };
+                if (receiver is null
+                    || this.context.GetTypeInfo(receiver).Type is not { IsReferenceType: false })
+                {
+                    break;
+                }
+
+                target = receiver;
             }
 
             return this.BindsTo(target, symbol);
