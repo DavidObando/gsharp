@@ -123,6 +123,11 @@ while True:
     elif method == "textDocument/inlayHint" and msg["params"]["range"]["end"]["line"] > doc_lines:
         send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "range past the end"}})
         continue
+    elif method == "textDocument/hover" and mode == "garbage-stdout" and not os.path.exists(os.environ["STUB_FLAG"]):
+        open(os.environ["STUB_FLAG"], "w").close()
+        stdout.write(b"Content-Length: 9\r\n\r\nnot json!")
+        stdout.flush()
+        continue
     elif method == "textDocument/hover" and mode == "no-hover":
         send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}})
         continue
@@ -195,6 +200,14 @@ class LspSoakTests(unittest.TestCase):
         kinds = {c["kind"]: c for c in third["crashes"]}
         self.assertEqual({"process-exit", "logged-exception"}, set(kinds))
         self.assertTrue(kinds["logged-exception"]["afterRestart"])
+
+    def test_non_json_output_is_a_process_failure_with_the_reason(self) -> None:
+        code, result = self.run_stub("garbage-stdout")
+        self.assertEqual(1, code)
+        crashes = [c for s in result["steps"] for c in s["crashes"]]
+        self.assertEqual(["process-exit"], [c["kind"] for c in crashes])
+        self.assertIn("not JSON", crashes[0]["stderr"])
+        self.assertEqual(1, result["restarts"])
 
     def test_rpc_error_is_recorded(self) -> None:
         code, result = self.run_stub("rpc-error", at=2)

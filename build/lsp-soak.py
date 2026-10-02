@@ -376,6 +376,10 @@ def cmd_plan(args: argparse.Namespace) -> int:
             files += sample_band(tree, args.sample, args.min_lines, args.max_lines, args.seed)
         else:
             files += find_largest(tree, args.largest)
+    unique: dict[Path, Path] = {}
+    for f in files:
+        unique.setdefault(f.expanduser().resolve(), f)
+    files = list(unique.values())
     if not files:
         raise HarnessError("no input files: pass --tree and/or file paths")
     meta = parse_pairs("--meta", args.meta)
@@ -453,7 +457,7 @@ class LspClient:
             with self.send_lock:
                 stdin.write(header + body)
                 stdin.flush()
-        except (BrokenPipeError, OSError) as exc:
+        except (BrokenPipeError, OSError, ValueError) as exc:  # ValueError: pipe closed by kill()
             raise self._exited() from exc
 
     def _read_stdout(self) -> None:
@@ -472,18 +476,33 @@ class LspClient:
                         break
                     name, _, value = line.decode("ascii", "replace").partition(":")
                     if name.lower() == "content-length":
-                        length = int(value.strip())
+                        try:
+                            length = int(value.strip())
+                        except ValueError:
+                            self._protocol_error(f"bad Content-Length header: {line[:200]!r}")
+                            return
                 if length is None:
                     continue
                 body = stream.read(length)
                 if len(body) < length:
                     return
-                self._dispatch(json.loads(body.decode("utf-8")))
+                try:
+                    message = json.loads(body.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    self._protocol_error(f"server wrote a frame that is not JSON ({exc}): {body[:200]!r}")
+                    return
+                self._dispatch(message)
         finally:
             self.closed.set()
             with self.lock:
                 for q in self.pending.values():
                     q.put({"__closed__": True})
+
+    def _protocol_error(self, detail: str) -> None:
+        # The stream can't be resynchronized: record why, stop the server, and let pending and
+        # later requests fail as a server exit that carries this detail.
+        self.stderr_tail.append(f"lsp-soak: protocol error: {detail}")
+        self.kill()
 
     def _read_stderr(self) -> None:
         stream = self.process.stderr
