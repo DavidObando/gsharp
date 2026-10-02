@@ -130,6 +130,16 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
                          "*.cs",
                          SearchOption.AllDirectories))
             {
+                // Build output (obj/**/GeneratedAssemblyInfo.cs, ...) is not a
+                // committed source and must not satisfy the non-empty check.
+                if (Path.GetRelativePath(projectDirectory, sourcePath)
+                    .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .Any(segment => string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
                 string code = StripComments(File.ReadAllText(sourcePath));
                 Assert.DoesNotMatch(RoslynEnumPropertyPattern, code);
                 Assert.DoesNotMatch(RoslynEnumDirectPattern, code);
