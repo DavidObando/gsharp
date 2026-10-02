@@ -92,6 +92,42 @@ internal static class SharedClassNormalizer
         {
             diagnostics.ReportSharedClassCannotDeclare(explicitBlock.SharedKeyword.Location, className, "a 'shared { }' block");
         }
+
+        // The body parser accepts `open` and `override` on a method, property or event, and
+        // the shared-member binders would silently drop them (a shared member is static
+        // and never virtual), unlike the same member in a `shared { }` block. Reject them.
+        foreach (var method in declaration.Methods)
+        {
+            ReportVirtualModifiers(diagnostics, className, "method", method.OpenModifier, method.OverrideModifier);
+        }
+
+        foreach (var property in declaration.Properties)
+        {
+            ReportVirtualModifiers(diagnostics, className, "property", property.OpenModifier, property.OverrideModifier);
+        }
+
+        foreach (var evt in declaration.Events)
+        {
+            ReportVirtualModifiers(diagnostics, className, "event", evt.OpenModifier, evt.OverrideModifier);
+        }
+    }
+
+    private static void ReportVirtualModifiers(
+        DiagnosticBag diagnostics,
+        string className,
+        string memberKind,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier)
+    {
+        if (openModifier != null)
+        {
+            diagnostics.ReportSharedClassCannotDeclare(openModifier.Location, className, $"an 'open' {memberKind}");
+        }
+
+        if (overrideModifier != null)
+        {
+            diagnostics.ReportSharedClassCannotDeclare(overrideModifier.Location, className, $"an 'override' {memberKind}");
+        }
     }
 
     private static ImmutableArray<MemberSyntax> NormalizeNestedTypes(

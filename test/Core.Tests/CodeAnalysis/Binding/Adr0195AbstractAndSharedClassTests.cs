@@ -1,4 +1,4 @@
-// <copyright file="Adr0195AbstractAndStaticClassTests.cs" company="GSharp">
+// <copyright file="Adr0195AbstractAndSharedClassTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -233,6 +233,24 @@ shared class Primary(X int32) { }
 ");
         var lines = result.Diagnostics.Where(d => d.Id == "GS0617").Select(d => d.Location.StartLine + 1).OrderBy(l => l).ToArray();
         Assert.Equal(new[] { 3, 4, 5, 9 }, lines);
+    }
+
+    [Fact]
+    public void SharedClass_WithOpenOrOverrideMembers_ReportsGS0617ForEach()
+    {
+        // The same members in a `shared { }` block are rejected by the parser; in the body of a
+        // shared class they must not be accepted and silently made non-virtual.
+        var result = EmittedOracle.Evaluate(@"
+shared class Helpers {
+    open func A() int32 { return 1 }
+    open prop P int32 { get { return 1 } }
+    open event E func()
+    func Fine() int32 { return 1 }
+}
+0
+");
+        var lines = result.Diagnostics.Where(d => d.Id == "GS0617").Select(d => d.Location.StartLine + 1).OrderBy(l => l).ToArray();
+        Assert.Equal(new[] { 3, 4, 5 }, lines);
     }
 
     [Fact]

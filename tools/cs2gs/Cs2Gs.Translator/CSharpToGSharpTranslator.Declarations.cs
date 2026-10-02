@@ -1881,13 +1881,16 @@ public sealed partial class CSharpToGSharpTranslator
             // class's CLR identity back (matching the native assembly's
             // metadata shape), not the package's `<Program>`.
             //
-            // Issue #4674 (ADR-0195): only a class that HAD members, all lifted, is elided. A
-            // static class the author wrote empty (`public static class Marker { }`) is a
+            // Issue #4674 (ADR-0195): only an extension HOLDER is elided, that is a class whose
+            // every member was an extension method. A static class the author wrote empty
+            // (`public static class Marker { }`), or one that holds only things that also
+            // leave the body (a nested delegate is lifted to a top-level declaration), is a
             // declared type of the assembly's API and now has a direct form, a
             // `shared class`, so it is kept.
             if (isStaticClass &&
                 members.Count == 0 &&
                 mergedMembers.Count > 0 &&
+                mergedMembers.All(IsExtensionMethodDeclaration) &&
                 !hostedAnyExtensionOnStaticClass &&
                 !IsTypeOfReferenced(this.context.Compilation, symbol, this.retainedFilePaths))
             {
@@ -1981,6 +1984,11 @@ public sealed partial class CSharpToGSharpTranslator
                 isRefLike: isRefLike,
                 isShared: isStaticClass);
         }
+
+        private static bool IsExtensionMethodDeclaration(MemberDeclarationSyntax member) =>
+            member is MethodDeclarationSyntax method
+            && method.ParameterList.Parameters.Count > 0
+            && method.ParameterList.Parameters[0].Modifiers.Any(SyntaxKind.ThisKeyword);
 
         private bool ShouldAttachOwnedExtensions(
             TypeDeclarationSyntax node,

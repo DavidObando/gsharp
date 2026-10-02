@@ -65,6 +65,11 @@ namespace Corpus.Adr0195
     {
     }
 
+    public static class OnlyANestedDelegate
+    {
+        public delegate void Callback(int value);
+    }
+
     public class WithStatics
     {
         public static int Count;
@@ -162,6 +167,19 @@ namespace Corpus.Adr0195
         Assert.True(marker.IsShared);
         Assert.Empty(marker.Members);
         Assert.Contains("shared class Marker", GSharpPrinter.Print(Translate()), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StaticClassWithOnlyALiftedNestedDelegate_IsKept()
+    {
+        // The nested delegate is lifted to a top-level declaration, so the body is empty, but the
+        // class is a declared type of the API and not an extension holder.
+        TypeDeclaration holder = Declaration("OnlyANestedDelegate");
+
+        Assert.True(holder.IsShared);
+        Assert.Contains(
+            Translate().Members.OfType<NamedDelegateDeclaration>(),
+            lifted => lifted.Name == "OnlyANestedDelegate_Callback");
     }
 
     [Fact]
