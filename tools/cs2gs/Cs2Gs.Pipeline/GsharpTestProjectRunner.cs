@@ -243,7 +243,8 @@ public class GsharpTestProjectRunner
     /// <param name="version">The exact version required.</param>
     /// <param name="config">The build config to probe first.</param>
     /// <returns>The nupkg path, or <see langword="null"/> when no local copy exists.</returns>
-    internal static string FindLocalPackageVersion(
+#nullable enable annotations
+    internal static string? FindLocalPackageVersion(
         string repoRoot, string packageId, string version, string config = "Release")
     {
         if (string.IsNullOrEmpty(repoRoot))
@@ -273,6 +274,7 @@ public class GsharpTestProjectRunner
 
         return null;
     }
+#nullable restore annotations
 
     internal static (string NupkgPath, string Version)? ResolveNewestSdkPackage(string directory)
         => ResolveNewestPackage(directory, SdkPackageId);

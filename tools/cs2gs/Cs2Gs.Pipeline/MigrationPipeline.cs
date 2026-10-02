@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
-
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -229,14 +227,15 @@ public sealed class MigrationPipeline
             : null;
         if (repositoryLayout)
         {
-            string sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, this.options.SdkVersion);
+#nullable enable annotations
+            string? sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, this.options.SdkVersion);
             if (sdkVersion is null)
             {
                 throw new InvalidOperationException(
                     "Could not resolve a local Gsharp.NET.Sdk package for the mirrored projects.");
             }
 
-            string? sourcePin = SdkPin.ReadGlobalJsonPin(destinationRoot);
+            string? mirroredGlobalJsonPin = SdkPin.ReadGlobalJsonPin(destinationRoot);
             if (this.options.SdkPinLocation == SdkPinLocation.GlobalJson)
             {
                 if (SdkPin.WriteGlobalJsonPin(destinationRoot, sdkVersion))
@@ -244,14 +243,14 @@ public sealed class MigrationPipeline
                     this.options.RepositoryAdditionalFiles.Add(SdkPin.GlobalJsonFileName);
                 }
             }
-            else if (sourcePin is not null)
+            else if (mirroredGlobalJsonPin is not null)
             {
                 // A versioned Sdk attribute silently overrides a global.json
                 // msbuild-sdks pin, and validate takes a pinned global.json to
                 // mean the tree is in global-json mode. Mixing the two would
                 // build different projects against different SDKs.
                 throw new InvalidOperationException(
-                    "The repository global.json (mirrored from the source) already pins Gsharp.NET.Sdk " + sourcePin +
+                    "The repository global.json (mirrored from the source) already pins Gsharp.NET.Sdk " + mirroredGlobalJsonPin +
                     "; migrate with --sdk-pin global-json.");
             }
 
@@ -265,6 +264,7 @@ public sealed class MigrationPipeline
             // project and finds this null.
             this.options.RepositoryAnalyzerVerifierPackageVersion =
                 SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion(this.options.Config, this.options.SdkVersion);
+#nullable restore annotations
 
             foreach (CorpusApp app in apps)
             {
@@ -713,6 +713,7 @@ public sealed class MigrationPipeline
     /// falls back to resolving one as <c>migrate</c> does.
     /// </summary>
     /// <param name="migratedRoot">The migrated tree.</param>
+#nullable enable annotations
     private void ResolveValidationSdkPin(string migratedRoot)
     {
         string? treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
@@ -735,7 +736,7 @@ public sealed class MigrationPipeline
         }
 
         SdkPinLocation location = treePin is null ? SdkPinLocation.ProjectFile : SdkPinLocation.GlobalJson;
-        string requestedVersion = recordedPin ?? this.options.SdkVersion;
+        string? requestedVersion = recordedPin ?? this.options.SdkVersion;
         string sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, requestedVersion);
 
         // A null version is not thrown here: each app's compile reports the
@@ -746,6 +747,7 @@ public sealed class MigrationPipeline
         this.options.RepositoryAnalyzerVerifierPackageVersion =
             SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion(this.options.Config, requestedVersion);
     }
+#nullable restore annotations
 
     private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> LoadEvaluatedProjectReferencesAsync(
         IReadOnlyList<CorpusApp> apps,

@@ -180,10 +180,12 @@ public sealed class Issue4631SdkPinTests : IDisposable
     [InlineData("0.4.1200\"", false)]
     [InlineData("", false)]
     [InlineData(null, false)]
-    public void SdkVersionArgument_IsValidatedStrictly(string version, bool valid)
+#nullable enable annotations
+    public void SdkVersionArgument_IsValidatedStrictly(string? version, bool valid)
     {
         Assert.Equal(valid, SdkPinArguments.IsValidVersion(version));
     }
+#nullable restore annotations
 
     /// <summary><c>--sdk-pin</c> accepts exactly the two documented spellings.</summary>
     [Fact]
