@@ -433,6 +433,78 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_SynthesizedPatternVariableCannotShadowHelper()
+        {
+            // Issue #4302: a type pattern without a designation synthesizes a
+            // G# pattern variable from the type name (`Callback` -> `callback`).
+            // A lifted helper with that spelling must still be the call target,
+            // so lifted references are qualified through their owner.
+            string printed = Translate("""
+                public delegate int Callback(int n);
+
+                public class C
+                {
+                    public int Run()
+                    {
+                        Callback value = n => n + 100;
+                        switch (value)
+                        {
+                            case Callback { }:
+                                return callback(0);
+                        }
+
+                        return -1;
+                        static int callback(int n) => n == 0 ? 7 : Other<int>(n - 1);
+                        static int Other<T>(int n) => callback(n);
+                    }
+                }
+                """);
+
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run())",
+                "7");
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_LaterImportAliasCannotShadowHelper()
+        {
+            // Issue #4302: a file-scope import alias allocated after the helper
+            // name was chosen (`TextStringBuilder_2` for System.Text.StringBuilder
+            // beside a source StringBuilder) must not capture the helper's calls.
+            string printed = Translate("""
+                public class StringBuilder
+                {
+                }
+
+                public class C
+                {
+                    public int TextStringBuilder => 0;
+
+                    public int Run(int value)
+                    {
+                        return TextStringBuilder(value);
+                        static int TextStringBuilder(int n) => n == 0 ? 5 : Other<int>(n - 1);
+                        static int Other<T>(int n) => TextStringBuilder(n);
+                    }
+
+                    public int Later()
+                    {
+                        var mine = new StringBuilder();
+                        var text = new System.Text.StringBuilder();
+                        text.Append("x");
+                        return mine == null ? 0 : text.Length;
+                    }
+                }
+                """);
+
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run(2) * 10 + C().Later())",
+                "51");
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReusesNameAcrossUnrelatedTypes()
         {
             string printed = Translate("""
@@ -523,7 +595,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
-            Assert.Contains("return Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
+            Assert.Contains("return C.Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
@@ -575,7 +647,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
-            Assert.Contains("return Helper_3(value) + Helper_2(value)", printed, StringComparison.Ordinal);
+            Assert.Contains("return C.Helper_3(value) + Helper_2(value)", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 
@@ -597,7 +669,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
-            Assert.Contains("return Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
+            Assert.Contains("return C.Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 

@@ -450,9 +450,13 @@ public sealed partial class CSharpToGSharpTranslator
             this.anonymousTypeRegistriesByPackage[registryKey] = anonymousTypeRegistry;
         }
 
+        LiftedLocalFunctionNameAllocator liftedHelperNames = LiftedLocalFunctionNames.GetValue(
+            context.Compilation,
+            static _ => new LiftedLocalFunctionNameAllocator());
         var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry, nameAllocator)
         {
             AnalyzerApiMode = this.analyzerApiMode,
+            IsLiftedHelperName = name => liftedHelperNames.IsAllocatedHelperName(name),
         };
         typeMapper.SetTopLevelStatementsEntryPoint(
             keptTopLevelProgram is null ? null : entryPoint);

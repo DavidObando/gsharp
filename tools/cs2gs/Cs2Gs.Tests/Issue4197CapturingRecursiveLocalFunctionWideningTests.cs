@@ -1126,7 +1126,7 @@ namespace Demo
             """);
 
         Assert.Contains("func First_2(", printed, StringComparison.Ordinal);
-        Assert.Contains("= First_2", printed, StringComparison.Ordinal);
+        Assert.Contains("= this.First_2", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
 

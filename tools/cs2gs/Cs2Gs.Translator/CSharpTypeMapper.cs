@@ -247,6 +247,15 @@ public sealed class CSharpTypeMapper
     public bool AnalyzerApiMode { get; set; }
 
     /// <summary>
+    /// Gets or sets the predicate naming lifted local-function helpers already
+    /// allocated in this compilation (issue #4302). A helper is an aggregate
+    /// member, and a member shadows a file-scope import alias in gsc scope
+    /// resolution, so a synthesized readable alias must never take one of
+    /// these names.
+    /// </summary>
+    public System.Func<string, bool> IsLiftedHelperName { get; set; }
+
+    /// <summary>
     /// Gets every namespace shortened into a bare/qualified-nested type name by
     /// this mapper so far (see <see cref="shortenedNamespaces"/>).
     /// </summary>
@@ -1223,9 +1232,11 @@ public sealed class CSharpTypeMapper
         string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
         string baseAlias = $"{namespaceQualifier}{simpleName}";
         string alias = baseAlias;
+        System.Func<string, bool> isLiftedHelperName = this.IsLiftedHelperName;
         for (var suffix = 2;
             reserved.Contains(alias)
-                || HasVisibleCallableName(alias, context, location, names);
+                || HasVisibleCallableName(alias, context, location, names)
+                || (isLiftedHelperName != null && isLiftedHelperName(alias));
             suffix++)
         {
             alias = $"{baseAlias}_{suffix}";

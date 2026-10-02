@@ -59,15 +59,11 @@ public sealed partial class CSharpToGSharpTranslator
                 // Mirrors the invocation path: a static lift lands in the
                 // emitted aggregate's `shared` block, so only a site outside
                 // that aggregate's sibling-static scope qualifies it.
-                INamedTypeSymbol recursiveOwner =
-                    this.state.CurrentEmittedAggregate ?? recursiveLiftedLocal.ContainingType;
-                translated = recursiveLift.IsStatic
-                    && recursiveOwner != null
-                    && !this.IsBareSiblingStaticScope(recursiveOwner, recursiveLift.Name, name)
-                        ? new MemberAccessExpression(
-                            this.StaticQualifierReceiver(recursiveOwner, name.GetLocation()),
-                            recursiveLift.Name)
-                        : new IdentifierExpression(recursiveLift.Name);
+                translated = this.LiftedLocalFunctionTarget(
+                    recursiveLift.Name,
+                    recursiveLift.IsStatic,
+                    this.state.CurrentEmittedAggregate ?? recursiveLiftedLocal.ContainingType,
+                    name);
                 return true;
             }
 
@@ -76,20 +72,42 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction.OriginalDefinition, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
-                INamedTypeSymbol emittedOwner = this.state.CurrentEmittedAggregate ?? containingType;
-
-                // Issue #3471: the lifted helper lands in the containing
-                // aggregate's `shared` block, so a same-type site names it bare.
-                translated = this.IsBareSiblingStaticScope(emittedOwner, liftedName, name)
-                    ? new IdentifierExpression(liftedName)
-                    : new MemberAccessExpression(
-                        this.StaticQualifierReceiver(emittedOwner, name.GetLocation()),
-                        liftedName);
+                translated = this.LiftedLocalFunctionTarget(
+                    liftedName,
+                    isStatic: true,
+                    this.state.CurrentEmittedAggregate ?? containingType,
+                    name);
                 return true;
             }
 
             translated = null;
             return false;
+        }
+
+        // Issue #4302: every reference to a lifted local-function helper (call
+        // target or value) is qualified through its owner: `Owner.Name` for a
+        // `shared` helper and `this.Name` for an instance helper. A bare name
+        // could be shadowed by anything gsc resolves first in the emitted
+        // scope (a synthesized pattern variable or carrier local, a file-scope
+        // import alias allocated later), silently calling the wrong function.
+        // Qualification makes the helper's binding independent of every
+        // local and file-scope name.
+        private GExpression LiftedLocalFunctionTarget(
+            string liftedName,
+            bool isStatic,
+            INamedTypeSymbol owner,
+            SyntaxNode site)
+        {
+            if (!isStatic)
+            {
+                return new MemberAccessExpression(new ThisExpression(), liftedName);
+            }
+
+            return owner != null
+                ? new MemberAccessExpression(
+                    this.StaticQualifierReceiver(owner, site.GetLocation()),
+                    liftedName)
+                : new IdentifierExpression(liftedName);
         }
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)

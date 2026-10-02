@@ -137,11 +137,12 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
-        public void LiftedStaticLocalFunction_SameTypeCall_EmitsBare()
+        public void LiftedStaticLocalFunction_SameTypeCall_QualifiesThroughOwner()
         {
             // Issue #4302: a mixed generic/non-generic recursion group keeps
-            // the readable member-lift fallback, and same-type calls remain
-            // bare rather than acquiring a redundant owner qualification.
+            // the readable member-lift fallback. Its readable name could be
+            // shadowed by a synthesized local or a later import alias, so
+            // every call qualifies through the owner, same-type sites included.
             string printed = Translate("""
                 public class Labels
                 {
@@ -163,8 +164,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
-            Assert.Contains("return NewLabel(value)", printed, StringComparison.Ordinal);
-            Assert.DoesNotContain("Labels.NewLabel(value)", printed, StringComparison.Ordinal);
+            Assert.Contains("return Labels.NewLabel(value)", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 

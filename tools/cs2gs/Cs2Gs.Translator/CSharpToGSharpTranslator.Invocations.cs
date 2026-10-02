@@ -219,16 +219,11 @@ public sealed partial class CSharpToGSharpTranslator
                         : captureArgument);
                 }
 
-                INamedTypeSymbol recursiveOwner =
-                    this.state.CurrentEmittedAggregate ?? recursiveLocal.ContainingType;
-                GExpression recursiveTarget = recursiveLift.IsStatic
-                    && recursiveOwner != null
-                    && !this.IsBareSiblingStaticScope(
-                        recursiveOwner, recursiveLift.Name, invocation)
-                        ? new MemberAccessExpression(
-                            this.StaticQualifierReceiver(recursiveOwner, invocation.GetLocation()),
-                            recursiveLift.Name)
-                        : new IdentifierExpression(recursiveLift.Name);
+                GExpression recursiveTarget = this.LiftedLocalFunctionTarget(
+                    recursiveLift.Name,
+                    recursiveLift.IsStatic,
+                    this.state.CurrentEmittedAggregate ?? recursiveLocal.ContainingType,
+                    invocation);
                 IReadOnlyList<GTypeReference> recursiveTypeArguments =
                     invocation.Expression is GenericNameSyntax recursiveGeneric
                         ? this.MapTypeArguments(recursiveGeneric)
@@ -399,15 +394,11 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction.OriginalDefinition, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
-                INamedTypeSymbol emittedOwner = this.state.CurrentEmittedAggregate ?? containingType;
-
-                // Issue #3471: same-type call sites name the lifted `shared`
-                // helper bare; only cross-type sites qualify through the owner.
-                target = this.IsBareSiblingStaticScope(emittedOwner, liftedName, invocation)
-                    ? new IdentifierExpression(liftedName)
-                    : new MemberAccessExpression(
-                        this.StaticQualifierReceiver(emittedOwner, invocation.GetLocation()),
-                        liftedName);
+                target = this.LiftedLocalFunctionTarget(
+                    liftedName,
+                    isStatic: true,
+                    this.state.CurrentEmittedAggregate ?? containingType,
+                    invocation);
                 if (invocation.Expression is GenericNameSyntax liftedGeneric)
                 {
                     typeArguments = this.MapTypeArguments(liftedGeneric);

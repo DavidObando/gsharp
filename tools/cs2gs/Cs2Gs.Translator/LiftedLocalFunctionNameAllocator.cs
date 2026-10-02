@@ -17,6 +17,16 @@ internal sealed class LiftedLocalFunctionNameAllocator
     private readonly Dictionary<ISymbol, HashSet<string>> usedByType =
         new(SymbolEqualityComparer.Default);
 
+    private readonly HashSet<string> helperNames = new(StringComparer.Ordinal);
+
+    public bool IsAllocatedHelperName(string name)
+    {
+        lock (this.gate)
+        {
+            return this.helperNames.Contains(name);
+        }
+    }
+
     public string Allocate(
         IMethodSymbol localFunction,
         INamedTypeSymbol emittedOwner,
@@ -24,14 +34,18 @@ internal sealed class LiftedLocalFunctionNameAllocator
         string localName,
         Func<string, bool> unavailable)
     {
+        // Memo keys are normalized to definitions so one helper reached
+        // through different symbol instances gets one name and one registry.
+        ISymbol key = localFunction.OriginalDefinition;
+        ISymbol owner = (ISymbol)(emittedOwner ?? localFunction.ContainingType)?.OriginalDefinition
+            ?? localFunction.ContainingAssembly;
         lock (this.gate)
         {
-            if (this.assigned.TryGetValue(localFunction, out string assignedName))
+            if (this.assigned.TryGetValue(key, out string assignedName))
             {
                 return assignedName;
             }
 
-            ISymbol owner = emittedOwner ?? localFunction.ContainingType ?? (ISymbol)localFunction.ContainingAssembly;
             if (!this.usedByType.TryGetValue(owner, out HashSet<string> used))
             {
                 used = new HashSet<string>(StringComparer.Ordinal);
@@ -47,7 +61,8 @@ internal sealed class LiftedLocalFunctionNameAllocator
             }
 
             used.Add(candidate);
-            this.assigned.Add(localFunction, candidate);
+            this.helperNames.Add(candidate);
+            this.assigned.Add(key, candidate);
             return candidate;
         }
     }
@@ -57,14 +72,15 @@ internal sealed class LiftedLocalFunctionNameAllocator
         ISet<string> occupied,
         string baseName)
     {
+        ISymbol key = property.OriginalDefinition;
+        ISymbol owner = (ISymbol)property.ContainingType?.OriginalDefinition ?? property.ContainingAssembly;
         lock (this.gate)
         {
-            if (this.assigned.TryGetValue(property, out string assignedName))
+            if (this.assigned.TryGetValue(key, out string assignedName))
             {
                 return assignedName;
             }
 
-            ISymbol owner = property.ContainingType ?? (ISymbol)property.ContainingAssembly;
             if (!this.usedByType.TryGetValue(owner, out HashSet<string> used))
             {
                 used = new HashSet<string>(StringComparer.Ordinal);
@@ -80,7 +96,7 @@ internal sealed class LiftedLocalFunctionNameAllocator
             }
 
             used.Add(candidate);
-            this.assigned.Add(property, candidate);
+            this.assigned.Add(key, candidate);
             return candidate;
         }
     }
