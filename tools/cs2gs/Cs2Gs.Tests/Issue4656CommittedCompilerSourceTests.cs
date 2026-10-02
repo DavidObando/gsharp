@@ -54,6 +54,22 @@ public sealed class Issue4656CommittedCompilerSourceTests
         }
     }
 
+    /// <summary>
+    /// Build output is judged below the scanned root only: obj/ and bin/
+    /// beneath it are skipped (any case), a root that itself sits under a bin/
+    /// directory is not.
+    /// </summary>
+    [Fact]
+    public void IsBuildOutput_JudgesOnlySegmentsBelowTheRoot()
+    {
+        string root = Path.Combine(Path.DirectorySeparatorChar + "work", "bin", "Release", "tree");
+
+        Assert.True(CommittedCompilerSource.IsBuildOutput(root, Path.Combine(root, "src", "obj", "A.gs")));
+        Assert.True(CommittedCompilerSource.IsBuildOutput(root, Path.Combine(root, "src", "Bin", "A.gs")));
+        Assert.False(CommittedCompilerSource.IsBuildOutput(root, Path.Combine(root, "src", "Core", "A.gs")));
+        Assert.False(CommittedCompilerSource.IsBuildOutput(root, Path.Combine(root, "src", "binary", "A.gs")));
+    }
+
     private static void Delete(params string[] roots)
     {
         // Best-effort cleanup: a failure here must never mask the test's own result.

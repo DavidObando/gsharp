@@ -53,7 +53,10 @@ internal static class CommittedCompilerSource
     {
         // A set: overlapping directories ("src" and "src/Core") must not count
         // a file twice.
-        var files = new HashSet<string>(StringComparer.Ordinal);
+        // Path case is folded only on Windows; elsewhere (including
+        // case-sensitive macOS volumes) two spellings may be two files.
+        var files = new HashSet<string>(
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         foreach (string relative in relativeDirectories)
         {
             string directory = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
