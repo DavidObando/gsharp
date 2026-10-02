@@ -168,6 +168,12 @@ class ReleaseVersionRefsTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertReported(self.problems_with({path: "{ not json"}), path, "invalid JSON")
 
+    def test_versions_json_must_be_a_non_empty_array(self) -> None:
+        for text in ("null", "{}", "1", "[]"):
+            with self.subTest(text=text):
+                self.assertReported(self.problems_with({refs.VERSIONS_JSON: text}),
+                                    refs.VERSIONS_JSON, "non-empty JSON array")
+
     def test_missing_versions_json_is_reported_as_missing(self) -> None:
         self.assertIn(f"{refs.VERSIONS_JSON}: missing", self.problems_with({refs.VERSIONS_JSON: None}))
 

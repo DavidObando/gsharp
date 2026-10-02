@@ -274,20 +274,20 @@ def check(tree: Tree) -> list[str]:
         problems.append(
             f"{RELEASE_JSON}: version {version} does not belong to docsVersion {docs_version!r}")
     versions_text = tree.read(VERSIONS_JSON)
-    try:
-        if versions_text is None:
-            problems.append(f"{VERSIONS_JSON}: missing")
-            versions = None
-        else:
+    if versions_text is None:
+        problems.append(f"{VERSIONS_JSON}: missing")
+    else:
+        try:
             versions = json.loads(versions_text)
-    except json.JSONDecodeError as error:
-        problems.append(f"{VERSIONS_JSON}: invalid JSON: {error}")
-        versions = None
-    if versions is None:
-        pass
-    elif not isinstance(versions, list) or not versions or versions[0] != docs_version:
-        problems.append(
-            f"{VERSIONS_JSON}: newest snapshot {versions[:1]} != release docsVersion {docs_version!r}")
+        except json.JSONDecodeError as error:
+            problems.append(f"{VERSIONS_JSON}: invalid JSON: {error}")
+        else:
+            if not isinstance(versions, list) or not versions:
+                problems.append(f"{VERSIONS_JSON}: expected a non-empty JSON array, found {versions!r}")
+            elif versions[0] != docs_version:
+                problems.append(
+                    f"{VERSIONS_JSON}: newest snapshot {versions[0]!r} != release docsVersion "
+                    f"{docs_version!r}")
     version_json = tree.read(VERSION_JSON)
     if version_json is None:
         problems.append(f"{VERSION_JSON}: missing")
