@@ -288,6 +288,7 @@ public sealed class Issue4633TestNameParityTests
 
         Assert.True(rendered.IsMatch);
         Assert.Empty(rendered.StaleEntries);
+        Assert.Contains("rows: Own.Tests.A.Adds (2 row(s) render differently)", rendered.Explained);
         Assert.False(lost.IsMatch);
         Assert.Equal(2, lost.UnexplainedMissing.Count);
     }

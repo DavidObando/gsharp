@@ -117,7 +117,7 @@ public sealed partial class TestParityStage
         summary.Extra = result.Extra.Count;
         summary.Explained = verdict.Explained.Count;
         summary.StaleBaselineEntries.AddRange(verdict.StaleEntries.Select(entry => entry.ToString()));
-        this.WriteTestNameParity(context, result, verdict);
+        bool reportWritten = this.WriteTestNameParity(context, result, verdict);
 
         string counts =
             $"per-test-name parity: C# discovers {result.ExpectedCount} case(s), migrated run reported " +
@@ -138,12 +138,16 @@ public sealed partial class TestParityStage
         }
 
         var message = new StringBuilder();
-        message.Append("TEST-NAME-PARITY: the migrated run does not execute the same test cases as the C# ")
-            .Append("original. ").Append(counts).AppendLine();
+        message.Append("The migrated run does not execute the same test cases as the C# original. ")
+            .Append(counts).AppendLine();
         AppendDifferences(message, "missing from the migrated run", verdict.UnexplainedMissing);
         AppendDifferences(message, "not in the C# original", verdict.UnexplainedExtra);
-        message.Append("Full lists: ").Append(TestNameParityFileName)
-            .Append(". A difference that is understood belongs in ")
+        if (reportWritten)
+        {
+            message.Append("Full lists: ").Append(TestNameParityFileName).Append(". ");
+        }
+
+        message.Append("A difference that is understood belongs in ")
             .Append(TestNameParityBaseline.DefaultRelativePath).Append(" with a reason and an issue.");
         return this.NameParityFailure(context, "TEST-NAME-PARITY", message.ToString());
     }
@@ -187,7 +191,7 @@ public sealed partial class TestParityStage
         return context.Triage.TestParityNameMismatch(id, message, EmittedGsRelative(context));
     }
 
-    private void WriteTestNameParity(
+    private bool WriteTestNameParity(
         StageExecutionContext context, TestNameParityResult result, TestNameParityVerdict verdict)
     {
         var document = new TestNameParityReport
@@ -209,11 +213,14 @@ public sealed partial class TestParityStage
             File.WriteAllText(
                 Path.Combine(context.ArtifactDir, TestNameParityFileName),
                 JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true }));
+            return true;
         }
-        catch (Exception ex) when (IsReadFailure(ex))
+        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is System.Security.SecurityException)
         {
             // Diagnostic detail only; the verdict and its counts are already on
-            // the context and in the stage log.
+            // the context and in the stage log, which says the report is absent.
+            this.Note(context, "could not write " + TestNameParityFileName + ": " + ex.Message);
+            return false;
         }
     }
 }

@@ -283,6 +283,13 @@ public sealed class TestNameParityBaseline
         }
 
         var explained = new List<string>();
+        foreach (string method in rowMethods.OrderBy(name => name, StringComparer.Ordinal))
+        {
+            int rows = result.Missing.Count(name => IsRowOf(name, method));
+            explained.Add("rows: " + method + " (" + rows.ToString(CultureInfo.InvariantCulture) +
+                " row(s) render differently)");
+        }
+
         var unexplainedMissing = new List<string>();
         foreach (string name in result.Missing)
         {
