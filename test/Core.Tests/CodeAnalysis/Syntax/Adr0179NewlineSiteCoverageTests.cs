@@ -6,7 +6,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 
@@ -84,7 +83,7 @@ public sealed class Adr0179NewlineSiteCoverageTests
             bool negated = outer.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax prefix
                 && prefix.OperatorToken.ValueText == "!";
             string arguments = string.Join(", ", invocation.ArgumentList.Arguments.Select(argument =>
-                FromTokens(argument.DescendantTokens().Select(token => (token.Text, token.SpanStart)).ToList(), argument.SyntaxTree.GetText().ToString())));
+                FromTokens(argument.DescendantTokens().Select(token => (token.Text, token.SpanStart)).ToList())));
             yield return (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
         }
     }
@@ -110,9 +109,8 @@ public sealed class Adr0179NewlineSiteCoverageTests
             }
 
             bool negated = outer.Parent is UnaryExpressionSyntax unary && unary.OperatorToken.Text == "!";
-            string source = tree.Text.ToString();
             string arguments = string.Join(", ", call.Arguments.Select(argument =>
-                FromTokens(Tokens(argument).Select(token => (token.Text, token.Span.Start)).ToList(), source)));
+                FromTokens(Tokens(argument).Select(token => (token.Text, token.Span.Start)).ToList())));
             yield return (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
         }
     }
@@ -121,7 +119,7 @@ public sealed class Adr0179NewlineSiteCoverageTests
     // languages: a gap of whitespace between two tokens becomes one space, a gap
     // holding a comment also becomes one space, and no gap stays none. Comments,
     // line breaks and indentation therefore never enter the key.
-    private static string FromTokens(IReadOnlyList<(string Text, int Start)> tokens, string source)
+    private static string FromTokens(IReadOnlyList<(string Text, int Start)> tokens)
     {
         var text = new System.Text.StringBuilder();
         for (var i = 0; i < tokens.Count; i++)

@@ -138,13 +138,14 @@ internal static class TestSource
     {
         string root = Root;
         string extension = SourceExtension;
-        // A set: overlapping directories must not count a file twice, compared
-        // the way the platform's file system compares paths.
+        // A set: overlapping directories must not count a file twice. Paths are
+        // folded only on Windows; elsewhere (including case-sensitive macOS
+        // volumes) two spellings may be two files.
         var files = new HashSet<string>(
-            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         foreach (string relative in relativeDirectories)
         {
-            string directory = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            string directory = Path.Combine(root, relative.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar));
             if (!Directory.Exists(directory))
             {
                 throw new DirectoryNotFoundException(

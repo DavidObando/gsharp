@@ -523,7 +523,9 @@ public class DiagnosticIdUniquenessTests
             var descriptorAccess = Assert.IsType<GSharpSyntax.AccessorExpressionSyntax>(call.Arguments[1]);
             Assert.Equal("DiagnosticDescriptors", GSharpSourceSyntax.SimpleName(descriptorAccess.LeftPart));
             var descriptorName = GSharpSourceSyntax.SimpleName(descriptorAccess.RightPart);
-            var reportFunction = call.Ancestors().OfType<GSharpSyntax.FunctionDeclarationSyntax>().First();
+            var reportFunction = call.Ancestors().OfType<GSharpSyntax.FunctionDeclarationSyntax>()
+                .FirstOrDefault(function => function.Identifier.Text.StartsWith("Report", StringComparison.Ordinal));
+            Assert.True(reportFunction != null, $"{file}: {name} is called outside a Report* function");
             Assert.Equal(reportFunction.Identifier.Text["Report".Length..], descriptorName);
             referencedDescriptors.Add(descriptorName);
         }
