@@ -17,6 +17,8 @@
 [Dd]ebugPublic/
 [Rr]elease/
 [Rr]eleases/
+# ...but not the release documentation.
+!/docs/release/
 x64/
 x86/
 bld/
