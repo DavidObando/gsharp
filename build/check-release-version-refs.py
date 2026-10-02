@@ -275,7 +275,11 @@ def check(tree: Tree) -> list[str]:
             f"{RELEASE_JSON}: version {version} does not belong to docsVersion {docs_version!r}")
     versions_text = tree.read(VERSIONS_JSON)
     try:
-        versions = json.loads(versions_text) if versions_text else []
+        if versions_text is None:
+            problems.append(f"{VERSIONS_JSON}: missing")
+            versions = None
+        else:
+            versions = json.loads(versions_text)
     except json.JSONDecodeError as error:
         problems.append(f"{VERSIONS_JSON}: invalid JSON: {error}")
         versions = None

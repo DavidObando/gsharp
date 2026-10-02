@@ -168,6 +168,9 @@ class ReleaseVersionRefsTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertReported(self.problems_with({path: "{ not json"}), path, "invalid JSON")
 
+    def test_missing_versions_json_is_reported_as_missing(self) -> None:
+        self.assertIn(f"{refs.VERSIONS_JSON}: missing", self.problems_with({refs.VERSIONS_JSON: None}))
+
     def test_crlf_checkout_reads_like_lf(self) -> None:
         self.assertEqual(refs._scan("a\r\nGsharp.NET.Sdk/0.0.1\r\n"), (("0.0.1", 2),))
         with tempfile.TemporaryDirectory() as scratch:
