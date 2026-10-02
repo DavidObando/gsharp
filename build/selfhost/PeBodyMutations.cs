@@ -8,6 +8,26 @@ using System.Reflection.PortableExecutable;
 byte[] image = File.ReadAllBytes(args[0]);
 using var pe = new PEReader(new MemoryStream(image));
 MetadataReader reader = pe.GetMetadataReader();
+if (args.Length == 3 && args[2] == "--runtime-header")
+{
+    int offset = pe.PEHeaders.CorHeaderStartOffset;
+    int entrypoint = BinaryPrimitives.ReadInt32LittleEndian(image.AsSpan(offset + 20));
+    if (entrypoint == 0)
+    {
+        throw new InvalidOperationException("runtime-header mutation needs an executable input");
+    }
+
+    byte[] changed = image.ToArray();
+    BinaryPrimitives.WriteInt32LittleEndian(changed.AsSpan(offset + 20), 0);
+    File.WriteAllBytes(Path.Combine(args[1], "entrypoint-only.dll"), changed);
+    changed = image.ToArray();
+    changed[offset + 16] ^= 0x02; // Requires32Bit changes execution requirements without touching IL.
+    File.WriteAllBytes(Path.Combine(args[1], "flags-only.dll"), changed);
+    Console.WriteLine($"entrypoint-only: offset {offset + 20}, 0x{entrypoint:X8} -> 0");
+    Console.WriteLine($"flags-only: offset {offset + 16}, Requires32Bit toggled");
+    return 0;
+}
+
 bool headerDone = false, ehDone = false;
 foreach (MethodDefinitionHandle handle in reader.MethodDefinitions)
 {

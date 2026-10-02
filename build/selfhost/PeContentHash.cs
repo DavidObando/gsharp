@@ -1,10 +1,9 @@
 // Issue #4631 (C3): hashes the parts of an assembly that the self-host
-// equivalence gate compares: the metadata stream with every copy of the MVID
-// zeroed, then each complete method body in MethodDef order (header, IL and
-// exception regions). This is stronger than RefactoringBaselineTests' IL-only
-// body hash; those existing baseline hashes are intentionally unchanged. The PE
-// wrapper (headers, debug directory, checksum, timestamp) is excluded: it is
-// derived from these bytes under deterministic emit.
+// equivalence gate compares: metadata with the MVID zeroed, CLR execution
+// flags and entry point, then each complete method body in MethodDef order
+// (header, IL and exception regions). This is stronger than RefactoringBaselineTests'
+// IL-only body hash; those existing baseline hashes are intentionally unchanged.
+// Non-runtime PE wrapper data (debug directory, checksum, timestamp) is excluded.
 //
 // usage: dotnet run build/selfhost/PeContentHash.cs -- <assembly.dll>...
 // prints: <hex sha256>  <methods-with-body>  <path>
@@ -75,6 +74,9 @@ foreach (string path in args)
     }
 
     sha.AppendData(metadata);
+    // The CLR flags and entry-point token/RVA occupy these eight header bytes;
+    // neither is determined by metadata or method bodies alone.
+    sha.AppendData(bytes.AsSpan(pe.PEHeaders.CorHeaderStartOffset + 16, 8));
     int methods = 0;
     foreach (MethodDefinitionHandle handle in reader.MethodDefinitions)
     {

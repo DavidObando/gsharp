@@ -29,6 +29,7 @@ SPEC.loader.exec_module(stage2)
 
 CORE = REPO / "out" / "bin" / "Release" / "Core" / "GSharp.Core.dll"
 FORMATTING = REPO / "out" / "bin" / "Release" / "GSharp.Formatting" / "GSharp.Formatting.dll"
+COMPILER = REPO / "out" / "bin" / "Release" / "Compiler" / "gsc.dll"
 
 
 def work_directory() -> tempfile.TemporaryDirectory:
@@ -215,6 +216,19 @@ class MainTests(unittest.TestCase):
                     self.assertEqual([output], call.args[4])
                     self.assertEqual(config, call.args[6])
 
+    def test_work_under_tree_out_is_rejected_before_building(self) -> None:
+        with work_directory() as directory:
+            work = Path(directory)
+            bootstrap = self.package(work, "1.0.0", "cs")
+            stage1 = self.package(work, "1.0.0-stage1", "gs")
+            evidence = work / "out" / "obj" / "stage2-check" / "existing.log"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("retain this evidence", encoding="utf-8")
+            code, build, _ = self.invoke(work, bootstrap, stage1, ["--work", str(evidence.parent)])
+            self.assertEqual(2, code)
+            build.assert_not_called()
+            self.assertEqual("retain this evidence", evidence.read_text(encoding="utf-8"))
+
 
 class CleanOutputsTests(unittest.TestCase):
     def test_configured_outputs_are_clean_before_rebuild(self) -> None:
@@ -270,8 +284,26 @@ class CleanOutputsTests(unittest.TestCase):
                     stage2.build_stage(tree, current, Path("unused.nupkg"), ["a.gsproj"],
                                        ["a.dll"], work, "Release")
 
+    def test_snapshot_directory_alias_is_rejected(self) -> None:
+        with work_directory() as directory:
+            tree = Path(directory)
+            work = tree / "gate"
+            shared = work / "shared-snapshots"
+            shared.mkdir(parents=True)
+            (work / "stage1").symlink_to(shared, target_is_directory=True)
+            (work / "stage2").symlink_to(shared, target_is_directory=True)
 
-HAVE_BUILD = CORE.exists() and FORMATTING.exists() and shutil.which("dotnet") is not None
+            def rebuild(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
+                (tree / "a.dll").write_bytes(b"rebuilt")
+                return 0, 0.0
+
+            with patch.object(stage2, "pin", return_value="1.0-stage1"), \
+                    patch.object(stage2, "run", side_effect=rebuild), self.assertRaises(OSError):
+                stage2.build_stage(tree, "stage1", Path("unused.nupkg"), ["a.gsproj"],
+                                   ["a.dll"], work, "Release")
+
+
+HAVE_BUILD = all(path.exists() for path in (CORE, FORMATTING, COMPILER)) and shutil.which("dotnet") is not None
 if os.environ.get("CI") and not HAVE_BUILD:
     # In CI these run after the Release build; a skip there would be vacuous.
     raise RuntimeError("CI run without a Release build: build GSharp.sln before this script")
@@ -336,6 +368,49 @@ class CompareTests(unittest.TestCase):
         self.assertFalse(row["bytesEqual"])
         self.assertFalse(row["contentEqual"], mutation.stdout)
         self.assertFalse(stage2.decide({"comparison": [row], "tests": []})[0])
+
+    def test_clr_entrypoint_only_change_is_not_equivalent(self) -> None:
+        self.check_runtime_header_mutant("entrypoint-only.dll")
+
+    def test_clr_execution_flags_only_change_is_not_equivalent(self) -> None:
+        self.check_runtime_header_mutant("flags-only.dll")
+
+    def check_runtime_header_mutant(self, name: str) -> None:
+        mutation = subprocess.run(
+            ["dotnet", "run", str(REPO / "build/selfhost/PeBodyMutations.cs"), "--",
+             str(COMPILER), str(self.work), "--runtime-header"], cwd=stage2.HASH_TOOL.parent,
+            env=stage2.stage_env(self.work, "mutations"), capture_output=True, text=True, check=True)
+        row = stage2.compare(stage(COMPILER), stage(self.work / name), self.work)[0]
+        self.assertFalse(row["bytesEqual"])
+        self.assertFalse(row["contentEqual"], mutation.stdout)
+        self.assertFalse(stage2.decide({"comparison": [row], "tests": []})[0])
+
+    def test_parent_relative_outputs_keep_distinct_stage_snapshots(self) -> None:
+        tree, work = self.work / "tree", self.work / "gate"
+        tree.mkdir()
+        work.mkdir()
+        output = "../shared/Core.dll"
+        inputs = iter((CORE, FORMATTING))
+
+        def rebuild(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
+            source = tree / output
+            source.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(next(inputs), source)
+            return 0, 0.0
+
+        with patch.object(stage2, "pin", return_value="1.0-stage1"), \
+                patch.object(stage2, "run", side_effect=rebuild):
+            first = stage2.build_stage(tree, "stage1", Path("unused.nupkg"), ["Core.gsproj"],
+                                       [output], work, "Release")
+            second = stage2.build_stage(tree, "stage2", Path("unused.nupkg"), ["Core.gsproj"],
+                                        [output], work, "Release")
+        row = stage2.compare(first, second, work)[0]
+        self.assertFalse(row["contentEqual"], "the second build overwrote the first snapshot")
+        self.assertFalse(stage2.decide({"comparison": [row], "tests": []})[0])
+        self.assertNotEqual(Path(first["assemblies"][output]).resolve(),
+                            Path(second["assemblies"][output]).resolve())
+        self.assertEqual(CORE.read_bytes(), Path(first["assemblies"][output]).read_bytes())
+        self.assertEqual(FORMATTING.read_bytes(), Path(second["assemblies"][output]).read_bytes())
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ stage-1 (G#-source, stage-0-built) SDK package, this script:
                                                 -> the stage-2 assemblies
   3. compares each assembly pair: full-file SHA-256, and the IL+metadata
      hash with the MVID zeroed (build/selfhost/PeContentHash.cs, including
-     complete method bodies: headers, IL and exception regions)
+     complete method bodies and CLR execution flags/entry point)
   4. optionally runs test projects while pinned to stage 1, so every
      assembly they compile against is a stage-2 assembly.
 
@@ -109,13 +109,14 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         if code != 0:
             raise Stage2Error(f"{stage}: dotnet build {project} failed (exit {code}); see {log}")
     target = work / stage
-    shutil.rmtree(target, ignore_errors=True)
+    if target.exists():
+        shutil.rmtree(target)
     copied = {}
-    for assembly in assemblies:
+    for index, assembly in enumerate(assemblies):
         source = tree / assembly
         if not source.is_file():
             raise Stage2Error(f"{stage}: expected output {assembly} was not produced")
-        destination = target / assembly
+        destination = target / f"{index}-{Path(assembly).name}"
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         pdb = source.with_suffix(".pdb")
@@ -239,6 +240,8 @@ def main(argv: list[str]) -> int:
     assemblies = args.assembly or [f"out/bin/{args.config}/Core/GSharp.Core.dll"]
     report: dict = {"tree": str(tree), "projects": projects}
     try:
+        if work.is_relative_to((tree / "out").resolve()):
+            raise Stage2Error("--work must be outside the migrated tree's out directory")
         bootstrap, stage1 = args.bootstrap.resolve(), args.stage1.resolve()
         if packer.package_version(stage1) == packer.package_version(bootstrap):
             raise Stage2Error("stage-1 and bootstrap SDK versions must differ")
