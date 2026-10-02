@@ -26,8 +26,11 @@ namespace GSharp.Core.Tests.PublicApi;
 /// The snapshot is rendered from METADATA (System.Reflection.Metadata), not
 /// runtime reflection: it needs no dependency resolution, and it describes the
 /// built assembly exactly, so the same test reads a C#-built and a G#-built
-/// <c>GSharp.Core.dll</c> the same way. It records every public or protected
-/// type and member with the shape that binds callers: kind, base type,
+/// <c>GSharp.Core.dll</c> the same way. It records every type and member another
+/// assembly can reach: public, protected and protected internal (FamORAssem);
+/// private protected (FamANDAssem) is excluded because only the declaring
+/// assembly's derived types see it. For each it records the shape that binds
+/// callers: kind, base type,
 /// interfaces, generic parameters and constraints, member signatures with
 /// parameter names, and constant values (enum members included, since
 /// <c>SyntaxKind</c> values are compiled into analyzers). Property and event
@@ -630,7 +633,7 @@ public sealed class CorePublicApiSnapshotTests
             HandleKind.TypeDefinition => FullName(this.reader, (TypeDefinitionHandle)handle),
             HandleKind.TypeReference => this.GetTypeFromReference(this.reader, (TypeReferenceHandle)handle, 0),
             HandleKind.TypeSpecification => this.GetTypeFromSpecification(this.reader, null, (TypeSpecificationHandle)handle, 0),
-            _ => handle.Kind.ToString(),
+            _ => throw new InvalidOperationException("unsupported type handle kind " + handle.Kind),
         };
 
         public string GetPrimitiveType(PrimitiveTypeCode typeCode) => typeCode.ToString();
