@@ -103,10 +103,22 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
             return cmp;
         }
 
-        // Equal on every source fact above means two symbols with the same
-        // declaration, name, signature, file, position and container chain:
-        // they could not coexist as distinct emitted members.
-        return x.Kind.CompareTo(y.Kind);
+        cmp = x.Kind.CompareTo(y.Kind);
+        if (cmp != 0)
+        {
+            return cmp;
+        }
+
+        // Last keys, after everything that orders existing output: the
+        // declaration's extent, then the fully qualified signature (the
+        // short-name signature above cannot tell List[A.X] from List[B.X]).
+        cmp = (xNode?.Span.End ?? int.MaxValue).CompareTo(yNode?.Span.End ?? int.MaxValue);
+        if (cmp != 0)
+        {
+            return cmp;
+        }
+
+        return string.CompareOrdinal(QualifiedSignature(x), QualifiedSignature(y));
     }
 
     /// <summary>
@@ -148,6 +160,28 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
         }
 
         return builder.ToString();
+    }
+
+    private static string QualifiedSignature(Symbol symbol)
+    {
+        if (symbol is not FunctionSymbol function)
+        {
+            return symbol.ToString();
+        }
+
+        var builder = new StringBuilder();
+        builder.Append(function.Type?.ToString() ?? "?").Append('(');
+        for (int i = 0; i < function.Parameters.Length; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(',');
+            }
+
+            builder.Append(function.Parameters[i].Type?.ToString() ?? "?");
+        }
+
+        return builder.Append(')').ToString();
     }
 
     private static string FormatSignature(FunctionSymbol function)

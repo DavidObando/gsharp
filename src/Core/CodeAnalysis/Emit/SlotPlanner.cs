@@ -107,8 +107,9 @@ internal sealed class SlotPlanner
         }
 
         // Issue #4663: deterministic order, never identity-hash order.
-        foreach (var plan in BoundProgramOrder.Initializers(this.emitCtx.Program).Select(pair => pair.Value))
+        foreach (var entry in BoundProgramOrder.Initializers(this.emitCtx.Program))
         {
+            var plan = entry.Value;
             collector.Visit(plan.Prologue);
             foreach (var argument in plan.Arguments)
             {
@@ -204,8 +205,9 @@ internal sealed class SlotPlanner
         }
 
         // Issue #4663: deterministic order, never identity-hash order.
-        foreach (var plan in BoundProgramOrder.Initializers(this.emitCtx.Program).Select(pair => pair.Value))
+        foreach (var entry in BoundProgramOrder.Initializers(this.emitCtx.Program))
         {
+            var plan = entry.Value;
             collector.Visit(plan.Prologue);
             foreach (var argument in plan.Arguments)
             {
