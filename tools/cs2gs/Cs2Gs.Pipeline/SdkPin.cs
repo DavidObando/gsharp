@@ -192,7 +192,15 @@ internal static class SdkPin
         string path = Path.Combine(root, GlobalJsonFileName);
         bool created = !File.Exists(path);
         JsonObject document = created ? new JsonObject() : ParseGlobalJson(path);
-        JsonObject? sdks = document[MsbuildSdksProperty] as JsonObject;
+        JsonNode? existing = document[MsbuildSdksProperty];
+        JsonObject? sdks = existing as JsonObject;
+        if (existing is not null && sdks is null)
+        {
+            // Never discard configuration we do not understand.
+            throw new InvalidOperationException(
+                "'" + path + "' has an msbuild-sdks value that is not a JSON object.");
+        }
+
         if (sdks is null)
         {
             sdks = new JsonObject();

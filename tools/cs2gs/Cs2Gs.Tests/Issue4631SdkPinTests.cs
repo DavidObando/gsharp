@@ -111,6 +111,17 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(this.root));
     }
 
+    /// <summary>A non-object <c>msbuild-sdks</c> is reported, never overwritten.</summary>
+    [Fact]
+    public void WriteGlobalJsonPin_RefusesToOverwriteANonObjectMsbuildSdks()
+    {
+        string path = Path.Combine(this.root, "global.json");
+        File.WriteAllText(path, """{ "msbuild-sdks": "Other.Sdk/1.0.0" }""");
+
+        Assert.Throws<InvalidOperationException>(() => SdkPin.WriteGlobalJsonPin(this.root, PinnedVersion));
+        Assert.Equal("""{ "msbuild-sdks": "Other.Sdk/1.0.0" }""", File.ReadAllText(path));
+    }
+
     /// <summary>A malformed pin in a tree is an error, not "no pin".</summary>
     [Fact]
     public void ReadGlobalJsonPin_RejectsAMalformedVersion()
