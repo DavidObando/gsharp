@@ -36,6 +36,20 @@ internal static class CaptureTestOracleCommand
     /// <returns>0 when every oracle was captured, 1 when any failed or on usage errors.</returns>
     internal static int Run(string[] args)
     {
+        try
+        {
+            return RunCore(args);
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine("cs2gs: " + ex.Message);
+            PrintUsage();
+            return 1;
+        }
+    }
+
+    private static int RunCore(string[] args)
+    {
         string corpus = null;
         string outDir = null;
         string config = "Release";
@@ -223,7 +237,8 @@ internal static class CaptureTestOracleCommand
         Console.WriteLine();
         Console.WriteLine("options:");
         Console.WriteLine("  --corpus <dir>     The C# repository root (required).");
-        Console.WriteLine("  --out <dir>        Where to write one <app>" + CSharpTestOracle.FileSuffix + " per test project (required).");
+        Console.WriteLine("  --out <dir>        Where to write one oracle per test project (required); each file is named");
+        Console.WriteLine("                     <sanitized app id>-<8-hex hash>" + CSharpTestOracle.FileSuffix + ".");
         Console.WriteLine("  --config <name>    Build configuration (default: Release).");
         Console.WriteLine("  --manifests <dir>  The migrate run directory; its validation manifests add the evaluated");
         Console.WriteLine("                     MSBuild IsTestProject to the classification (recommended).");

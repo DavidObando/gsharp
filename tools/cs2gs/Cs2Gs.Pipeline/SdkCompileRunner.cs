@@ -1047,6 +1047,10 @@ public sealed class SdkCompileRunner
             // Issue #4633: a stale TRX from an earlier run in the same artifact
             // directory must never stand in for this run's results.
             string trxPath = MirroredTestResultsPath(artifactDirectory);
+            Directory.CreateDirectory(Path.GetDirectoryName(trxPath));
+
+            // A stale TRX that cannot be deleted throws here: reading it later
+            // would compare an old run's names.
             if (File.Exists(trxPath))
             {
                 File.Delete(trxPath);

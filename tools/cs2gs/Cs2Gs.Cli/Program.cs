@@ -280,7 +280,7 @@ internal static class Program
         {
             options.TestParityAllowList = TestParityAllowList.LoadForRepository(
                 options.SourceRoot, allowListPath);
-            options.TestNameParityBaseline = TestNameParityBaseline.LoadForRepository(
+            options.TestNameParityBaseline ??= TestNameParityBaseline.LoadForRepository(
                 options.SourceRoot, null);
         }
         catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
@@ -652,6 +652,10 @@ internal static class Program
                     case "--csharp-test-oracle":
                         options.CSharpTestOracleDirectory = Path.GetFullPath(NextValue(args, ref i, arg));
                         break;
+                    case "--test-name-baseline":
+                        options.TestNameParityBaseline = TestNameParityBaseline.Load(
+                            Path.GetFullPath(NextValue(args, ref i, arg)));
+                        break;
                     case "--baseline-strict":
                         baselineStrict = true;
                         break;
@@ -789,7 +793,8 @@ internal static class Program
         Console.WriteLine("                    <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.");
         Console.WriteLine("  --csharp-test-oracle <dir>  Check mirrored test projects name for name against the");
         Console.WriteLine("                    C# case lists `cs2gs capture-test-oracle` wrote (issue #4633); the");
-        Console.WriteLine("                    justified differences are read from <corpus>/" + TestNameParityBaseline.DefaultRelativePath + ".");
+        Console.WriteLine("                    justified differences are read from <corpus>/" + TestNameParityBaseline.DefaultRelativePath);
+        Console.WriteLine("  --test-name-baseline <file>  Use this per-test-name baseline instead of the default.");
         Console.WriteLine("  --via-sdk         Build emitted G# via 'dotnet build' + Gsharp.NET.Sdk (default).");
         Console.WriteLine("  --no-via-sdk      Use the legacy direct-gsc compile path.");
         Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE");

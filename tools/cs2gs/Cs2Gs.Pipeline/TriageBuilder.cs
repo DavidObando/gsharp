@@ -578,8 +578,13 @@ public sealed class TriageBuilder
     /// <param name="id">The diagnostic id.</param>
     /// <param name="message">The human-readable description, differences included.</param>
     /// <param name="gsFile">The emitted G# file (relative path), or null.</param>
+    /// <param name="fingerprintKey">
+    /// The stable identity of the failure (the sorted differences, or the
+    /// failure kind and app); the message can carry runner-specific paths, so
+    /// it is used only when no key is given.
+    /// </param>
     /// <returns>The populated triage artifact.</returns>
-    public TriageArtifact TestParityNameMismatch(string id, string message, string gsFile = null)
+    public TriageArtifact TestParityNameMismatch(string id, string message, string gsFile = null, string fingerprintKey = null)
     {
         string text = string.IsNullOrWhiteSpace(message) ? "per-test-name parity failed" : message.Trim();
         var artifact = this.NewArtifact(MigrationStageKind.TestParity, TriageCategory.TestParityFailure);
@@ -608,7 +613,7 @@ public sealed class TriageBuilder
             artifact.Stage,
             artifact.Diagnostic.Id,
             artifact.OffendingCSharpConstruct.Kind,
-            text);
+            fingerprintKey ?? text);
         artifact.SuggestedIssue = this.TestParityIssue(artifact);
         return artifact;
     }

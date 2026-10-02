@@ -458,6 +458,25 @@ public sealed class Issue4633TestNameParityTests
         Assert.Equal("TEST-ORACLE-MISSING", Assert.Single(outcome.Artifacts).Diagnostic.Id);
     }
 
+    /// <summary>
+    /// Review finding: a failure whose message names an absolute path (here
+    /// the oracle directory) still fingerprints the same on every runner.
+    /// </summary>
+    [Fact]
+    public void Stage_FailureFingerprint_DoesNotDependOnPaths()
+    {
+        string Fingerprint()
+        {
+            StageExecutionContext context = Context(withOracle: true);
+            File.Delete(Path.Combine(context.Options.CSharpTestOracleDirectory, CSharpTestOracle.FileNameFor(AppId)));
+            WriteTrx(context, OracleNames);
+            return Assert.Single(new TestParityStage().EvaluateMirroredTestRun(
+                context, new ProcessRunResult(0, GreenRunOutput, string.Empty, false)).Artifacts).Fingerprint;
+        }
+
+        Assert.Equal(Fingerprint(), Fingerprint());
+    }
+
     /// <summary>A run that left no TRX cannot be compared and fails.</summary>
     [Fact]
     public void Stage_MissingTrx_Fails()

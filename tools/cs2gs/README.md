@@ -308,7 +308,7 @@ cases and stay green.
 
 * **The oracle** is the C# original's xUnit *discovery*, not a second run:
   `cs2gs capture-test-oracle` builds each test project (Release) and records
-  `dotnet test --list-tests` as `<app>.csharp-tests.json`. The nightly does
+  `dotnet test --list-tests` as `<sanitized app id>-<hash>.csharp-tests.json`. The nightly does
   this once, after translation, and ships the files to every shard.
 * **The comparison** reads the migrated run's TRX. Both sides pass
   `-- xUnit.MethodDisplay=ClassAndMethod`, which overrides the repository's

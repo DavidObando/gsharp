@@ -149,7 +149,9 @@ public sealed partial class TestParityStage
 
         message.Append("A difference that is understood belongs in ")
             .Append(TestNameParityBaseline.DefaultRelativePath).Append(" with a reason and an issue.");
-        return this.NameParityFailure(context, "TEST-NAME-PARITY", message.ToString());
+        string differences = "missing:\n" + string.Join("\n", verdict.UnexplainedMissing) +
+            "\nextra:\n" + string.Join("\n", verdict.UnexplainedExtra);
+        return this.NameParityFailure(context, "TEST-NAME-PARITY", message.ToString(), differences);
     }
 
     /// <summary>
@@ -185,10 +187,15 @@ public sealed partial class TestParityStage
         }
     }
 
-    private TriageArtifact NameParityFailure(StageExecutionContext context, string id, string message)
+    private TriageArtifact NameParityFailure(
+        StageExecutionContext context, string id, string message, string fingerprintKey = null)
     {
         this.Note(context, "per-test-name parity FAILED (" + id + "): " + message);
-        return context.Triage.TestParityNameMismatch(id, message, EmittedGsRelative(context));
+
+        // Fingerprint on what identifies the failure, never on paths in the
+        // message, so the same failure deduplicates across shards and runs.
+        return context.Triage.TestParityNameMismatch(
+            id, message, EmittedGsRelative(context), fingerprintKey ?? id + "|" + context.App.Id);
     }
 
     private bool WriteTestNameParity(

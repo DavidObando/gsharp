@@ -244,10 +244,10 @@ public sealed class StageExecutionContext
     /// Gets or sets the per-test-name parity summary the test-parity stage
     /// recorded for a completed mirrored test run (issue #4633), carried into
     /// the run record PASS or FAIL. <see langword="null"/> when no completed
-    /// mirrored run happened.
+    /// mirrored run happened (this file is nullable-oblivious, like the
+    /// sibling <see cref="EmittedAssemblyPath"/>).
     /// </summary>
-#nullable enable annotations
-    public TestNameParitySummary? TestNameParity { get; set; }
+    public TestNameParitySummary TestNameParity { get; set; }
 }
 
 /// <summary>
