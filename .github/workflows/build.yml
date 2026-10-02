@@ -229,6 +229,12 @@ jobs:
       - name: Verify the concurrency benchmark harness
         run: python3 build/verify-concurrency-bench.py --smoke
 
+      - name: Verify the self-host compiler benchmark gate
+        run: |
+          # The benchmark measures peak memory with GNU time.
+          command -v /usr/bin/time >/dev/null || { sudo apt-get update && sudo apt-get install -y time; }
+          python3 build/test-selfhost-bench.py
+
   e2e:
     runs-on: ubuntu-latest
 
