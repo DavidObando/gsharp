@@ -1570,6 +1570,14 @@ public partial class Parser
                     Diagnostics.ReportUnexpectedToken(memberAccessibility.Location, memberAccessibility.Kind, SyntaxKind.IdentifierToken);
                 }
 
+                // `open init { }` / `override init { }`: the modifiers were consumed with the
+                // member's other modifiers and would otherwise be dropped without a word.
+                var virtualModifier = memberOpenModifier ?? memberOverrideModifier;
+                if (virtualModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(virtualModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.OpenBraceToken);
+                }
+
                 if (memberAsyncModifier != null)
                 {
                     Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);

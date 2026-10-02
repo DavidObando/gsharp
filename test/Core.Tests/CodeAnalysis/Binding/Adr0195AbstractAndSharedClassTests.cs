@@ -253,6 +253,15 @@ shared class Helpers {
         Assert.Equal(new[] { 3, 4, 5 }, lines);
     }
 
+    [Theory]
+    [InlineData("open init { }")]
+    [InlineData("override init { }")]
+    public void SharedClass_StaticInitializerWithOpenOrOverride_IsRejected(string member)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From("shared class Config {\n    var value int32\n    " + member + "\n}\n"));
+        Assert.Contains(tree.Diagnostics, d => d.Severity == DiagnosticSeverity.Error && d.Location.StartLine + 1 == 3);
+    }
+
     [Fact]
     public void SharedClass_WithBaseOrInterface_ReportsGS0619()
     {
