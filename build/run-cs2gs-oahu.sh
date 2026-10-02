@@ -58,11 +58,17 @@ dotnet test "$source_dir/tests/Oahu.Cli.E2E.Tests/Oahu.Cli.E2E.Tests.csproj" \
   --configuration Release --no-build
 dotnet "$source_dir/src/Oahu.App/bin/Release/net10.0/Oahu.dll" --smoke-test
 
+# cs2gs rejects C# #if/#elif (CS2GS-CONDITIONAL-COMPILATION): G# has no
+# conditional compilation, and translating one arm silently drops the other.
+# The pinned Oahu commit still has #if sites, and this repository cannot edit
+# it, so this gate alone downgrades them to forwarded warnings that name each
+# site in the log. Remove the flag once the pinned Oahu commit has no #if.
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$source_dir" \
   --out "$migrated_dir" \
   --artifacts "$runs_dir" \
+  --allow-conditional-compilation \
   --config Release | tee "$log_file"
 migrate_exit=${PIPESTATUS[0]}
 set -e
