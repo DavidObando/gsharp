@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -202,9 +204,9 @@ public sealed class SdkCompileRunner
         string config,
         IReadOnlyDictionary<string, string> generatedProjectPaths,
         bool isAnalyzerTestProject,
-        string sdkMoniker,
-        string analyzerVerifierPackageVersion,
-        string warningsNotAsErrors = null)
+        string? sdkMoniker,
+        string? analyzerVerifierPackageVersion,
+        string? warningsNotAsErrors = null)
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
         if (sdkMoniker is null)

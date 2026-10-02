@@ -165,11 +165,22 @@ internal static class SdkPin
                 "'" + path + "' has an msbuild-sdks value that is not a JSON object.");
         }
 
-        foreach (KeyValuePair<string, JsonNode> entry in sdks)
+        // The SDK resolver matches keys case-insensitively, and a JsonObject can
+        // hold several spellings of one key: that is ambiguous, so it is an error.
+        string? pinned = null;
+        string? pinnedKey = null;
+        foreach (KeyValuePair<string, JsonNode?> entry in sdks)
         {
             if (!string.Equals(entry.Key, PackageId, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
+            }
+
+            if (pinnedKey is not null)
+            {
+                throw new InvalidOperationException(
+                    "'" + path + "' pins " + PackageId + " more than once under msbuild-sdks ('" +
+                    pinnedKey + "' and '" + entry.Key + "'); keep exactly one.");
             }
 
             string? version = entry.Value is JsonValue value && value.TryGetValue<string>(out string? text)
@@ -182,10 +193,11 @@ internal static class SdkPin
                     "', which is not a valid SDK version.");
             }
 
-            return version;
+            pinnedKey = entry.Key;
+            pinned = version;
         }
 
-        return null;
+        return pinned;
     }
 
     /// <summary>
@@ -225,7 +237,7 @@ internal static class SdkPin
         // Keys are matched case-insensitively by the SDK resolver; drop every
         // differently-cased spelling so the file holds exactly one pin.
         var existingKeys = new List<string>();
-        foreach (KeyValuePair<string, JsonNode> entry in sdks)
+        foreach (KeyValuePair<string, JsonNode?> entry in sdks)
         {
             if (string.Equals(entry.Key, PackageId, StringComparison.OrdinalIgnoreCase))
             {

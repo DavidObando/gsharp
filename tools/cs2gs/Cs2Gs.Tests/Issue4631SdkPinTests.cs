@@ -123,6 +123,22 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => SdkPin.ReadGlobalJsonPin(this.root));
     }
 
+    /// <summary>
+    /// Two spellings of the SDK key are one key to MSBuild, so reading must not
+    /// silently pick the first; writing still collapses them to one.
+    /// </summary>
+    [Fact]
+    public void ReadGlobalJsonPin_RejectsCaseVariantDuplicateKeys()
+    {
+        File.WriteAllText(
+            Path.Combine(this.root, "global.json"),
+            "{ \"msbuild-sdks\": { \"Gsharp.NET.Sdk\": \"" + PinnedVersion + "\", \"gsharp.net.sdk\": \"9.9.9\" } }");
+
+        Assert.Throws<InvalidOperationException>(() => SdkPin.ReadGlobalJsonPin(this.root));
+        Assert.True(SdkPin.WriteGlobalJsonPin(this.root, PinnedVersion) is false);
+        Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(this.root));
+    }
+
     /// <summary>A malformed per-project pin names the project instead of failing deep inside resolution.</summary>
     [Fact]
     public void ReadProjectPin_RejectsAMalformedVersion_NamingTheProject()
