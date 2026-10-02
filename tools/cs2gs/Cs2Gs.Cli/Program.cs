@@ -652,6 +652,9 @@ internal static class Program
                     case "--no-via-sdk":
                         options.CompileViaSdk = false;
                         break;
+                    case "--allow-conditional-compilation":
+                        options.ConditionalCompilation = Cs2Gs.Translator.ConditionalCompilationPolicy.Warn;
+                        break;
                     default:
                         Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
                         PrintUsage();
@@ -770,6 +773,10 @@ internal static class Program
         Console.WriteLine("                    <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.");
         Console.WriteLine("  --via-sdk         Build emitted G# via 'dotnet build' + Gsharp.NET.Sdk (default).");
         Console.WriteLine("  --no-via-sdk      Use the legacy direct-gsc compile path.");
+        Console.WriteLine("  --allow-conditional-compilation  Report each C# #if/#elif as a non-fatal");
+        Console.WriteLine("                    CS2GS-CONDITIONAL-COMPILATION warning and translate the active arm,");
+        Console.WriteLine("                    instead of failing translation. Only for a pinned external corpus");
+        Console.WriteLine("                    that cannot be edited; G# has no conditional compilation.");
         Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE");
         Console.WriteLine("                    repository and stop, writing a per-app validation-context.json so");
         Console.WriteLine("                    'cs2gs validate' shards can run stages 2-4 in parallel elsewhere.");

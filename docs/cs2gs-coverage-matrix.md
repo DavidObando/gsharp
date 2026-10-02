@@ -292,14 +292,14 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | CrefParameter | CrefParameterSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | CrefParameterList | CrefParameterListSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | DefineDirectiveTrivia | DefineDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
-| ElifDirectiveTrivia | ElifDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
-| ElseDirectiveTrivia | ElseDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
-| EndIfDirectiveTrivia | EndIfDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
+| ElifDirectiveTrivia | ElifDirectiveTriviaSyntax |  | Preprocessor |  |  | Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently. |
+| ElseDirectiveTrivia | ElseDirectiveTriviaSyntax |  | Preprocessor |  |  | Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently. |
+| EndIfDirectiveTrivia | EndIfDirectiveTriviaSyntax |  | Preprocessor |  |  | Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently. |
 | EndRegionDirectiveTrivia | EndRegionDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | ErrorDirectiveTrivia | ErrorDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | ExtensionMemberCref | ExtensionMemberCrefSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | ExternAliasDirective | ExternAliasDirectiveSyntax |  | NoGsharpConstruct |  |  | Extern aliases disambiguate identically-named assemblies — a project-system feature G# does not model. |
-| IfDirectiveTrivia | IfDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
+| IfDirectiveTrivia | IfDirectiveTriviaSyntax |  | Preprocessor |  |  | Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently. |
 | IgnoredDirectiveTrivia | IgnoredDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | IncompleteMember | IncompleteMemberSyntax |  | NotReachable |  |  | Parser error-recovery artifact; never appears in well-formed C#. |
 | IndexerMemberCref | IndexerMemberCrefSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |

@@ -201,7 +201,12 @@ public sealed class TranslationContext
     /// </summary>
     /// <param name="node">The C# node that could not be translated.</param>
     /// <param name="message">A human-readable description of the gap.</param>
-    public void ReportUnsupported(SyntaxNode node, string message)
+    /// <param name="diagnosticId">
+    /// An explicit diagnostic id, or <see langword="null"/> (the default) for
+    /// the classification-derived one. The classification is assigned here
+    /// either way.
+    /// </param>
+    public void ReportUnsupported(SyntaxNode node, string message, string diagnosticId = null)
     {
         if (node is null)
         {
@@ -217,7 +222,10 @@ public sealed class TranslationContext
             node.Kind().ToString(),
             message,
             node.GetLocation(),
-            TranslationSeverity.Unsupported);
+            TranslationSeverity.Unsupported)
+        {
+            DiagnosticId = diagnosticId,
+        };
         if (UnsupportedByDesign.TryGetRationale(node.Kind(), out UnsupportedRationale rationale))
         {
             diagnostic.Classification = UnsupportedClassification.ByDesign;

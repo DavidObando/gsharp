@@ -344,6 +344,13 @@ public sealed partial class CSharpToGSharpTranslator
     {
         CompilationUnitSyntax root = document.GetRoot();
 
+        // A document split into several package units is translated once per
+        // unit; only the first (or only) unit reports its directives.
+        if (this.packageFilter is null || this.includeGlobalNamespace)
+        {
+            ReportConditionalCompilation(root, context, this.ConditionalCompilation);
+        }
+
         Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts =
             GetOrCollectPartialTypeParts(context.Compilation);
         if (this.retainedFilePaths != null)

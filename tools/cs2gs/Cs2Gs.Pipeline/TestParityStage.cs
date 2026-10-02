@@ -621,7 +621,9 @@ public sealed partial class TestParityStage : IMigrationStage
         // round-trip failure means the live library path cannot run yet; the
         // stage records the reason and skips rather than fabricating a pass.
         TranslatedProject tests = await TranslateProjectAsync(
-            context.App.TestsProjectPath, cancellationToken).ConfigureAwait(false);
+            context.App.TestsProjectPath,
+            context.Options.ConditionalCompilation,
+            cancellationToken).ConfigureAwait(false);
 
         if (tests.LoadErrors is not null)
         {
@@ -716,6 +718,7 @@ public sealed partial class TestParityStage : IMigrationStage
 
     private static async Task<TranslatedProject> TranslateProjectAsync(
         string projectPath,
+        ConditionalCompilationPolicy conditionalCompilation,
         CancellationToken cancellationToken)
     {
         LoadedCSharpProject project = (await CSharpProjectLoader
@@ -750,7 +753,10 @@ public sealed partial class TestParityStage : IMigrationStage
         // anonymousTypeRegistriesByPackage`) is shared too — otherwise two
         // files in the same package could each mint a colliding
         // `AnonymousTypeN` name for two DIFFERENT anonymous shapes (GS0102).
-        var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
+        var translator = new CSharpToGSharpTranslator(preservePartialParts: true)
+        {
+            ConditionalCompilation = conditionalCompilation,
+        };
         foreach (LoadedDocument document in project.Documents)
         {
             cancellationToken.ThrowIfCancellationRequested();

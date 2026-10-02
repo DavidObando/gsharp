@@ -397,7 +397,10 @@ public sealed class TranslateStage : IMigrationStage
                 preserveEntryType: preserveEntryType,
                 projectDirectory: currentProject.ProjectDirectory,
                 emitPartialMethodPairs: true,
-                translatedFilePaths: translatedFilePaths);
+                translatedFilePaths: translatedFilePaths)
+            {
+                ConditionalCompilation = context.Options.ConditionalCompilation,
+            };
 
             PreserveGeneratedFriendAssemblyAnnotations(
                 context,
@@ -446,7 +449,10 @@ public sealed class TranslateStage : IMigrationStage
                             preserveEntryType: preserveEntryType,
                             projectDirectory: currentProject.ProjectDirectory,
                             emitPartialMethodPairs: true,
-                            translatedFilePaths: translatedFilePaths);
+                            translatedFilePaths: translatedFilePaths)
+                        {
+                            ConditionalCompilation = context.Options.ConditionalCompilation,
+                        };
                     translatedDocument.Units.Add(new TranslatedUnit(document, unitIndex, package, unitTranslator));
                 }
 
@@ -916,7 +922,8 @@ public sealed class TranslateStage : IMigrationStage
     private static bool IsForwardedTranslationWarning(string diagnosticId) =>
         diagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId
         || diagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
-        || diagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId;
+        || diagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId
+        || diagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId;
 
     /// <summary>
     /// True for an ordinary C# compiler error (<c>CS####</c>). cs2gs's own

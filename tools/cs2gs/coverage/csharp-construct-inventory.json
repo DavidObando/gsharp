@@ -686,7 +686,7 @@
     "nodeType": "ElifDirectiveTriviaSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "Preprocessor",
-    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+    "notes": "Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently."
   },
   {
     "kind": "ElseClause",
@@ -700,7 +700,7 @@
     "nodeType": "ElseDirectiveTriviaSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "Preprocessor",
-    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+    "notes": "Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently."
   },
   {
     "kind": "EmptyStatement",
@@ -715,7 +715,7 @@
     "nodeType": "EndIfDirectiveTriviaSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "Preprocessor",
-    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+    "notes": "Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently."
   },
   {
     "kind": "EndRegionDirectiveTrivia",
@@ -1083,7 +1083,7 @@
     "nodeType": "IfDirectiveTriviaSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "Preprocessor",
-    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+    "notes": "Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently."
   },
   {
     "kind": "IfStatement",
