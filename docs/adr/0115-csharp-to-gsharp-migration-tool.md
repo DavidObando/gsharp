@@ -177,8 +177,12 @@ private nested aggregate is lifted like any other and hosted on its owner throug
 `@ExtensionOwner(typeof(Owner))` (issue #4234): a function hosted on its owner
 reaches the owner's private nested types and members, so the real body is kept in
 one function, the owner carries the one `[Extension]` method the C# assembly had,
-and no forwarding companion lands on the package's public `<Program>`. The
-description that follows applies to the owned-receiver case only.
+and no forwarding companion lands on the package's public `<Program>`. A
+second case keeps the scheme: an extension whose signature or attributes name one of
+the owner's private nested types (gsc binds a function's receiver, parameter and
+return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
+function cannot name the private type; such a method cannot be public API). The
+description that follows applies to those two cases only.
 
 Issue #3413 adds one ownership-preserving exception: when the declaring static
 class contains a private nested aggregate, its extension methods stay as

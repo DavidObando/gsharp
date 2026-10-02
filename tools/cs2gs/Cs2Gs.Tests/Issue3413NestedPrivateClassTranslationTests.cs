@@ -294,10 +294,10 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
     }
 
     [Fact]
-    public void PrivateExtensionWhoseSignatureNamesAPrivateNestedType_StaysAnInOwnerHelper()
+    public void PrivateExtensionWhoseSignatureOrAttributesNameAPrivateNestedType_StaysAnInOwnerHelper()
     {
-        // gsc binds a function's receiver, parameter and return types before it resolves
-        // `@ExtensionOwner`, so a lifted function could not name the private `Box`; the
+        // gsc binds a function's receiver, parameter and return types, and its attributes
+        // (`[Marker(typeof(Box))]`), before it resolves `@ExtensionOwner`, so a lifted function could not name the private `Box`; the
         // in-owner helper can. (A public method cannot expose a private type, so such a
         // method is never API.) A method whose signature names no private nested type is
         // still lifted and hosted on its owner.
@@ -312,12 +312,26 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static void Main() => Console.WriteLine(Owner.Run("ok"));
                 }
 
+                [AttributeUsage(AttributeTargets.Method)]
+                public sealed class MarkerAttribute : Attribute
+                {
+                    public MarkerAttribute(Type type)
+                    {
+                        Type = type;
+                    }
+
+                    public Type Type { get; }
+                }
+
                 public static class Owner
                 {
                     private sealed class Box
                     {
                         public int N;
                     }
+
+                    [Marker(typeof(Box))]
+                    private static int Tagged(this string value) => 1;
 
                     private static Box Make(this string value, Box seed) => seed;
 
@@ -328,7 +342,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static string Echo(this string value) => value;
 
                     public static int Run(string value) =>
-                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]);
+                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged();
                 }
             }
             """;
@@ -340,7 +354,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             .Single(type => type.Name == "Owner");
         IReadOnlyList<GMember> shared = Assert.Single(owner.Members.OfType<SharedBlock>()).Members;
 
-        foreach (string name in new[] { "Make", "Count", "Sum" })
+        foreach (string name in new[] { "Make", "Count", "Sum", "Tagged" })
         {
             Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == name);
             Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == name);

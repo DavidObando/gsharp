@@ -1003,11 +1003,12 @@ public sealed partial class CSharpToGSharpTranslator
         // companion on the package's public `<Program>`: an extra public type, and
         // the owner's own method without its extension marker.
         //
-        // The same scheme also stays for an extension whose SIGNATURE names one of the owner's
-        // private nested types: gsc binds a function's receiver, parameter and return types
-        // before it resolves `@ExtensionOwner`, so a lifted top-level function cannot name
-        // (or access) the private type, while the in-owner helper can. Such a method cannot be
-        // public API (a public method may not expose a private type), so nothing is lost.
+        // The same scheme also stays for an extension whose SIGNATURE or ATTRIBUTES name one of
+        // the owner's private nested types: gsc binds a function's receiver, parameter and
+        // return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
+        // top-level function cannot name (or access) the private type, while the in-owner
+        // helper can. Such a method cannot be public API (a public method may not expose a
+        // private type in its signature), so nothing observable is lost.
         return original?.IsExtensionMethod == true &&
             HasPrivateNestedAggregate(original.ContainingType) &&
             (TryGetOwnedExtensionReceiver(original, out _) || SignatureNamesPrivateNestedType(original));
@@ -1016,14 +1017,17 @@ public sealed partial class CSharpToGSharpTranslator
     private static bool SignatureNamesPrivateNestedType(IMethodSymbol method)
     {
         INamedTypeSymbol owner = method.ContainingType;
-        if (NamesPrivateNestedType(method.ReturnType, owner))
+        if (NamesPrivateNestedType(method.ReturnType, owner)
+            || AttributesNamePrivateNestedType(method.GetAttributes(), owner)
+            || AttributesNamePrivateNestedType(method.GetReturnTypeAttributes(), owner))
         {
             return true;
         }
 
         foreach (IParameterSymbol parameter in method.Parameters)
         {
-            if (NamesPrivateNestedType(parameter.Type, owner))
+            if (NamesPrivateNestedType(parameter.Type, owner)
+                || AttributesNamePrivateNestedType(parameter.GetAttributes(), owner))
             {
                 return true;
             }
@@ -1031,6 +1035,11 @@ public sealed partial class CSharpToGSharpTranslator
 
         foreach (ITypeParameterSymbol typeParameter in method.TypeParameters)
         {
+            if (AttributesNamePrivateNestedType(typeParameter.GetAttributes(), owner))
+            {
+                return true;
+            }
+
             foreach (ITypeSymbol constraint in typeParameter.ConstraintTypes)
             {
                 if (NamesPrivateNestedType(constraint, owner))
@@ -1043,6 +1052,58 @@ public sealed partial class CSharpToGSharpTranslator
         return false;
     }
 
+    private static bool AttributesNamePrivateNestedType(
+        ImmutableArray<AttributeData> attributes,
+        INamedTypeSymbol owner)
+    {
+        foreach (AttributeData attribute in attributes)
+        {
+            if (attribute.AttributeClass != null && NamesPrivateNestedType(attribute.AttributeClass, owner))
+            {
+                return true;
+            }
+
+            foreach (TypedConstant argument in attribute.ConstructorArguments)
+            {
+                if (ConstantNamesPrivateNestedType(argument, owner))
+                {
+                    return true;
+                }
+            }
+
+            foreach (KeyValuePair<string, TypedConstant> named in attribute.NamedArguments)
+            {
+                if (ConstantNamesPrivateNestedType(named.Value, owner))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ConstantNamesPrivateNestedType(TypedConstant constant, INamedTypeSymbol owner)
+    {
+        switch (constant.Kind)
+        {
+            case TypedConstantKind.Type:
+                return constant.Value is ITypeSymbol type && NamesPrivateNestedType(type, owner);
+            case TypedConstantKind.Array:
+                foreach (TypedConstant element in constant.Values)
+                {
+                    if (ConstantNamesPrivateNestedType(element, owner))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            default:
+                return false;
+        }
+    }
+
     private static bool NamesPrivateNestedType(ITypeSymbol type, INamedTypeSymbol owner)
     {
         switch (type)
@@ -1051,6 +1112,21 @@ public sealed partial class CSharpToGSharpTranslator
                 return NamesPrivateNestedType(array.ElementType, owner);
             case IPointerTypeSymbol pointer:
                 return NamesPrivateNestedType(pointer.PointedAtType, owner);
+            case IFunctionPointerTypeSymbol functionPointer:
+                if (NamesPrivateNestedType(functionPointer.Signature.ReturnType, owner))
+                {
+                    return true;
+                }
+
+                foreach (IParameterSymbol parameter in functionPointer.Signature.Parameters)
+                {
+                    if (NamesPrivateNestedType(parameter.Type, owner))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             case INamedTypeSymbol named:
                 for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
                 {
