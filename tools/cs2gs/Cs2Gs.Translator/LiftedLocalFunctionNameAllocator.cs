@@ -20,7 +20,7 @@ internal sealed class LiftedLocalFunctionNameAllocator
     public string Allocate(
         IMethodSymbol localFunction,
         INamedTypeSymbol emittedOwner,
-        IReadOnlyCollection<string> occupied,
+        ISet<string> occupied,
         string localName,
         Func<string, bool> unavailable)
     {
@@ -54,7 +54,7 @@ internal sealed class LiftedLocalFunctionNameAllocator
 
     public string AllocateBackingField(
         IPropertySymbol property,
-        IReadOnlyCollection<string> occupied,
+        ISet<string> occupied,
         string baseName)
     {
         lock (this.gate)
