@@ -293,6 +293,24 @@ public sealed class Issue4633TestNameParityTests
     }
 
     /// <summary>
+    /// A <c>rows</c> entry does not hide a lost row behind an unrelated added
+    /// one with the same count: the rows must pair up by argument structure.
+    /// </summary>
+    [Fact]
+    public void Baseline_RowsEntry_RequiresMatchingArgumentStructure()
+    {
+        TestNameParityBaseline baseline = Baseline(Entry("rows", "Own.Tests.A.Adds"));
+        string[] oracle = { "Own.Tests.A.Adds(x: 1.5)" };
+
+        TestNameParityVerdict swapped = baseline.Evaluate(
+            AppId, TestNameParity.Compare(oracle, Passed("Own.Tests.A.Adds(y: 2, z: 3)")));
+
+        Assert.False(swapped.IsMatch);
+        Assert.Single(swapped.UnexplainedMissing);
+        Assert.Single(swapped.UnexplainedExtra);
+    }
+
+    /// <summary>
     /// Review finding: names are a multiset, so one exact entry excuses ONE
     /// occurrence. A second identical missing row needs <c>count</c>.
     /// </summary>

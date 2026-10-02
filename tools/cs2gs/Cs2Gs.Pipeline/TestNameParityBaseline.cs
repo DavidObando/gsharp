@@ -33,9 +33,10 @@ namespace Cs2Gs.Pipeline;
 /// <item><description>
 /// <c>rows</c>: one theory METHOD (<c>Ns.Class.Method</c>, no argument list)
 /// whose rows render differently on the two sides. It excuses that method's
-/// missing and extra rows ONLY when there are equally many of each, so it
-/// covers a rendering difference (a value's <c>ToString()</c> differs between
-/// C# and G#) and never a lost or added row.
+/// missing and extra rows ONLY when they pair up one for one by argument
+/// structure (the same multiset of argument-name lists, e.g.
+/// <c>(x: …, y: …)</c>), so it covers a value rendering differently between
+/// C# and G# and never a lost row hidden behind an unrelated added one.
 /// </description></item>
 /// </list>
 /// <para>
@@ -62,6 +63,10 @@ public sealed class TestNameParityBaseline
 
     private static readonly Regex IssueReference = new Regex(
         @"^#[0-9]+$", RegexOptions.CultureInvariant);
+
+    // An xUnit argument label: `name: ` at the start of the list or after `, `.
+    private static readonly Regex ArgumentNamePattern = new Regex(
+        @"(?:^|, )(\w+): ", RegexOptions.CultureInvariant);
 
     private readonly List<TestNameParityBaselineEntry> entries;
 
@@ -266,9 +271,11 @@ public sealed class TestNameParityBaseline
         foreach (TestNameParityBaselineEntry entry in scoped.Where(e => e.Kind.Trim() == RowsKind))
         {
             string method = entry.Test.Trim();
-            int missingRows = result.Missing.Count(name => IsRowOf(name, method));
-            int extraRows = result.Extra.Count(name => IsRowOf(name, method));
-            if (missingRows > 0 && missingRows == extraRows)
+            List<string> missingShapes = result.Missing.Where(name => IsRowOf(name, method)).Select(ArgumentShape).ToList();
+            List<string> extraShapes = result.Extra.Where(name => IsRowOf(name, method)).Select(ArgumentShape).ToList();
+            missingShapes.Sort(StringComparer.Ordinal);
+            extraShapes.Sort(StringComparer.Ordinal);
+            if (missingShapes.Count > 0 && missingShapes.SequenceEqual(extraShapes, StringComparer.Ordinal))
             {
                 rowMethods.Add(method);
                 fired.Add(entry);
@@ -339,6 +346,14 @@ public sealed class TestNameParityBaseline
         return scoped.FirstOrDefault(entry =>
             entry.Kind.Trim() == RowsKind && string.Equals(entry.Test.Trim(), method, StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// The argument structure of a theory row: its argument names in order
+    /// (<c>Ns.C.M(x: 1, y: "a")</c> gives <c>x,y</c>), ignoring the rendered
+    /// values, which are exactly what a <c>rows</c> entry allows to differ.
+    /// </summary>
+    private static string ArgumentShape(string row) =>
+        string.Join(",", ArgumentNamePattern.Matches(row.Substring(row.IndexOf('(') + 1)).Select(match => match.Groups[1].Value));
 
     private static bool IsRowOf(string name, string method) =>
         name.Length > method.Length &&
