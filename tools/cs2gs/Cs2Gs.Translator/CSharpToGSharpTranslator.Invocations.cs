@@ -219,12 +219,14 @@ public sealed partial class CSharpToGSharpTranslator
                         : captureArgument);
                 }
 
+                INamedTypeSymbol recursiveOwner =
+                    this.state.CurrentEmittedAggregate ?? recursiveLocal.ContainingType;
                 GExpression recursiveTarget = recursiveLift.IsStatic
-                    && recursiveLocal.ContainingType is { } recursiveContainingType
+                    && recursiveOwner != null
                     && !this.IsBareSiblingStaticScope(
-                        recursiveContainingType, recursiveLift.Name, invocation)
+                        recursiveOwner, recursiveLift.Name, invocation)
                         ? new MemberAccessExpression(
-                            this.StaticQualifierReceiver(recursiveContainingType, invocation.GetLocation()),
+                            this.StaticQualifierReceiver(recursiveOwner, invocation.GetLocation()),
                             recursiveLift.Name)
                         : new IdentifierExpression(recursiveLift.Name);
                 IReadOnlyList<GTypeReference> recursiveTypeArguments =
@@ -397,12 +399,14 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction.OriginalDefinition, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
+                INamedTypeSymbol emittedOwner = this.state.CurrentEmittedAggregate ?? containingType;
+
                 // Issue #3471: same-type call sites name the lifted `shared`
                 // helper bare; only cross-type sites qualify through the owner.
-                target = this.IsBareSiblingStaticScope(containingType, liftedName, invocation)
+                target = this.IsBareSiblingStaticScope(emittedOwner, liftedName, invocation)
                     ? new IdentifierExpression(liftedName)
                     : new MemberAccessExpression(
-                        this.StaticQualifierReceiver(containingType, invocation.GetLocation()),
+                        this.StaticQualifierReceiver(emittedOwner, invocation.GetLocation()),
                         liftedName);
                 if (invocation.Expression is GenericNameSyntax liftedGeneric)
                 {

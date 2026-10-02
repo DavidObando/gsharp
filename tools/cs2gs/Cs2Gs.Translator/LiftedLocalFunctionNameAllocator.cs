@@ -19,6 +19,7 @@ internal sealed class LiftedLocalFunctionNameAllocator
 
     public string Allocate(
         IMethodSymbol localFunction,
+        INamedTypeSymbol emittedOwner,
         IReadOnlyCollection<string> occupied,
         string localName,
         Func<string, bool> unavailable)
@@ -30,7 +31,7 @@ internal sealed class LiftedLocalFunctionNameAllocator
                 return assignedName;
             }
 
-            ISymbol owner = localFunction.ContainingType ?? (ISymbol)localFunction.ContainingAssembly;
+            ISymbol owner = emittedOwner ?? localFunction.ContainingType ?? (ISymbol)localFunction.ContainingAssembly;
             if (!this.usedByType.TryGetValue(owner, out HashSet<string> used))
             {
                 used = new HashSet<string>(StringComparer.Ordinal);

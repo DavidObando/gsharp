@@ -347,6 +347,8 @@ internal sealed class DocumentTranslationState
     // Shared helpers synthesized from capture-free static local functions.
     public List<MethodDeclaration> PendingStaticSynthHelpers { get; set; }
 
+    public INamedTypeSymbol CurrentEmittedAggregate { get; set; }
+
     public Dictionary<IMethodSymbol, string> LiftedStaticLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
 
