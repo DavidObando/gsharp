@@ -1229,6 +1229,20 @@ public sealed partial class CSharpToGSharpTranslator
                         spellingLocation: symbol.PartialDefinitionPart.Parameters[index].Locations.FirstOrDefault()))
                     .ToList()
                 : this.MapParameters(symbol, node.ParameterList, skipFirstParameter);
+            if (forceExtensionReceiver && symbol != null && AttributesNamePrivateNestedType(symbol))
+            {
+                parameters = parameters
+                    .Select(parameter => parameter.Name == null
+                        ? parameter
+                        : new Parameter(
+                            parameter.Name,
+                            parameter.Type,
+                            parameter.IsVariadic,
+                            parameter.RefKind,
+                            parameter.DefaultValue))
+                    .ToList();
+            }
+
             if (isPartialPart)
             {
                 parameters = this.ReconcilePartialMethodParameters(symbol, parameters, isDeclaringPart);
@@ -1399,11 +1413,21 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #4370: a `[LibraryImport]` definition's import arguments
             // are re-spelled from their constant values; issue #4301: so are
             // a `[GeneratedRegex]` definition's.
+            //
+            // The forwarding companion of an owner-scoped extension sits at top level, where an
+            // attribute naming one of the owner's private nested types cannot resolve. Those
+            // attributes stay on the in-owner helper; the companion, a thin forwarder, carries
+            // none of the source attributes, in any position (method, return, parameter).
+            bool omitCompanionAttributes = forceExtensionReceiver
+                && symbol != null
+                && AttributesNamePrivateNestedType(symbol);
             List<AttributeUse> methodAttributes = isNativeImportDefinition
                 ? this.MapLibraryImportMethodAttributes(node, symbol)
                 : isGeneratedRegexDefinition
                     ? this.MapGeneratedRegexMethodAttributes(node, symbol)
-                    : this.MapAttributes(node.AttributeLists);
+                    : omitCompanionAttributes
+                        ? new List<AttributeUse>()
+                        : this.MapAttributes(node.AttributeLists);
 
             // ADR-0192 §C: method-level attributes are unioned across the
             // parts by gsc, so each part carries only its OWN — `node` is the

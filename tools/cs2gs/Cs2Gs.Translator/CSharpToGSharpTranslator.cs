@@ -1008,20 +1008,64 @@ public sealed partial class CSharpToGSharpTranslator
         // return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
         // top-level function cannot name (or access) the private type, while the in-owner
         // helper can. A method whose SIGNATURE names such a type cannot be public API (CS0050);
-        // one that only has an attribute naming it can, and then keeps the helper alone: the
-        // top-level forwarding companion copies attributes in several positions (method,
-        // return, parameter) and could not bind the private type in any of them, so such a
-        // method gets no companion (IsOwnerScopedCompanionShapeEligible).
+        // one that only has an attribute naming it can: it keeps the helper and its
+        // forwarding companion, and the companion (top level, where the private type cannot
+        // be named) carries none of the source attributes, in any position (see
+        // TranslateMethod, `forceExtensionReceiver`).
         return original?.IsExtensionMethod == true &&
             HasPrivateNestedAggregate(original.ContainingType) &&
-            (TryGetOwnedExtensionReceiver(original, out _) || SignatureNamesPrivateNestedType(original));
+            (TryGetOwnedExtensionReceiver(original, out _)
+                || SignatureTypesNamePrivateNestedType(original)
+                || AttributesNamePrivateNestedType(original));
     }
 
-    private static bool SignatureNamesPrivateNestedType(IMethodSymbol method)
+    /// <summary>
+    /// Whether the receiver, a parameter, the return type or a type-parameter constraint of
+    /// <paramref name="method"/> names one of its owner's private nested types.
+    /// </summary>
+    /// <param name="method">The extension method.</param>
+    /// <returns><see langword="true"/> when a signature type names an owner-private nested type.</returns>
+    private static bool SignatureTypesNamePrivateNestedType(IMethodSymbol method)
     {
         INamedTypeSymbol owner = method.ContainingType;
-        if (NamesPrivateNestedType(method.ReturnType, owner)
-            || AttributesNamePrivateNestedType(method.GetAttributes(), owner)
+        if (NamesPrivateNestedType(method.ReturnType, owner))
+        {
+            return true;
+        }
+
+        foreach (IParameterSymbol parameter in method.Parameters)
+        {
+            if (NamesPrivateNestedType(parameter.Type, owner))
+            {
+                return true;
+            }
+        }
+
+        foreach (ITypeParameterSymbol typeParameter in method.TypeParameters)
+        {
+            foreach (ITypeSymbol constraint in typeParameter.ConstraintTypes)
+            {
+                if (NamesPrivateNestedType(constraint, owner))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether an attribute on <paramref name="method"/>, its return value, a parameter or a
+    /// type parameter names one of its owner's private nested types (as the attribute class
+    /// or in an argument).
+    /// </summary>
+    /// <param name="method">The extension method.</param>
+    /// <returns><see langword="true"/> when an attribute names an owner-private nested type.</returns>
+    private static bool AttributesNamePrivateNestedType(IMethodSymbol method)
+    {
+        INamedTypeSymbol owner = method.ContainingType;
+        if (AttributesNamePrivateNestedType(method.GetAttributes(), owner)
             || AttributesNamePrivateNestedType(method.GetReturnTypeAttributes(), owner))
         {
             return true;
@@ -1029,8 +1073,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         foreach (IParameterSymbol parameter in method.Parameters)
         {
-            if (NamesPrivateNestedType(parameter.Type, owner)
-                || AttributesNamePrivateNestedType(parameter.GetAttributes(), owner))
+            if (AttributesNamePrivateNestedType(parameter.GetAttributes(), owner))
             {
                 return true;
             }
@@ -1041,14 +1084,6 @@ public sealed partial class CSharpToGSharpTranslator
             if (AttributesNamePrivateNestedType(typeParameter.GetAttributes(), owner))
             {
                 return true;
-            }
-
-            foreach (ITypeSymbol constraint in typeParameter.ConstraintTypes)
-            {
-                if (NamesPrivateNestedType(constraint, owner))
-                {
-                    return true;
-                }
             }
         }
 
@@ -1183,7 +1218,7 @@ public sealed partial class CSharpToGSharpTranslator
             || original.Parameters.Any(parameter => parameter.IsParams)
             || original.ReturnsByRef
             || original.ReturnsByRefReadonly
-            || SignatureNamesPrivateNestedType(original))
+            || SignatureTypesNamePrivateNestedType(original))
         {
             return false;
         }

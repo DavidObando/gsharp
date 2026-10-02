@@ -407,15 +407,21 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
 
         // A PUBLIC extension whose only mention of the private type is an attribute (method,
         // return or parameter target) is legal C# and API: it keeps the in-owner helper, with
-        // its attributes, and gets no top-level forwarding companion, whose copy of those
-        // attributes could not name the private type.
+        // its attributes, AND its public forwarding companion (so it is still discoverable as an
+        // extension), and the companion, at top level where `Box` is out of scope, carries none
+        // of the source attributes.
         foreach (string name in new[] { "PublicTagged", "PublicReturnTagged", "PublicParameterTagged" })
         {
             MethodDeclaration publicHelper = Assert.Single(
                 shared.OfType<MethodDeclaration>(),
                 method => method.Name == name);
             Assert.NotEmpty(publicHelper.Attributes.Concat(publicHelper.Parameters.SelectMany(parameter => parameter.Attributes)));
-            Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == name);
+            MethodDeclaration companion = Assert.Single(
+                unit.Members.OfType<MethodDeclaration>(),
+                method => method.Name == name);
+            Assert.NotNull(companion.Receiver);
+            Assert.Empty(companion.Attributes);
+            Assert.Empty(companion.Parameters.SelectMany(parameter => parameter.Attributes));
         }
 
         // A null array argument (`[Marker(null)]` for a `Type[]` parameter) names no type and
