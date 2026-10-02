@@ -1502,7 +1502,47 @@ public sealed partial class CSharpToGSharpTranslator
                     includePromotedValue: true);
             }
 
+            // At statement position the parser reads `yield (` as a tuple
+            // yield, not as an arbitrary parenthesized expression. Keep the
+            // expression's target type and iterator-time evaluation by
+            // materializing it immediately before the yield.
+            if (value is not TupleLiteralExpression
+                && GSharpPrinter.RenderExpression(value).StartsWith('('))
+            {
+                string name = this.FreshYieldedValueName(node);
+                GTypeReference type = typeInfo.ConvertedType is { } yieldType
+                    ? this.typeMapper.Map(yieldType, this.context, node.Expression.GetLocation())
+                    : null;
+                return new GStatement[]
+                {
+                    new LocalDeclarationStatement(
+                        BindingKind.Let,
+                        name,
+                        type,
+                        initializer: value),
+                    new YieldStatement(new IdentifierExpression(name)),
+                };
+            }
+
             return new[] { (GStatement)new YieldStatement(value) };
+        }
+
+        private string FreshYieldedValueName(YieldStatementSyntax node)
+        {
+            var usedNames = new HashSet<string>(
+                node.SyntaxTree.GetRoot().DescendantTokens()
+                    .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
+                    .Select(token => token.ValueText),
+                StringComparer.Ordinal);
+
+            string name;
+            do
+            {
+                name = $"__yielded{this.state.YieldedValueCounter++}";
+            }
+            while (usedNames.Contains(name));
+
+            return name;
         }
 
         private static SyntaxNode GetBreakTarget(YieldStatementSyntax node)

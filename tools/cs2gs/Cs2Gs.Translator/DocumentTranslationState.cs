@@ -307,6 +307,9 @@ internal sealed class DocumentTranslationState
     // Monotonic counter for synthesizing spill temporaries (issue #1731).
     public int SpillCounter { get; set; }
 
+    // Monotonic counter for locals that keep parenthesized yield values parseable.
+    public int YieldedValueCounter { get; set; }
+
     // Monotonic counter for immutable pattern captures that seed mutable C#
     // switch-arm pattern locals.
     public int SwitchPatternCounter { get; set; }

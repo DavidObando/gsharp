@@ -67,6 +67,21 @@ public static class GSharpPrinter
     public static string RenderTypeReference(GTypeReference type) => RenderType(type);
 
     /// <summary>
+    /// Renders an expression to its canonical G# source form.
+    /// </summary>
+    /// <param name="expression">The expression to render.</param>
+    /// <returns>The canonical G# expression text.</returns>
+    public static string RenderExpression(GExpression expression)
+    {
+        if (expression == null)
+        {
+            throw new ArgumentNullException(nameof(expression));
+        }
+
+        return RenderExpression(expression, 0);
+    }
+
+    /// <summary>
     /// ADR-0192: renders a method's signature — everything but its body and
     /// its method-level attributes (which gsc unions across partial parts),
     /// keeping parameter annotations and defaults — exactly as the printer
