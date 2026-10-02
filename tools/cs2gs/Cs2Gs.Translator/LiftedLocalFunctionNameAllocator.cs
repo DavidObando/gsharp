@@ -27,10 +27,10 @@ internal sealed class LiftedLocalFunctionNameAllocator
     private readonly HashSet<string> helperNames = new(StringComparer.Ordinal);
     private readonly HashSet<string> aliasNames = new(StringComparer.Ordinal);
 
-    // Issue #4302: synthesized pattern designators print beside bare helper
-    // references in the same emitted type, so the two reserve against each
-    // other whichever is allocated first.
-    private readonly Dictionary<ISymbol, HashSet<string>> designatorsByType =
+    // Issue #4302: synthesized locals can print beside bare helper references
+    // in the same emitted type, so the two reserve against each other
+    // whichever is allocated first.
+    private readonly Dictionary<ISymbol, HashSet<string>> localNamesByType =
         new(SymbolEqualityComparer.Default);
 
     public static LiftedLocalFunctionNameAllocator For(Compilation compilation) =>
@@ -52,16 +52,42 @@ internal sealed class LiftedLocalFunctionNameAllocator
 
             if (owner != null)
             {
-                if (!this.designatorsByType.TryGetValue(owner, out HashSet<string> designators))
+                if (!this.localNamesByType.TryGetValue(owner, out HashSet<string> localNames))
                 {
-                    designators = new HashSet<string>(StringComparer.Ordinal);
-                    this.designatorsByType.Add(owner, designators);
+                    localNames = new HashSet<string>(StringComparer.Ordinal);
+                    this.localNamesByType.Add(owner, localNames);
                 }
 
-                designators.Add(designator);
+                localNames.Add(designator);
             }
 
             return designator;
+        }
+    }
+
+    public bool TryClaimLocalName(INamedTypeSymbol emittedOwner, string name)
+    {
+        lock (this.gate)
+        {
+            ISymbol owner = emittedOwner?.OriginalDefinition;
+            if (owner == null)
+            {
+                return true;
+            }
+
+            if (this.usedByType.TryGetValue(owner, out HashSet<string> helpers)
+                && helpers.Contains(name))
+            {
+                return false;
+            }
+
+            if (!this.localNamesByType.TryGetValue(owner, out HashSet<string> localNames))
+            {
+                localNames = new HashSet<string>(StringComparer.Ordinal);
+                this.localNamesByType.Add(owner, localNames);
+            }
+
+            return localNames.Add(name);
         }
     }
 
@@ -108,13 +134,13 @@ internal sealed class LiftedLocalFunctionNameAllocator
                 this.usedByType.Add(owner, used);
             }
 
-            this.designatorsByType.TryGetValue(owner, out HashSet<string> designators);
+            this.localNamesByType.TryGetValue(owner, out HashSet<string> localNames);
             string candidate = localName;
             for (int suffix = 2;
                 occupied.Contains(candidate)
                     || used.Contains(candidate)
                     || this.aliasNames.Contains(candidate)
-                    || designators?.Contains(candidate) == true
+                    || localNames?.Contains(candidate) == true
                     || unavailable(candidate);
                 suffix++)
             {

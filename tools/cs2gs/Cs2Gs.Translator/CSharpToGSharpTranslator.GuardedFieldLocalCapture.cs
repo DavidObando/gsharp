@@ -112,6 +112,14 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                INamedTypeSymbol owner = this.state.CurrentEmittedAggregate ?? symbol.ContainingType;
+                if (!LiftedLocalFunctionNameAllocator
+                    .For(this.context.Compilation)
+                    .TryClaimLocalName(owner, capturedName))
+                {
+                    continue;
+                }
+
                 // Translate the representative read BEFORE registering any
                 // substitution — otherwise this exact node would short-
                 // circuit to the (not-yet-declared) capture and translate the

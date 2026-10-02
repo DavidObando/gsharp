@@ -2220,6 +2220,11 @@ public sealed partial class CSharpToGSharpTranslator
         {
             while (true)
             {
+                if (this.BindsTo(target, symbol))
+                {
+                    return true;
+                }
+
                 ExpressionSyntax receiver = target switch
                 {
                     MemberAccessExpressionSyntax member
@@ -2236,7 +2241,7 @@ public sealed partial class CSharpToGSharpTranslator
                 target = receiver;
             }
 
-            return this.BindsTo(target, symbol);
+            return false;
         }
 
         private bool MutatingStructCallWritesSymbol(
