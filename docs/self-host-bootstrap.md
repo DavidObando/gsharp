@@ -24,7 +24,7 @@ python3 build/selfhost-pack-stage1.py \
 The script changes the tree in place, idempotently, and records every change in `<work>/stage1-report.json`:
 
 - It stages the stage-0 nupkg, plus its `GSharp.CodeAnalysis.Analyzers.Testing` sibling, into the tree's `.nugs` feed.
-- It pins `Gsharp.NET.Sdk` once, under `msbuild-sdks` in `global.json`. A tree migrated with `cs2gs migrate --sdk-pin global-json` is already bare. In a per-project tree, the generated pin is the one on `src/Core/Core.gsproj`, and it is rewritten to the bare name wherever it appears. Pins on samples and templates are intentional and are left alone.
+- It pins `Gsharp.NET.Sdk` once, under `msbuild-sdks` in `global.json`. The file is rewritten as plain JSON, so comments and formatting are not kept (the repository's `global.json` has none). A BOM is kept. A tree migrated with `cs2gs migrate --sdk-pin global-json` is already bare. In a per-project tree, the generated pin is the one on `src/Core/Core.gsproj`, and it is rewritten to the bare name wherever it appears. Pins on samples and templates are intentional and are left alone.
 - MSBuild lets a versioned `Sdk` attribute silently override `global.json`, so the script fails if a toolchain project still carries one.
 
 It restores the projects that the SDK's `Pack*` targets build through nested `<MSBuild>` calls, then runs `dotnet pack` on the SDK project.

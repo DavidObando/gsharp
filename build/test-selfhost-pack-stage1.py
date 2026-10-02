@@ -142,6 +142,7 @@ class PrepareTreeTests(unittest.TestCase):
             nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.0.4.1129-g6c4824cbc0.nupkg", {"x": b""})
 
             report = packer.prepare_tree(tree, bootstrap)
+            again = packer.prepare_tree(tree, bootstrap)
 
             self.assertEqual("0.4.1129-g6c4824cbc0", report["bootstrapVersion"])
             self.assertEqual(
@@ -151,6 +152,12 @@ class PrepareTreeTests(unittest.TestCase):
             document = json.loads((tree / "global.json").read_text())
             self.assertEqual("0.4.1129-g6c4824cbc0", document["msbuild-sdks"]["Gsharp.NET.Sdk"])
             self.assertEqual("latestFeature", document["sdk"]["rollForward"])
+            self.assertTrue(report["globalJsonUpdated"])
+            self.assertEqual([False, False], [s["replacedExisting"] for s in report["stagedPackages"]])
+            # Idempotent: a second run changes nothing and says so.
+            self.assertFalse(again["globalJsonUpdated"])
+            self.assertEqual([], again["rewrittenPins"])
+            self.assertEqual([True, True], [s["replacedExisting"] for s in again["stagedPackages"]])
 
 
 class VersionTests(unittest.TestCase):
@@ -188,13 +195,16 @@ class ReversionTests(unittest.TestCase):
                 "tools/compiler/gsc.dll": b"MZ"})
             nupkg(root / "Gsharp.NET.Sdk.0.4.0-g.snupkg", {
                 "Gsharp.NET.Sdk.nuspec": b"<package><metadata><version>0.4.0-g</version></metadata></package>"})
+            versionless = nupkg(root / "other" / "Gsharp.NET.Sdk.1.0.0-g.nupkg", {"Gsharp.NET.Sdk.nuspec": b"<package/>"})
+            with self.assertRaises(packer.SelfHostError):
+                packer.stamp_package(versionless, root / "other" / "x.nupkg", "1.0.0", required=True)
 
             stamped = packer.reversion(produced, "0.4.1129-stage1")
 
             self.assertEqual("Gsharp.NET.Sdk.0.4.1129-stage1.nupkg", stamped.name)
             self.assertEqual(
                 ["Gsharp.NET.Sdk.0.4.1129-stage1.nupkg", "Gsharp.NET.Sdk.0.4.1129-stage1.snupkg"],
-                sorted(p.name for p in root.iterdir()))
+                sorted(p.name for p in root.iterdir() if p.is_file()))
             with zipfile.ZipFile(root / "Gsharp.NET.Sdk.0.4.1129-stage1.snupkg") as archive:
                 self.assertIn(b"<version>0.4.1129-stage1</version>", archive.read("Gsharp.NET.Sdk.nuspec"))
             with zipfile.ZipFile(stamped) as archive:

@@ -152,6 +152,23 @@ def check_no_versioned_toolchain_pins(tree: Path) -> None:
             + "\n  ".join(sorted(offenders)))
 
 
+def closes_next(text: str, start: int) -> bool:
+    """Whether the next token after `start`, skipping whitespace and comments, closes an object or array."""
+    i = start
+    while i < len(text):
+        if text[i].isspace():
+            i += 1
+        elif text.startswith("//", i):
+            end = text.find("\n", i)
+            i = len(text) if end < 0 else end + 1
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = len(text) if end < 0 else end + 2
+        else:
+            return text[i] in "}]"
+    return False
+
+
 def strip_json_comments(text: str) -> str:
     out, i, in_string = [], 0, False
     while i < len(text):
@@ -174,7 +191,7 @@ def strip_json_comments(text: str) -> str:
             end = text.find("*/", i + 2)
             i = len(text) if end < 0 else end + 2
             continue
-        elif c == "," and re.match(r"\s*(//[^\n]*\n\s*|/\*.*?\*/\s*)*[}\]]", text[i + 1:], re.DOTALL):
+        elif c == "," and closes_next(text, i + 1):
             # A trailing comma (outside any string): drop it.
             pass
         else:
@@ -183,7 +200,7 @@ def strip_json_comments(text: str) -> str:
     return "".join(out)
 
 
-def pin_global_json(tree: Path, version: str) -> None:
+def pin_global_json(tree: Path, version: str) -> bool:
     path = tree / "global.json"
     raw = path.read_bytes() if path.exists() else b""
     bom = raw.startswith(b"\xef\xbb\xbf")
@@ -197,15 +214,25 @@ def pin_global_json(tree: Path, version: str) -> None:
     for key in [k for k in sdks if k.lower() == SDK_ID.lower()]:
         del sdks[key]
     sdks[SDK_ID] = version
-    path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + (json.dumps(document, indent=2) + "\n").encode("utf-8"))
+    # Written as plain JSON: comments and formatting in the original are not kept.
+    updated = (b"\xef\xbb\xbf" if bom else b"") + (json.dumps(document, indent=2) + "\n").encode("utf-8")
+    changed = updated != raw
+    if changed:
+        path.write_bytes(updated)
+    return changed
 
 
-def stage_feed(tree: Path, nupkgs: list[Path]) -> Path:
+def stage_feed(tree: Path, nupkgs: list[Path]) -> list[dict]:
+    """Copies `nupkgs` into the tree's .nugs feed; returns what was staged and whether it replaced a file."""
     feed = tree / ".nugs"
     feed.mkdir(exist_ok=True)
+    staged = []
     for nupkg in nupkgs:
-        shutil.copy2(nupkg, feed / nupkg.name)
-    return feed
+        target = feed / nupkg.name
+        replaced = target.exists()
+        shutil.copy2(nupkg, target)
+        staged.append({"package": nupkg.name, "replacedExisting": replaced})
+    return staged
 
 
 def sibling_nupkgs(bootstrap: Path, version: str) -> list[Path]:
@@ -222,13 +249,15 @@ def prepare_tree(tree: Path, bootstrap: Path) -> dict:
     if not (tree / SDK_PROJECT).is_file():
         raise SelfHostError(f"{tree / SDK_PROJECT} not found; is {tree} a migrated repository?")
     rewritten = normalize_pins(tree)
-    pin_global_json(tree, version)
+    global_json_updated = pin_global_json(tree, version)
     check_no_versioned_toolchain_pins(tree)
     staged = stage_feed(tree, sibling_nupkgs(bootstrap, version))
     return {
         "bootstrapVersion": version,
         "rewrittenPins": rewritten,
-        "feed": str(staged),
+        "globalJsonUpdated": global_json_updated,
+        "feed": str(tree / ".nugs"),
+        "stagedPackages": staged,
     }
 
 
@@ -332,7 +361,7 @@ def reversion(nupkg: Path, version: str) -> Path:
     symbols = nupkg.with_suffix(".snupkg")
     if symbols.exists():
         # The symbol package travels with the package, under the same version.
-        stamp_package(symbols, target.with_suffix(".snupkg"), version, required=False)
+        stamp_package(symbols, target.with_suffix(".snupkg"), version, required=True)
     return target
 
 
