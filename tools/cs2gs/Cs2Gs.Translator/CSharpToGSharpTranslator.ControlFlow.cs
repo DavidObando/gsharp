@@ -382,9 +382,19 @@ public sealed partial class CSharpToGSharpTranslator
             // references to that binder print as the hoist local); otherwise a fresh
             // synthetic name is used.
             ILocalSymbol mainBinder = this.FindMainPatternBinder(isPattern.Pattern);
-            string hoistName = mainBinder != null
-                ? this.EmittedName(mainBinder, mainBinder.Name)
-                : $"__scrutinee{this.state.LoopHoistCounter++}";
+            string hoistName;
+            if (mainBinder != null)
+            {
+                hoistName = this.EmittedName(mainBinder, mainBinder.Name);
+            }
+            else
+            {
+                do
+                {
+                    hoistName = $"__scrutinee{this.state.LoopHoistCounter++}";
+                }
+                while (!this.TryClaimSynthesizedLocalName(hoistName, clause));
+            }
 
             BindingKind binding = mainBinder != null && this.IsLocalReassigned(mainBinder)
                 ? BindingKind.Var

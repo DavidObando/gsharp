@@ -743,6 +743,42 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void LoopScrutinee_ReservesAgainstLiftedHelper()
+        {
+            string printed = Translate("""
+                using System;
+
+                public class C
+                {
+                    private static Func<int, int> Make(out int ignored)
+                    {
+                        ignored = 0;
+                        return value => 100 + value;
+                    }
+
+                    public int Run()
+                    {
+                        while (Make(out var ignored) is not null)
+                        {
+                            return __scrutinee0(0);
+                            static int __scrutinee0(int n) =>
+                                n == 0 ? 7 : Other<int>(n - 1);
+                            static int Other<T>(int n) => __scrutinee0(n);
+                        }
+
+                        return -1;
+                    }
+                }
+                """);
+
+            Assert.Contains("func __scrutinee0_2(", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run())",
+                "7");
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReservesNameAgainstLaterTypeAlias()
         {
             string printed = Translate("""
