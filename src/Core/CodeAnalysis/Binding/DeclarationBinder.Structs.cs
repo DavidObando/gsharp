@@ -130,7 +130,8 @@ internal sealed partial class DeclarationBinder
     /// Issue #950: reports GS0380 for any member declared <c>protected</c> when
     /// the enclosing type is not an inheritable <c>open class</c>. Structs
     /// (value types) and non-open/sealed classes cannot be derived from, so a
-    /// <c>protected</c> member there has no meaning.
+    /// <c>protected</c> member there has no meaning. A <c>protected override</c>
+    /// method, property or event is exempt on a class (issue #4674).
     /// </summary>
     private void ValidateProtectedMemberPlacement(StructDeclarationSyntax syntax)
     {
@@ -170,7 +171,10 @@ internal sealed partial class DeclarationBinder
 
         foreach (var evt in syntax.Events)
         {
-            ReportProtectedToken(evt.AccessibilityModifier);
+            if (!(overridesAllowed && evt.OverrideModifier != null))
+            {
+                ReportProtectedToken(evt.AccessibilityModifier);
+            }
         }
 
         if (!syntax.Constructors.IsDefaultOrEmpty)

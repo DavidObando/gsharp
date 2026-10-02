@@ -140,12 +140,14 @@ open class Base {
         return 1
     }
     protected open prop Size int32 { get { return 1 } }
+    protected open event Changed func()
 }
 class Sealed : Base {
     protected override func Reveal() int32 {
         return 2
     }
     protected override prop Size int32 { get { return 2 } }
+    protected override event Changed func()
 }
 0
 ";
