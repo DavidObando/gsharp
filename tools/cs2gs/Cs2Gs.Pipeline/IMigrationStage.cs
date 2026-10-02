@@ -248,7 +248,6 @@ public sealed class StageExecutionContext
     /// </summary>
 #nullable enable annotations
     public TestNameParitySummary? TestNameParity { get; set; }
-#nullable restore
 }
 
 /// <summary>
