@@ -199,7 +199,8 @@ step 4) for `gsharplang.vscode-gsharp`:
 V=0.4.NNNN
 for id in gsharp.net.sdk gsharp.templates gsharp.repl gsharp.gsfmt gsharp.cs2gs \
           gsharp.codeanalysis.analyzers.testing; do
-  curl -fsS "https://api.nuget.org/v3-flatcontainer/$id/index.json" | grep -q "\"$V\"" \
+  curl -fsS "https://api.nuget.org/v3-flatcontainer/$id/index.json" \
+    | python3 -c 'import json,sys; sys.exit(sys.argv[1] not in json.load(sys.stdin)["versions"])' "$V" \
     && echo "ok   $id $V" || echo "MISSING $id $V"
 done
 gh release view "v$V" --repo DavidObando/gsharp --json assets --jq '.assets[].name'
@@ -255,6 +256,12 @@ gh api repos/DavidObando/gsharp/rulesets -X POST --input - <<'JSON'
   "bypass_actors": [ { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" } ] }
 JSON
 ```
+
+The bypass entry copies "Lock Main"'s own: `RepositoryRole` 5 is GitHub's
+built-in repository **Admin** role. To confirm it before posting, run
+`gh api repos/DavidObando/gsharp/rulesets/17277774 --jq .bypass_actors`.
+Drop `bypass_actors` if nobody should bypass. Rollback step 7 then needs the
+ruleset disabled temporarily to move the branch.
 
 Branch policy (**pending owner decision D2**; the assessment recommends):
 
