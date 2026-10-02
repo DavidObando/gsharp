@@ -600,6 +600,7 @@ internal static class Program
         string allowListPath = null;
         bool baselineStrict = false;
         bool translateOnly = false;
+        bool sdkPinSpecified = false;
         var appIds = new List<string>();
         var options = new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository };
 
@@ -692,6 +693,7 @@ internal static class Program
 
                         break;
                     case "--sdk-pin":
+                        sdkPinSpecified = true;
                         string pin = NextValue(args, ref i, arg);
                         if (!SdkPinArguments.TryParseLocation(pin, out SdkPinLocation location))
                         {
@@ -716,7 +718,7 @@ internal static class Program
         }
 
         if (options.OutputLayout == MigrationOutputLayout.DiagnosticRun
-            && (options.SdkVersion is not null || options.SdkPinLocation != SdkPinLocation.ProjectFile))
+            && (options.SdkVersion is not null || sdkPinSpecified))
         {
             Console.Error.WriteLine("cs2gs: --sdk-version and --sdk-pin apply to repository migration only.");
             return null;

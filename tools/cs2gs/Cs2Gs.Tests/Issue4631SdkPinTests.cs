@@ -212,6 +212,66 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.False(SdkPinArguments.TryParseLocation("Project", out _));
     }
 
+    /// <summary>An explicit project pin is rejected in diagnostic mode, including when repeated.</summary>
+    /// <param name="firstPin">The first pin option.</param>
+    /// <param name="secondPin">A later pin option, or an empty string.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Theory]
+    [InlineData("project", "")]
+    [InlineData("global-json", "project")]
+    public async Task Migrate_DiagnosticRunRejectsExplicitSdkPin(string firstPin, string secondPin)
+    {
+        var args = new List<string>
+        {
+            "migrate",
+            "--diagnostic-run",
+            "--corpus",
+            this.root,
+            "--sdk-pin",
+            firstPin,
+        };
+        if (secondPin.Length > 0)
+        {
+            args.Add("--sdk-pin");
+            args.Add(secondPin);
+        }
+
+        System.Reflection.MethodInfo parse = typeof(Cs2Gs.Cli.Program).GetMethod(
+            "ParseMigrateArgs",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(parse);
+        object[] parameters = { args.ToArray(), false };
+        object result = parse.Invoke(null, parameters);
+
+        Assert.Null(result);
+    }
+
+    /// <summary>Explicit local package lookup selects and stages the requested version, not a newer one.</summary>
+    [Fact]
+    public void FindLocalPackageVersion_SelectsAndStagesTheExactVersion()
+    {
+        const string packageId = "Gsharp.NET.Sdk";
+        const string newerVersion = "9.9.9-newer";
+        string repoRoot = Path.Combine(this.root, "package-repo");
+        string packageDirectory = Path.Combine(repoRoot, "out", "bin", "Release", "nupkgs");
+        Directory.CreateDirectory(packageDirectory);
+        string requestedPath = Path.Combine(packageDirectory, packageId + "." + PinnedVersion + ".nupkg");
+        File.WriteAllText(requestedPath, "requested");
+        File.WriteAllText(Path.Combine(packageDirectory, packageId + "." + newerVersion + ".nupkg"), "newer");
+
+        string found = GsharpTestProjectRunner.FindLocalPackageVersion(
+            repoRoot,
+            packageId,
+            PinnedVersion,
+            "Release");
+
+        Assert.Equal(requestedPath, found);
+        GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, found);
+        Assert.Equal(
+            "requested",
+            File.ReadAllText(Path.Combine(repoRoot, ".nugs", Path.GetFileName(requestedPath))));
+    }
+
     /// <summary>
     /// An explicit version is what every generated project pins, whatever
     /// newer nupkg the local build left behind; no <c>global.json</c> pin is
