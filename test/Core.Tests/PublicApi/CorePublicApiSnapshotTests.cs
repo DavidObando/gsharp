@@ -530,7 +530,8 @@ public sealed class CorePublicApiSnapshotTests
             ConstantTypeCode.Double => blob.ReadDouble().ToString("R", System.Globalization.CultureInfo.InvariantCulture),
             ConstantTypeCode.String => Quote(blob.ReadUTF16(blob.Length)),
             ConstantTypeCode.NullReference => "null",
-            _ => constant.TypeCode.ToString(),
+            _ => throw new InvalidOperationException(
+                "unsupported constant type " + constant.TypeCode + "; render it explicitly rather than lose its value"),
         };
     }
 
