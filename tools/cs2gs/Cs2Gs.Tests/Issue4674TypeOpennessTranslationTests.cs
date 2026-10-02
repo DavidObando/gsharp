@@ -121,7 +121,10 @@ namespace Corpus.Openness
     {
         TypeDeclaration declaration = Translate().Members.OfType<TypeDeclaration>().Single(t => t.Name == name);
 
-        Assert.Equal(expectedOpen, declaration.IsOpen);
+        // A C# `abstract` class is inheritable too: it is emitted `open` here, and
+        // `abstract` (which implies `open`) once the translator can say that
+        // (ADR-0195), so the claim is "inheritable", whichever way it is spelled.
+        Assert.Equal(expectedOpen, declaration.IsOpen || declaration.IsAbstract);
     }
 
     [Theory]
