@@ -269,7 +269,7 @@ type abstract class GSharp.Core.CodeAnalysis.Symbols.VariableSymbol : GSharp.Cor
   method public Boolean get_IsReadOnly()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxNode get_DeclaringSyntax()
-  method public Void .ctor(String name, Boolean isReadOnly, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = ?)
+  method public Void .ctor(String name, Boolean isReadOnly, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = null)
   method public virtual System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxNode> get_DeclaringSyntaxNodes()
   property public Boolean IsReadOnly { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol Type { get; }
@@ -343,8 +343,8 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions get_Submission()
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit()
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream)
-  method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream, System.IO.Stream pdbStream, System.IO.Stream refStream, String assemblyName = ?, String assemblyVersion = ?)
-  method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream, System.IO.Stream pdbStream, System.IO.Stream refStream, System.IO.Stream docStream, String assemblyName = ?, String assemblyVersion = ?, String targetFrameworkMoniker = ?)
+  method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream, System.IO.Stream pdbStream, System.IO.Stream refStream, String assemblyName = null, String assemblyVersion = null)
+  method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream, System.IO.Stream pdbStream, System.IO.Stream refStream, System.IO.Stream docStream, String assemblyName = null, String assemblyVersion = null, String targetFrameworkMoniker = null)
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream, System.IO.Stream refStream)
   method public GSharp.Core.CodeAnalysis.Diagnostics.ILogger get_Logger()
   method public GSharp.Core.CodeAnalysis.Emit.DebugInformationOptions get_DebugInformation()
@@ -402,7 +402,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.EmitResult : System.Object
   property public Boolean Success { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics { get; }
 type class GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol : GSharp.Core.CodeAnalysis.Symbols.VariableSymbol
-  method public Void .ctor(String name, Boolean isReadOnly, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = ?)
+  method public Void .ctor(String name, Boolean isReadOnly, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = null)
   method public virtual Boolean get_IsScoped()
   method public virtual GSharp.Core.CodeAnalysis.Binding.RefKind get_RefKind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.SymbolKind get_Kind()
@@ -487,7 +487,7 @@ type class GSharp.Core.CodeAnalysis.Syntax.BinaryExpressionSyntax : GSharp.Core.
 type class GSharp.Core.CodeAnalysis.Syntax.BreakStatementSyntax : GSharp.Core.CodeAnalysis.Syntax.StatementSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Keyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_LabelIdentifier()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken keyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken labelIdentifier = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken keyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken labelIdentifier = null)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken Keyword { get; }
@@ -510,7 +510,7 @@ type class GSharp.Core.CodeAnalysis.Syntax.CompilationUnitSyntax : GSharp.Core.C
 type class GSharp.Core.CodeAnalysis.Syntax.ContinueStatementSyntax : GSharp.Core.CodeAnalysis.Syntax.StatementSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Keyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_LabelIdentifier()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken keyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken labelIdentifier = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken keyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken labelIdentifier = null)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken Keyword { get; }
@@ -1162,11 +1162,11 @@ type enum GSharp.Core.CodeAnalysis.Syntax.SyntaxKind : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind YieldStatement = 244
 type interface GSharp.Core.CodeAnalysis.Diagnostics.ILogger
   method public abstract Boolean IsEnabled(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level)
-  method public abstract Void Log(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level, String message, System.Exception exception = ?)
-  method public abstract Void LogDebug(String message, System.Exception exception = ?)
-  method public abstract Void LogError(String message, System.Exception exception = ?)
-  method public abstract Void LogInfo(String message, System.Exception exception = ?)
-  method public abstract Void LogWarning(String message, System.Exception exception = ?)
+  method public abstract Void Log(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level, String message, System.Exception exception = null)
+  method public abstract Void LogDebug(String message, System.Exception exception = null)
+  method public abstract Void LogError(String message, System.Exception exception = null)
+  method public abstract Void LogInfo(String message, System.Exception exception = null)
+  method public abstract Void LogWarning(String message, System.Exception exception = null)
 type sealed class GSharp.Core.CodeAnalysis.Analyzers.AnalyzerOptions : System.Object
   method public System.Nullable`1<Int32> get_TimeBudgetMilliseconds()
   method public Void .ctor()
@@ -1187,7 +1187,7 @@ type sealed class GSharp.Core.CodeAnalysis.Analyzers.DiagnosticSuppressionMap : 
   method public static GSharp.Core.CodeAnalysis.Analyzers.DiagnosticSuppressionMap Build(System.Collections.Generic.IEnumerable`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> syntaxTrees)
   method public static System.Collections.Immutable.ImmutableArray`1<String> GetSuppressedIds(GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax annotation)
 type sealed class GSharp.Core.CodeAnalysis.Analyzers.GSharpAnalyzerDriver : System.Object
-  method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Run(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> analyzers, GSharp.Core.CodeAnalysis.Analyzers.AnalyzerOptions options = ?, System.Threading.CancellationToken cancellationToken = ?)
+  method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Run(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> analyzers, GSharp.Core.CodeAnalysis.Analyzers.AnalyzerOptions options = null, System.Threading.CancellationToken cancellationToken = null)
 type sealed class GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzerAttribute : System.Attribute
   method public Void .ctor()
 type sealed class GSharp.Core.CodeAnalysis.Binding.AccessPath : System.Object, System.IEquatable`1<GSharp.Core.CodeAnalysis.Binding.AccessPath>
@@ -1215,7 +1215,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.Binder : System.Object
   method public static GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope BindGlobalScope(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope previous, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> syntaxTrees, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, Boolean implicitSystemImport, System.Collections.Immutable.ImmutableHashSet`1<String> preprocessorSymbols)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope BindGlobalScope(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope previous, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> syntaxTrees, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, Boolean implicitSystemImport, System.Collections.Immutable.ImmutableHashSet`1<String> preprocessorSymbols, Boolean isLibrary)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope BindGlobalScope(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope previous, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> syntaxTrees, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, Boolean implicitSystemImport, System.Collections.Immutable.ImmutableHashSet`1<String> preprocessorSymbols, Boolean isLibrary, GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions submission)
-  method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references = ?)
+  method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references = null)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Binding.BoundBodyCache cache)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Binding.BoundBodyCache cache, System.Collections.Immutable.ImmutableHashSet`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> dirtyTrees)
   method public static GSharp.Core.CodeAnalysis.Symbols.TypeSymbol TryInferExpressionType(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol containingFunction, System.Collections.Generic.IEnumerable`1<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol> additionalLocals, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression)
@@ -1225,7 +1225,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundAddressOfExpression : GS
   method public Boolean get_IsUnmanaged()
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Operand()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression operand)
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression operand, Boolean unmanaged, Boolean isReadOnly = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression operand, Boolean unmanaged, Boolean isReadOnly = false)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean IsReadOnly { get; }
@@ -1242,7 +1242,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundArrayCreationExpression 
   method public System.Collections.Immutable.ImmutableArray`1<Int32> get_RectangularLengths()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol containerType, GSharp.Core.CodeAnalysis.Binding.BoundExpression lengthExpression)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol containerType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> elements)
-  method public static GSharp.Core.CodeAnalysis.Binding.BoundArrayCreationExpression CreateRectangular(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.RectangularArrayTypeSymbol containerType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> dimensionExpressions, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> elements = ?, System.Collections.Immutable.ImmutableArray`1<Int32> rectangularLengths = ?)
+  method public static GSharp.Core.CodeAnalysis.Binding.BoundArrayCreationExpression CreateRectangular(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.RectangularArrayTypeSymbol containerType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> dimensionExpressions, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> elements = null, System.Collections.Immutable.ImmutableArray`1<Int32> rectangularLengths = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression LengthExpression { get; }
@@ -1269,7 +1269,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundAssignmentExpression : G
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Value()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_AssignedValueType()
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_Variable()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol variable, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol assignedValueType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol variable, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol assignedValueType = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Expression { get; }
@@ -1304,7 +1304,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundAttributeArgument : Syst
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxNode get_Syntax()
   method public Object get_Value()
   method public String get_Name()
-  method public Void .ctor(String name, Object value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax = ?, Boolean isMemberAssignment = ?)
+  method public Void .ctor(String name, Object value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax = null, Boolean isMemberAssignment = false)
   method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Binding.BoundAttributeArgument other)
   method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Binding.BoundAttributeArgument left, GSharp.Core.CodeAnalysis.Binding.BoundAttributeArgument right)
   method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Binding.BoundAttributeArgument left, GSharp.Core.CodeAnalysis.Binding.BoundAttributeArgument right)
@@ -1319,7 +1319,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundAttributeArgument : Syst
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundAwaitExpression : GSharp.Core.CodeAnalysis.Binding.BoundExpression
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Expression()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_AwaiterTypeSymbol()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol awaiterTypeSymbol = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol awaiterTypeSymbol = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Expression { get; }
@@ -1351,7 +1351,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundBaseClassCallExpression 
   method public GSharp.Core.CodeAnalysis.Symbols.StructSymbol get_BaseClass()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> get_Arguments()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> get_MethodTypeArguments()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, GSharp.Core.CodeAnalysis.Symbols.StructSymbol baseClass, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol method, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnTypeOverride = ?, GSharp.Core.CodeAnalysis.Symbols.PropertySymbol property = ?, Boolean isSetterAccessor = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, GSharp.Core.CodeAnalysis.Symbols.StructSymbol baseClass, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol method, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnTypeOverride = null, GSharp.Core.CodeAnalysis.Symbols.PropertySymbol property = null, Boolean isSetterAccessor = false)
   method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_MethodTypeArguments(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> value)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
@@ -1384,7 +1384,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundBaseInterfaceCallExpress
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundBinaryExpression : GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperationExpression
   method public Boolean get_IsChecked()
   method public GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperator get_Op()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression left, GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperator op, GSharp.Core.CodeAnalysis.Binding.BoundExpression right, Boolean isChecked = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression left, GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperator op, GSharp.Core.CodeAnalysis.Binding.BoundExpression right, Boolean isChecked = false)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind get_BinaryOperatorKind()
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Left()
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Right()
@@ -1421,7 +1421,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundBinaryPattern : GSharp.C
   method public GSharp.Core.CodeAnalysis.Binding.BoundPattern get_Left()
   method public GSharp.Core.CodeAnalysis.Binding.BoundPattern get_Right()
   method public GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol get_RightInputVariable()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, Boolean isConjunction, GSharp.Core.CodeAnalysis.Binding.BoundPattern left, GSharp.Core.CodeAnalysis.Binding.BoundPattern right, GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol rightInputVariable = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, Boolean isConjunction, GSharp.Core.CodeAnalysis.Binding.BoundPattern left, GSharp.Core.CodeAnalysis.Binding.BoundPattern right, GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol rightInputVariable = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   property public Boolean IsConjunction { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundNodeKind Kind { get; }
@@ -1531,7 +1531,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundClrConstructorCallExpres
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> get_ArgumentRefKinds()
   method public System.Reflection.ConstructorInfo get_Constructor()
   method public System.Type get_ClrType()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, System.Type clrType, System.Reflection.ConstructorInfo constructor, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, System.Type clrType, System.Reflection.ConstructorInfo constructor, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public GSharp.Core.CodeAnalysis.Binding.BoundNodeKind Kind { get; }
@@ -1565,7 +1565,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundClrEventSubscriptionExpr
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ConstrainedInterfaceType()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_EventContainingType()
   method public System.Reflection.EventInfo get_Event()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Reflection.EventInfo eventInfo, GSharp.Core.CodeAnalysis.Binding.BoundExpression handler, Boolean isAdd, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = ?, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = ?, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol eventContainingType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Reflection.EventInfo eventInfo, GSharp.Core.CodeAnalysis.Binding.BoundExpression handler, Boolean isAdd, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = null, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = null, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol eventContainingType = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean IsAdd { get; }
@@ -1587,8 +1587,8 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundClrIndexAssignmentExpres
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_Target()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> get_Arguments()
   method public System.Reflection.PropertyInfo get_Indexer()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol target, System.Reflection.PropertyInfo indexer, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = ?, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = ?)
-  method public static GSharp.Core.CodeAnalysis.Binding.BoundClrIndexAssignmentExpression WithExpressionTarget(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression targetExpression, System.Reflection.PropertyInfo indexer, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = ?, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol target, System.Reflection.PropertyInfo indexer, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = null, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = null)
+  method public static GSharp.Core.CodeAnalysis.Binding.BoundClrIndexAssignmentExpression WithExpressionTarget(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression targetExpression, System.Reflection.PropertyInfo indexer, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = null, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean IsConstrainedTypeParameterAccess { get; }
@@ -1608,7 +1608,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundClrIndexExpression : GSh
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ConstrainedInterfaceType()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> get_Arguments()
   method public System.Reflection.PropertyInfo get_Indexer()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression target, System.Reflection.PropertyInfo indexer, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = ?, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression target, System.Reflection.PropertyInfo indexer, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = null, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean IsConstrainedTypeParameterAccess { get; }
@@ -1651,7 +1651,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundClrPropertyAccessExpress
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ConstrainedInterfaceType()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_StaticContainerType()
   method public System.Reflection.MemberInfo get_Member()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Reflection.MemberInfo member, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol staticContainerType = ?, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = ?, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = ?, Boolean isAddressableStaticField = ?, Boolean isReadOnlySubmissionGlobal = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Reflection.MemberInfo member, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol staticContainerType = null, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = null, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = null, Boolean isAddressableStaticField = false, Boolean isReadOnlySubmissionGlobal = false)
   method public static Boolean IsAddressableSubmissionFieldChain(GSharp.Core.CodeAnalysis.Binding.BoundExpression expression)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Instance()
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
@@ -1677,7 +1677,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundClrPropertyAssignmentExp
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ConstrainedInterfaceType()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_StaticContainerType()
   method public System.Reflection.MemberInfo get_Member()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Reflection.MemberInfo member, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol staticContainerType, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = ?, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Reflection.MemberInfo member, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol staticContainerType, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = null, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean IsConstrainedTypeParameterAccess { get; }
@@ -1694,7 +1694,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundClrStaticCallExpression 
   method public GSharp.Core.CodeAnalysis.Binding.BoundClrStaticCallExpression WithArguments(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> get_ArgumentRefKinds()
   method public System.Reflection.MethodInfo get_Method()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, System.Reflection.MethodInfo method, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, System.Reflection.MethodInfo method, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.Symbol get_CalledFunction()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
@@ -1747,7 +1747,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundConditionalGotoStatement
   method public Boolean get_JumpIfTrue()
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Condition()
   method public GSharp.Core.CodeAnalysis.Binding.BoundLabel get_Label()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundLabel label, GSharp.Core.CodeAnalysis.Binding.BoundExpression condition, Boolean jumpIfTrue = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundLabel label, GSharp.Core.CodeAnalysis.Binding.BoundExpression condition, Boolean jumpIfTrue = true)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   property public Boolean JumpIfTrue { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Condition { get; }
@@ -1768,7 +1768,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundConstrainedStaticCallExp
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> get_TypeArgumentSymbols()
   method public System.Reflection.MethodInfo get_ClrMethod()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol typeParameter, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol interfaceMethod, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnType)
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol typeParameter, System.Reflection.MethodInfo clrMethod, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgumentSymbols = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol typeParameter, System.Reflection.MethodInfo clrMethod, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgumentSymbols = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.Symbol get_CalledFunction()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
@@ -1810,7 +1810,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundConstructorChainingExpre
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundConversionExpression : GSharp.Core.CodeAnalysis.Binding.BoundExpression
   method public Boolean get_IsChecked()
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Expression()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression, Boolean isChecked = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression, Boolean isChecked = false)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean IsChecked { get; }
@@ -1851,7 +1851,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundEventSubscriptionExpress
   method public GSharp.Core.CodeAnalysis.Symbols.EventSymbol get_Event()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_EventType()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_StructType()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol structType, GSharp.Core.CodeAnalysis.Symbols.EventSymbol eventSymbol, GSharp.Core.CodeAnalysis.Binding.BoundExpression handler, Boolean isAdd, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol eventType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol structType, GSharp.Core.CodeAnalysis.Symbols.EventSymbol eventSymbol, GSharp.Core.CodeAnalysis.Binding.BoundExpression handler, Boolean isAdd, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol eventType = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean IsAdd { get; }
@@ -1899,9 +1899,9 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundFieldAssignmentExpressio
   method public GSharp.Core.CodeAnalysis.Symbols.StructSymbol get_StructType()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ResultType()
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_Receiver()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol field, GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol interfaceType, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType = ?)
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol receiver, GSharp.Core.CodeAnalysis.Symbols.StructSymbol structType, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol field, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType = ?)
-  method public static GSharp.Core.CodeAnalysis.Binding.BoundFieldAssignmentExpression WithExpressionReceiver(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiverExpression, GSharp.Core.CodeAnalysis.Symbols.StructSymbol structType, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol field, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol field, GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol interfaceType, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType = null)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol receiver, GSharp.Core.CodeAnalysis.Symbols.StructSymbol structType, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol field, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType = null)
+  method public static GSharp.Core.CodeAnalysis.Binding.BoundFieldAssignmentExpression WithExpressionReceiver(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiverExpression, GSharp.Core.CodeAnalysis.Symbols.StructSymbol structType, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol field, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression ReceiverExpression { get; }
@@ -1921,7 +1921,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer : Syste
   method public GSharp.Core.CodeAnalysis.Symbols.StructSymbol get_FieldDeclaringType()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_MemberType()
   method public String get_MemberName()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Symbols.FieldSymbol field, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.StructSymbol fieldDeclaringType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Symbols.FieldSymbol field, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.StructSymbol fieldDeclaringType = null)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Symbols.PropertySymbol property, GSharp.Core.CodeAnalysis.Binding.BoundExpression value)
   method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer other)
   method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer left, GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer right)
@@ -1942,7 +1942,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundFixedStatement : GSharp.
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_PinnedVariable()
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_PointerVariable()
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_SourceVariable()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.FixedPinKind pinKind, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol pinnedVariable, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol pointerVariable, GSharp.Core.CodeAnalysis.Binding.BoundExpression pinnedSource, GSharp.Core.CodeAnalysis.Binding.BoundStatement body, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol sourceVariable = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.FixedPinKind pinKind, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol pinnedVariable, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol pointerVariable, GSharp.Core.CodeAnalysis.Binding.BoundExpression pinnedSource, GSharp.Core.CodeAnalysis.Binding.BoundStatement body, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol sourceVariable = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression PinnedSource { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundNodeKind Kind { get; }
@@ -2074,7 +2074,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundGoStatement : GSharp.Cor
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ResultType()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression, GSharp.Core.CodeAnalysis.Binding.BoundExpression sink)
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression, GSharp.Core.CodeAnalysis.Binding.BoundExpression sink, GSharp.Core.CodeAnalysis.Binding.BoundExpression resultCell, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol lexicalEnclosingType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression expression, GSharp.Core.CodeAnalysis.Binding.BoundExpression sink, GSharp.Core.CodeAnalysis.Binding.BoundExpression resultCell, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol lexicalEnclosingType = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Expression { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression ResultCell { get; }
@@ -2103,7 +2103,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundImportedCallExpression :
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_StaticContainerType()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> get_ArgumentRefKinds()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> get_TypeArgumentSymbols()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgumentSymbols = ?, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol staticContainerType = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgumentSymbols = null, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol staticContainerType = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.Symbol get_CalledFunction()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
@@ -2125,7 +2125,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundImportedInstanceCallExpr
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> get_ArgumentRefKinds()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> get_TypeArgumentSymbols()
   method public System.Reflection.MethodInfo get_Method()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Reflection.MethodInfo method, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgumentSymbols = ?, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = ?, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = ?, Boolean isNonVirtualBaseCall = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Reflection.MethodInfo method, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgumentSymbols = null, GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol constrainedReceiverTypeParameter = null, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol constrainedInterfaceType = null, Boolean isNonVirtualBaseCall = false)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.Symbol get_CalledFunction()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
@@ -2191,7 +2191,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundIndirectCallExpression :
   method public GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol get_FunctionType()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> get_Arguments()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> get_ArgumentRefKinds()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression target, GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol functionType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression target, GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol functionType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.RefKind> argumentRefKinds = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Target { get; }
@@ -2234,7 +2234,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundIsExpression : GSharp.Co
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundLabel : System.Object
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxNode get_DeclaringSyntax()
   method public String get_Name()
-  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = ?)
+  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = null)
   method public virtual String ToString()
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxNode DeclaringSyntax { get; }
   property public String Name { get; }
@@ -2258,7 +2258,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundListPattern : GSharp.Cor
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundPattern> get_Elements()
   method public System.Reflection.PropertyInfo get_IndexerProperty()
   method public System.Reflection.PropertyInfo get_LengthProperty()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundPattern> elements, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol elementType, System.Reflection.PropertyInfo lengthProperty = ?, System.Reflection.PropertyInfo indexerProperty = ?, GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol inputVariable = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundPattern> elements, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol elementType, System.Reflection.PropertyInfo lengthProperty = null, System.Reflection.PropertyInfo indexerProperty = null, GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol inputVariable = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Binding.BoundNodeKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol InputVariable { get; }
@@ -2297,7 +2297,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundManagedReferenceExpressi
   method public Boolean get_IsReadOnly()
   method public Boolean get_RetainForCapture()
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Location()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, Boolean readOnly, Boolean retainForCapture = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, Boolean readOnly, Boolean retainForCapture = false)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean IsReadOnly { get; }
@@ -2338,7 +2338,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundMethodGroupExpression : 
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol> get_Candidates()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> get_MethodTypeArguments()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol function, GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol type)
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol function, GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.StructSymbol staticOwnerType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> methodTypeArguments = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol function, GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.StructSymbol staticOwnerType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> methodTypeArguments = null)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol> candidates)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol> candidates, GSharp.Core.CodeAnalysis.Symbols.StructSymbol staticOwnerType)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol function, GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol type)
@@ -2372,7 +2372,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundNullConditionalAccessExp
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_WhenNotNull()
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_Capture()
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_ResultSlot()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol capture, GSharp.Core.CodeAnalysis.Binding.BoundExpression whenNotNull, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol resultSlot = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundExpression receiver, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol capture, GSharp.Core.CodeAnalysis.Binding.BoundExpression whenNotNull, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol resultSlot = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Receiver { get; }
@@ -2657,7 +2657,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundStackAllocExpression : G
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ElementType()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ResultType()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> get_InitializerElements()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol elementType, GSharp.Core.CodeAnalysis.Binding.BoundExpression count, Boolean isPointerForm, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> initializerElements = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol resultType, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol elementType, GSharp.Core.CodeAnalysis.Binding.BoundExpression count, Boolean isPointerForm, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> initializerElements = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean HasInitializer { get; }
@@ -2806,7 +2806,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundUnaryExpression : GSharp
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Operand()
   method public GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperator get_Op()
   method public String get_PlatformCheckMessage()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperator op, GSharp.Core.CodeAnalysis.Binding.BoundExpression operand, Boolean isChecked = ?, String platformCheckMessage = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperator op, GSharp.Core.CodeAnalysis.Binding.BoundExpression operand, Boolean isChecked = false, String platformCheckMessage = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   property public Boolean IsChecked { get; }
@@ -2860,7 +2860,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundVariableDeclaration : GS
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Initializer()
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_Variable()
   method public Object get_ConstantValue()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol variable, GSharp.Core.CodeAnalysis.Binding.BoundExpression initializer, Object constantValue = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol variable, GSharp.Core.CodeAnalysis.Binding.BoundExpression initializer, Object constantValue = null)
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Initializer { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundNodeKind Kind { get; }
@@ -3084,7 +3084,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportAmbiguousImportedStaticMember(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name)
   method public Void ReportAmbiguousImportedType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name)
   method public Void ReportAmbiguousImportedTypeReference(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name, GSharp.Core.CodeAnalysis.Binding.ImportedTypeAmbiguity ambiguity)
-  method public Void ReportAmbiguousOverload(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name, Int32 candidateCount, System.Collections.Generic.IEnumerable`1<String> candidateSignatures = ?)
+  method public Void ReportAmbiguousOverload(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name, Int32 candidateCount, System.Collections.Generic.IEnumerable`1<String> candidateSignatures = null)
   method public Void ReportAmbiguousOverloadResolution(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name)
   method public Void ReportAmbiguousSourceType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name)
   method public Void ReportAnnotationExpected(GSharp.Core.CodeAnalysis.Text.TextLocation location)
@@ -3545,7 +3545,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticDescriptor : System.Object
   method public String get_MessageFormat()
   method public String get_Title()
   method public Void .ctor(String id, GSharp.Core.CodeAnalysis.DiagnosticSeverity severity, String messageFormat)
-  method public Void .ctor(String id, String title, String messageFormat, String category, GSharp.Core.CodeAnalysis.DiagnosticSeverity defaultSeverity, Boolean isEnabledByDefault, String description = ?, String helpLinkUri = ?)
+  method public Void .ctor(String id, String title, String messageFormat, String category, GSharp.Core.CodeAnalysis.DiagnosticSeverity defaultSeverity, Boolean isEnabledByDefault, String description = null, String helpLinkUri = null)
   property public Boolean IsEnabledByDefault { get; }
   property public GSharp.Core.CodeAnalysis.DiagnosticSeverity DefaultSeverity { get; }
   property public GSharp.Core.CodeAnalysis.DiagnosticSeverity Severity { get; }
@@ -3559,20 +3559,20 @@ type sealed class GSharp.Core.CodeAnalysis.Diagnostics.FileLogger : System.Objec
   method public Void .ctor(String filePath)
   method public sealed Boolean IsEnabled(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level)
   method public sealed Void Dispose()
-  method public sealed Void Log(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level, String message, System.Exception exception = ?)
-  method public sealed Void LogDebug(String message, System.Exception exception = ?)
-  method public sealed Void LogError(String message, System.Exception exception = ?)
-  method public sealed Void LogInfo(String message, System.Exception exception = ?)
-  method public sealed Void LogWarning(String message, System.Exception exception = ?)
+  method public sealed Void Log(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level, String message, System.Exception exception = null)
+  method public sealed Void LogDebug(String message, System.Exception exception = null)
+  method public sealed Void LogError(String message, System.Exception exception = null)
+  method public sealed Void LogInfo(String message, System.Exception exception = null)
+  method public sealed Void LogWarning(String message, System.Exception exception = null)
 type sealed class GSharp.Core.CodeAnalysis.Diagnostics.NullLogger : System.Object, GSharp.Core.CodeAnalysis.Diagnostics.ILogger
   field public static readonly GSharp.Core.CodeAnalysis.Diagnostics.NullLogger Instance
   method public Void .ctor()
   method public sealed Boolean IsEnabled(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level)
-  method public sealed Void Log(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level, String message, System.Exception exception = ?)
-  method public sealed Void LogDebug(String message, System.Exception exception = ?)
-  method public sealed Void LogError(String message, System.Exception exception = ?)
-  method public sealed Void LogInfo(String message, System.Exception exception = ?)
-  method public sealed Void LogWarning(String message, System.Exception exception = ?)
+  method public sealed Void Log(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level, String message, System.Exception exception = null)
+  method public sealed Void LogDebug(String message, System.Exception exception = null)
+  method public sealed Void LogError(String message, System.Exception exception = null)
+  method public sealed Void LogInfo(String message, System.Exception exception = null)
+  method public sealed Void LogWarning(String message, System.Exception exception = null)
 type sealed class GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider : System.Object
   method public Boolean TryGetDocumentation(String documentationId, out GSharp.Core.CodeAnalysis.Documentation.DocumentationComment documentation)
   method public static GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider ForAssembly(System.Reflection.Assembly assembly)
@@ -3894,7 +3894,7 @@ type sealed class GSharp.Core.CodeAnalysis.Execution.EmittedProgramResult : Syst
 type sealed class GSharp.Core.CodeAnalysis.Execution.InteractiveSessionHost : System.Object, System.IDisposable
   method public GSharp.Core.CodeAnalysis.Execution.SubmissionRunResult RunSubmission(Byte[] peImage, String assemblyName)
   method public Object ReadStaticField(System.Reflection.Assembly assembly, String typeFullName, String fieldName)
-  method public Void .ctor(System.Collections.Generic.IReadOnlyList`1<String> referencePaths = ?)
+  method public Void .ctor(System.Collections.Generic.IReadOnlyList`1<String> referencePaths = null)
   method public Void Reset()
   method public sealed Void Dispose()
 type sealed class GSharp.Core.CodeAnalysis.Execution.SubmissionRunResult : System.Object
@@ -3925,7 +3925,7 @@ type sealed class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderInfo
   method public System.Reflection.PropertyInfo get_TaskProperty()
   method public System.Type get_BuilderType()
   method public System.Type get_ResultType()
-  method public static GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderInfo Resolve(System.Type kickoffReturnClrType, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver resolver, System.Type methodAttributeBuilderType = ?)
+  method public static GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderInfo Resolve(System.Type kickoffReturnClrType, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver resolver, System.Type methodAttributeBuilderType = null)
   property public Boolean IsValid { get; }
   property public GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind Kind { get; }
   property public System.Reflection.MethodInfo AwaitOnCompletedMethod { get; }
@@ -4187,12 +4187,12 @@ type sealed class GSharp.Core.CodeAnalysis.PEWriter.MetadataWriter : System.Obje
 type sealed class GSharp.Core.CodeAnalysis.PEWriter.PEWriter : System.Object
   method public Void .ctor()
 type sealed class GSharp.Core.CodeAnalysis.SemanticModel : System.Object
-  method public GSharp.Core.CodeAnalysis.Binding.BoundNode GetBoundNode(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = ?)
+  method public GSharp.Core.CodeAnalysis.Binding.BoundNode GetBoundNode(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.Compilation.Compilation get_Compilation()
-  method public GSharp.Core.CodeAnalysis.SymbolInfo GetSymbolInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = ?)
-  method public GSharp.Core.CodeAnalysis.Symbols.Symbol GetDeclaredSymbol(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = ?)
+  method public GSharp.Core.CodeAnalysis.SymbolInfo GetSymbolInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
+  method public GSharp.Core.CodeAnalysis.Symbols.Symbol GetDeclaredSymbol(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_SyntaxTree()
-  method public GSharp.Core.CodeAnalysis.TypeInfo GetTypeInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = ?)
+  method public GSharp.Core.CodeAnalysis.TypeInfo GetTypeInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
   property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SyntaxTree { get; }
 type sealed class GSharp.Core.CodeAnalysis.StructValue : System.Object
@@ -4220,7 +4220,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.ArrayTypeSymbol : GSharp.Core
 type sealed class GSharp.Core.CodeAnalysis.Symbols.AsyncLetVariableSymbol : GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol
   method public Boolean get_WasAwaited()
   method public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol get_Cell()
-  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol cell, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = ?)
+  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.VariableSymbol cell, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = null)
   method public Void set_WasAwaited(Boolean value)
   property public Boolean WasAwaited { get; set; }
   property public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol Cell { get; }
@@ -4408,7 +4408,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.EventSymbol : GSharp.Core.Cod
   method public System.Reflection.MethodInfo get_ExternalOverriddenAddMethod()
   method public System.Reflection.MethodInfo get_ExternalOverriddenRaiseMethod()
   method public System.Reflection.MethodInfo get_ExternalOverriddenRemoveMethod()
-  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, Boolean isFieldLike, Boolean isVirtual, Boolean isOverride, Boolean isStatic = ?, GSharp.Core.CodeAnalysis.Syntax.EventDeclarationSyntax declaration = ?)
+  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, Boolean isFieldLike, Boolean isVirtual, Boolean isOverride, Boolean isStatic = false, GSharp.Core.CodeAnalysis.Syntax.EventDeclarationSyntax declaration = null)
   method public Void set_AddBodySyntax(GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax value)
   method public Void set_AddMethodSymbol(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol value)
   method public Void set_BackingField(GSharp.Core.CodeAnalysis.Symbols.FieldSymbol value)
@@ -4468,7 +4468,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.FieldSymbol : GSharp.Core.Cod
   method public Int32 get_FixedBufferLength()
   method public Object get_ConstantValue()
   method public System.Nullable`1<Int32> get_ExplicitOffset()
-  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, Boolean isReadOnly = ?, Boolean isStatic = ?, Boolean isConst = ?, Boolean isEventBackingField = ?, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaration = ?)
+  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, Boolean isReadOnly = false, Boolean isStatic = false, Boolean isConst = false, Boolean isEventBackingField = false, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaration = null)
   method public Void SetConstantValue(Object value)
   method public Void SetExplicitOffset(Int32 offset)
   method public Void SetFixedBuffer(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol elementType, Int32 length)
@@ -4562,11 +4562,11 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol : GSharp.Core.
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol> get_TypeParameters()
   method public System.Reflection.MethodInfo get_ExplicitInterfaceSlot()
   method public System.Reflection.MethodInfo get_ExternalOverriddenMethod()
-  method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration = ?, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package = ?, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility = ?)
+  method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration = null, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package = null, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility = 0)
   method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Symbols.StructSymbol receiverType)
   method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Symbols.StructSymbol receiverType, Boolean isOpen, Boolean isOverride)
-  method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol receiverType, Boolean isOpen = ?, Boolean isOverride = ?)
-  method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol receiverType, GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol explicitReceiverParameter, Boolean isOpen = ?, Boolean isOverride = ?)
+  method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol receiverType, Boolean isOpen = false, Boolean isOverride = false)
+  method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol receiverType, GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol explicitReceiverParameter, Boolean isOpen = false, Boolean isOverride = false)
   method public Void set_AsyncReturnsValueTask(Boolean value)
   method public Void set_ExplicitInterfaceClauseTarget(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol value)
   method public Void set_ExplicitInterfaceMember(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol value)
@@ -4666,7 +4666,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.GlobalVariableSymbol : GSharp
   method public Boolean get_IsConst()
   method public GSharp.Core.CodeAnalysis.Symbols.Accessibility get_Accessibility()
   method public Object get_ConstantValue()
-  method public Void .ctor(String name, Boolean isReadOnly, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility = ?, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = ?)
+  method public Void .ctor(String name, Boolean isReadOnly, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility = 0, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = null)
   method public Void SetConstantValue(Object value)
   method public virtual GSharp.Core.CodeAnalysis.Symbols.SymbolKind get_Kind()
   property public Boolean IsConst { get; }
@@ -4731,10 +4731,10 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.ImportSymbol : GSharp.Core.Co
   property public String Target { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.ImportedClassSymbol : GSharp.Core.CodeAnalysis.Symbols.Symbol
   method public Boolean TryLookupFunction(String text, GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax callExpression, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, out GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function)
-  method public Boolean TryLookupFunction(String text, GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax callExpression, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, out GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, out Boolean isAmbiguous, System.Type[] explicitTypeArgs = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgSymbols = ?, System.Func`2<System.Type, System.Type> projectTypeArgument = ?)
-  method public Boolean TryLookupFunction(String text, GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax callExpression, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, out GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, out System.Collections.Immutable.ImmutableArray`1<Int32> parameterMapping, out Boolean isAmbiguous, System.Type[] explicitTypeArgs = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgSymbols = ?, System.Func`2<System.Type, System.Type> projectTypeArgument = ?, System.Collections.Generic.IReadOnlyList`1<String> argumentNames = ?)
-  method public Boolean TryLookupFunction(String text, GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax callExpression, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, out GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, out System.Collections.Immutable.ImmutableArray`1<Int32> parameterMapping, out Boolean isAmbiguous, out System.Collections.Immutable.ImmutableArray`1<System.Reflection.MethodInfo> ambiguousMethods, System.Type[] explicitTypeArgs = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgSymbols = ?, System.Func`2<System.Type, System.Type> projectTypeArgument = ?, System.Collections.Generic.IReadOnlyList`1<String> argumentNames = ?)
-  method public Boolean TryLookupFunction(String text, GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax callExpression, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, out GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, out System.Collections.Immutable.ImmutableArray`1<Int32> parameterMapping, out Boolean isAmbiguous, out System.Collections.Immutable.ImmutableArray`1<System.Reflection.MethodInfo> ambiguousMethods, out Boolean isExpanded, System.Type[] explicitTypeArgs = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgSymbols = ?, System.Func`2<System.Type, System.Type> projectTypeArgument = ?, System.Collections.Generic.IReadOnlyList`1<String> argumentNames = ?, System.Func`4<System.Reflection.MethodInfo, Boolean, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>, System.ValueTuple`2<System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>, System.Collections.Immutable.ImmutableArray`1<Boolean>>> refineSymbolicMethodGroupArgs = ?)
+  method public Boolean TryLookupFunction(String text, GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax callExpression, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, out GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, out Boolean isAmbiguous, System.Type[] explicitTypeArgs = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgSymbols = null, System.Func`2<System.Type, System.Type> projectTypeArgument = null)
+  method public Boolean TryLookupFunction(String text, GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax callExpression, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, out GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, out System.Collections.Immutable.ImmutableArray`1<Int32> parameterMapping, out Boolean isAmbiguous, System.Type[] explicitTypeArgs = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgSymbols = null, System.Func`2<System.Type, System.Type> projectTypeArgument = null, System.Collections.Generic.IReadOnlyList`1<String> argumentNames = null)
+  method public Boolean TryLookupFunction(String text, GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax callExpression, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, out GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, out System.Collections.Immutable.ImmutableArray`1<Int32> parameterMapping, out Boolean isAmbiguous, out System.Collections.Immutable.ImmutableArray`1<System.Reflection.MethodInfo> ambiguousMethods, System.Type[] explicitTypeArgs = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgSymbols = null, System.Func`2<System.Type, System.Type> projectTypeArgument = null, System.Collections.Generic.IReadOnlyList`1<String> argumentNames = null)
+  method public Boolean TryLookupFunction(String text, GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax callExpression, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> arguments, out GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol function, out System.Collections.Immutable.ImmutableArray`1<Int32> parameterMapping, out Boolean isAmbiguous, out System.Collections.Immutable.ImmutableArray`1<System.Reflection.MethodInfo> ambiguousMethods, out Boolean isExpanded, System.Type[] explicitTypeArgs = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArgSymbols = null, System.Func`2<System.Type, System.Type> projectTypeArgument = null, System.Collections.Generic.IReadOnlyList`1<String> argumentNames = null, System.Func`4<System.Reflection.MethodInfo, Boolean, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>, System.ValueTuple`2<System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>, System.Collections.Immutable.ImmutableArray`1<Boolean>>> refineSymbolicMethodGroupArgs = null)
   method public Boolean TryLookupMember(String text, GSharp.Core.CodeAnalysis.Syntax.NameExpressionSyntax ne, out System.Reflection.MemberInfo member)
   method public GSharp.Core.CodeAnalysis.Symbols.ImportedClassSymbol WithFamilyAccessBase(System.Type familyAccessBase)
   method public GSharp.Core.CodeAnalysis.Symbols.ImportedTypeSymbol get_ConstructedReceiver()
@@ -4743,7 +4743,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.ImportedClassSymbol : GSharp.
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Declaration()
   method public System.Type get_ClassType()
   method public System.Type get_FamilyAccessBase()
-  method public Void .ctor(System.Type type, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.ImportedTypeSymbol symbolicReceiver = ?, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references = ?, GSharp.Core.CodeAnalysis.Symbols.ImportedTypeSymbol constructedReceiver = ?)
+  method public Void .ctor(System.Type type, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.ImportedTypeSymbol symbolicReceiver = null, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references = null, GSharp.Core.CodeAnalysis.Symbols.ImportedTypeSymbol constructedReceiver = null)
   method public virtual GSharp.Core.CodeAnalysis.Symbols.SymbolKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Symbols.ImportedTypeSymbol ConstructedReceiver { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.ImportedTypeSymbol SymbolicReceiver { get; }
@@ -4760,7 +4760,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol : GSha
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Declaration()
   method public System.Reflection.MethodInfo get_Method()
-  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.ImportedClassSymbol importedClass, System.Reflection.MethodInfo method, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnTypeOverride = ?)
+  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.ImportedClassSymbol importedClass, System.Reflection.MethodInfo method, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnTypeOverride = null)
   method public static Boolean HasHiddenContextParameter(System.Reflection.MethodInfo method)
   method public static Boolean IsSuspendingMethod(System.Reflection.MethodInfo method)
   method public static System.Reflection.ParameterInfo[] GetLogicalParameters(System.Reflection.MethodInfo method)
@@ -4838,7 +4838,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol : GSharp.Core
   method public Void SetStaticPrivateMethods(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol> methods)
   method public Void SetTypeParameters(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol> typeParameters)
   method public static Boolean HasDefaultBody(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol method)
-  method public static GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol Construct(GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol definition, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArguments, System.Func`2<System.Type, System.Type> mapClrType = ?)
+  method public static GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol Construct(GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol definition, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArguments, System.Func`2<System.Type, System.Type> mapClrType = null)
   method public virtual String get_ContainingNamespace()
   method public virtual System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxNode> get_DeclaringSyntaxNodes()
   property public Boolean HasStaticVirtualMembers { get; }
@@ -4878,7 +4878,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.MarshalAsMetadata : System.Ob
   method public System.Nullable`1<System.Runtime.InteropServices.UnmanagedType> get_ArraySubType()
   method public System.Nullable`1<System.Runtime.InteropServices.VarEnum> get_SafeArraySubType()
   method public System.Runtime.InteropServices.UnmanagedType get_UnmanagedType()
-  method public Void .ctor(System.Runtime.InteropServices.UnmanagedType unmanagedType, System.Nullable`1<System.Runtime.InteropServices.UnmanagedType> arraySubType = ?, System.Nullable`1<System.Runtime.InteropServices.VarEnum> safeArraySubType = ?, System.Nullable`1<Int32> sizeConst = ?, System.Nullable`1<Int32> sizeParamIndex = ?)
+  method public Void .ctor(System.Runtime.InteropServices.UnmanagedType unmanagedType, System.Nullable`1<System.Runtime.InteropServices.UnmanagedType> arraySubType = null, System.Nullable`1<System.Runtime.InteropServices.VarEnum> safeArraySubType = null, System.Nullable`1<Int32> sizeConst = null, System.Nullable`1<Int32> sizeParamIndex = null)
   method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Symbols.MarshalAsMetadata other)
   method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Symbols.MarshalAsMetadata left, GSharp.Core.CodeAnalysis.Symbols.MarshalAsMetadata right)
   method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Symbols.MarshalAsMetadata left, GSharp.Core.CodeAnalysis.Symbols.MarshalAsMetadata right)
@@ -4915,7 +4915,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.PInvokeMetadata : System.Obje
   method public System.Runtime.InteropServices.CallingConvention get_CallingConvention()
   method public System.Runtime.InteropServices.CharSet get_CharSet()
   method public System.Runtime.InteropServices.StringMarshalling get_StringMarshalling()
-  method public Void .ctor(String libraryName, String entryPoint, System.Runtime.InteropServices.CharSet charSet, Boolean setLastError, System.Runtime.InteropServices.CallingConvention callingConvention, Boolean exactSpelling, Boolean preserveSig, System.Nullable`1<Boolean> bestFitMapping, System.Nullable`1<Boolean> throwOnUnmappableChar, Boolean isLibraryImport = ?, System.Runtime.InteropServices.StringMarshalling stringMarshalling = ?)
+  method public Void .ctor(String libraryName, String entryPoint, System.Runtime.InteropServices.CharSet charSet, Boolean setLastError, System.Runtime.InteropServices.CallingConvention callingConvention, Boolean exactSpelling, Boolean preserveSig, System.Nullable`1<Boolean> bestFitMapping, System.Nullable`1<Boolean> throwOnUnmappableChar, Boolean isLibraryImport = false, System.Runtime.InteropServices.StringMarshalling stringMarshalling = 0)
   method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Symbols.PInvokeMetadata other)
   method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Symbols.PInvokeMetadata left, GSharp.Core.CodeAnalysis.Symbols.PInvokeMetadata right)
   method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Symbols.PInvokeMetadata left, GSharp.Core.CodeAnalysis.Symbols.PInvokeMetadata right)
@@ -4947,7 +4947,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol : GSharp.Core
   method public Boolean get_IsVariadic()
   method public GSharp.Core.CodeAnalysis.Symbols.MarshalAsMetadata get_MarshalAsMetadata()
   method public Object get_ExplicitDefaultValue()
-  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, Boolean isVariadic = ?, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = ?, Boolean isScoped = ?, GSharp.Core.CodeAnalysis.Binding.RefKind refKind = ?)
+  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, Boolean isVariadic = false, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaringSyntax = null, Boolean isScoped = false, GSharp.Core.CodeAnalysis.Binding.RefKind refKind = 0)
   method public Void SetExplicitDefaultValue(Object value)
   method public Void SetMarshalAsMetadata(GSharp.Core.CodeAnalysis.Symbols.MarshalAsMetadata metadata)
   method public Void set_IsUnscopedRefReceiver(Boolean value)
@@ -5012,7 +5012,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.PropertySymbol : GSharp.Core.
   method public System.Reflection.MethodInfo get_ExplicitInterfaceSetterSlot()
   method public System.Reflection.MethodInfo get_ExternalOverriddenGetter()
   method public System.Reflection.MethodInfo get_ExternalOverriddenSetter()
-  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, Boolean hasGetter, Boolean hasSetter, Boolean isAutoProperty, Boolean isVirtual, Boolean isOverride, String setterParameterName = ?, Boolean isStatic = ?, GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax declaration = ?, Boolean isInitOnly = ?, System.Nullable`1<GSharp.Core.CodeAnalysis.Symbols.Accessibility> getterAccessibility = ?, System.Nullable`1<GSharp.Core.CodeAnalysis.Symbols.Accessibility> setterAccessibility = ?, System.Nullable`1<Boolean> metadataIsAbstract = ?)
+  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, Boolean hasGetter, Boolean hasSetter, Boolean isAutoProperty, Boolean isVirtual, Boolean isOverride, String setterParameterName = "value", Boolean isStatic = false, GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax declaration = null, Boolean isInitOnly = false, System.Nullable`1<GSharp.Core.CodeAnalysis.Symbols.Accessibility> getterAccessibility = null, System.Nullable`1<GSharp.Core.CodeAnalysis.Symbols.Accessibility> setterAccessibility = null, System.Nullable`1<Boolean> metadataIsAbstract = null)
   method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_IsIndexer(Boolean value)
   method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Parameters(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> value)
   method public Void set_BackingField(GSharp.Core.CodeAnalysis.Symbols.FieldSymbol value)
@@ -5194,7 +5194,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.StructSymbol : GSharp.Core.Co
   method public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol, GSharp.Core.CodeAnalysis.Binding.BoundExpression> get_InstanceFieldInitializers()
   method public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol, GSharp.Core.CodeAnalysis.Binding.BoundExpression> get_StaticFieldInitializers()
   method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> fields, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax declaration, String packageName)
-  method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> fields, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax declaration, String packageName, Boolean isData, Boolean isInline = ?)
+  method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> fields, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax declaration, String packageName, Boolean isData, Boolean isInline = false)
   method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> fields, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax declaration, String packageName, Boolean isData, Boolean isInline, Boolean isClass)
   method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> fields, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax declaration, String packageName, Boolean isData, Boolean isInline, Boolean isClass, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> primaryConstructorParameters)
   method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> fields, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax declaration, String packageName, Boolean isData, Boolean isInline, Boolean isClass, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> primaryConstructorParameters, Boolean isOpen, GSharp.Core.CodeAnalysis.Symbols.StructSymbol baseClass)
@@ -5221,7 +5221,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.StructSymbol : GSharp.Core.Co
   method public Void SetLayoutMetadata(GSharp.Core.CodeAnalysis.Symbols.StructLayoutMetadata metadata)
   method public Void SetMethods(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol> methods)
   method public Void SetProperties(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.PropertySymbol> properties)
-  method public Void SetReifiedFromTypeParameters(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol> reifiedFrom, Int32 ordinalOffset = ?)
+  method public Void SetReifiedFromTypeParameters(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol> reifiedFrom, Int32 ordinalOffset = 0)
   method public Void SetStaticEvents(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.EventSymbol> events)
   method public Void SetStaticFieldInitializers(System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol, GSharp.Core.CodeAnalysis.Binding.BoundExpression> initializers)
   method public Void SetStaticFields(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> fields)
@@ -5229,9 +5229,9 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.StructSymbol : GSharp.Core.Co
   method public Void SetStaticMethods(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol> methods)
   method public Void SetStaticProperties(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.PropertySymbol> properties)
   method public Void SetTypeParameters(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol> typeParameters)
-  method public static GSharp.Core.CodeAnalysis.Symbols.StructSymbol Construct(GSharp.Core.CodeAnalysis.Symbols.StructSymbol definition, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArguments, System.Func`2<System.Type, System.Type> mapClrType = ?)
-  method public static GSharp.Core.CodeAnalysis.Symbols.StructSymbol ConstructNested(GSharp.Core.CodeAnalysis.Symbols.StructSymbol nestedDefinition, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> enclosingTypeArguments, System.Func`2<System.Type, System.Type> mapClrType = ?)
-  method public static GSharp.Core.CodeAnalysis.Symbols.StructSymbol ConstructNestedGeneric(GSharp.Core.CodeAnalysis.Symbols.StructSymbol nestedDefinition, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> enclosingTypeArguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> ownTypeArguments, System.Func`2<System.Type, System.Type> mapClrType = ?)
+  method public static GSharp.Core.CodeAnalysis.Symbols.StructSymbol Construct(GSharp.Core.CodeAnalysis.Symbols.StructSymbol definition, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> typeArguments, System.Func`2<System.Type, System.Type> mapClrType = null)
+  method public static GSharp.Core.CodeAnalysis.Symbols.StructSymbol ConstructNested(GSharp.Core.CodeAnalysis.Symbols.StructSymbol nestedDefinition, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> enclosingTypeArguments, System.Func`2<System.Type, System.Type> mapClrType = null)
+  method public static GSharp.Core.CodeAnalysis.Symbols.StructSymbol ConstructNestedGeneric(GSharp.Core.CodeAnalysis.Symbols.StructSymbol nestedDefinition, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> enclosingTypeArguments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> ownTypeArguments, System.Func`2<System.Type, System.Type> mapClrType = null)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol> CollectEnclosingTypeParameters(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol nested)
   method public virtual Boolean get_IsValueType()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_BaseType()
@@ -5329,7 +5329,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol : GSharp.
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ConstraintInterfaceType()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ConstraintReferenceType()
   method public Int32 get_Ordinal()
-  method public Void .ctor(String name, Int32 ordinal, GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint constraint, GSharp.Core.CodeAnalysis.Symbols.TypeParameterVariance variance, GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol interfaceConstraint = ?)
+  method public Void .ctor(String name, Int32 ordinal, GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint constraint, GSharp.Core.CodeAnalysis.Symbols.TypeParameterVariance variance, GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol interfaceConstraint = null)
   method public Void set_ClassConstraint(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol value)
   method public Void set_ClrInterfaceConstraint(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol value)
   method public Void set_Constraint(GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint value)
@@ -5381,7 +5381,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax : GSharp.Core
   method public String GetNameText()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> get_DotTokens()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> get_NameSegments()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken atToken, GSharp.Core.CodeAnalysis.Syntax.AnnotationTargetSyntax target, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> nameSegments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> dotTokens, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenthesisToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> arguments, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenthesisToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentOpenBracketToken = ?, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> typeArguments = ?, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentCloseBracketToken = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken atToken, GSharp.Core.CodeAnalysis.Syntax.AnnotationTargetSyntax target, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> nameSegments, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> dotTokens, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenthesisToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> arguments, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenthesisToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentOpenBracketToken = null, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> typeArguments = null, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentCloseBracketToken = null)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public Boolean HasArgumentList { get; }
   property public Boolean HasTypeArgumentList { get; }
@@ -5742,7 +5742,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.CompoundIndexAssignmentExpress
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Value()
   method public GSharp.Core.CodeAnalysis.Syntax.IndexExpressionSyntax get_Target()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OperatorToken()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.IndexExpressionSyntax target, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken operatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax value, Boolean returnsPreviousValue = ?, Boolean isIncrementDecrement = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.IndexExpressionSyntax target, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken operatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax value, Boolean returnsPreviousValue = false, Boolean isIncrementDecrement = false)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public Boolean IsIncrementDecrement { get; }
   property public Boolean ReturnsPreviousValue { get; }
@@ -6009,7 +6009,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.EventSubscriptionExpressionSyn
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_LeftHandSide()
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Value()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OperatorToken()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax leftHandSide, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken operatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax value, Boolean returnsPreviousValue = ?, Boolean isIncrementDecrement = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax leftHandSide, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken operatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax value, Boolean returnsPreviousValue = false, Boolean isIncrementDecrement = false)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public Boolean IsIncrementDecrement { get; }
   property public Boolean ReturnsPreviousValue { get; }
@@ -6055,7 +6055,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.FieldDeclarationSyntax : GShar
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_VarOrLetKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax get_Type()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> get_Annotations()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessibilityModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken varOrLetKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax type, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken equalsToken = ?, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax initializer = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessibilityModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken varOrLetKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax type, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken equalsToken = null, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax initializer = null)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public Boolean IsConst { get; }
   property public Boolean IsFixedBuffer { get; }
@@ -6327,7 +6327,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.FunctionLiteralExpressionSynta
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ReturnReadOnlyModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ReturnRefModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax get_ReturnTypeClause()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken asyncModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken funcKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax> parameters, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax body, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken returnRefModifier = ?, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken returnReadOnlyModifier = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken asyncModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken funcKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax> parameters, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax body, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken returnRefModifier = null, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken returnReadOnlyModifier = null)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken funcKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax> parameters, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax body)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public Boolean IsAsync { get; }
@@ -6537,7 +6537,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.IndirectCompoundAssignmentExpr
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Target()
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Value()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OperatorToken()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax target, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken operatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax value, Boolean returnsPreviousValue = ?, Boolean isIncrementDecrement = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax target, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken operatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax value, Boolean returnsPreviousValue = false, Boolean isIncrementDecrement = false)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public Boolean IsIncrementDecrement { get; }
   property public Boolean ReturnsPreviousValue { get; }
@@ -7048,7 +7048,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.PropertyPatternSyntax : GSharp
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_CloseBraceToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Designation()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OpenBraceToken()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBraceToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.PropertyPatternFieldSyntax> fields, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBraceToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken designation = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBraceToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.PropertyPatternFieldSyntax> fields, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBraceToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken designation = null)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_BindingIdentifier()
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.PropertyPatternFieldSyntax> Fields { get; }
@@ -7624,9 +7624,9 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax : GSharp.Core
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken lengthToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken lengthToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentOpenBracketToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> typeArguments, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentCloseBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken lengthToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentOpenBracketToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> typeArguments, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentCloseBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> arrayCommaTokens)
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken lengthToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> qualifierDotTokens, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> qualifierIdentifierTokens, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentOpenBracketToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> typeArguments, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentCloseBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken arrayQuestionToken = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> outerSegmentTypeArgumentOpenBracketTokens = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax>> outerSegmentTypeArgumentLists = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> outerSegmentTypeArgumentCloseBracketTokens = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> arrayCommaTokens = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken lengthToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> qualifierDotTokens, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> qualifierIdentifierTokens, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentOpenBracketToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> typeArguments, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeArgumentCloseBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken arrayQuestionToken = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> outerSegmentTypeArgumentOpenBracketTokens = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax>> outerSegmentTypeArgumentLists = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> outerSegmentTypeArgumentCloseBracketTokens = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> arrayCommaTokens = null)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> tupleElements, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
-  method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateArray(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken lengthToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBracketToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax elementType, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken arrayQuestionToken = ?, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> arrayCommaTokens = ?)
+  method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateArray(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken lengthToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBracketToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax elementType, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken arrayQuestionToken = null, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> arrayCommaTokens = null)
   method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateArrowFunction(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> functionParameterTypes, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken arrowToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
   method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateArrowFunction(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> functionParameterTypes, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> functionParameterEllipsisTokens, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken arrowToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
   method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateAsyncArrowFunction(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken asyncModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> functionParameterTypes, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken arrowToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
@@ -7634,7 +7634,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax : GSharp.Core
   method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateAsyncFunction(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken asyncModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken funcKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> functionParameterTypes, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
   method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateAsyncFunction(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken asyncModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken funcKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> functionParameterTypes, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> functionParameterEllipsisTokens, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
   method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateAsyncSequence(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken asyncModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken sequenceKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBracketToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax elementType, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
-  method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateFunctionPointer(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken unmanagedKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken callingConventionOpenBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken callingConventionIdentifierToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken callingConventionCloseBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> functionParameterTypes, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken arrowToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> callingConventionRestTokens = ?)
+  method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateFunctionPointer(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken unmanagedKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken callingConventionOpenBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken callingConventionIdentifierToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken callingConventionCloseBracketToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> functionParameterTypes, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken arrowToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> callingConventionRestTokens = null)
   method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateLegacyFunction(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken funcKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> functionParameterTypes, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> functionParameterEllipsisTokens, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
   method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreateManagedFunctionPointer(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken managedFunctionPointerStarToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken managedFunctionPointerFuncKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> functionParameterTypes, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax returnTypeClause)
   method public static GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax CreatePointer(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken starToken, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax pointeeType, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken questionToken)
@@ -7800,7 +7800,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TypePatternSyntax : GSharp.Cor
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Identifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_IsKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax get_Type()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken isKeyword, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax type, GSharp.Core.CodeAnalysis.Syntax.PropertyPatternSyntax propertyPattern = ?, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken designation = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken isKeyword, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax type, GSharp.Core.CodeAnalysis.Syntax.PropertyPatternSyntax propertyPattern = null, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken designation = null)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_BindingIdentifier()
   property public GSharp.Core.CodeAnalysis.Syntax.PropertyPatternSyntax PropertyPattern { get; }
@@ -7908,7 +7908,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.YieldStatementSyntax : GSharp.
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Expression()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_BreakKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_YieldKeyword()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken yieldKeyword, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken breakKeyword = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken yieldKeyword, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken breakKeyword = null)
   method public virtual GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Expression { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
@@ -7923,7 +7923,7 @@ type sealed class GSharp.Core.CodeAnalysis.Text.SourceText : System.Object
   method public String ToString(Int32 start, Int32 length)
   method public String get_FileName()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextLine> get_Lines()
-  method public static GSharp.Core.CodeAnalysis.Text.SourceText From(String text, String fileName = ?, Byte[] rawBytes = ?)
+  method public static GSharp.Core.CodeAnalysis.Text.SourceText From(String text, String fileName = "", Byte[] rawBytes = null)
   method public virtual String ToString()
   property public Byte[] RawBytes { get; }
   property public Char Item[Int32] { get; }
@@ -7978,7 +7978,7 @@ type sealed class GSharp.Core.Resx.ResxEntry : System.Object
   property public String Value { get; }
 type static class GSharp.Core.CodeAnalysis.Analyzers.GSharpAnalyzerHost : System.Object
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> Load(System.Collections.Generic.IReadOnlyList`1<String> analyzerPaths, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> hostDiagnostics)
-  method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Run(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, System.Collections.Generic.IReadOnlyList`1<String> analyzerPaths, GSharp.Core.CodeAnalysis.Analyzers.AnalyzerOptions options = ?, System.Threading.CancellationToken cancellationToken = ?)
+  method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Run(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, System.Collections.Generic.IReadOnlyList`1<String> analyzerPaths, GSharp.Core.CodeAnalysis.Analyzers.AnalyzerOptions options = null, System.Threading.CancellationToken cancellationToken = null)
 type static class GSharp.Core.CodeAnalysis.Binding.BoundNodePrinter : System.Object
   method public static Void WriteTo(GSharp.Core.CodeAnalysis.Binding.BoundNode node, System.CodeDom.Compiler.IndentedTextWriter writer)
   method public static Void WriteTo(GSharp.Core.CodeAnalysis.Binding.BoundNode node, System.IO.TextWriter writer)
@@ -8009,7 +8009,7 @@ type static class GSharp.Core.CodeAnalysis.Documentation.XmlDocumentationParser 
   method public static GSharp.Core.CodeAnalysis.Documentation.DocumentationComment ParseMember(System.Xml.Linq.XElement member)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> ParseInline(System.Xml.Linq.XElement container)
 type static class GSharp.Core.CodeAnalysis.Execution.EmittedProgramHost : System.Object
-  method public static GSharp.Core.CodeAnalysis.Execution.EmittedProgramResult Run(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, System.Collections.Generic.IReadOnlyList`1<String> referencePaths = ?, System.Threading.CancellationToken cancellationToken = ?)
+  method public static GSharp.Core.CodeAnalysis.Execution.EmittedProgramResult Run(GSharp.Core.CodeAnalysis.Compilation.Compilation compilation, System.Collections.Generic.IReadOnlyList`1<String> referencePaths = null, System.Threading.CancellationToken cancellationToken = null)
   method public static Int32 get_UnhandledExceptionExitCode()
   method public static String FormatUnhandledException(System.Exception unhandledException)
   property public Int32 UnhandledExceptionExitCode { get; }
@@ -8026,7 +8026,7 @@ type static class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncEmitPrecheck : Sy
   field public const String AsyncStateMachineUnavailableMessage = "Could not synthesize the state machine for this async function; the awaitable's method-builder type could not be resolved. See https://github.com/DavidObando/gsharp/issues/52."
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Check(GSharp.Core.CodeAnalysis.Binding.BoundProgram program)
 type static class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncExceptionHandlerRewriter : System.Object
-  method public static GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement Rewrite(GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement body, Boolean preserveFinallyAcrossSuspension = ?)
+  method public static GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement Rewrite(GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement body, Boolean preserveFinallyAcrossSuspension = false)
 type static class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncIteratorDetection : System.Object
   method public static Boolean IsAsyncEnumerable(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   method public static Boolean IsAsyncIteratorFunction(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol function, GSharp.Core.CodeAnalysis.Binding.BoundStatement body)
@@ -8036,7 +8036,7 @@ type static class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncStateMachineRewri
   method public static GSharp.Core.CodeAnalysis.Lowering.Async.AsyncStateMachinePlan RewriteSingle(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol function, GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement body, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, String packageName)
   method public static GSharp.Core.CodeAnalysis.Lowering.Async.AsyncStateMachineRewriteResult Rewrite(GSharp.Core.CodeAnalysis.Binding.BoundProgram program, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references)
 type static class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncStateMachineTypeBuilder : System.Object
-  method public static GSharp.Core.CodeAnalysis.Lowering.Async.SynthesizedStateMachineType Build(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol kickoff, GSharp.Core.CodeAnalysis.Binding.BoundStatement loweredBody, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, Int32 ordinal = ?)
+  method public static GSharp.Core.CodeAnalysis.Lowering.Async.SynthesizedStateMachineType Build(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol kickoff, GSharp.Core.CodeAnalysis.Binding.BoundStatement loweredBody, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, Int32 ordinal = 0)
 type static class GSharp.Core.CodeAnalysis.Lowering.Async.GeneratedNames : System.Object
   field public const String BuilderField = "<>t__builder"
   field public const String SpillTempPrefix = "<>7__wrap"
@@ -8045,7 +8045,7 @@ type static class GSharp.Core.CodeAnalysis.Lowering.Async.GeneratedNames : Syste
   method public static String AwaiterField(Int32 ordinal)
   method public static String HoistedLocalField(String localName, Int32 ordinal)
   method public static String ParameterField(String parameterName)
-  method public static String SpillTempField(Int32 ordinal, String domain = ?)
+  method public static String SpillTempField(Int32 ordinal, String domain = "")
   method public static String StateMachineTypeName(String methodName, Int32 ordinal)
 type static class GSharp.Core.CodeAnalysis.Lowering.Async.KickoffBodyBuilder : System.Object
   method public static GSharp.Core.CodeAnalysis.Lowering.Async.KickoffBodyPlan Build(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol kickoffMethod, GSharp.Core.CodeAnalysis.Lowering.Async.AsyncStateMachineFieldMap fieldMap)
@@ -8070,7 +8070,7 @@ type static class GSharp.Core.CodeAnalysis.Lowering.BaseCallForwarderRewriter : 
 type static class GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorMoveNextBodyBuilder : System.Object
   method public static GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement Build(GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorPlan plan, GSharp.Core.CodeAnalysis.Symbols.StructSymbol smClass, GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol thisParameter, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol stateField, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol currentField, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol promiseField, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol disposeModeField, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol disposeExceptionField, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol builderField, System.Collections.Generic.Dictionary`2<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> fieldMap, System.Collections.Generic.Dictionary`2<System.Type, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> awaiterPoolFields)
 type static class GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorRewriter : System.Object
-  method public static GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorRewriteResult Rewrite(GSharp.Core.CodeAnalysis.Binding.BoundProgram program, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references = ?)
+  method public static GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorRewriteResult Rewrite(GSharp.Core.CodeAnalysis.Binding.BoundProgram program, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references = null)
 type static class GSharp.Core.CodeAnalysis.Lowering.Iterators.IteratorMoveNextBodyBuilder : System.Object
   method public static GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement BuildDisposeBody(GSharp.Core.CodeAnalysis.Lowering.Iterators.IteratorStateMachinePlan plan, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol stateField, GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol thisParameter, GSharp.Core.CodeAnalysis.Symbols.StructSymbol smClass, System.Collections.Generic.Dictionary`2<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> hoistedFieldMap)
   method public static GSharp.Core.CodeAnalysis.Lowering.Iterators.IteratorMoveNextBody BuildWithFieldAccess(GSharp.Core.CodeAnalysis.Lowering.Iterators.IteratorStateMachinePlan plan, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol stateField, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol currentField, GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol thisParameter, GSharp.Core.CodeAnalysis.Symbols.StructSymbol smClass, System.Collections.Generic.Dictionary`2<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol, GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> hoistedFieldMap)
@@ -8125,24 +8125,24 @@ type static class GSharp.Core.CodeAnalysis.Symbols.ClrTypeUtilities : System.Obj
   method public static System.Reflection.EventInfo[] SafeGetEvents(System.Type type, System.Reflection.BindingFlags flags)
   method public static System.Reflection.FieldInfo SafeGetField(System.Type type, String name, System.Reflection.BindingFlags flags)
   method public static System.Reflection.FieldInfo SafeGetFieldIncludingInterfaces(System.Type type, String name, System.Reflection.BindingFlags flags)
-  method public static System.Reflection.FieldInfo SafeGetInheritedInstanceField(System.Type type, String name, System.Func`2<System.Type, Boolean> canAccessInternalsOf = ?)
+  method public static System.Reflection.FieldInfo SafeGetInheritedInstanceField(System.Type type, String name, System.Func`2<System.Type, Boolean> canAccessInternalsOf = null)
   method public static System.Reflection.FieldInfo[] SafeGetFields(System.Type type, System.Reflection.BindingFlags flags)
   method public static System.Reflection.MethodInfo GetMethodSafe(System.Type type, String name)
   method public static System.Reflection.MethodInfo GetMethodSafe(System.Type type, String name, System.Type[] types)
   method public static System.Reflection.MethodInfo[] SafeGetMethods(System.Type type, System.Reflection.BindingFlags flags)
   method public static System.Reflection.MethodInfo[] SafeGetMethodsIncludingInterfaces(System.Type type, System.Reflection.BindingFlags flags)
-  method public static System.Reflection.PropertyInfo SafeGetInheritedInstanceProperty(System.Type type, String name, System.Func`2<System.Type, Boolean> canAccessInternalsOf = ?)
+  method public static System.Reflection.PropertyInfo SafeGetInheritedInstanceProperty(System.Type type, String name, System.Func`2<System.Type, Boolean> canAccessInternalsOf = null)
   method public static System.Reflection.PropertyInfo SafeGetProperty(System.Type type, String name, System.Reflection.BindingFlags flags)
   method public static System.Reflection.PropertyInfo SafeGetPropertyIncludingInterfaces(System.Type type, String name, System.Reflection.BindingFlags flags)
   method public static System.Reflection.PropertyInfo[] SafeGetProperties(System.Type type, System.Reflection.BindingFlags flags)
   method public static System.Type GetEnumUnderlyingTypeSafe(System.Type type)
 type static class GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplay : System.Object
-  method public static String ToDisplayString(GSharp.Core.CodeAnalysis.Symbols.Symbol symbol, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format, GSharp.Core.CodeAnalysis.Compilation.Compilation compilation = ?)
+  method public static String ToDisplayString(GSharp.Core.CodeAnalysis.Symbols.Symbol symbol, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format, GSharp.Core.CodeAnalysis.Compilation.Compilation compilation = null)
   method public static String ToDisplayString(System.Reflection.MemberInfo member, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format)
   method public static String ToDisplayString(System.Type clrType, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format)
   method public static String ToTypeDisplayString(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   method public static String ToTypeDisplayString(System.Type type)
-  method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart> ToDisplayParts(GSharp.Core.CodeAnalysis.Symbols.Symbol symbol, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format, GSharp.Core.CodeAnalysis.Compilation.Compilation compilation = ?)
+  method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart> ToDisplayParts(GSharp.Core.CodeAnalysis.Symbols.Symbol symbol, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format, GSharp.Core.CodeAnalysis.Compilation.Compilation compilation = null)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart> ToDisplayParts(System.Reflection.MemberInfo member, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart> ToDisplayParts(System.Type clrType, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format)
 type static class GSharp.Core.CodeAnalysis.Symbols.NullableLifting : System.Object
@@ -8203,7 +8203,7 @@ type static class GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts : System.Object
   method public static GSharp.Core.CodeAnalysis.Syntax.SyntaxKind GetKeywordKind(String text)
   method public static Int32 GetBinaryOperatorPrecedence(GSharp.Core.CodeAnalysis.Syntax.SyntaxKind kind)
   method public static Int32 GetUnaryOperatorPrecedence(GSharp.Core.CodeAnalysis.Syntax.SyntaxKind kind)
-  method public static String GetEmittedIdentifier(String name, GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext context, System.Collections.Generic.IEnumerable`1<String> scopeNames = ?)
+  method public static String GetEmittedIdentifier(String name, GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext context, System.Collections.Generic.IEnumerable`1<String> scopeNames = null)
   method public static String GetText(GSharp.Core.CodeAnalysis.Syntax.SyntaxKind kind)
   method public static String GetTextOrEmpty(GSharp.Core.CodeAnalysis.Syntax.SyntaxKind kind)
   method public static System.Collections.Generic.IEnumerable`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxKind> GetBinaryOperatorKinds()
@@ -8225,7 +8225,7 @@ type static class GSharp.Core.IO.TextWriterExtensions : System.Object
   method public static Void WriteString(System.IO.TextWriter writer, String text)
 type static class GSharp.Core.Resx.ResxCodeGenerator : System.Object
   field public const String DesignerFileSuffix = ".Designer.gs"
-  method public static String GenerateFromFile(String resxPath, String projectDirectory, String rootNamespace, Boolean isPublic = ?)
+  method public static String GenerateFromFile(String resxPath, String projectDirectory, String rootNamespace, Boolean isPublic = false)
   method public static String GetDesignerFilePath(String resxPath)
 type static class GSharp.Core.Resx.ResxDesignerGenerator : System.Object
   method public static String Generate(GSharp.Core.Resx.ResxDocument document, GSharp.Core.Resx.ResxDesignerOptions options)
@@ -8315,7 +8315,7 @@ type struct GSharp.Core.CodeAnalysis.Binding.BoundInterpolatedStringPart
   method public String get_Format()
   method public String get_Literal()
   method public System.Nullable`1<Int32> get_Alignment()
-  method public static GSharp.Core.CodeAnalysis.Binding.BoundInterpolatedStringPart FromHole(GSharp.Core.CodeAnalysis.Binding.BoundExpression value, System.Nullable`1<Int32> alignment, String format, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode holeSyntax = ?)
+  method public static GSharp.Core.CodeAnalysis.Binding.BoundInterpolatedStringPart FromHole(GSharp.Core.CodeAnalysis.Binding.BoundExpression value, System.Nullable`1<Int32> alignment, String format, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode holeSyntax = null)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundInterpolatedStringPart FromLiteral(String text)
   property public Boolean IsHole { get; }
   property public Boolean IsLiteral { get; }
@@ -8357,7 +8357,7 @@ type struct GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart : System.
   method public GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind get_Kind()
   method public GSharp.Core.CodeAnalysis.Symbols.Symbol get_Symbol()
   method public String get_Text()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind Kind, String Text, GSharp.Core.CodeAnalysis.Symbols.Symbol Symbol = ?)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind Kind, String Text, GSharp.Core.CodeAnalysis.Symbols.Symbol Symbol = null)
   method public Void Deconstruct(out GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind Kind, out String Text, out GSharp.Core.CodeAnalysis.Symbols.Symbol Symbol)
   method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Kind(GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind value)
   method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Symbol(GSharp.Core.CodeAnalysis.Symbols.Symbol value)
@@ -8378,9 +8378,9 @@ type struct GSharp.Core.CodeAnalysis.Symbols.MemberQuery
   method public GSharp.Core.CodeAnalysis.Symbols.MemberKinds get_Kinds()
   method public GSharp.Core.CodeAnalysis.Symbols.MemberQuery WithKinds(GSharp.Core.CodeAnalysis.Symbols.MemberKinds kinds)
   method public Void .ctor(Boolean includeInstance, Boolean includeStatic, Boolean includeInherited, GSharp.Core.CodeAnalysis.Symbols.MemberKinds kinds)
-  method public static GSharp.Core.CodeAnalysis.Symbols.MemberQuery InheritedStatic(GSharp.Core.CodeAnalysis.Symbols.MemberKinds kinds = ?)
-  method public static GSharp.Core.CodeAnalysis.Symbols.MemberQuery Instance(GSharp.Core.CodeAnalysis.Symbols.MemberKinds kinds = ?)
-  method public static GSharp.Core.CodeAnalysis.Symbols.MemberQuery Static(GSharp.Core.CodeAnalysis.Symbols.MemberKinds kinds = ?)
+  method public static GSharp.Core.CodeAnalysis.Symbols.MemberQuery InheritedStatic(GSharp.Core.CodeAnalysis.Symbols.MemberKinds kinds = 15)
+  method public static GSharp.Core.CodeAnalysis.Symbols.MemberQuery Instance(GSharp.Core.CodeAnalysis.Symbols.MemberKinds kinds = 15)
+  method public static GSharp.Core.CodeAnalysis.Symbols.MemberQuery Static(GSharp.Core.CodeAnalysis.Symbols.MemberKinds kinds = 15)
   method public static GSharp.Core.CodeAnalysis.Symbols.MemberQuery get_All()
   property public Boolean IncludeInherited { get; }
   property public Boolean IncludeInstance { get; }
@@ -8407,7 +8407,7 @@ type struct GSharp.Core.CodeAnalysis.Syntax.InterpolatedStringSegment
   method public String get_Format()
   method public String get_Text()
   method public System.Nullable`1<Int32> get_Alignment()
-  method public static GSharp.Core.CodeAnalysis.Syntax.InterpolatedStringSegment FromExpression(GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression, System.Nullable`1<Int32> alignment = ?, String format = ?)
+  method public static GSharp.Core.CodeAnalysis.Syntax.InterpolatedStringSegment FromExpression(GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression, System.Nullable`1<Int32> alignment = null, String format = null)
   method public static GSharp.Core.CodeAnalysis.Syntax.InterpolatedStringSegment FromText(String text)
   property public Boolean IsExpression { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Expression { get; }
