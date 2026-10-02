@@ -3258,9 +3258,7 @@ public sealed partial class CSharpToGSharpTranslator
                     .ThenBy(symbol => symbol.Name, StringComparer.Ordinal)
                     .Select(symbol => new LiftedLocalFunctionCapture(
                         symbol,
-                        capturingLocals.Any(candidate =>
-                            directCaptures[candidate.Symbol].Contains(symbol)
-                            && this.IsSymbolReassigned(symbol, candidate.Syntax))))
+                        this.IsCaptureWrittenInDeclaringScope(symbol)))
                     .ToList();
                 IMethodSymbol containingMethod = pair.Symbol.ContainingSymbol as IMethodSymbol;
                 while (containingMethod?.MethodKind == MethodKind.LocalFunction)
@@ -3276,6 +3274,14 @@ public sealed partial class CSharpToGSharpTranslator
                         captures);
             }
         }
+
+        // Issue #4302: a lifted helper receives its captures as parameters, so
+        // any write that the original closure cell would observe (a lambda,
+        // another local function, or the member body itself) must keep the
+        // capture by-ref to preserve shared storage.
+        private bool IsCaptureWrittenInDeclaringScope(ISymbol capture) =>
+            capture.ContainingSymbol.DeclaringSyntaxReferences.Any(reference =>
+                this.IsSymbolReassigned(capture, reference.GetSyntax()));
 
         // Issues #3399/#4197: ordinary mutual recursion uses nullable
         // function locals so every member is declared before any body binds.

@@ -438,6 +438,44 @@ namespace Demo
     }
 
     [Fact]
+    public void CrossSectionLift_LambdaWrittenCapture_KeepsSharedStorage()
+    {
+        // Issue #4302: the cross-section member lift forwards captures as
+        // helper parameters. A write in a lambda outside the lifted body must
+        // still make the capture by-ref, or `F` returns a stale snapshot.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int x = 1;
+                        System.Action mutate = () => { x = 42; };
+                        switch (value) {
+                            case 0:
+                                int F(int n) {
+                                    if (n == 0) {
+                                        mutate();
+                                        return x;
+                                    }
+
+                                    return F(n - 1);
+                                }
+
+                                return F(0);
+                            default:
+                                return F(0);
+                        }
+                    }
+                }
+            }
+            """);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(0) + C().Run(1))",
+            "84");
+    }
+
+    [Fact]
     public void RefReturningLocalFunctionNameofFromAnotherSwitchSection_IsHarmless()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
