@@ -25,6 +25,11 @@ public sealed class TranslationContext
 {
     private readonly List<TranslationDiagnostic> diagnostics = new List<TranslationDiagnostic>();
 
+    // Keyed by the syntax tree instance, so two in-memory trees without a file
+    // path never collide.
+    private readonly HashSet<(string Id, SyntaxTree Tree, int Start, int Length)> reportedOnce =
+        new HashSet<(string Id, SyntaxTree Tree, int Start, int Length)>();
+
     // Issue #1910: a partial type's other declarations live in different
     // `SyntaxTree`s than the one this context was created for, so resolving a
     // symbol on one of their members requires a `SemanticModel` bound to THAT
@@ -179,6 +184,39 @@ public sealed class TranslationContext
     /// <param name="node">The expression node.</param>
     /// <returns>The resolved type info.</returns>
     public TypeInfo GetTypeInfo(SyntaxNode node) => this.SemanticModel.GetTypeInfo(node);
+
+    /// <summary>
+    /// Records <paramref name="diagnostic"/> unless one with the same id was
+    /// already recorded at the same source span. A node that is translated
+    /// more than once in one context (a speculative translation) then reports
+    /// once. A diagnostic without a source location or a diagnostic id is
+    /// always recorded.
+    /// </summary>
+    /// <param name="diagnostic">The diagnostic to record.</param>
+    public void ReportOnce(TranslationDiagnostic diagnostic)
+    {
+        if (diagnostic is null)
+        {
+            throw new ArgumentNullException(nameof(diagnostic));
+        }
+
+        Location location = diagnostic.Location;
+        if (location?.SourceTree == null || diagnostic.DiagnosticId == null)
+        {
+            this.diagnostics.Add(diagnostic);
+            return;
+        }
+
+        var key = (
+            diagnostic.DiagnosticId,
+            location.SourceTree,
+            location.SourceSpan.Start,
+            location.SourceSpan.Length);
+        if (this.reportedOnce.Add(key))
+        {
+            this.diagnostics.Add(diagnostic);
+        }
+    }
 
     /// <summary>
     /// Records a structured diagnostic for a construct the translator cannot map.
