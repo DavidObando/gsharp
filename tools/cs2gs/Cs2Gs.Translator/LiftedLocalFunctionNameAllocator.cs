@@ -70,7 +70,11 @@ internal sealed class LiftedLocalFunctionNameAllocator
         lock (this.gate)
         {
             string alias = baseAlias;
-            for (int suffix = 2; reserved(alias) || this.helperNames.Contains(alias); suffix++)
+            for (int suffix = 2;
+                reserved(alias)
+                    || this.helperNames.Contains(alias)
+                    || this.aliasNames.Contains(alias);
+                suffix++)
             {
                 alias = $"{baseAlias}_{suffix}";
             }

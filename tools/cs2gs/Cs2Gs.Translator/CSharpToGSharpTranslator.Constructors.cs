@@ -34,6 +34,9 @@ public sealed partial class CSharpToGSharpTranslator
         // so an alias or a `using static` spelling still resolves.
         private const string UnscopedRefAttributeFullName = "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute";
 
+        private readonly Dictionary<ISymbol, IReadOnlyList<ISymbol>> liftedHelperOccupiedSymbolsByScope =
+            new(SymbolEqualityComparer.Default);
+
         // Issue #3469: author comments (`//`, `/* */`, and `///` doc lines)
         // from the C# node's leading trivia are carried onto the first G#
         // node the construct translates to; the printer re-emits them above
@@ -2004,7 +2007,7 @@ public sealed partial class CSharpToGSharpTranslator
                     localName,
                     candidate => this.typeMapper.ClaimsDocumentScopeName(candidate, this.context)
                         || this.IsLiftedHelperNameMentionedInSource(candidate, aggregate, localFunction));
-            this.typeMapper.ReserveSiblingStaticMemberName(allocated);
+            this.typeMapper.ReserveSiblingMemberName(allocated);
             return allocated;
         }
 
@@ -2081,21 +2084,12 @@ public sealed partial class CSharpToGSharpTranslator
                 scope is IMethodSymbol;
                 scope = scope.ContainingSymbol)
             {
-                foreach (SyntaxReference reference in scope.DeclaringSyntaxReferences)
+                foreach (ISymbol symbol in this.GetLiftedHelperOccupiedSymbols(scope))
                 {
-                    using IDisposable scopeModel = this.context.UseSemanticModelFor(reference.SyntaxTree);
-                    SyntaxNode declaration = reference.GetSyntax();
-                    occupied.UnionWith(
-                        declaration
-                            .DescendantNodes()
-                            .Where(IsLiftedHelperOccupiedNameDeclaration)
-                            .Select(this.context.GetDeclaredSymbol)
-                            .Where(symbol =>
-                                symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
-                                || (symbol is IMethodSymbol method
-                                    && method.MethodKind == MethodKind.LocalFunction
-                                    && !SymbolEqualityComparer.Default.Equals(method, localFunction)))
-                            .Select(symbol => this.EmittedName(symbol, symbol.Name)));
+                    if (!SymbolEqualityComparer.Default.Equals(symbol, localFunction))
+                    {
+                        occupied.Add(this.EmittedName(symbol, symbol.Name));
+                    }
                 }
             }
 
@@ -2113,6 +2107,34 @@ public sealed partial class CSharpToGSharpTranslator
                         : name);
                 }));
             return occupied;
+        }
+
+        private IReadOnlyList<ISymbol> GetLiftedHelperOccupiedSymbols(ISymbol scope)
+        {
+            if (this.liftedHelperOccupiedSymbolsByScope.TryGetValue(
+                scope,
+                out IReadOnlyList<ISymbol> cached))
+            {
+                return cached;
+            }
+
+            var symbols = new List<ISymbol>();
+            foreach (SyntaxReference reference in scope.DeclaringSyntaxReferences)
+            {
+                using IDisposable scopeModel = this.context.UseSemanticModelFor(reference.SyntaxTree);
+                symbols.AddRange(
+                    reference.GetSyntax()
+                        .DescendantNodes()
+                        .Where(IsLiftedHelperOccupiedNameDeclaration)
+                        .Select(this.context.GetDeclaredSymbol)
+                        .Where(symbol =>
+                            symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
+                            || (symbol is IMethodSymbol method
+                                && method.MethodKind == MethodKind.LocalFunction)));
+            }
+
+            this.liftedHelperOccupiedSymbolsByScope.Add(scope, symbols);
+            return symbols;
         }
 
         private static bool IsLiftedHelperOccupiedNameDeclaration(SyntaxNode node) =>
@@ -2179,14 +2201,10 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            foreach (SyntaxTree tree in GetSyntaxTreesMentioningIdentifier(this.context.Compilation, name))
+            foreach (IGrouping<SyntaxTree, SyntaxToken> tokens in
+                GetIdentifierTokens(this.context.Compilation, name).GroupBy(token => token.SyntaxTree))
             {
-                IEnumerable<SyntaxToken> tokens = tree.GetRoot()
-                    .DescendantTokens()
-                    .Where(token => token.IsKind(SyntaxKind.IdentifierToken)
-                        && string.Equals(token.ValueText, name, StringComparison.Ordinal));
-
-                using IDisposable modelScope = this.context.UseSemanticModelFor(tree);
+                using IDisposable modelScope = this.context.UseSemanticModelFor(tokens.Key);
                 foreach (SyntaxToken token in tokens)
                 {
                     if (this.LiftedHelperNameTokenCanCollide(
@@ -2204,41 +2222,39 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        // Identifier spelling -> the syntax trees that contain it, built once
-        // per compilation so each lifted-helper candidate only rescans the
-        // trees that can mention it.
-        private static IReadOnlyList<SyntaxTree> GetSyntaxTreesMentioningIdentifier(
+        // Identifier spelling -> matching tokens, built once per compilation
+        // so lifted-helper candidates never rescan syntax trees.
+        private static IReadOnlyList<SyntaxToken> GetIdentifierTokens(
             Compilation compilation,
             string name)
         {
-            Dictionary<string, List<SyntaxTree>> index = IdentifierTreeIndexes.GetValue(
+            Dictionary<string, List<SyntaxToken>> index = IdentifierTokenIndexes.GetValue(
                 compilation,
                 static target =>
                 {
-                    var built = new Dictionary<string, List<SyntaxTree>>(StringComparer.Ordinal);
+                    var built = new Dictionary<string, List<SyntaxToken>>(StringComparer.Ordinal);
                     foreach (SyntaxTree tree in target.SyntaxTrees)
                     {
-                        var seen = new HashSet<string>(StringComparer.Ordinal);
                         foreach (SyntaxToken token in tree.GetRoot().DescendantTokens())
                         {
-                            if (token.IsKind(SyntaxKind.IdentifierToken) && seen.Add(token.ValueText))
+                            if (token.IsKind(SyntaxKind.IdentifierToken))
                             {
-                                if (!built.TryGetValue(token.ValueText, out List<SyntaxTree> trees))
+                                if (!built.TryGetValue(token.ValueText, out List<SyntaxToken> tokens))
                                 {
-                                    trees = new List<SyntaxTree>();
-                                    built.Add(token.ValueText, trees);
+                                    tokens = new List<SyntaxToken>();
+                                    built.Add(token.ValueText, tokens);
                                 }
 
-                                trees.Add(tree);
+                                tokens.Add(token);
                             }
                         }
                     }
 
                     return built;
                 });
-            return index.TryGetValue(name, out List<SyntaxTree> found)
+            return index.TryGetValue(name, out List<SyntaxToken> found)
                 ? found
-                : Array.Empty<SyntaxTree>();
+                : Array.Empty<SyntaxToken>();
         }
 
         private bool LiftedHelperNameTokenCanCollide(

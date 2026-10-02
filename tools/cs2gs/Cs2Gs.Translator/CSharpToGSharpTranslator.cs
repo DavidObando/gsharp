@@ -86,7 +86,7 @@ public sealed partial class CSharpToGSharpTranslator
     // Lifted helpers from separate partial-type documents share one CLR type;
     // LiftedLocalFunctionNameAllocator.For keeps their readable names unique
     // across the whole compilation.
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<string, List<SyntaxTree>>> IdentifierTreeIndexes = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<string, List<SyntaxToken>>> IdentifierTokenIndexes = new();
 
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, HashSet<INamedTypeSymbol>> AllStaticUsingTargetsCache = new();
 

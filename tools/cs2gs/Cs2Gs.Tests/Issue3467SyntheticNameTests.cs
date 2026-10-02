@@ -704,6 +704,18 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableAlias_CompilationAllocatorKeepsAliasesUnique()
+        {
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                new[] { ("C.cs", "public class C { }") });
+            LiftedLocalFunctionNameAllocator allocator =
+                LiftedLocalFunctionNameAllocator.For(project.Compilation);
+
+            Assert.Equal("TextStringBuilder", allocator.ClaimAlias("TextStringBuilder", _ => false));
+            Assert.Equal("TextStringBuilder_2", allocator.ClaimAlias("TextStringBuilder", _ => false));
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReusesNameAcrossUnrelatedTypes()
         {
             string printed = Translate("""
