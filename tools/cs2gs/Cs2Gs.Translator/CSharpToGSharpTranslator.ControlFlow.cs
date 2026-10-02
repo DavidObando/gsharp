@@ -2216,6 +2216,10 @@ public sealed partial class CSharpToGSharpTranslator
                         || this.MutatingStructCallWritesSymbol(invocation, member, symbol) => true,
                 RefExpressionSyntax refOf
                     when this.WritesStorageOf(refOf.Expression, symbol) => true,
+                MemberAccessExpressionSyntax member
+                    when this.MutatingStructAccessorWritesSymbol(member, member.Expression, symbol) => true,
+                ElementAccessExpressionSyntax element
+                    when this.MutatingStructAccessorWritesSymbol(element, element.Expression, symbol) => true,
                 _ => false,
             };
 
@@ -2273,6 +2277,28 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => false,
             };
             return mutableValueReceiver && this.WritesStorageOf(member.Expression, symbol);
+        }
+
+        private bool MutatingStructAccessorWritesSymbol(
+            ExpressionSyntax access,
+            ExpressionSyntax receiver,
+            ISymbol symbol)
+        {
+            if (this.context.GetSymbolInfo(access).Symbol is not IPropertySymbol property
+                || property.GetMethod is not { IsReadOnly: false }
+                || property.ContainingType is { IsReferenceType: true, TypeKind: not TypeKind.Interface })
+            {
+                return false;
+            }
+
+            ITypeSymbol receiverType = this.context.GetTypeInfo(receiver).Type;
+            bool mutableValueReceiver = receiverType switch
+            {
+                ITypeParameterSymbol typeParameter => !typeParameter.IsReferenceType,
+                INamedTypeSymbol { TypeKind: TypeKind.Struct } named => !named.IsReadOnly,
+                _ => false,
+            };
+            return mutableValueReceiver && this.WritesStorageOf(receiver, symbol);
         }
 
         private bool ExtensionReceiverWritesSymbol(

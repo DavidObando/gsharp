@@ -396,21 +396,25 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
-        public void ReadableLiftFallback_QualifiedUnrelatedExtensionDoesNotReserveName()
+        public void ReadableLiftFallback_TypeQualifiedExtensionCallStillReservesName()
         {
-            // Issue #4302: a qualified call to an extension method on an
-            // unrelated type cannot observe a helper emitted into C.
+            // Issue #4302: a type-qualified extension call is rewritten to
+            // receiver syntax, where an emitted helper could capture it.
             string printed = Translate("""
-                public static class Extensions
+                public interface IThing
                 {
-                    public static int Helper(this string value, int n) => 100 + n;
                 }
 
-                public class C
+                public static class ThingExtensions
+                {
+                    public static int Helper(this IThing value, int n) => 1000 + n;
+                }
+
+                public class C : IThing
                 {
                     public int Run(int value)
                     {
-                        int viaExtension = Extensions.Helper("", 1);
+                        int viaExtension = ThingExtensions.Helper(this, 1);
                         return viaExtension + Helper(value);
                         static int Helper(int n) => n == 0 ? 7 : Other<int>(n - 1);
                         static int Other<T>(int n) => Helper(n);
@@ -418,11 +422,11 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.DoesNotContain("func Helper_2(", printed, StringComparison.Ordinal);
+            Assert.Contains("func Helper_2(", printed, StringComparison.Ordinal);
             LocalFunctionHoistTranslationTests.CompileAndRun(
                 printed,
                 "Console.WriteLine(C().Run(2))",
-                "108");
+                "1008");
         }
 
         [Fact]

@@ -2354,7 +2354,8 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                bool unrelatedMember = symbol is IFieldSymbol or IPropertySymbol or IEventSymbol or IMethodSymbol
+                bool unrelatedMember = (symbol is IFieldSymbol or IPropertySymbol or IEventSymbol
+                        || symbol is IMethodSymbol { IsExtensionMethod: false })
                     && symbol.ContainingType != null
                     && !IsTypeRelatedToLiftedHelperOwners(symbol.ContainingType, owners);
                 bool safelyQualified = qualified

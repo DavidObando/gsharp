@@ -480,6 +480,7 @@ namespace Demo
     [InlineData("x.Set(42);")]
     [InlineData("x[0] = 42;")]
     [InlineData("ref int alias = ref x[0]; alias = 42;")]
+    [InlineData("_ = x.Value;")]
     public void CrossSectionLift_LambdaWriteThroughStructStorage_KeepsSharedStorage(string write)
     {
         // Issue #4302: writing a field or indexer of, or calling a mutating
@@ -492,6 +493,7 @@ namespace Demo
                     public void Set(int value) { N = value; }
                     [System.Diagnostics.CodeAnalysis.UnscopedRef]
                     public ref int this[int i] => ref N;
+                    public int Value { get { N = 42; return N; } }
                 }
 
                 public class C {
