@@ -19,6 +19,24 @@ internal sealed class LiftedLocalFunctionNameAllocator
 
     private readonly HashSet<string> helperNames = new(StringComparer.Ordinal);
 
+    private readonly HashSet<string> aliasNames = new(StringComparer.Ordinal);
+
+    public void ReserveAliasName(string name)
+    {
+        lock (this.gate)
+        {
+            this.aliasNames.Add(name);
+        }
+    }
+
+    public bool IsReservedAliasName(string name)
+    {
+        lock (this.gate)
+        {
+            return this.aliasNames.Contains(name);
+        }
+    }
+
     public bool IsAllocatedHelperName(string name)
     {
         lock (this.gate)

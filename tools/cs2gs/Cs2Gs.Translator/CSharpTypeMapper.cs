@@ -256,6 +256,13 @@ public sealed class CSharpTypeMapper
     public System.Func<string, bool> IsLiftedHelperName { get; set; }
 
     /// <summary>
+    /// Gets or sets the callback told about every synthesized import alias
+    /// (issue #4302), so lifted helpers allocated later in another document
+    /// of the compilation never take an alias's name.
+    /// </summary>
+    public System.Action<string> OnTypeAliasCreated { get; set; }
+
+    /// <summary>
     /// Gets every namespace shortened into a bare/qualified-nested type name by
     /// this mapper so far (see <see cref="shortenedNamespaces"/>).
     /// </summary>
@@ -1243,6 +1250,12 @@ public sealed class CSharpTypeMapper
         }
 
         this.synthesizedTypeAliases.Add(alias, target);
+        System.Action<string> onTypeAliasCreated = this.OnTypeAliasCreated;
+        if (onTypeAliasCreated != null)
+        {
+            onTypeAliasCreated(alias);
+        }
+
         return alias;
     }
 

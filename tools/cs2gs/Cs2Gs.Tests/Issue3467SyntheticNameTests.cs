@@ -505,6 +505,161 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_RefReturningMethodGroupValueIsLoud()
+        {
+            // Issue #4302: a lifted ref-returning local converted to a delegate
+            // would be wrapped in a value-returning lambda, losing the ref
+            // aliasing contract. It must be a loud gap, not silent output.
+            (string _, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateWithDiagnostics("""
+                public delegate ref int Getter(int[] values);
+
+                public class C
+                {
+                    public int Run()
+                    {
+                        int[] data = { 1, 2 };
+                        Getter getter = At<int>;
+                        getter(data) = 9;
+                        return data[0];
+
+                        static ref int At<T>(int[] values)
+                        {
+                            if (values.Length == 0)
+                            {
+                                return ref Other(values);
+                            }
+
+                            return ref values[0];
+                        }
+
+                        static ref int Other(int[] values) => ref At<int>(values);
+                    }
+                }
+                """);
+
+            Assert.Contains(
+                diagnostics,
+                d => d.Severity == TranslationSeverity.Unsupported
+                    && d.Message.Contains("ref-returning local function 'At'", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_LocalNamedLikeOwnerIsLoud()
+        {
+            // Issue #4302: a static lifted helper is qualified through its
+            // owner (`C.First`). A local spelled like the owner would capture
+            // that qualifier, so the shape must be a loud gap.
+            (string _, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateWithDiagnostics("""
+                public class D
+                {
+                    public int First(int n) => 100;
+                }
+
+                public class C
+                {
+                    public int Run(int value)
+                    {
+                        D C = new D();
+                        System.Func<int, int> f = First;
+                        return f(value) + (C == null ? 1 : 0);
+                        static int First(int n) => n == 0 ? 7 : Second<int>(n - 1);
+                        static int Second<T>(int n) => First(n);
+                    }
+                }
+                """);
+
+            Assert.Contains(
+                diagnostics,
+                d => d.Severity == TranslationSeverity.Unsupported
+                    && d.Message.Contains("'C'", StringComparison.Ordinal)
+                    && d.Message.Contains("'First'", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_ShadowedOwnerTypeParameterIsLoud()
+        {
+            // Issue #4302: inside `Second<T>` the owner qualifier `C[T]` would
+            // name the local function's `T`, not the class's, so a static
+            // helper reached from there would read another instantiation's
+            // statics. The shape must be a loud gap.
+            (string _, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateWithDiagnostics("""
+                public class C<T>
+                {
+                    public static int Marker;
+
+                    public static void Set(int value) => Marker = value;
+
+                    public int Run(int value)
+                    {
+                        return Second<string>(value);
+                        static int First(int n) => n == 0 ? Marker : Second<int>(n - 1);
+                        static int Second<T>(int n) => First(n);
+                    }
+                }
+                """);
+
+            Assert.Contains(
+                diagnostics,
+                d => d.Severity == TranslationSeverity.Unsupported
+                    && d.Message.Contains("type parameter 'T'", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_AvoidsAliasesFromOtherPartialDocuments()
+        {
+            // Issue #4302: with partial parts preserved, each document has its
+            // own import aliases. A helper lifted in one document must not take
+            // a synthesized alias name from another, in either document order.
+            var sources = new[]
+            {
+                ("C.Alias.cs", """
+                    public class StringBuilder
+                    {
+                    }
+
+                    public partial class C
+                    {
+                        public int Later()
+                        {
+                            var mine = new StringBuilder();
+                            var text = new System.Text.StringBuilder();
+                            text.Append("x");
+                            return mine == null ? 0 : text.Length;
+                        }
+                    }
+                    """),
+                ("C.Helper.cs", """
+                    public partial class C
+                    {
+                        public int Run(int value)
+                        {
+                            return TextStringBuilder(value);
+                            static int TextStringBuilder(int n) => n == 0 ? 5 : Other<int>(n - 1);
+                            static int Other<T>(int n) => TextStringBuilder(n);
+                        }
+                    }
+                    """),
+            };
+
+            foreach (bool reverse in new[] { false, true })
+            {
+                LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                    reverse ? sources.Reverse().ToArray() : sources);
+                Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+                var printed = new List<string>();
+                var translator = new CSharpToGSharpTranslator();
+                foreach (LoadedDocument document in project.Documents)
+                {
+                    var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+                    printed.Add(GSharpPrinter.Print(translator.TranslateDocument(document, context)));
+                }
+
+                TranslationTestValidation.AssertBinds(printed.ToArray());
+            }
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReusesNameAcrossUnrelatedTypes()
         {
             string printed = Translate("""
@@ -734,6 +889,24 @@ namespace Cs2Gs.Tests
 
             Assert.Contains("__underscore", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
+        }
+
+        private static (string Printed, IReadOnlyList<TranslationDiagnostic> Diagnostics) TranslateWithDiagnostics(
+            string source)
+        {
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
+            Assert.True(
+                project.BoundWithoutErrors,
+                "Snippet should bind with no C# errors: "
+                    + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+            LoadedDocument document = Assert.Single(project.Documents);
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+            return (GSharpPrinter.Print(unit), context.Diagnostics.ToList());
         }
 
         private static string Translate(

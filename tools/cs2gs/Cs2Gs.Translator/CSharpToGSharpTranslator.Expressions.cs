@@ -50,6 +50,22 @@ public sealed partial class CSharpToGSharpTranslator
         // after a collision suffix (`First_2`).
         private bool TryTranslateLiftedLocalFunctionReference(SimpleNameSyntax name, out GExpression translated)
         {
+            // A non-invocation reference converts the helper to a function
+            // value. A ref-returning helper would lose its aliasing contract
+            // in that conversion, so it is a loud gap (as for unlifted
+            // ref-returning locals used as delegates).
+            if (this.context.GetSymbolInfo(name).Symbol is IMethodSymbol referenced
+                && referenced.MethodKind == MethodKind.LocalFunction
+                && (referenced.ReturnsByRef || referenced.ReturnsByRefReadonly)
+                && (this.state.LiftedRecursiveLocalFunctions.ContainsKey(referenced.OriginalDefinition)
+                    || this.state.LiftedStaticLocalFunctions.ContainsKey(referenced.OriginalDefinition))
+                && !IsInvocationTarget(name))
+            {
+                this.context.ReportUnsupported(
+                    name,
+                    $"ref-returning local function '{referenced.Name}' cannot be used as a delegate or function value in G#.");
+            }
+
             if (this.context.GetSymbolInfo(name).Symbol is IMethodSymbol recursiveLiftedLocal
                 && recursiveLiftedLocal.MethodKind == MethodKind.LocalFunction
                 && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
@@ -109,6 +125,9 @@ public sealed partial class CSharpToGSharpTranslator
                     liftedName)
                 : new IdentifierExpression(liftedName);
         }
+
+        private static bool IsInvocationTarget(SimpleNameSyntax name) =>
+            name.Parent is InvocationExpressionSyntax invocation && invocation.Expression == name;
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
         {

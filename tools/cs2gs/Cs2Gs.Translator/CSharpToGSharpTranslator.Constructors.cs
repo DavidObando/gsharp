@@ -1991,21 +1991,97 @@ public sealed partial class CSharpToGSharpTranslator
         // candidates go through the same predicate, so allocation always ends
         // on a proven name; an occupied-set shape this misses becomes a
         // suffix, never a silently rebound call.
-        private string AllocateLiftedLocalFunctionName(IMethodSymbol localFunction, string localName)
+        private string AllocateLiftedLocalFunctionName(
+            IMethodSymbol localFunction,
+            string localName,
+            bool emittedStatic)
         {
             INamedTypeSymbol aggregate = this.state.CurrentEmittedAggregate ?? localFunction.ContainingType;
+            if (emittedStatic && aggregate != null)
+            {
+                this.ReportUnsafeLiftedHelperQualifier(localFunction, aggregate);
+            }
+
             HashSet<string> occupied = this.CollectLiftedHelperOccupiedNames(aggregate, localFunction);
-            return LiftedLocalFunctionNames
-                .GetValue(
-                    this.context.Compilation,
-                    static _ => new LiftedLocalFunctionNameAllocator())
-                .Allocate(
-                    localFunction,
-                    aggregate,
-                    occupied,
-                    localName,
-                    candidate => this.typeMapper.ClaimsDocumentScopeName(candidate, this.context)
-                        || this.IsLiftedHelperNameMentionedInSource(candidate, aggregate, localFunction));
+            LiftedLocalFunctionNameAllocator allocator = LiftedLocalFunctionNames.GetValue(
+                this.context.Compilation,
+                static _ => new LiftedLocalFunctionNameAllocator());
+            return allocator.Allocate(
+                localFunction,
+                aggregate,
+                occupied,
+                localName,
+                candidate => this.typeMapper.ClaimsDocumentScopeName(candidate, this.context)
+                    || allocator.IsReservedAliasName(candidate)
+                    || this.IsLiftedHelperNameMentionedInSource(candidate, aggregate, localFunction));
+        }
+
+        // Issue #4302 fail-safe: a shared lifted helper is always referenced
+        // as `Owner.Name` (or `Owner[T].Name`). Inside the enclosing member
+        // that qualifier is only sound when nothing declared there shadows
+        // it: a local, parameter, or range variable spelled like the owner
+        // (or one of its containing types), or a type parameter spelled like
+        // one of the owner's type parameters. Those shapes cannot be emitted
+        // safely, so they are reported as loud gaps instead of producing a
+        // call that binds something else.
+        private void ReportUnsafeLiftedHelperQualifier(IMethodSymbol localFunction, INamedTypeSymbol aggregate)
+        {
+            var qualifierNames = new HashSet<string>(StringComparer.Ordinal);
+            var ownerTypeParameters = new HashSet<string>(StringComparer.Ordinal);
+            for (INamedTypeSymbol type = aggregate; type != null; type = type.ContainingType)
+            {
+                qualifierNames.Add(type.Name);
+                qualifierNames.Add(this.EmittedName(type, type.Name));
+                foreach (ITypeParameterSymbol typeParameter in type.TypeParameters)
+                {
+                    ownerTypeParameters.Add(typeParameter.Name);
+                }
+            }
+
+            ISymbol enclosingMember = localFunction.ContainingSymbol;
+            while (enclosingMember is IMethodSymbol enclosingMethod
+                && (enclosingMethod.MethodKind == MethodKind.LocalFunction
+                    || enclosingMethod.MethodKind == MethodKind.AnonymousFunction))
+            {
+                enclosingMember = enclosingMethod.ContainingSymbol;
+            }
+
+            if (enclosingMember == null)
+            {
+                return;
+            }
+
+            SyntaxNode reportAt = localFunction.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            foreach (SyntaxReference reference in enclosingMember.DeclaringSyntaxReferences)
+            {
+                using IDisposable scopeModel = this.context.UseSemanticModelFor(reference.SyntaxTree);
+                foreach (SyntaxNode node in reference.GetSyntax().DescendantNodesAndSelf())
+                {
+                    if (node is TypeParameterSyntax typeParameter
+                        && ownerTypeParameters.Contains(typeParameter.Identifier.ValueText))
+                    {
+                        string typeParameterReason =
+                            $"lifted local function '{localFunction.Name}' becomes a shared helper on '{aggregate.Name}', " +
+                            $"but the enclosing member declares type parameter '{typeParameter.Identifier.ValueText}', " +
+                            "which shadows the owner's; its owner-qualified reference would name another instantiation.";
+                        this.context.ReportUnsupported(reportAt ?? node, typeParameterReason);
+                        return;
+                    }
+
+                    if (IsLiftedHelperOccupiedNameDeclaration(node)
+                        && this.context.GetDeclaredSymbol(node) is ISymbol declared
+                        && declared is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
+                        && qualifierNames.Contains(declared.Name))
+                    {
+                        string shadowReason =
+                            $"lifted local function '{localFunction.Name}' becomes a shared helper referenced as " +
+                            $"'{aggregate.Name}.{localFunction.Name}', but the enclosing member declares '{declared.Name}', " +
+                            "which shadows that owner qualifier.";
+                        this.context.ReportUnsupported(reportAt ?? node, shadowReason);
+                        return;
+                    }
+                }
+            }
         }
 
         // Issue #4302: the names a lifted helper emitted into `aggregate`
@@ -3130,7 +3206,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
                 this.state.LiftedStaticLocalFunctions[pair.Symbol] =
-                    this.AllocateLiftedLocalFunctionName(pair.Symbol, localName);
+                    this.AllocateLiftedLocalFunctionName(pair.Symbol, localName, emittedStatic: true);
             }
 
             var capturingLocals = localFunctions
@@ -3236,10 +3312,11 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
+                bool liftedStatic = containingMethod?.IsStatic != false;
                 this.state.LiftedRecursiveLocalFunctions[pair.Symbol] =
                     new LiftedRecursiveLocalFunction(
-                        this.AllocateLiftedLocalFunctionName(pair.Symbol, localName),
-                        containingMethod?.IsStatic != false,
+                        this.AllocateLiftedLocalFunctionName(pair.Symbol, localName, liftedStatic),
+                        liftedStatic,
                         captures);
             }
         }

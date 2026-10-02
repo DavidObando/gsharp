@@ -457,6 +457,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             AnalyzerApiMode = this.analyzerApiMode,
             IsLiftedHelperName = name => liftedHelperNames.IsAllocatedHelperName(name),
+            OnTypeAliasCreated = name => liftedHelperNames.ReserveAliasName(name),
         };
         typeMapper.SetTopLevelStatementsEntryPoint(
             keptTopLevelProgram is null ? null : entryPoint);
