@@ -1995,7 +1995,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             INamedTypeSymbol aggregate = this.state.CurrentEmittedAggregate ?? localFunction.ContainingType;
             HashSet<string> occupied = this.CollectLiftedHelperOccupiedNames(aggregate, localFunction);
-            return LiftedLocalFunctionNames
+            string allocated = LiftedLocalFunctionNames
                 .GetValue(
                     this.context.Compilation,
                     static _ => new LiftedLocalFunctionNameAllocator())
@@ -2006,6 +2006,8 @@ public sealed partial class CSharpToGSharpTranslator
                     localName,
                     candidate => this.typeMapper.ClaimsDocumentScopeName(candidate, this.context)
                         || this.IsLiftedHelperNameMentionedInSource(candidate, aggregate, localFunction));
+            this.typeMapper.ReserveSiblingStaticMemberName(allocated);
+            return allocated;
         }
 
         // Issue #4302: the names a lifted helper emitted into `aggregate`

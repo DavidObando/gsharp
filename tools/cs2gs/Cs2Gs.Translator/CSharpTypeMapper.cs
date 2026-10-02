@@ -1077,6 +1077,9 @@ public sealed class CSharpTypeMapper
             || this.sourceDeclaredTypeNames.Contains(name);
     }
 
+    internal void ReserveSiblingStaticMemberName(string name) =>
+        this.reservedSiblingStaticMemberNames.Add(name);
+
     /// <summary>
     /// Maps an exact inferred contract while qualifying metadata homonyms
     /// reachable through the current file's imports.

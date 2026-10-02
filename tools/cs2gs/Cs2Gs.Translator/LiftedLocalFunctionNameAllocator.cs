@@ -26,12 +26,15 @@ internal sealed class LiftedLocalFunctionNameAllocator
     {
         lock (this.gate)
         {
-            if (this.assigned.TryGetValue(localFunction, out string assignedName))
+            IMethodSymbol functionKey = localFunction.OriginalDefinition;
+            if (this.assigned.TryGetValue(functionKey, out string assignedName))
             {
                 return assignedName;
             }
 
-            ISymbol owner = emittedOwner ?? localFunction.ContainingType ?? (ISymbol)localFunction.ContainingAssembly;
+            ISymbol owner = (ISymbol)emittedOwner?.OriginalDefinition
+                ?? (ISymbol)localFunction.ContainingType?.OriginalDefinition
+                ?? localFunction.ContainingAssembly;
             if (!this.usedByType.TryGetValue(owner, out HashSet<string> used))
             {
                 used = new HashSet<string>(StringComparer.Ordinal);
@@ -47,7 +50,7 @@ internal sealed class LiftedLocalFunctionNameAllocator
             }
 
             used.Add(candidate);
-            this.assigned.Add(localFunction, candidate);
+            this.assigned.Add(functionKey, candidate);
             return candidate;
         }
     }
@@ -59,12 +62,14 @@ internal sealed class LiftedLocalFunctionNameAllocator
     {
         lock (this.gate)
         {
-            if (this.assigned.TryGetValue(property, out string assignedName))
+            IPropertySymbol propertyKey = property.OriginalDefinition;
+            if (this.assigned.TryGetValue(propertyKey, out string assignedName))
             {
                 return assignedName;
             }
 
-            ISymbol owner = property.ContainingType ?? (ISymbol)property.ContainingAssembly;
+            ISymbol owner = (ISymbol)property.ContainingType?.OriginalDefinition
+                ?? property.ContainingAssembly;
             if (!this.usedByType.TryGetValue(owner, out HashSet<string> used))
             {
                 used = new HashSet<string>(StringComparer.Ordinal);
@@ -80,7 +85,7 @@ internal sealed class LiftedLocalFunctionNameAllocator
             }
 
             used.Add(candidate);
-            this.assigned.Add(property, candidate);
+            this.assigned.Add(propertyKey, candidate);
             return candidate;
         }
     }

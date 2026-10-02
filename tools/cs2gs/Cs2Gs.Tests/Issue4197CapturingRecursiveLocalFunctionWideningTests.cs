@@ -1126,8 +1126,41 @@ namespace Demo
             """);
 
         Assert.Contains("func First_2(", printed, StringComparison.Ordinal);
-        Assert.Contains("= First_2", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "let callback (int32) -> int32 = this.First_2",
+            printed,
+            StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void GeneratedPatternCarrier_DoesNotShadowLiftedHelper()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public delegate int Callback(int value);
+
+                public class C {
+                    public int Run(Callback value) {
+                        switch (value) {
+                            case Callback { }:
+                                return callback(0);
+                            default:
+                                return -1;
+                        }
+
+                        int callback(int n) => n == 0 ? 2 : Other<int>(n - 1);
+                        int Other<T>(int n) => callback(n);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("this.callback(", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run((value int32) -> 1))",
+            "2");
     }
 
     [Fact]

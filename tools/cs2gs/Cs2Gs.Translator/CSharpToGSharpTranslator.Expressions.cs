@@ -61,13 +61,11 @@ public sealed partial class CSharpToGSharpTranslator
                 // that aggregate's sibling-static scope qualifies it.
                 INamedTypeSymbol recursiveOwner =
                     this.state.CurrentEmittedAggregate ?? recursiveLiftedLocal.ContainingType;
-                translated = recursiveLift.IsStatic
-                    && recursiveOwner != null
-                    && !this.IsBareSiblingStaticScope(recursiveOwner, recursiveLift.Name, name)
-                        ? new MemberAccessExpression(
-                            this.StaticQualifierReceiver(recursiveOwner, name.GetLocation()),
-                            recursiveLift.Name)
-                        : new IdentifierExpression(recursiveLift.Name);
+                translated = this.LiftedLocalFunctionReference(
+                    recursiveOwner,
+                    recursiveLift.Name,
+                    recursiveLift.IsStatic,
+                    name.GetLocation());
                 return true;
             }
 
@@ -78,18 +76,34 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 INamedTypeSymbol emittedOwner = this.state.CurrentEmittedAggregate ?? containingType;
 
-                // Issue #3471: the lifted helper lands in the containing
-                // aggregate's `shared` block, so a same-type site names it bare.
-                translated = this.IsBareSiblingStaticScope(emittedOwner, liftedName, name)
-                    ? new IdentifierExpression(liftedName)
-                    : new MemberAccessExpression(
-                        this.StaticQualifierReceiver(emittedOwner, name.GetLocation()),
-                        liftedName);
+                translated = this.LiftedLocalFunctionReference(
+                    emittedOwner,
+                    liftedName,
+                    isStatic: true,
+                    name.GetLocation());
                 return true;
             }
 
             translated = null;
             return false;
+        }
+
+        private GExpression LiftedLocalFunctionReference(
+            INamedTypeSymbol owner,
+            string name,
+            bool isStatic,
+            Location location)
+        {
+            if (isStatic && owner != null)
+            {
+                return new MemberAccessExpression(
+                    this.StaticQualifierReceiver(owner, location),
+                    name);
+            }
+
+            return isStatic
+                ? new IdentifierExpression(name)
+                : new MemberAccessExpression(new ThisExpression(), name);
         }
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)

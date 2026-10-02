@@ -433,6 +433,47 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_ReservesNameAgainstLaterTypeAlias()
+        {
+            string printed = Translate("""
+                namespace Demo;
+
+                public class StringBuilder
+                {
+                }
+
+                public class C
+                {
+                    private static int TextStringBuilder(int value) => -value;
+
+                    public int Run(int value)
+                    {
+                        return TextStringBuilder(value);
+                        static int TextStringBuilder(int n) =>
+                            n == 0 ? 7 : Other<int>(n - 1);
+                        static int Other<T>(int n) => TextStringBuilder(n);
+                    }
+
+                    public string Later()
+                    {
+                        var builder = new System.Text.StringBuilder();
+                        return builder.ToString();
+                    }
+                }
+                """);
+
+            Assert.Contains("func TextStringBuilder_2(", printed, StringComparison.Ordinal);
+            Assert.Contains(
+                "import TextStringBuilder_3 = System.Text.StringBuilder",
+                printed,
+                StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run(2))",
+                "7");
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReusesNameAcrossUnrelatedTypes()
         {
             string printed = Translate("""
@@ -523,7 +564,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
-            Assert.Contains("return Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
+            Assert.Contains("return C.Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
@@ -575,7 +616,10 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
-            Assert.Contains("return Helper_3(value) + Helper_2(value)", printed, StringComparison.Ordinal);
+            Assert.Contains(
+                "return C.Helper_3(value) + Helper_2(value)",
+                printed,
+                StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 
@@ -597,7 +641,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
-            Assert.Contains("return Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
+            Assert.Contains("return C.Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 

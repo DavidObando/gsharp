@@ -137,11 +137,10 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
-        public void LiftedStaticLocalFunction_SameTypeCall_EmitsBare()
+        public void LiftedStaticLocalFunction_SameTypeCall_UsesExplicitReceiver()
         {
-            // Issue #4302: a mixed generic/non-generic recursion group keeps
-            // the readable member-lift fallback, and same-type calls remain
-            // bare rather than acquiring a redundant owner qualification.
+            // Issue #4302: an explicit receiver prevents synthesized locals
+            // (such as recursive-pattern carriers) from shadowing the helper.
             string printed = Translate("""
                 public class Labels
                 {
@@ -163,8 +162,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
-            Assert.Contains("return NewLabel(value)", printed, StringComparison.Ordinal);
-            Assert.DoesNotContain("Labels.NewLabel(value)", printed, StringComparison.Ordinal);
+            Assert.Contains("return Labels.NewLabel(value)", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 
@@ -186,6 +184,29 @@ namespace Cs2Gs.Tests
 
             Assert.DoesNotContain("Box[T].Total", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("Box.Total", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
+        public void GenericOwner_LiftedHelper_UsesConstructedOwner()
+        {
+            string printed = Translate("""
+                public class Box<T>
+                {
+                    public static int Run(int value)
+                    {
+                        return Helper(value);
+
+                        static int Helper(int i) =>
+                            i == 0 ? 0 : Other<int>(i - 1);
+
+                        static int Other<U>(int i) => Helper(i);
+                    }
+                }
+                """);
+
+            Assert.Contains("return Box[T].Helper(value)", printed, StringComparison.Ordinal);
+            Assert.Contains("Box[T].Other[int32](", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 

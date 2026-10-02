@@ -134,6 +134,10 @@ public static class MeterExtensions
         Assert.Contains("func Other_2[", combined, StringComparison.Ordinal);
         Assert.DoesNotContain("Extensions.", combined, StringComparison.Ordinal);
         Assert.DoesNotContain("class Extensions", combined, StringComparison.Ordinal);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
     }
 
     [Fact]
