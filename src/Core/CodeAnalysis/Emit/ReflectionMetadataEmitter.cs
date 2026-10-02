@@ -3350,6 +3350,55 @@ internal sealed class ReflectionMetadataEmitter
         return new PackageMethodPlan(packages, functionsByPackage, entryPointPackage, packageCtorRows, entryHandle);
     }
 
+    /// <summary>
+    /// Issue #4676: the accessibility of a package's synthesized <c>&lt;Program&gt;</c>
+    /// host type. The host is how a package exposes its top-level functions and
+    /// globals to other assemblies, so it stays <c>public</c> whenever it carries
+    /// a member another assembly can reach, and for an executable's entry-point
+    /// package. A LIBRARY package that hosts no such member (every GSharp.Core
+    /// namespace whose code is all types, say) is a compiler-generated detail,
+    /// like the C# compiler's own generated types, and is emitted NotPublic so it
+    /// is not part of the assembly's API (reflection-based tooling such as an
+    /// analyzer-target enumeration no longer sees one <c>&lt;Program&gt;</c> per
+    /// namespace). An assembly granted InternalsVisibleTo still reaches the
+    /// host's internal members, since it can see the NotPublic type too.
+    /// </summary>
+    /// <param name="pkg">The package whose host is being emitted.</param>
+    /// <param name="hasEntryPoint">Whether the compilation has an entry point (an executable).</param>
+    /// <param name="packageMethods">The planned per-package functions.</param>
+    /// <param name="globals">The global variables hosted on THIS package's <c>&lt;Program&gt;</c> (default when it hosts none).</param>
+    /// <returns>The type visibility flag for the host's TypeDef.</returns>
+    private static TypeAttributes ProgramHostAccessibility(
+        PackageSymbol pkg,
+        bool hasEntryPoint,
+        PackageMethodPlan packageMethods,
+        ImmutableArray<GlobalVariableSymbol> globals)
+    {
+        if (hasEntryPoint)
+        {
+            return TypeAttributes.Public;
+        }
+
+        static bool IsReachableFromOtherAssemblies(Accessibility accessibility)
+            => accessibility is Accessibility.Public or Accessibility.Protected;
+
+        if (packageMethods.FunctionsByPackage.TryGetValue(pkg, out var functions)
+            && functions.Any(function => IsReachableFromOtherAssemblies(function.Accessibility)))
+        {
+            return TypeAttributes.Public;
+        }
+
+        // Globals live on ONE host (the caller passes them only for that
+        // package); a reachable one keeps the host public, so a REPL submission
+        // or library that publishes a variable keeps its host.
+        if (!globals.IsDefaultOrEmpty && globals.Any(global => IsReachableFromOtherAssemblies(global.Accessibility)))
+        {
+            return TypeAttributes.Public;
+        }
+
+        return TypeAttributes.NotPublic;
+    }
+
     private Dictionary<PackageSymbol, TypeDefinitionHandle> EmitProgramAndStateMachineTypeDefinitions(
         AggregateTypeLayout aggregateTypes,
         FieldRowPlan fieldRows,
@@ -3389,7 +3438,8 @@ internal sealed class ReflectionMetadataEmitter
             this.functions.EmitGlobalFieldDefs(globals);
 
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
-                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
+                attributes: TypeAttributes.Class | ProgramHostAccessibility(globalsHostPkg, this.emitCtx.Program.EntryPoint is not null, packageMethods, globals)
+                    | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                     | TypeAttributes.Sealed | TypeAttributes.Abstract,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(globalsHostPkg.Name),
@@ -3413,7 +3463,8 @@ internal sealed class ReflectionMetadataEmitter
             // range so the monotone <Program> fieldList constraint holds.
             var fieldListRow = programFirstFieldRow + globals.Length;
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
-                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
+                attributes: TypeAttributes.Class | ProgramHostAccessibility(pkg, this.emitCtx.Program.EntryPoint is not null, packageMethods, default)
+                    | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                     | TypeAttributes.Sealed | TypeAttributes.Abstract,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(pkg.Name),
