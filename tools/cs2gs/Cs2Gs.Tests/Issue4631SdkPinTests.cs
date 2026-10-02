@@ -120,6 +120,7 @@ public sealed class Issue4631SdkPinTests : IDisposable
 
         Assert.Throws<InvalidOperationException>(() => SdkPin.WriteGlobalJsonPin(this.root, PinnedVersion));
         Assert.Equal("""{ "msbuild-sdks": "Other.Sdk/1.0.0" }""", File.ReadAllText(path));
+        Assert.Throws<InvalidOperationException>(() => SdkPin.ReadGlobalJsonPin(this.root));
     }
 
     /// <summary>A malformed pin in a tree is an error, not "no pin".</summary>

@@ -145,9 +145,17 @@ internal static class SdkPin
         }
 
         JsonObject document = ParseGlobalJson(path);
-        if (document[MsbuildSdksProperty] is not JsonObject sdks)
+        JsonNode? node = document[MsbuildSdksProperty];
+        if (node is null)
         {
             return null;
+        }
+
+        if (node is not JsonObject sdks)
+        {
+            // Malformed configuration is an error, never "no pin".
+            throw new InvalidOperationException(
+                "'" + path + "' has an msbuild-sdks value that is not a JSON object.");
         }
 
         foreach (KeyValuePair<string, JsonNode> entry in sdks)
