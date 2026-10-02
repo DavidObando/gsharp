@@ -325,6 +325,13 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                         Value = value;
                     }
 
+                    public MarkerAttribute(Type[] types)
+                    {
+                        Types = types;
+                    }
+
+                    public Type[] Types { get; }
+
                     public Type Type { get; }
 
                     public object Value { get; }
@@ -345,6 +352,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     [Marker(typeof(Box))]
                     private static int Tagged(this string value) => 1;
 
+                    [Marker(typeof(Box))]
+                    public static int PublicTagged(this string value) => 4;
+
+                    [Marker((Type[])null)]
+                    private static int NullArray(this string value) => 5;
+
                     [Marker(Mode.Fast)]
                     private static int Moded(this string value) => 2;
 
@@ -360,7 +373,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static string Echo(this string value) => value;
 
                     public static int Run(string value) =>
-                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested();
+                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.NullArray();
                 }
             }
             """;
@@ -377,6 +390,24 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == name);
             Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == name);
         }
+
+        // A PUBLIC extension whose only mention of the private type is an attribute argument is
+        // legal C# and API: it keeps the helper and its forwarding companion, and the
+        // companion (top level, where `Box` is out of scope) carries no copy of the attribute.
+        MethodDeclaration publicHelper = Assert.Single(
+            shared.OfType<MethodDeclaration>(),
+            method => method.Name == "PublicTagged");
+        Assert.NotEmpty(publicHelper.Attributes);
+        MethodDeclaration publicCompanion = Assert.Single(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "PublicTagged");
+        Assert.Empty(publicCompanion.Attributes);
+
+        // A null array argument (`[Marker(null)]` for a `Type[]` parameter) names no type and
+        // must not break the check (its `Values` is the default array): the method is lifted.
+        Assert.Contains(
+            Assert.Single(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "NullArray").Attributes,
+            attribute => attribute.Name == "ExtensionOwner");
 
         MethodDeclaration echo = Assert.Single(
             unit.Members.OfType<MethodDeclaration>(),

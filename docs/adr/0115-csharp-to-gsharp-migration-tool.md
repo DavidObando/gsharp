@@ -181,7 +181,9 @@ and no forwarding companion lands on the package's public `<Program>`. A
 second case keeps the scheme: an extension whose signature or attributes name one of
 the owner's private nested types (gsc binds a function's receiver, parameter and
 return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
-function cannot name the private type; such a method cannot be public API). The
+function cannot name the private type; a method whose signature names one cannot be
+public API, and one that only has an attribute naming it keeps the in-owner helper and
+its public forwarding companion, which carries no copy of that attribute). The
 description that follows applies to those two cases only.
 
 Issue #3413 adds one ownership-preserving exception: when the declaring static

@@ -1007,8 +1007,10 @@ public sealed partial class CSharpToGSharpTranslator
         // the owner's private nested types: gsc binds a function's receiver, parameter and
         // return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
         // top-level function cannot name (or access) the private type, while the in-owner
-        // helper can. Such a method cannot be public API (a public method may not expose a
-        // private type in its signature), so nothing observable is lost.
+        // helper can. A method whose SIGNATURE names such a type cannot be public API (CS0050);
+        // one that only has an attribute naming it can, and then keeps the helper plus its
+        // public forwarding companion, which carries no copy of the attribute (see
+        // CompanionAttributesNamePrivateNestedType).
         return original?.IsExtensionMethod == true &&
             HasPrivateNestedAggregate(original.ContainingType) &&
             (TryGetOwnedExtensionReceiver(original, out _) || SignatureNamesPrivateNestedType(original));
@@ -1098,6 +1100,13 @@ public sealed partial class CSharpToGSharpTranslator
             case TypedConstantKind.Type:
                 return constant.Value is ITypeSymbol type && NamesPrivateNestedType(type, owner);
             case TypedConstantKind.Array:
+                // A null array argument (`[Marker(null)]` for a `Type[]` parameter) is an
+                // Array constant whose `Values` is the default array, which cannot be enumerated.
+                if (constant.Values.IsDefaultOrEmpty)
+                {
+                    return false;
+                }
+
                 foreach (TypedConstant element in constant.Values)
                 {
                     if (ConstantNamesPrivateNestedType(element, owner))
