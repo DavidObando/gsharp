@@ -48,7 +48,7 @@ public sealed partial class Chan<T>
             {
                 // `ok` is true, so the three-state encoding (ADR-0174 D3)
                 // guarantees a delivered value rather than the zero value.
-                item = value!;
+                item = new ReceiveResult<T>(value, ok).Value;
                 return true;
             }
 
@@ -66,7 +66,7 @@ public sealed partial class Chan<T>
 
                 // Guarded by `result.Ok`: the value was delivered (ADR-0174 D3).
                 return result.Ok
-                    ? new ValueTask<T>(result.Value!)
+                    ? new ValueTask<T>(result.Value)
                     : ValueTask.FromException<T>(new ChannelClosedException());
             }
 
@@ -86,7 +86,7 @@ public sealed partial class Chan<T>
             }
 
             // Past the `!result.Ok` throw above, so a value was delivered.
-            return result.Value!;
+            return result.Value;
         }
     }
 }
