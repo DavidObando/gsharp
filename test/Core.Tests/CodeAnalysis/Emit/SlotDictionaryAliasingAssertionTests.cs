@@ -101,7 +101,7 @@ Console.WriteLine(p.X + p.Y + z.X + z.Y + v + miss)
     }
 
     private static string IfGuard(string key) =>
-        $@"\bif\s*(?:\(\s*receiverSpillSlots\.ContainsKey\({key}\)\s*\)|receiverSpillSlots\.ContainsKey\({key}\)\s*\{{)";
+        $@"\bif\s*(?:\(\s*receiverSpillSlots\.ContainsKey\(\s*{key}\s*\)\s*\)|receiverSpillSlots\.ContainsKey\(\s*{key}\s*\)\s*\{{)";
 
     // Issue #4656: the tree's own language, and an empty scan throws.
     private static IReadOnlyList<string> LocateEmitterSources() =>

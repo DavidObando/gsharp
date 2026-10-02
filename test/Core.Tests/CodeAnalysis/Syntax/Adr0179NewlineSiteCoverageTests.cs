@@ -74,9 +74,17 @@ public sealed class Adr0179NewlineSiteCoverageTests
                 continue;
             }
 
-            bool negated = invocation.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax prefix
+            // `!(F())`: the negation may sit outside parentheses.
+            Microsoft.CodeAnalysis.SyntaxNode outer = invocation;
+            while (outer.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax)
+            {
+                outer = outer.Parent;
+            }
+
+            bool negated = outer.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax prefix
                 && prefix.OperatorToken.ValueText == "!";
-            string arguments = string.Join(", ", invocation.ArgumentList.Arguments.Select(argument => Collapse(argument.ToString())));
+            string arguments = string.Join(", ", invocation.ArgumentList.Arguments.Select(argument =>
+                FromTokens(argument.DescendantTokens().Select(token => (token.Text, token.SpanStart)).ToList(), argument.SyntaxTree.GetText().ToString())));
             yield return (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
         }
     }
@@ -92,18 +100,65 @@ public sealed class Adr0179NewlineSiteCoverageTests
                 continue;
             }
 
-            // `!a.b.F()` negates the whole member access whose right part is the call.
+            // `!a.b.F()` negates the whole member access whose right part is the
+            // call; `!(F())` puts parentheses in between.
             SyntaxNode outer = call;
-            while (outer.Parent is AccessorExpressionSyntax access && access.RightPart == outer)
+            while ((outer.Parent is AccessorExpressionSyntax access && access.RightPart == outer)
+                || outer.Parent is ParenthesizedExpressionSyntax)
             {
-                outer = access;
+                outer = outer.Parent;
             }
 
             bool negated = outer.Parent is UnaryExpressionSyntax unary && unary.OperatorToken.Text == "!";
-            string arguments = string.Join(", ", call.Arguments.Select(argument => Collapse(tree.Text.ToString(argument.Span))));
+            string source = tree.Text.ToString();
+            string arguments = string.Join(", ", call.Arguments.Select(argument =>
+                FromTokens(Tokens(argument).Select(token => (token.Text, token.Span.Start)).ToList(), source)));
             yield return (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
         }
     }
 
-    private static string Collapse(string text) => Regex.Replace(text.Trim(), @"\s+", " ");
+    // An argument's text rebuilt from its tokens, the same way in both
+    // languages: a gap of whitespace between two tokens becomes one space, a gap
+    // holding a comment also becomes one space, and no gap stays none. Comments,
+    // line breaks and indentation therefore never enter the key.
+    private static string FromTokens(IReadOnlyList<(string Text, int Start)> tokens, string source)
+    {
+        var text = new System.Text.StringBuilder();
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            if (i > 0)
+            {
+                int previousEnd = tokens[i - 1].Start + tokens[i - 1].Text.Length;
+                if (tokens[i].Start > previousEnd)
+                {
+                    text.Append(' ');
+                }
+            }
+
+            text.Append(tokens[i].Text);
+        }
+
+        return text.ToString();
+    }
+
+    private static IEnumerable<SyntaxToken> Tokens(SyntaxNode node)
+    {
+        foreach (var child in node.GetChildren())
+        {
+            if (child is SyntaxToken token)
+            {
+                if (token.Text.Length > 0)
+                {
+                    yield return token;
+                }
+            }
+            else
+            {
+                foreach (var nested in Tokens(child))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
 }

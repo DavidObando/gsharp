@@ -111,7 +111,7 @@ internal static class TestSource
     /// <param name="relativePathWithoutExtension">For example <c>src/Core/CodeAnalysis/Emit/SlotPlanner</c>.</param>
     /// <returns>The path in the tree's language.</returns>
     internal static string SourcePath(string relativePathWithoutExtension) =>
-        Path.Combine(Root, relativePathWithoutExtension.Replace('/', Path.DirectorySeparatorChar) + SourceExtension);
+        Path.Combine(Root, relativePathWithoutExtension.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar) + SourceExtension);
 
     /// <summary>
     /// Every compiler source file under the given repository-relative
@@ -138,8 +138,10 @@ internal static class TestSource
     {
         string root = Root;
         string extension = SourceExtension;
-        // A set: overlapping directories must not count a file twice.
-        var files = new HashSet<string>(StringComparer.Ordinal);
+        // A set: overlapping directories must not count a file twice, compared
+        // the way the platform's file system compares paths.
+        var files = new HashSet<string>(
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         foreach (string relative in relativeDirectories)
         {
             string directory = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
@@ -150,9 +152,7 @@ internal static class TestSource
                     "directory must be updated, not allowed to scan nothing.");
             }
 
-            files.UnionWith(EnumerateSkippingBuildOutput(directory, stemPattern + extension, option)
-                .Select(Path.GetFullPath)
-                .Where(path => !IsBuildOutput(root, path)));
+            files.UnionWith(EnumerateSkippingBuildOutput(directory, stemPattern + extension, option));
         }
 
         if (files.Count == 0)
@@ -230,8 +230,6 @@ internal static class TestSource
         return snapshot;
     }
 
-    // Judged on the path BELOW the root: the root itself may sit under a bin/
-    // (a test's temporary tree inside its output directory, for one).
     // Walks the tree without descending into obj/ or bin/, which can be far
     // larger than the sources they sit beside.
     private static IEnumerable<string> EnumerateSkippingBuildOutput(string directory, string pattern, SearchOption option)
@@ -261,12 +259,6 @@ internal static class TestSource
             }
         }
     }
-
-    private static bool IsBuildOutput(string root, string path) =>
-        Path.GetRelativePath(root, path)
-            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Any(segment => string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase));
 
     private static bool HasSolution(string directory) =>
         File.Exists(Path.Combine(directory, "GSharp.sln")) || File.Exists(Path.Combine(directory, "GSharp.slnx"));
