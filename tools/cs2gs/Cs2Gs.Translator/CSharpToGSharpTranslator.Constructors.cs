@@ -1982,18 +1982,31 @@ public sealed partial class CSharpToGSharpTranslator
 
         private string AllocateLiftedLocalFunctionName(IMethodSymbol localFunction, string localName)
         {
+            INamedTypeSymbol emittedOwner =
+                this.state.CurrentEmittedAggregate ?? localFunction.ContainingType;
             var occupied = new HashSet<string>(StringComparer.Ordinal);
-            for (INamedTypeSymbol type = localFunction.ContainingType; type != null; type = type.BaseType)
+            for (INamedTypeSymbol type = emittedOwner; type != null; type = type.BaseType)
             {
                 occupied.Add(this.EmittedName(type, type.Name));
                 occupied.UnionWith(type.GetMembers().Select(member => this.EmittedName(member, member.Name)));
             }
 
-            if (localFunction.ContainingType != null)
+            if (emittedOwner != null)
             {
-                occupied.UnionWith(localFunction.ContainingType.AllInterfaces
+                occupied.UnionWith(emittedOwner.AllInterfaces
                     .SelectMany(type => type.GetMembers())
                     .Select(member => this.EmittedName(member, member.Name)));
+                if (this.ownedExtensions.TryGetMethods(
+                    emittedOwner,
+                    out IReadOnlyList<MethodDeclarationSyntax> ownedExtensionMethods))
+                {
+                    occupied.UnionWith(
+                        ownedExtensionMethods
+                            .Where(this.CanLowerOwnedExtension)
+                            .Select(this.context.GetDeclaredSymbol)
+                            .OfType<IMethodSymbol>()
+                            .Select(method => this.EmittedName(method, method.Name)));
+                }
             }
 
             foreach (INamedTypeSymbol staticUsingTarget in
@@ -2011,7 +2024,7 @@ public sealed partial class CSharpToGSharpTranslator
             occupied.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
                 ?? Enumerable.Empty<string>());
             occupied.UnionWith(
-                localFunction.ContainingType.InstanceConstructors
+                emittedOwner.InstanceConstructors
                     .SelectMany(constructor => constructor.Parameters)
                     .Where(parameter =>
                         parameter.DeclaringSyntaxReferences.Any(reference =>
@@ -2038,7 +2051,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             var containingTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-            for (INamedTypeSymbol type = localFunction.ContainingType; type != null; type = type.BaseType)
+            for (INamedTypeSymbol type = emittedOwner; type != null; type = type.BaseType)
             {
                 containingTypes.Add(type);
             }
@@ -2063,6 +2076,7 @@ public sealed partial class CSharpToGSharpTranslator
                     static _ => new LiftedLocalFunctionNameAllocator())
                 .Allocate(
                     localFunction,
+                    emittedOwner,
                     occupied,
                     localName,
                     candidate => this.typeMapper.ClaimsDocumentScopeName(candidate, this.context));

@@ -59,12 +59,14 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction.OriginalDefinition, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
+                INamedTypeSymbol emittedOwner = this.state.CurrentEmittedAggregate ?? containingType;
+
                 // Issue #3471: the lifted helper lands in the containing
                 // aggregate's `shared` block, so a same-type site names it bare.
-                return this.IsBareSiblingStaticScope(containingType, liftedName, identifier)
+                return this.IsBareSiblingStaticScope(emittedOwner, liftedName, identifier)
                     ? new IdentifierExpression(liftedName)
                     : new MemberAccessExpression(
-                        this.StaticQualifierReceiver(containingType, identifier.GetLocation()),
+                        this.StaticQualifierReceiver(emittedOwner, identifier.GetLocation()),
                         liftedName);
             }
 
@@ -259,9 +261,15 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (node is MethodDeclarationSyntax method
                     && this.context.GetDeclaredSymbol(method) is IMethodSymbol
-                        { IsExtensionMethod: true })
+                        { IsExtensionMethod: true } extensionMethod)
                 {
-                    return false;
+                    return this.state.CurrentEmittedAggregate is { } emittedAggregate
+                        && SymbolEqualityComparer.Default.Equals(
+                            emittedAggregate.OriginalDefinition,
+                            owner.OriginalDefinition)
+                        && !SymbolEqualityComparer.Default.Equals(
+                            extensionMethod.ContainingType.OriginalDefinition,
+                            owner.OriginalDefinition);
                 }
 
                 if (node is TypeDeclarationSyntax typeDeclaration)
