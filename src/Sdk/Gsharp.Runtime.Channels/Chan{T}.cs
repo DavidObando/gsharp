@@ -216,6 +216,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     public ValueTask<T> ReceiveValueAsync(CancellationToken cancellationToken = default)
     {
         var outcome = ReceiveOrPark(cancellationToken, out var value, out var ok, out var node);
+        var delivered = new ReceiveResult<T>(value, ok);
         return outcome switch
         {
             // The zero value is the documented closed-channel result (D3), so a
@@ -225,7 +226,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
 
             // Ready means ReceiveOrPark took a value; `ok` reports whether the
             // channel delivered one, and this shape deliberately discards it.
-            ReceiveStart.Ready => new ValueTask<T>(new ReceiveResult<T>(value, ok).Element),
+            ReceiveStart.Ready => new ValueTask<T>(delivered.Element),
 
             // Parked is the only remaining outcome, and ReceiveOrPark assigns
             // `node` on exactly that path.
@@ -240,6 +241,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     public ValueTask<(T Value, bool Ok)> ReceiveTupleAsync(CancellationToken cancellationToken = default)
     {
         var outcome = ReceiveOrPark(cancellationToken, out var value, out var ok, out var node);
+        var delivered = new ReceiveResult<T>(value, ok);
         return outcome switch
         {
             // The `false` IS the report that the value is meaningless (D3).
@@ -247,7 +249,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
             ReceiveStart.Cancelled => ValueTask.FromCanceled<(T Value, bool Ok)>(cancellationToken),
 
             // Ready means ReceiveOrPark took a value; `ok` travels beside it.
-            ReceiveStart.Ready => new ValueTask<(T Value, bool Ok)>((new ReceiveResult<T>(value, ok).Element, ok)),
+            ReceiveStart.Ready => new ValueTask<(T Value, bool Ok)>((delivered.Element, ok)),
 
             // Parked is the only remaining outcome, and ReceiveOrPark assigns
             // `node` on exactly that path.

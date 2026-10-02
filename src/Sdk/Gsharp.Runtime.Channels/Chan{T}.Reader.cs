@@ -48,7 +48,8 @@ public sealed partial class Chan<T>
             {
                 // `ok` is true, so the three-state encoding (ADR-0174 D3)
                 // guarantees a delivered value rather than the zero value.
-                item = new ReceiveResult<T>(value, ok).Element;
+                var delivered = new ReceiveResult<T>(value, ok);
+                item = delivered.Element;
                 return true;
             }
 
