@@ -123,6 +123,19 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => SdkPin.ReadGlobalJsonPin(this.root));
     }
 
+    /// <summary>A malformed per-project pin names the project instead of failing deep inside resolution.</summary>
+    [Fact]
+    public void ReadProjectPin_RejectsAMalformedVersion_NamingTheProject()
+    {
+        string project = Path.Combine(this.root, "Broken.gsproj");
+        File.WriteAllText(project, "<Project Sdk=\"Gsharp.NET.Sdk/latest\" />");
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => SdkPin.ReadProjectPin(new[] { project }));
+        Assert.Contains("Broken.gsproj", error.Message, StringComparison.Ordinal);
+        Assert.Contains("'latest'", error.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>A malformed pin in a tree is an error, not "no pin".</summary>
     [Fact]
     public void ReadGlobalJsonPin_RejectsAMalformedVersion()

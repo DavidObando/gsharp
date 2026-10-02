@@ -113,7 +113,14 @@ internal static class SdkPin
             string? sdk = XDocument.Load(path).Root?.Attribute("Sdk")?.Value;
             if (sdk is not null && sdk.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase))
             {
-                versions.Add(sdk.Substring(PackageId.Length + 1));
+                string version = sdk.Substring(PackageId.Length + 1);
+                if (!IsValidVersion(version))
+                {
+                    throw new InvalidOperationException(
+                        "'" + path + "' pins " + PackageId + " to '" + version + "', which is not a valid SDK version.");
+                }
+
+                versions.Add(version);
             }
         }
 
