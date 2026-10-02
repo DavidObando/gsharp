@@ -276,6 +276,12 @@ internal sealed class DocumentTranslationState
     public HashSet<Cs2Gs.CodeModel.Ast.GExpression> GSharpNullablePatternReceivers { get; } =
         new HashSet<Cs2Gs.CodeModel.Ast.GExpression>(ReferenceEqualityComparer.Instance);
 
+    // Issue #4612: for each collection-expression element, the element (or
+    // Add) type CoerceCollectionElement bound it to, so a bridge nested inside
+    // the element (a forgiven `x!`) reports the slot the store really uses.
+    public Dictionary<SyntaxNode, ITypeSymbol> CollectionElementSlots { get; } =
+        new Dictionary<SyntaxNode, ITypeSymbol>();
+
     // Issue #4356: `var` locals a nested nullable pattern member is STORED in
     // (so a designation's binding can read it after the test). A binding is
     // materialized after the test's block expression has finished, outside
