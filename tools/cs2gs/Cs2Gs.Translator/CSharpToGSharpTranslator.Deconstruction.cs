@@ -188,7 +188,7 @@ public sealed partial class CSharpToGSharpTranslator
                     this.state.PendingSpillPrologue = outerSpillPrologue;
                 }
 
-                string temp = $"__spill{this.state.SpillCounter++}";
+                string temp = this.NewSpillName();
                 statements.Add(new LocalDeclarationStatement(
                     BindingKind.Let,
                     temp,
@@ -702,7 +702,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression value,
             List<GStatement> statements)
         {
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             statements.Add(new LocalDeclarationStatement(
                 BindingKind.Let,
                 temp,
@@ -1610,7 +1610,7 @@ public sealed partial class CSharpToGSharpTranslator
                 spillType = MakeNullable(spillType);
             }
 
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             var reference = new IdentifierExpression(temp);
             this.state.ShortCircuitSpillDeclarations.Add(
                 new LocalDeclarationStatement(
@@ -1708,9 +1708,21 @@ public sealed partial class CSharpToGSharpTranslator
                 return operand;
             }
 
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             prologue.Add(new LocalDeclarationStatement(BindingKind.Let, temp, type: null, initializer: operand));
             return new IdentifierExpression(temp);
+        }
+
+        private string NewSpillName()
+        {
+            string candidate;
+            do
+            {
+                candidate = $"__spill{this.state.SpillCounter++}";
+            }
+            while (!this.TryClaimSynthesizedLocalName(candidate));
+
+            return candidate;
         }
 
         // Rebuilds an assignment TARGET (a link's left-hand side in a chained

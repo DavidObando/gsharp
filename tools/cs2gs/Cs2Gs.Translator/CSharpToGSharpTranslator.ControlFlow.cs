@@ -829,7 +829,7 @@ public sealed partial class CSharpToGSharpTranslator
             LocalDeclarationStatement hoist = null;
             if (!IsTrivialOperand(receiver))
             {
-                string spillName = $"__spill{this.state.SpillCounter++}";
+                string spillName = this.NewSpillName();
                 scrutinee = new IdentifierExpression(spillName);
                 hoist = new LocalDeclarationStatement(
                     BindingKind.Let,
@@ -1357,7 +1357,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (!IsTrivialOperand(receiver))
             {
-                string spillName = $"__spill{this.state.SpillCounter++}";
+                string spillName = this.NewSpillName();
                 statements.Add(new LocalDeclarationStatement(
                     BindingKind.Let,
                     spillName,
@@ -2205,11 +2205,7 @@ public sealed partial class CSharpToGSharpTranslator
                         symbol)
                         || this.MutatingStructCallWritesSymbol(invocation, member, symbol) => true,
                 RefExpressionSyntax refOf
-                    when refOf.Expression is IdentifierNameSyntax
-                        && this.BindsTo(refOf.Expression, symbol) => true,
-                RefExpressionSyntax refOf
-                    when refOf.Expression is MemberAccessExpressionSyntax
-                        && this.WritesStorageOf(refOf.Expression, symbol) => true,
+                    when this.WritesStorageOf(refOf.Expression, symbol) => true,
                 _ => false,
             };
 

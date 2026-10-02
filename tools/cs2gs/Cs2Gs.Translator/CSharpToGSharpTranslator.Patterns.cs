@@ -1425,7 +1425,7 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns><c>{ let t = member; test(t) }</c>.</returns>
         private GExpression BindPatternMemberOnce(GExpression member, Func<GExpression, GExpression> test)
         {
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             var local = new IdentifierExpression(temp);
             if (this.IsGSharpNullablePatternReceiver(member))
             {
@@ -1462,7 +1462,7 @@ public sealed partial class CSharpToGSharpTranslator
                 storageType = MakeNullable(storageType);
             }
 
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             var local = new IdentifierExpression(temp);
             this.state.StoredPatternCaptures.Add(local);
             if (gsharpNullable)

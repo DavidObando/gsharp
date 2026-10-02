@@ -112,10 +112,7 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                INamedTypeSymbol owner = this.state.CurrentEmittedAggregate ?? symbol.ContainingType;
-                if (!LiftedLocalFunctionNameAllocator
-                    .For(this.context.Compilation)
-                    .TryClaimLocalName(owner, capturedName))
+                if (!this.TryClaimSynthesizedLocalName(capturedName, ifStatement))
                 {
                     continue;
                 }

@@ -1239,7 +1239,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (this.state.PendingSpillPrologue != null)
             {
-                string temp = $"__spill{this.state.SpillCounter++}";
+                string temp = this.NewSpillName();
                 this.state.PendingSpillPrologue.Add(
                     new LocalDeclarationStatement(BindingKind.Let, temp, initializer: receiver));
                 return new IdentifierExpression(temp);
@@ -1730,7 +1730,7 @@ public sealed partial class CSharpToGSharpTranslator
                         and not IParameterReferenceOperation
                         and not IFieldReferenceOperation
                         and not IArrayElementReferenceOperation;
-                string temp = $"__spill{this.state.SpillCounter++}";
+                string temp = this.NewSpillName();
                 this.state.PendingSpillPrologue.Add(new LocalDeclarationStatement(
                     BindingKind.Var,
                     temp,
@@ -1765,7 +1765,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (argument.Value is IConversionOperation or IDelegateCreationOperation
                 || value is DefaultValueExpression)
             {
-                string temp = $"__spill{this.state.SpillCounter++}";
+                string temp = this.NewSpillName();
                 this.state.PendingSpillPrologue.Add(new LocalDeclarationStatement(
                     BindingKind.Let,
                     temp,

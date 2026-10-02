@@ -2011,6 +2011,16 @@ public sealed partial class CSharpToGSharpTranslator
             return allocated;
         }
 
+        private bool TryClaimSynthesizedLocalName(string name, SyntaxNode site = null)
+        {
+            INamedTypeSymbol owner = this.state.CurrentEmittedAggregate
+                ?? this.context.SemanticModel.GetEnclosingSymbol(
+                    site?.SpanStart ?? this.state.CurrentBodyScope?.SpanStart ?? 0)?.ContainingType;
+            return LiftedLocalFunctionNameAllocator
+                .For(this.context.Compilation)
+                .TryClaimLocalName(owner, name);
+        }
+
         // Issue #4302: the names a lifted helper emitted into `aggregate`
         // could collide with that are not visible as source identifiers:
         // metadata members of the aggregate's (and the Roslyn containing
@@ -2989,7 +2999,9 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
                 }
 
-                foreach (IdentifierNameSyntax identifier in candidate.Syntax.DescendantNodes()
+                foreach (IdentifierNameSyntax identifier in candidate.Syntax.DescendantNodes(
+                    node => !(node is InvocationExpressionSyntax
+                        && this.context.SemanticModel.GetOperation(node) is INameOfOperation))
                     .OfType<IdentifierNameSyntax>())
                 {
                     ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;

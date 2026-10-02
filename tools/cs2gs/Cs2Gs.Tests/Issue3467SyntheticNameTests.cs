@@ -663,6 +663,86 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void MutablePatternCapture_ReservesAgainstLiftedHelper()
+        {
+            string printed = Translate("""
+                using System;
+
+                public class C
+                {
+                    public int Run(Func<int, int> value)
+                    {
+                        switch (value)
+                        {
+                            case var callback:
+                                callback = n => 100 + n;
+                                return callback(0) + __pattern0(0);
+                                static int __pattern0(int n) =>
+                                    n == 0 ? 7 : Other<int>(n - 1);
+                                static int Other<T>(int n) => __pattern0(n);
+                        }
+                    }
+                }
+                """);
+
+            Assert.Contains("__pattern1", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run((value int32) -> value))",
+                "107");
+        }
+
+        [Fact]
+        public void SpillLocal_ReservesAgainstLiftedHelper()
+        {
+            string printed = Translate("""
+                public class C
+                {
+                    public int Run()
+                    {
+                        int total = 0;
+                        int x = 5;
+
+                        int MutateX()
+                        {
+                            x = 99;
+                            return 1;
+                        }
+
+                        void Add(int a = 1, int b = 2, int c = 3)
+                        {
+                            total = (a * 100) + (b * 10) + c;
+                            if (a > 100)
+                            {
+                                AddPatternSwitch(a - 1);
+                            }
+                        }
+
+                        void AddPatternSwitch(int depth)
+                        {
+                            if (depth > 0)
+                            {
+                                Add(depth - 1);
+                            }
+                        }
+
+                        Add(c: x, a: MutateX());
+                        return total + __spill0(0);
+                        static int __spill0(int n) =>
+                            n == 0 ? 7 : Other<int>(n - 1);
+                        static int Other<T>(int n) => __spill0(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("let __spill1 = x", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run())",
+                "132");
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReservesNameAgainstLaterTypeAlias()
         {
             string printed = Translate("""

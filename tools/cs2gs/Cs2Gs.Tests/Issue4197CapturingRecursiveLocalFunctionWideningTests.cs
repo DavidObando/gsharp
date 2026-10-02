@@ -479,6 +479,7 @@ namespace Demo
     [InlineData("x.N = 42;")]
     [InlineData("x.Set(42);")]
     [InlineData("x[0] = 42;")]
+    [InlineData("ref int alias = ref x[0]; alias = 42;")]
     public void CrossSectionLift_LambdaWriteThroughStructStorage_KeepsSharedStorage(string write)
     {
         // Issue #4302: writing a field or indexer of, or calling a mutating
@@ -489,7 +490,8 @@ namespace Demo
                 public struct S {
                     public int N;
                     public void Set(int value) { N = value; }
-                    public int this[int i] { get => N; set { N = value; } }
+                    [System.Diagnostics.CodeAnalysis.UnscopedRef]
+                    public ref int this[int i] => ref N;
                 }
 
                 public class C {
@@ -544,6 +546,30 @@ namespace Demo
             printed,
             "Console.WriteLine(C.Run[int32]())",
             "T");
+    }
+
+    [Fact]
+    public void GenericRecursiveGroup_NameofOuterValue_IsNotACapture()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        return First<T>(value, depth);
+                        static int First<U>(T item, int n) =>
+                            n == 0 ? nameof(value).Length : Second<U>(item, n - 1);
+                        static int Second<V>(T item, int n) =>
+                            n == 0 ? nameof(value).Length : First<V>(item, n - 1);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("// unsupported:", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run[string](\"x\", 1))",
+            "5");
     }
 
     [Fact]

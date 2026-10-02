@@ -2657,7 +2657,8 @@ public sealed partial class CSharpToGSharpTranslator
                 || rootPattern.DescendantNodesAndSelf()
                     .OfType<SingleVariableDesignationSyntax>()
                     .Any(designation =>
-                        this.EmittedName(designation, designation.Identifier) == candidate));
+                        this.EmittedName(designation, designation.Identifier) == candidate)
+                || !this.TryClaimSynthesizedLocalName(candidate, pattern));
 
             usedDesignators.Add(candidate);
             return candidate;
