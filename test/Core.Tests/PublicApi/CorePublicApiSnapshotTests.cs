@@ -95,6 +95,11 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("  field public const String Quoted = \"a\\\"b\\\\c\\nd\"", baseline, StringComparison.Ordinal);
         Assert.Contains("  method protected virtual Void OnChanged()", baseline, StringComparison.Ordinal);
         Assert.DoesNotContain("Hidden", baseline, StringComparison.Ordinal);
+
+        // An enum records its underlying type: changing it changes the enum's size.
+        Assert.Contains(
+            "type enum GSharp.Core.Tests.PublicApi.SnapshotByteEnum : Byte",
+            RenderPublicApi(typeof(SnapshotFixture).Assembly.Location));
     }
 
     internal static IReadOnlyList<string> RenderPublicApi(string assemblyPath)
@@ -181,6 +186,12 @@ public sealed class CorePublicApiSnapshotTests
         {
             supertypes.Add(baseType);
         }
+        else if (kind == "enum")
+        {
+            // The underlying type lives on the special `value__` field, which
+            // the member list skips; it decides the enum's size and passing.
+            supertypes.Add(EnumUnderlyingType(reader, type, provider));
+        }
 
         supertypes.AddRange(type.GetInterfaceImplementations()
             .Select(i => provider.Describe(reader.GetInterfaceImplementation(i).Interface))
@@ -191,6 +202,20 @@ public sealed class CorePublicApiSnapshotTests
         }
 
         return header.ToString();
+    }
+
+    private static string EnumUnderlyingType(MetadataReader reader, TypeDefinition type, SignatureNames provider)
+    {
+        foreach (FieldDefinitionHandle handle in type.GetFields())
+        {
+            FieldDefinition field = reader.GetFieldDefinition(handle);
+            if ((field.Attributes & FieldAttributes.Static) == 0)
+            {
+                return field.DecodeSignature(provider, null);
+            }
+        }
+
+        throw new InvalidOperationException("enum without an instance value field");
     }
 
     private static string RenderGenericParameters(
@@ -370,13 +395,25 @@ public sealed class CorePublicApiSnapshotTests
         foreach (EventDefinitionHandle handle in type.GetEvents())
         {
             EventDefinition definition = reader.GetEventDefinition(handle);
-            string adder = AccessorAccess(reader, definition.GetAccessors().Adder);
-            if (adder is null)
+            EventAccessors accessors = definition.GetAccessors();
+
+            // The event is as visible as its widest accessor (add, remove or raise).
+            string[] access =
+            {
+                AccessorAccess(reader, accessors.Adder),
+                AccessorAccess(reader, accessors.Remover),
+                AccessorAccess(reader, accessors.Raiser),
+            };
+            string widest = access.Contains("public") ? "public"
+                : access.Contains("protected internal") ? "protected internal"
+                : access.Contains("protected") ? "protected"
+                : null;
+            if (widest is null)
             {
                 continue;
             }
 
-            members.Add("  event " + adder + " " + provider.Describe(definition.Type) + " " + reader.GetString(definition.Name));
+            members.Add("  event " + widest + " " + provider.Describe(definition.Type) + " " + reader.GetString(definition.Name));
         }
     }
 
@@ -589,6 +626,13 @@ public sealed class CorePublicApiSnapshotTests
 
         public string GetPinnedType(string elementType) => elementType;
     }
+}
+
+/// <summary>An enum with a non-default underlying type, pinned by the renderer test.</summary>
+public enum SnapshotByteEnum : byte
+{
+    /// <summary>The only value.</summary>
+    One = 1,
 }
 
 /// <summary>A tiny public type whose rendering the renderer test pins.</summary>
