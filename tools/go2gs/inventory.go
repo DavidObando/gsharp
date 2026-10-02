@@ -48,6 +48,7 @@ type inventoryBuilder struct {
 	seenTypes             map[string]bool
 	seenSymbols           map[string]bool
 	seenMethodSets        map[string]bool
+	seenBlockers          map[string]bool
 	scopeIDs              map[*types.Scope]string
 	scopeIndexes          map[string]*scopeIndex
 	diagnosticSeq         int
@@ -68,7 +69,7 @@ type inventoryBuilder struct {
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
-	return &inventoryBuilder{
+	builder := &inventoryBuilder{
 		analysis: analysis, sourceRoot: sourceRoot, goroot: goroot, profile: profile,
 		semanticProfileID: semanticProfileIdentity(analysis.Profile, analysis.Toolchain),
 		packageIDs:        map[*packages.Package]string{}, packageModuleIDs: map[*packages.Package]string{},
@@ -77,15 +78,17 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		objectIDs:  map[objectRef]string{}, fileIDs: map[string]string{},
 		moduleIDs: map[string]string{}, seenModules: map[string]bool{},
 		seenFiles: map[string]bool{}, seenTypes: map[string]bool{}, seenSymbols: map[string]bool{},
-		seenMethodSets: map[string]bool{}, scopeIDs: map[*types.Scope]string{},
-		scopeIndexes: map[string]*scopeIndex{},
-		inputDrift:   map[string]bool{}, snapshotFiles: map[string][]string{},
+		seenMethodSets: map[string]bool{},
+		scopeIDs:       map[*types.Scope]string{},
+		scopeIndexes:   map[string]*scopeIndex{},
+		inputDrift:     map[string]bool{}, snapshotFiles: map[string][]string{},
 		selectedSnapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
 		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
 		skipSemantics: map[*packages.Package]bool{}, positionMaps: map[string]*sourcePositionMap{},
 		maxRecords: profile.Limits.MaxRecords, records: analysisRecordCount(analysis),
 		ctx: context.Background(),
 	}
+	return builder
 }
 
 type objectRef struct {
@@ -999,10 +1002,13 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			} else {
 				role, reason = "ignored", "excluded by current build constraints or file naming"
 			}
-		case strings.HasSuffix(path, "_test.go"):
-			role, reason = "test", "selected test source for this package variant"
 		case compiled[path]:
 			role = "compiled"
+			if strings.HasSuffix(path, "_test.go") {
+				reason = "selected test source compiled for this package variant"
+			}
+		case strings.HasSuffix(path, "_test.go"):
+			role, reason = "test", "test source not compiled for this package variant"
 		case active[path]:
 			role = "active"
 		default:
@@ -1032,14 +1038,14 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		}
 		record.FileIDs = append(record.FileIDs, fileID)
 	}
-	if unmappedCgo {
-		sort.Strings(record.FileIDs)
-		return nil
-	}
 	for _, path := range syntaxPaths {
 		if fileID := b.fileIDs[b.fileKey(pkg, path)]; fileID != "" {
 			record.CompiledFileIDs = append(record.CompiledFileIDs, fileID)
 		}
+	}
+	if unmappedCgo {
+		sort.Strings(record.FileIDs)
+		return nil
 	}
 
 	b.addScopes(pkg)
@@ -3047,12 +3053,18 @@ func (b *inventoryBuilder) addBlocker(blocks, category, message string, units, d
 	}
 	record.ID = blockerRecordID(record)
 	id := record.ID
-	for _, existing := range b.analysis.Blockers {
-		if existing.ID == id {
-			return
+	if b.seenBlockers == nil {
+		b.seenBlockers = make(map[string]bool, len(b.analysis.Blockers)+1)
+		for _, existing := range b.analysis.Blockers {
+			b.seenBlockers[existing.ID] = true
 		}
 	}
-	appendInventoryRecord(b, &b.analysis.Blockers, record)
+	if b.seenBlockers[id] {
+		return
+	}
+	if appendInventoryRecord(b, &b.analysis.Blockers, record) {
+		b.seenBlockers[id] = true
+	}
 }
 
 func (b *inventoryBuilder) recordCount() int {

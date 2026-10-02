@@ -569,7 +569,8 @@ func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
 		}
 	}
 	for _, file := range a1.Files {
-		foundTestFile = foundTestFile || file.Role == "test"
+		foundTestFile = foundTestFile || strings.HasSuffix(file.Path, "_test.go") &&
+			(file.Role == "compiled" || file.Role == "test")
 	}
 	if !foundImports || !foundInitialization || !foundTestFile {
 		t.Fatalf("package graph facts missing: imports=%v initialization=%v test-file=%v", foundImports, foundInitialization, foundTestFile)
@@ -905,6 +906,9 @@ func TestCgoInventoryUsesSourceWithoutNativeToolchain(t *testing.T) {
 	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "cgo") ||
 		!hasBlockerCategory(analysis, "native") {
 		t.Fatalf("CGo source was not fail-closed: %#v", analysis.Blockers)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("CGo incomplete artifact is structurally invalid: %v", err)
 	}
 	for _, name := range []string{"cgo.go", "native.h", "native.c"} {
 		path := "source://" + name
@@ -4643,7 +4647,7 @@ func TestValidateAnalysisRequiresCompleteLoadedOwnershipGraph(t *testing.T) {
 					value.Packages[index].CompiledFileIDs = []string{}
 				}
 			}
-		}, "belongs to noncompiled file"},
+		}, "compiledFileIds membership"},
 		{"typed-file-root", func(value *Analysis) {
 			for index := range value.Packages {
 				value.Packages[index].InitializationOrder = []InitializationRecord{}
@@ -4711,6 +4715,20 @@ func TestValidateAnalysisRejectsInvalidFileRolesAndNodeTrees(t *testing.T) {
 		}
 		return indexes
 	}
+	setListedCompiledRole := func(value *Analysis, role string) {
+		for _, pkg := range value.Packages {
+			if len(pkg.CompiledFileIDs) == 0 {
+				continue
+			}
+			for index := range value.Files {
+				if value.Files[index].ID == pkg.CompiledFileIDs[0] {
+					value.Files[index].Role = role
+					return
+				}
+			}
+		}
+		t.Fatal("validation fixture has no listed compiled file")
+	}
 	tests := []struct {
 		name   string
 		mutate func(*Analysis)
@@ -4725,6 +4743,42 @@ func TestValidateAnalysisRejectsInvalidFileRolesAndNodeTrees(t *testing.T) {
 		{"embed-role-flag", func(value *Analysis) {
 			value.Files[0].Embed = !value.Files[0].Embed
 		}, "disagrees with native/embed flags"},
+		{"compiled-membership-active-role", func(value *Analysis) {
+			setListedCompiledRole(value, "active")
+		}, "compiledFileIds membership"},
+		{"compiled-membership-test-role", func(value *Analysis) {
+			setListedCompiledRole(value, "test")
+		}, "compiledFileIds membership"},
+		{"compiled-membership-ignored-role", func(value *Analysis) {
+			setListedCompiledRole(value, "ignored")
+		}, "compiledFileIds membership"},
+		{"unlisted-compiled-role-incomplete", func(value *Analysis) {
+			compiled := map[string]bool{}
+			for _, pkg := range value.Packages {
+				for _, fileID := range pkg.CompiledFileIDs {
+					compiled[fileID] = true
+				}
+			}
+			for index := range value.Files {
+				if compiled[value.Files[index].ID] ||
+					(value.Files[index].Role != "active" && value.Files[index].Role != "test" &&
+						value.Files[index].Role != "ignored") {
+					continue
+				}
+				value.Files[index].Role = "compiled"
+				value.InventoryComplete = false
+				blocker := BlockerRecord{
+					Blocks: "inventory", Category: "test", Message: "incomplete fixture",
+					AffectedUnits: []string{}, DiagnosticIDs: []string{},
+				}
+				blocker.ID = blockerRecordID(blocker)
+				value.Blockers = append(value.Blockers, blocker)
+				value.RecordCounts.Blockers++
+				value.RecordCounts.Total++
+				return
+			}
+			t.Fatal("validation fixture has no unlisted active/test/ignored file")
+		}, "compiledFileIds membership"},
 		{"tree-on-noncompiled-file", func(value *Analysis) {
 			for packageIndex := range value.Packages {
 				if len(value.Packages[packageIndex].CompiledFileIDs) < 2 {

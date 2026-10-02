@@ -909,6 +909,10 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 		if fileListings[file.PackageID][file.ID] != 1 {
 			return fmt.Errorf("file %q is not listed exactly once by package %q", file.ID, file.PackageID)
 		}
+		if (file.Role == "compiled") != compiledFileListings[file.PackageID][file.ID] {
+			return fmt.Errorf("file %q role %q disagrees with package %q compiledFileIds membership",
+				file.ID, file.Role, file.PackageID)
+		}
 		files[file.ID] = file
 	}
 	for _, pkg := range a.Packages {

@@ -245,7 +245,8 @@ come from canonical declarations/types, not dictionary traversal or absolute
 cache paths.
 Schema-v1 file roles are closed to `compiled`, `active`, `test`, `ignored`,
 `native`, and `embed`; the serialized native/embed flags must agree with the
-role. Every serialized syntax node belongs to a compiled file, and each
+role, and `compiled` role must exactly match membership in the owning package's
+`compiledFileIds`. Every serialized syntax node belongs to a compiled file, and each
 node-bearing file is exactly one `*ast.File`-rooted parent tree with no
 detached nodes or cycles. Incomplete inventories may omit a compiled file's
 tree, while complete inventories require one for every compiled file.

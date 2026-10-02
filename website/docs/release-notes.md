@@ -359,10 +359,12 @@ Before moving an application to a different compiler version, pin the intended S
   type IDs scoped to that semantic profile.
   This separates GOOS/GOARCH/tag and local-replacement-content inventories
   without losing within-profile canonical type deduplication. Validation also
-  rejects unknown file roles, native/embed role-flag disagreement,
+  rejects unknown file roles, native/embed role-flag disagreement, mismatches
+  between `compiled` role and owning-package `compiledFileIds`,
   noncompiled-file syntax trees, detached nodes, parent cycles, and complete
   artifacts without a loaded main-module package/source ownership graph. Each
-  node-bearing file must be one `*ast.File`-rooted tree. These checks reuse
+  node-bearing file must be one `*ast.File`-rooted tree. Blocker IDs are indexed
+  during construction so bounded deduplication remains linear. These checks reuse
   producer contracts and establish internal consistency, not artifact
   authenticity. The pinned
   cliamp profile reports an actionable mismatch rather than substituting the

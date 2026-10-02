@@ -153,6 +153,51 @@ func TestBlockerDeduplicationUsesBoundedPublishedMessage(t *testing.T) {
 	assertPublishedBlocker(t, analysis.Blockers[0], profile.Limits.MaxStringBytes)
 }
 
+func TestBlockerDeduplicationMaintainsIDIndex(t *testing.T) {
+	profile := testProfile()
+	seed := BlockerRecord{
+		Blocks: "inventory", Category: "seed", Message: "seed",
+		AffectedUnits: []string{}, DiagnosticIDs: []string{},
+	}
+	seed.ID = blockerRecordID(seed)
+	analysis := Analysis{Blockers: []BlockerRecord{seed}}
+	builder := newInventoryBuilder(&analysis, "", "", profile)
+	builder.block("seed", "seed", nil, nil)
+	for index := 0; index < 2048; index++ {
+		builder.block("indexed", fmt.Sprintf("blocker-%04d", index), nil, nil)
+	}
+	if len(builder.seenBlockers) != len(analysis.Blockers) || len(analysis.Blockers) != 2049 {
+		t.Fatalf("blocker ID index is inconsistent: index=%d records=%d",
+			len(builder.seenBlockers), len(analysis.Blockers))
+	}
+}
+
+func TestBlockerDeduplicationOnlyScansPublishedRecordsToSeedIndex(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "inventory.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Name.Name != "addBlocker" {
+			continue
+		}
+		scans := 0
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			statement, ok := node.(*ast.RangeStmt)
+			if ok && containsBlockersSelector(statement.X) {
+				scans++
+			}
+			return true
+		})
+		if scans != 1 {
+			t.Fatalf("addBlocker published-record scans = %d, want one index seed scan", scans)
+		}
+		return
+	}
+	t.Fatal("addBlocker function not found")
+}
+
 func TestRecordedMessagePathRedactionIsComponentAware(t *testing.T) {
 	for _, test := range []struct {
 		name       string
