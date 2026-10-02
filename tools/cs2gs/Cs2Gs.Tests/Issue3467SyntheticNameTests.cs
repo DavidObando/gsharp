@@ -545,7 +545,7 @@ namespace Cs2Gs.Tests
                     {
                         D C = new D();
                         Func<int, int> f = First;
-                        return f(1) + C.First(0);
+                        return f(1) + C!.First(0);
                         static int First(int n) => n == 0 ? 7 : Second<int>(n - 1);
                         static int Second<T>(int n) => First(n);
                     }
@@ -592,6 +592,31 @@ namespace Cs2Gs.Tests
             LocalFunctionHoistTranslationTests.CompileAndRun(
                 printed,
                 "Console.WriteLine(C().Run())",
+                "107");
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_ReferencedUnderscoreParameterReservesEmittedName()
+        {
+            string printed = Translate("""
+                using System;
+
+                public class C
+                {
+                    public int Run(Func<int, int> _)
+                    {
+                        return _(0) + __underscore(0);
+                        static int __underscore(int n) =>
+                            n == 0 ? 7 : Other<int>(n - 1);
+                        static int Other<T>(int n) => __underscore(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("func __underscore_2(", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run((value int32) -> 100))",
                 "107");
         }
 

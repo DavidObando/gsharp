@@ -1201,7 +1201,9 @@ public sealed partial class CSharpToGSharpTranslator
 
         private string MapParameterName(IParameterSymbol symbol, SyntaxNode fallbackNode)
         {
-            if (symbol.Name != "_" || fallbackNode is not ParameterSyntax underscoreParameter)
+            ParameterSyntax underscoreParameter = fallbackNode as ParameterSyntax
+                ?? symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as ParameterSyntax;
+            if (symbol.Name != "_" || underscoreParameter == null)
             {
                 return this.EmittedName(symbol, symbol.Name);
             }
@@ -1225,12 +1227,15 @@ public sealed partial class CSharpToGSharpTranslator
                 ancestor is AnonymousFunctionExpressionSyntax
                     or LocalFunctionStatementSyntax
                     or BaseMethodDeclarationSyntax);
+            SemanticModel model = body == null
+                ? this.context.SemanticModel
+                : this.context.Compilation.GetSemanticModel(body.SyntaxTree);
             bool referenced = body != null
                 && body.DescendantNodes()
                     .OfType<IdentifierNameSyntax>()
                     .Any(identifier => identifier.Identifier.ValueText == "_"
                         && SymbolEqualityComparer.Default.Equals(
-                            this.context.GetSymbolInfo(identifier).Symbol,
+                            model.GetSymbolInfo(identifier).Symbol,
                             symbol));
             return referenced ? "__underscore" : "_";
         }
@@ -2098,7 +2103,12 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     if (!SymbolEqualityComparer.Default.Equals(symbol, localFunction))
                     {
-                        occupied.Add(this.EmittedName(symbol, symbol.Name));
+                        string name = symbol is IParameterSymbol { Name: "_" } parameter
+                            && parameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                                is ParameterSyntax syntax
+                                ? this.MapParameterName(parameter, syntax)
+                                : this.EmittedName(symbol, symbol.Name);
+                        occupied.Add(name);
                     }
                 }
             }
@@ -2303,7 +2313,8 @@ public sealed partial class CSharpToGSharpTranslator
                     // itself binds to a type or namespace proves the access
                     // cannot observe the helper.
                     MemberAccessExpressionSyntax access => access.Name == simpleName
-                        && (access.Expression is not SimpleNameSyntax receiver
+                        && (UnwrapParenthesesAndSuppressions(access.Expression)
+                                is not SimpleNameSyntax receiver
                             || this.context.GetSymbolInfo(receiver).Symbol is INamespaceOrTypeSymbol),
                     MemberBindingExpressionSyntax => true,
                     QualifiedNameSyntax qualifiedName => qualifiedName.Right == simpleName,
@@ -2312,7 +2323,9 @@ public sealed partial class CSharpToGSharpTranslator
                 qualifiedThroughTypeOrNamespace =
                     simpleName.Parent is MemberAccessExpressionSyntax qualifiedAccess
                     && qualifiedAccess.Name == simpleName
-                    && this.context.GetSymbolInfo(qualifiedAccess.Expression).Symbol is INamespaceOrTypeSymbol;
+                    && this.context.GetSymbolInfo(
+                        UnwrapParenthesesAndSuppressions(qualifiedAccess.Expression)).Symbol
+                        is INamespaceOrTypeSymbol;
             }
             else
             {
