@@ -101,6 +101,13 @@ public sealed partial class TestParityStage
         }
 
         summary.MigratedCases = actual.Count;
+        if (actual.Any(result => string.IsNullOrWhiteSpace(result?.Name)))
+        {
+            string unnamed = "the migrated run's TRX holds a result without a test name, so its cases cannot be " +
+                "compared name for name (#4633).";
+            return this.NameParityFailure(context, "TEST-RESULTS-UNREADABLE", unnamed);
+        }
+
         if (actual.Count == 0)
         {
             string none = "the migrated run reported ZERO test results, but the C# original discovers " +

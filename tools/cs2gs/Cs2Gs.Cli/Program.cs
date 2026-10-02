@@ -280,8 +280,12 @@ internal static class Program
         {
             options.TestParityAllowList = TestParityAllowList.LoadForRepository(
                 options.SourceRoot, allowListPath);
-            options.TestNameParityBaseline ??= TestNameParityBaseline.LoadForRepository(
-                options.SourceRoot, null);
+
+            // The default baseline only matters when per-name parity runs.
+            if (options.TestNameParityBaseline is null && !string.IsNullOrEmpty(options.CSharpTestOracleDirectory))
+            {
+                options.TestNameParityBaseline = TestNameParityBaseline.LoadForRepository(options.SourceRoot, null);
+            }
         }
         catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
         {

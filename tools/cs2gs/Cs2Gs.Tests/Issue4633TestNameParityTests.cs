@@ -565,6 +565,19 @@ public sealed class Issue4633TestNameParityTests
         Assert.Equal("TEST-RESULTS-UNREADABLE", Assert.Single(outcome.Artifacts).Diagnostic.Id);
     }
 
+    /// <summary>Review finding: a TRX result without a name fails closed instead of being dropped.</summary>
+    [Fact]
+    public void Stage_UnnamedResult_FailsClosed()
+    {
+        StageExecutionContext context = Context(withOracle: true);
+        WriteTrx(context, OracleNames.Append(" ").ToArray());
+
+        StageOutcome outcome = new TestParityStage().EvaluateMirroredTestRun(
+            context, new ProcessRunResult(0, GreenRunOutput, string.Empty, false));
+
+        Assert.Equal("TEST-RESULTS-UNREADABLE", Assert.Single(outcome.Artifacts).Diagnostic.Id);
+    }
+
     /// <summary>Zero migrated results where the C# original has cases is a failure.</summary>
     [Fact]
     public void Stage_ZeroResults_Fails()
