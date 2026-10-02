@@ -68,12 +68,14 @@ public sealed class Issue3869ModifierSweepTests
     }
 
     /// <summary>
-    /// <c>abstract</c> — deliberately dropped in favour of <c>open</c>, with an
-    /// Info diagnostic recorded (ADR-0115 §B.4: G# has no abstract-class
-    /// modifier). Documented and reported, not silent.
+    /// <c>abstract</c> — preserved (ADR-0195 / issue #4674). It used to be dropped in
+    /// favour of <c>open</c> with an Info diagnostic, which left a concrete,
+    /// instantiable type where the C# one was abstract; G# now has an <c>abstract</c>
+    /// class modifier (it implies <c>open</c>), so nothing is lost and nothing is
+    /// reported.
     /// </summary>
     [Fact]
-    public void Abstract_MapsToOpen_AndIsReported()
+    public void Abstract_IsPreserved_AndImpliesOpen()
     {
         LoadedCSharpProject project = Load("namespace R { public abstract class C { public int X; } }");
         var translator = new CSharpToGSharpTranslator();
@@ -81,8 +83,9 @@ public sealed class Issue3869ModifierSweepTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         string printed = GSharpPrinter.Print(translator.TranslateDocument(document, context));
 
-        Assert.Contains("open class C", printed, StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.Contains("abstract class C", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("open class C", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Message.Contains("abstract", StringComparison.Ordinal));
     }
@@ -107,20 +110,19 @@ public sealed class Issue3869ModifierSweepTests
     }
 
     /// <summary>
-    /// <c>static class</c> — the class is emitted without a <c>static</c>
-    /// modifier (G# has none for aggregates), so the emitted type is not
-    /// <c>abstract sealed</c>. That is a shape difference, not a type-load
-    /// hazard: nothing in the CLR refuses to load a non-static class of static
-    /// members. Pinned so it is a known, deliberate divergence.
+    /// <c>static class</c> — preserved (ADR-0195 / issue #4674). It used to be emitted
+    /// as an ordinary instantiable class, so the type stopped being CLR
+    /// <c>abstract sealed</c>; G# now has a <c>static class</c> modifier, with the
+    /// members still in the <c>shared { }</c> block.
     /// </summary>
     [Fact]
-    public void StaticClass_LosesStatic_ButRemainsLoadable()
+    public void StaticClass_IsPreserved()
     {
         string printed = Translate(
             "namespace R { public static class Helpers { public static int X() { return 1; } } }");
 
-        Assert.Contains("class Helpers", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("static class", printed, StringComparison.Ordinal);
+        Assert.Contains("static class Helpers", printed, StringComparison.Ordinal);
+        Assert.Contains("shared {", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
