@@ -536,10 +536,21 @@ class LspClient:
 
     # -- API -----------------------------------------------------------------
 
+    @staticmethod
+    def _message(method: str, params: Any, rid: int | None = None) -> dict[str, Any]:
+        # JSON-RPC 2.0 lets params be omitted but not null; shutdown and exit carry none.
+        # (The G# server exits without replying to a shutdown whose params are null.)
+        message: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if rid is not None:
+            message["id"] = rid
+        if params is not None:
+            message["params"] = params
+        return message
+
     def notify(self, method: str, params: Any) -> None:
         if self.process.poll() is not None:
             raise self._exited()
-        self._send({"jsonrpc": "2.0", "method": method, "params": params})
+        self._send(self._message(method, params))
 
     def request(self, method: str, params: Any, timeout: float) -> dict[str, Any]:
         if self.process.poll() is not None:
@@ -550,7 +561,7 @@ class LspClient:
             q: queue.Queue[dict[str, Any]] = queue.Queue()
             self.pending[rid] = q
         try:
-            self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+            self._send(self._message(method, params, rid))
             try:
                 reply = q.get(timeout=timeout)
             except queue.Empty as exc:
@@ -567,14 +578,26 @@ class LspClient:
             taken, self.notifications = self.notifications, []
         return taken
 
-    def shutdown(self, timeout: float = 30) -> None:
+    def shutdown(self, timeout: float = 30) -> tuple[dict[str, Any] | None, str | None]:
+        """Ends the session; returns (crash, timeout) for an exit or hang that isn't a clean shutdown."""
+        replied = False
         try:
-            if self.process.poll() is None:
-                self.request("shutdown", None, timeout)
-                self.notify("exit", None)
-                self.process.wait(timeout=timeout)
-        except (ServerExited, RequestTimeout, subprocess.TimeoutExpired):
-            pass
+            if self.process.poll() is not None:
+                raise self._exited()
+            self.request("shutdown", None, timeout)
+            replied = True
+            self.notify("exit", None)
+            code = self.process.wait(timeout=timeout)
+            if code != 0:
+                return ({"kind": "process-exit", "code": code, "stderr": "\n".join(list(self.stderr_tail)[-40:]),
+                         "atShutdown": True}, None)
+            return None, None
+        except ServerExited as exc:
+            if replied and exc.code == 0:
+                return None, None  # it answered shutdown and then exited cleanly, a little early
+            return {"kind": "process-exit", "code": exc.code, "stderr": exc.stderr, "atShutdown": True}, None
+        except (RequestTimeout, subprocess.TimeoutExpired) as exc:
+            return None, f"shutdown: {exc}"
         finally:
             self.kill()
 
@@ -854,6 +877,14 @@ class FileRun:
     # -- whole file ----------------------------------------------------------
 
     def run(self) -> dict[str, Any]:
+        try:
+            return self._run()
+        finally:
+            # A harness error or an interrupt must not leave a language server running.
+            if self.client is not None:
+                self.client.kill()
+
+    def _run(self) -> dict[str, Any]:
         print(f"[{self.args.label}] {self.entry['name']}: {len(self.entry['steps'])} steps", flush=True)
         file_started = time.perf_counter()
         for i, step in enumerate(self.entry["steps"]):
@@ -872,14 +903,18 @@ class FileRun:
                 kinds = sorted({c["signature"] for c in record["crashes"]})
                 print(f"  {record['id']}: {record['elapsedMs']} ms crashes={kinds} timeouts={record['timeouts']}",
                       flush=True)
+        shutdown_crash, shutdown_timeout = (None, None)
         if self.client is not None:
-            self.client.shutdown()
+            shutdown_crash, shutdown_timeout = self.client.shutdown()
             time.sleep(0.2)
-        # Exceptions logged after the last step (late background binds) belong to it.
+        # Exceptions logged after the last step (late background binds), and a server that dies
+        # or hangs instead of shutting down cleanly, belong to the last step.
         if self.steps:
-            tail = {"crashes": []}
+            tail: dict[str, Any] = {"crashes": [shutdown_crash] if shutdown_crash else []}
             self._collect_background(tail)
             self.steps[-1]["crashes"].extend(tail["crashes"])
+            if shutdown_timeout:
+                self.steps[-1]["timeouts"].append(shutdown_timeout)
         crashes = [c for s in self.steps for c in s["crashes"]]
         if self.log_path is not None and self.log_path.exists() and not self.args.keep_logs:
             self.log_path.unlink()
@@ -985,6 +1020,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     out = Path(args.out).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     selected = [f for f in plan["files"] if not args.only or any(o in f["name"] for o in args.only)]
+    if not selected:
+        raise HarnessError(f"--only {args.only} matches no file in the plan")
     results = []
     for entry in selected:
         result = FileRun(args, entry, out).run()

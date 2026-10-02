@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import time
 import shutil
 import sys
 import unittest
@@ -80,6 +81,8 @@ while True:
             length = int(line.split(b":")[1])
     msg = json.loads(stdin.read(length))
     method, rid = msg.get("method"), msg.get("id")
+    if "params" in msg and msg["params"] is None:
+        sys.exit(9)  # like the real server: a null params member ends the session
     # Debug traffic echo, as the real server's LoggingStream does: it must never count.
     log_line("Debug", "[IN] " + json.dumps(msg)[:300] + ' "Level":"Error","Message":')
     if method == "exit":
@@ -94,6 +97,8 @@ while True:
     if rid is None:
         continue
     result = None
+    if method == "shutdown" and mode == "exit-on-shutdown":
+        sys.exit(5)
     if method == "initialize":
         if mode == "hang-initialize":
             time.sleep(30)
@@ -135,6 +140,22 @@ while True:
         continue
     send({"jsonrpc": "2.0", "id": rid, "result": result})
 '''
+
+
+def soak_children() -> list[int]:
+    """PIDs of live stub servers started by this test process."""
+    pids = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+            cmdline = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if int(stat[1]) == os.getpid() and stat[0] != "Z" and b"stub_server.py" in cmdline:
+            pids.append(int(entry.name))
+    return pids
 
 
 class LspSoakTests(unittest.TestCase):
@@ -272,6 +293,26 @@ class LspSoakTests(unittest.TestCase):
             steps = json.loads(plan.read_text(encoding="utf-8"))["files"][0]["steps"]
             sites = [s["edits"][0][0] for s in steps if s["kind"].startswith("delete-brace-") and s["kind"] != "delete-brace-tail"]
             self.assertEqual(len(sites), len(set(sites)), f"seed {seed}")
+
+    def test_exit_during_shutdown_is_recorded_on_the_last_step(self) -> None:
+        code, result = self.run_stub("exit-on-shutdown")
+        self.assertEqual(1, code)
+        last = self.planned_ids()[-1]
+        self.assertEqual({last: ["process-exit"]}, self.crash_steps(result))
+        self.assertTrue(result["steps"][-1]["crashes"][0]["atShutdown"])
+
+    def test_only_filter_matching_nothing_is_a_harness_error(self) -> None:
+        code = soak.main(["run", "--plan", str(self.plan), "--label", "none", "--out", str(SCRATCH / "run-none"),
+                          "--server", f"{sys.executable} {self.stub}", "--only", "NoSuchFile"])
+        self.assertEqual(2, code)
+
+    @unittest.skipUnless(Path("/proc").is_dir(), "process listing uses /proc")
+    def test_harness_error_does_not_leak_the_server(self) -> None:
+        before = set(soak_children())
+        code, _ = self.run_stub("no-hover")
+        self.assertEqual(2, code)
+        time.sleep(0.5)
+        self.assertEqual(set(), set(soak_children()) - before)
 
     def test_method_not_found_is_a_harness_error(self) -> None:
         code, _ = self.run_stub("no-hover")
