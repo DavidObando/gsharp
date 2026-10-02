@@ -208,7 +208,7 @@ You can also pin an SDK version through `global.json` next to the project.
 ```json title="global.json"
 {
   "msbuild-sdks": {
-    "Gsharp.NET.Sdk": "0.1.105-g627f5152b0"
+    "Gsharp.NET.Sdk": "0.4.591"
   }
 }
 ```
