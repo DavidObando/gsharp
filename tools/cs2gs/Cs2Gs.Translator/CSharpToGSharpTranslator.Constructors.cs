@@ -2715,6 +2715,12 @@ public sealed partial class CSharpToGSharpTranslator
                 this.state.RecursiveLocalFunctionGroups.ContainsKey(symbol);
 
             var statementList = statements.ToList();
+            var statementIndexes = new Dictionary<StatementSyntax, int>();
+            for (int index = 0; index < statementList.Count; index++)
+            {
+                statementIndexes.TryAdd(statementList[index], index);
+            }
+
             var localFunctions = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
             foreach (LocalFunctionStatementSyntax localFunction in statementList
                 .OfType<LocalFunctionStatementSyntax>())
@@ -2838,20 +2844,20 @@ public sealed partial class CSharpToGSharpTranslator
                     component.Select(candidate => candidate.Symbol),
                     SymbolEqualityComparer.Default);
                 int componentStart = component
-                    .Select(candidate => statementList.IndexOf(candidate.Syntax))
+                    .Select(candidate => statementIndexes[candidate.Syntax])
                     .Min();
                 if (component.Any(candidate =>
                         edges[candidate.Symbol].Any(dependency =>
                             !componentSymbols.Contains(dependency)
                             && localFunctions.Any(other =>
                                 SymbolEqualityComparer.Default.Equals(other.Symbol, dependency)
-                                && statementList.IndexOf(other.Syntax) >= componentStart))))
+                                && statementIndexes[other.Syntax] >= componentStart))))
                 {
                     return false;
                 }
 
                 var indexes = component
-                    .Select(candidate => statementList.IndexOf(candidate.Syntax))
+                    .Select(candidate => statementIndexes[candidate.Syntax])
                     .OrderBy(index => index)
                     .ToList();
                 if (indexes[^1] - indexes[0] + 1 != indexes.Count)

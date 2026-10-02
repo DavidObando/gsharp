@@ -51,7 +51,18 @@ public sealed partial class CSharpToGSharpTranslator
                     recursiveLiftedLocal.OriginalDefinition,
                     out LiftedRecursiveLocalFunction recursiveLift))
             {
-                return new IdentifierExpression(recursiveLift.Name);
+                // Mirrors the invocation path: a static lift lands in the
+                // emitted aggregate's `shared` block, so only a site outside
+                // that aggregate's sibling-static scope qualifies it.
+                INamedTypeSymbol recursiveOwner =
+                    this.state.CurrentEmittedAggregate ?? recursiveLiftedLocal.ContainingType;
+                return recursiveLift.IsStatic
+                    && recursiveOwner != null
+                    && !this.IsBareSiblingStaticScope(recursiveOwner, recursiveLift.Name, identifier)
+                        ? new MemberAccessExpression(
+                            this.StaticQualifierReceiver(recursiveOwner, identifier.GetLocation()),
+                            recursiveLift.Name)
+                        : new IdentifierExpression(recursiveLift.Name);
             }
 
             if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol localFunction

@@ -1346,10 +1346,12 @@ public sealed partial class CSharpToGSharpTranslator
         private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section, string injectLabel = null)
         {
             var statements = new List<GStatement>();
+
+            // Recursive local-function state for every section is registered
+            // once, up front, by TranslateSwitchStatement (the only caller), so
+            // cross-section references see each section's lifts.
             IReadOnlyList<StatementSyntax> ordered =
                 this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span);
-            this.RegisterCapturingRecursiveLocalFunctions(ordered);
-            this.RegisterRecursiveLocalFunctionLifts(ordered);
 
             // Issue #4262 follow-up (item 2): mirrors TranslateBlock's own
             // per-statement guarded-field-local-capture loop — a direct

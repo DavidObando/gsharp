@@ -1991,13 +1991,33 @@ public sealed partial class CSharpToGSharpTranslator
                                 refLocalFunction,
                                 localFunction)))))
             {
-                string reason = refLocalFunction.ReturnsByRefReadonly
-                    ? $"ref-readonly local function '{localFunction.Identifier.Text}' has no canonical G# function-literal form."
-                    : refLocalFunction.IsGenericMethod
-                        ? $"generic ref-returning local function '{localFunction.Identifier.Text}' is not supported by G#'s direct function-literal form."
-                        : refLocalFunction.IsStatic
-                            ? $"ref-returning local function '{localFunction.Identifier.Text}' cannot be used as a delegate or function value in G#."
-                        : $"capturing ref-returning local function '{localFunction.Identifier.Text}' cannot use G#'s direct function-literal form safely; declare it static or move it to a member.";
+                string refFunctionName = localFunction.Identifier.Text;
+                string reason;
+                if (refLocalFunction.ReturnsByRefReadonly)
+                {
+                    reason = $"ref-readonly local function '{refFunctionName}' has no canonical G# function-literal form.";
+                }
+                else if (refLocalFunction.IsGenericMethod)
+                {
+                    reason = $"generic ref-returning local function '{refFunctionName}' is not supported by G#'s direct function-literal form.";
+                }
+                else if (!refLocalFunction.IsStatic)
+                {
+                    reason = $"capturing ref-returning local function '{refFunctionName}' cannot use G#'s direct function-literal form safely; declare it static or move it to a member.";
+                }
+                else if (this.IsLocalFunctionReferencedFromAnotherSwitchSection(refLocalFunction, localFunction))
+                {
+                    reason = $"ref-returning local function '{refFunctionName}' is referenced from another switch section, where its G# function literal is out of scope.";
+                }
+                else if (this.IsLocalFunctionReferencedBeforeDeclarationInSwitchSection(refLocalFunction, localFunction))
+                {
+                    reason = $"ref-returning local function '{refFunctionName}' is referenced before its declaration in the switch section, where its G# function literal is not yet bound.";
+                }
+                else
+                {
+                    reason = $"ref-returning local function '{refFunctionName}' cannot be used as a delegate or function value in G#.";
+                }
+
                 this.context.ReportUnsupported(
                     localFunction,
                     reason);
