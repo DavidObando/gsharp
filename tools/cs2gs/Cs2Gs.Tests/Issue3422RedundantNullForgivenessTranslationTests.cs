@@ -27,6 +27,23 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
         Assert.False(string.IsNullOrEmpty(repoRoot));
+        if (CommittedCompilerSource.IsGSharp(repoRoot))
+        {
+            // Issue #4656: after the cut-over the committed G# IS the
+            // translation, and the same inventory is counted over it.
+            int committedDoubled = 0;
+            int committedParenthesized = 0;
+            foreach (string file in CommittedCompilerSource.GSharpFiles(repoRoot, "src/Core"))
+            {
+                string committed = StripCommentLines(File.ReadAllText(file));
+                committedDoubled += CountOccurrences(committed, "!!!!");
+                committedParenthesized += CountOccurrences(committed, ")!!.");
+            }
+
+            Assert.Equal(0, committedDoubled);
+            Assert.InRange(committedParenthesized, 0, 9);
+            return;
+        }
 
         LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
             Path.Combine(repoRoot, "src", "Core", "Core.csproj"));
@@ -34,6 +51,9 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
             project.BoundWithoutErrors,
             "Core should bind with no C# errors: "
                 + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        // Issue #4656: zero documents would count zero of everything and pass.
+        Assert.NotEmpty(project.Documents);
 
         var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
         int doubledAssertions = 0;

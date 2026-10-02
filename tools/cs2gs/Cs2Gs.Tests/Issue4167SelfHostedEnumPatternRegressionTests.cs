@@ -117,6 +117,7 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
         }
 
         string cs2gsRoot = TestFixtureSource.Resolve("tools", "cs2gs");
+        int scannedSources = 0;
         foreach (string projectDirectory in Directory.EnumerateDirectories(cs2gsRoot, "Cs2Gs.*"))
         {
             if (projectDirectory.EndsWith(".Tests", StringComparison.Ordinal))
@@ -132,8 +133,12 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
                 string code = StripComments(File.ReadAllText(sourcePath));
                 Assert.DoesNotMatch(RoslynEnumPropertyPattern, code);
                 Assert.DoesNotMatch(RoslynEnumDirectPattern, code);
+                scannedSources++;
             }
         }
+
+        // Issue #4656: a `*.cs` glob over a tree with no C# would check nothing.
+        Assert.True(scannedSources > 0, "no cs2gs C# sources were scanned under " + cs2gsRoot);
 
         string invocationsGs = translated["CSharpToGSharpTranslator.Invocations.cs"];
         string compactInvocations = string.Concat(invocationsGs.Where(c => !char.IsWhiteSpace(c)));
