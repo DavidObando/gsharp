@@ -174,10 +174,13 @@ def strip_json_comments(text: str) -> str:
             end = text.find("*/", i + 2)
             i = len(text) if end < 0 else end + 2
             continue
+        elif c == "," and re.match(r"\s*(//[^\n]*\n\s*|/\*.*?\*/\s*)*[}\]]", text[i + 1:], re.DOTALL):
+            # A trailing comma (outside any string): drop it.
+            pass
         else:
             out.append(c)
         i += 1
-    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+    return "".join(out)
 
 
 def pin_global_json(tree: Path, version: str) -> None:
@@ -188,6 +191,9 @@ def pin_global_json(tree: Path, version: str) -> None:
     if not isinstance(document, dict):
         raise SelfHostError(f"{path} is not a JSON object")
     sdks = document.setdefault("msbuild-sdks", {})
+    if not isinstance(sdks, dict):
+        # Never discard configuration we do not understand.
+        raise SelfHostError(f"{path} has an msbuild-sdks value that is not a JSON object")
     for key in [k for k in sdks if k.lower() == SDK_ID.lower()]:
         del sdks[key]
     sdks[SDK_ID] = version
@@ -364,6 +370,7 @@ def main(argv: list[str]) -> int:
     out = args.out.resolve()
     work = (args.work or out / "work").resolve()
     work.mkdir(parents=True, exist_ok=True)
+    report: dict = {}
     try:
         if not bootstrap.is_file():
             raise SelfHostError(f"{bootstrap} does not exist")
@@ -374,16 +381,19 @@ def main(argv: list[str]) -> int:
         if version == bootstrap_version:
             raise SelfHostError("the stage-1 version must differ from the bootstrap version "
                                 "(package caches are keyed by id+version)")
-        report = {"tree": str(tree), "bootstrap": str(bootstrap), "stage1Version": version}
+        report.update({"tree": str(tree), "bootstrap": str(bootstrap), "stage1Version": version})
         report.update(prepare_tree(tree, bootstrap))
         if not args.prepare_only:
             nupkg = pack(tree, version, out, work, args.config)
             report["stage1Package"] = str(nupkg)
             report.update(verify(nupkg, bootstrap))
     except SelfHostError as error:
+        # The tree may already be modified; the report still records how.
+        report["error"] = str(error)
         print(f"selfhost-pack-stage1: {error}", file=sys.stderr)
         return 1
-    (work / "stage1-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    finally:
+        (work / "stage1-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0
 

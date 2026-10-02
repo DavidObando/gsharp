@@ -117,6 +117,18 @@ class GlobalJsonTests(unittest.TestCase):
             packer.pin_global_json(tree, "1.0.0")
             self.assertTrue((tree / "global.json").read_bytes().startswith(b"\xef\xbb\xbf"))
 
+    def test_commas_inside_strings_are_kept(self) -> None:
+        text = '{"a": "x, }", "b": [1, 2,], }'
+        self.assertEqual({"a": "x, }", "b": [1, 2]}, json.loads(packer.strip_json_comments(text)))
+
+    def test_a_non_object_msbuild_sdks_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tree = make_tree(Path(temp))
+            (tree / "global.json").write_text('{ "msbuild-sdks": "Other/1.0.0" }')
+            with self.assertRaises(packer.SelfHostError):
+                packer.pin_global_json(tree, "1.0.0")
+            self.assertEqual('{ "msbuild-sdks": "Other/1.0.0" }', (tree / "global.json").read_text())
+
     def test_comment_markers_inside_strings_are_kept(self) -> None:
         self.assertEqual('{"a": "http://x/*y*/"} ', packer.strip_json_comments('{"a": "http://x/*y*/"} // c'))
 
@@ -163,6 +175,8 @@ class VersionTests(unittest.TestCase):
                                     "--version", "0.4.1129", "--out", str(root / "out")])
             self.assertEqual(1, code)
             self.assertIn("must differ", stderr.getvalue())
+            report = json.loads((root / "out" / "work" / "stage1-report.json").read_text())
+            self.assertIn("must differ", report["error"])
 
 
 class ReversionTests(unittest.TestCase):
