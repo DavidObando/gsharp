@@ -277,6 +277,32 @@ namespace Demo
     }
 
     [Fact]
+    public void CapturingRefReturningLocalFunction_RemainsALoudGap()
+    {
+        // Issue #4580: gsc emits an access-violating program for a capturing
+        // ref-returning function literal, so cs2gs keeps that shape off the
+        // native path and reports it until gsc is fixed.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int seed) {
+                        int[] data = new int[] { seed };
+                        ref int At() => ref data[0];
+                        At() = 5;
+                        return data[0];
+                    }
+                }
+            }
+            """, "capturing ref-returning function literals stay guarded pending #4580");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RefReturningLocalFunctionUsedAsDelegate_RemainsALoudGap()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
