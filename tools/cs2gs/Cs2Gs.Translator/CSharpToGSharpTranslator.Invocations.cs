@@ -3958,7 +3958,8 @@ public sealed partial class CSharpToGSharpTranslator
                     valueExpression,
                     translatedValue,
                     EnsureNonNullAssertion(translatedValue),
-                    targetSymbolForPromotionCheck)
+                    targetSymbolForPromotionCheck,
+                    targetType)
                 : translatedValue;
         }
 

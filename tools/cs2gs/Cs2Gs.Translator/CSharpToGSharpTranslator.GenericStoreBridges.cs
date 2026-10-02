@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Microsoft.CodeAnalysis;
@@ -322,9 +323,10 @@ public sealed partial class CSharpToGSharpTranslator
                     return (this.context.GetTypeInfo(elementAccess.Expression).Type as IArrayTypeSymbol, null);
 
                 case YieldStatementSyntax yielded:
-                    return (
-                        this.context.SemanticModel.GetEnclosingSymbol(yielded.SpanStart),
-                        this.context.GetTypeInfo(value).ConvertedType);
+                {
+                    IMethodSymbol iterator = this.context.SemanticModel.GetEnclosingSymbol(yielded.SpanStart) as IMethodSymbol;
+                    return (iterator, iterator == null ? null : this.GetIteratorStoreSlot(value, iterator));
+                }
 
                 default:
                     return (null, null);
@@ -389,9 +391,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return "type-parameter-local";
 
                 case IMethodSymbol iterator when OutermostTransparentNode(value).Parent is YieldStatementSyntax yielded:
-                    // Roslyn's converted yield type is the iterator element
-                    // contract, including async/enumerator and tuple forms.
-                    slotType = knownSlotType ?? this.context.GetTypeInfo(yielded.Expression).ConvertedType;
+                    slotType = knownSlotType ?? this.GetIteratorStoreSlot(value, iterator);
                     return "iterator-element";
 
                 case IMethodSymbol returning
@@ -484,7 +484,7 @@ public sealed partial class CSharpToGSharpTranslator
         // `!`, null-preserving operators, conditional/switch arms, and tuple
         // elements. Every classification that needs
         // the enclosing store or argument starts here.
-        private static SyntaxNode OutermostTransparentNode(ExpressionSyntax value)
+        private static SyntaxNode OutermostTransparentNode(ExpressionSyntax value, List<int> tupleIndices = null)
         {
             SyntaxNode node = value;
             while (true)
@@ -511,12 +511,43 @@ public sealed partial class CSharpToGSharpTranslator
                         node = arm.Parent;
                         break;
                     case ArgumentSyntax tupleElement when tupleElement.Parent is TupleExpressionSyntax tuple:
+                        tupleIndices?.Add(tuple.Arguments.IndexOf(tupleElement));
                         node = tuple;
                         break;
                     default:
                         return node;
                 }
             }
+        }
+
+        private ITypeSymbol GetIteratorStoreSlot(ExpressionSyntax value, IMethodSymbol iterator)
+        {
+            var tupleIndices = new List<int>();
+            SyntaxNode node = OutermostTransparentNode(value, tupleIndices);
+            if (node.Parent is not YieldStatementSyntax yielded)
+            {
+                return null;
+            }
+
+            // A bound generic iterator returns one of the enumerable/enumerator
+            // envelopes. Unwrap its declared element contract before following
+            // the tuple path; the forgiven operand may have a different type.
+            ITypeSymbol slotType = iterator.ReturnType is INamedTypeSymbol returnType
+                && returnType.TypeArguments.Length == 1
+                    ? returnType.TypeArguments[0]
+                    : this.context.GetTypeInfo(yielded.Expression).ConvertedType;
+            for (int i = tupleIndices.Count - 1; i >= 0; i--)
+            {
+                if (slotType is not INamedTypeSymbol { IsTupleType: true } tupleType
+                    || tupleIndices[i] >= tupleType.TupleElements.Length)
+                {
+                    return null;
+                }
+
+                slotType = GetEffectiveTupleElementType(tupleType, tupleIndices[i]);
+            }
+
+            return slotType;
         }
 
         // A lambda result stored into its delegate's return slot. An async
@@ -547,6 +578,17 @@ public sealed partial class CSharpToGSharpTranslator
             if (type is IArrayTypeSymbol array)
             {
                 return MentionsTypeParameter(array.ElementType, typeParameter);
+            }
+
+            if (type is IPointerTypeSymbol pointer)
+            {
+                return MentionsTypeParameter(pointer.PointedAtType, typeParameter);
+            }
+
+            if (type is IFunctionPointerTypeSymbol functionPointer)
+            {
+                return MentionsTypeParameter(functionPointer.Signature.ReturnType, typeParameter)
+                    || functionPointer.Signature.Parameters.Any(parameter => MentionsTypeParameter(parameter.Type, typeParameter));
             }
 
             // A nested type carries its containing types' type parameters
