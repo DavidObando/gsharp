@@ -35,7 +35,9 @@ internal static class CommittedCompilerSource
         if (csharp == gsharp)
         {
             throw new InvalidOperationException(
-                $"'{root}' must hold the compiler parser in exactly one language (Parser.cs or Parser.gs).");
+                $"'{root}' must hold the compiler parser in exactly one language: " +
+                $"{ParserWithoutExtension}.cs {(csharp ? "found" : "missing")}, " +
+                $"{ParserWithoutExtension}.gs {(gsharp ? "found" : "missing")}.");
         }
 
         return gsharp;
@@ -55,8 +57,8 @@ internal static class CommittedCompilerSource
         // a file twice.
         // Path case is folded only on Windows; elsewhere (including
         // case-sensitive macOS volumes) two spellings may be two files.
-        var files = new HashSet<string>(
-            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        StringComparer pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var files = new HashSet<string>(pathComparer);
         foreach (string relative in relativeDirectories)
         {
             string directory = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
@@ -77,7 +79,7 @@ internal static class CommittedCompilerSource
                 "a count over nothing proves nothing (#4656).");
         }
 
-        return files.OrderBy(path => path, StringComparer.Ordinal).ToList();
+        return files.OrderBy(path => path, pathComparer).ToList();
     }
 
     /// <summary>
