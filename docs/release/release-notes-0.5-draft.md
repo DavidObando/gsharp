@@ -7,7 +7,7 @@
 > [`final-csharp-release.md`](final-csharp-release.md)). This draft moves
 > there only when the first 0.5 release is cut.
 >
-> Items marked **pending D*n*** depend on an owner decision in the self-hosting
+> Items marked **pending D&lt;n&gt;** depend on an owner decision in the self-hosting
 > assessment (section 7) and must be confirmed or rewritten before publishing.
 > The stage-2 shipping rule follows the owner decision recorded in #4631.
 > `0.4.NNNN` is the final C#-built release; `0.5.x` is the first 0.5 version
@@ -95,7 +95,7 @@ documentation, run the project's tests, and review the affected diagnostics.
 ### Known limitations
 
 Translating the compiler from C# to G# lost some things, by decision
-(**pending D7**). None changes what the compiler does:
+(**pending D7**). None of these changes what the compiler does:
 
 - **File headers and regions.** Copyright headers and `#region` blocks are not
   in the G# source.

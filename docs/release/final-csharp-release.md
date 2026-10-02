@@ -27,11 +27,13 @@ commit.
 
 ### Publish order (one tag run)
 
+Rows marked "build" produce artifacts before anything is published; publishing is steps 1-4.
+
 | # | Step | What it publishes | Source |
 |---|---|---|---|
-| 0 | `build` job, `Build` + `Upload NuGet packages` | Packs `out/bin/Release/nupkgs/*` into artifact `nuget-packages` (6 `.nupkg` + 5 `.snupkg`; `Gsharp.Templates` has no symbols) | `build.yml:64-84`; `build/gsharp.build.props:81,110-111`; `src/Sdk/Gsharp.Templates/Gsharp.Templates.csproj:11` |
-| 0 | `vsix` job | Stamps `src/vscode-gsharp/package.json` with `nbgv get-version -v SimpleVersion` (`0.4.NNNN`), packs `vscode-gsharp.vsix` | `build.yml:490-508` |
-| 0 | `visual-studio-extension` job | Builds `GSharp.VisualStudio.vsix` (version `GetVsixVersion` = `FileVersion`, e.g. `0.4.NNNN.<n>`) with the VS project templates XmlPoked to `Gsharp.NET.Sdk/0.4.NNNN` | `build.yml:510-540`; `src/vs-gsharp/src/VsGsharp/VsGsharp.csproj:81-83,96-114` |
+| build | `build` job, `Build` + `Upload NuGet packages` | Packs `out/bin/Release/nupkgs/*` into artifact `nuget-packages` (6 `.nupkg` + 5 `.snupkg`; `Gsharp.Templates` has no symbols) | `build.yml:64-84`; `build/gsharp.build.props:81,110-111`; `src/Sdk/Gsharp.Templates/Gsharp.Templates.csproj:11` |
+| build | `vsix` job | Stamps `src/vscode-gsharp/package.json` with `nbgv get-version -v SimpleVersion` (`0.4.NNNN`), packs `vscode-gsharp.vsix` | `build.yml:490-508` |
+| build | `visual-studio-extension` job | Builds `GSharp.VisualStudio.vsix` (version `GetVsixVersion` = `FileVersion`, e.g. `0.4.NNNN.<n>`) with the VS project templates XmlPoked to `Gsharp.NET.Sdk/0.4.NNNN` | `build.yml:510-540`; `src/vs-gsharp/src/VsGsharp/VsGsharp.csproj:81-83,96-114` |
 | 1 | `publish`: Create GitHub Release | `gh release create "$GITHUB_REF_NAME" --generate-notes` if it doesn't already exist, then uploads every `.nupkg`, `.snupkg` and both `.vsix` with `--clobber` | `build.yml:741-747` |
 | 2 | `publish`: Push to NuGet | `dotnet nuget push ./nupkgs/*.nupkg --skip-duplicate` to nuget.org. The matching `.snupkg` files go to the symbol server automatically (the v0.4.591 run logged 9 pushes: 5 packages + 4 symbol packages). | `build.yml:754-755` |
 | 3 | `publish`: Publish to VS Code Marketplace | `npx @vscode/vsce publish --packagePath ./vsix/vscode-gsharp.vsix` | `build.yml:762-765` |
