@@ -117,6 +117,9 @@ while True:
             if mode == "ice":
                 items = [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
                           "severity": 1, "code": "GS9998", "message": "internal compiler error"}]
+            if mode == "log-background":
+                log_line("Error", "Background workspace load failed: System.NullReferenceException: x",
+                         "System.NullReferenceException", "System.NullReferenceException: x")
             if mode == "log-error":
                 log_line("Error", "HoverAsync failed: System.NullReferenceException: boom",
                          "System.NullReferenceException",
@@ -137,6 +140,9 @@ while True:
         open(os.environ["STUB_FLAG"], "w").close()
         stdout.write(b"Content-Length: 9\r\n\r\nnot json!")
         stdout.flush()
+        continue
+    elif method == os.environ.get("STUB_FORBID"):
+        send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}})
         continue
     elif method == "textDocument/hover" and mode == "no-hover":
         send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}})
@@ -309,6 +315,49 @@ class LspSoakTests(unittest.TestCase):
         self.assertEqual(1, code)
         crash = result["steps"][-1]["crashes"][0]
         self.assertEqual(("rpc-error", "shutdown", True), (crash["kind"], crash["method"], crash["atShutdown"]))
+
+    def test_restart_probe_respects_skipped_methods(self) -> None:
+        out = SCRATCH / "run-probe"
+        code = soak.main(["run", "--plan", str(self.plan), "--label", "probe", "--out", str(out),
+                          "--server", f"{sys.executable} {self.stub}",
+                          "--skip-method", "textDocument/documentSymbol",
+                          "--server-env", "STUB_MODE=exit", "--server-env", "STUB_AT=3",
+                          "--server-env", "STUB_FORBID=textDocument/documentSymbol",
+                          "--server-env", f"STUB_FLAG={out}.fired"])
+        self.assertEqual(1, code)  # the exit is recorded; a forbidden probe would make this 2
+
+    def test_compare_aligns_background_exceptions_per_file(self) -> None:
+        self.run_stub("log-background", at=2)
+        early = SCRATCH / "early.json"
+        shutil.copy(SCRATCH / "run-log-background" / "summary.json", early)
+        shutil.rmtree(SCRATCH / "run-log-background")
+        (SCRATCH / "run-log-background.fired").unlink()
+        self.run_stub("log-background", at=4)
+        late = SCRATCH / "run-log-background" / "summary.json"
+        for path in (early, late):
+            summary = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual({}, summary["files"][0]["stepCrashes"])
+            self.assertEqual(1, len(summary["files"][0]["backgroundCrashes"]))
+        self.assertEqual(0, soak.main(["compare", str(early), str(late)]))
+        self.run_stub("clean")
+        self.assertEqual(1, soak.main(["compare", str(SCRATCH / "run-clean" / "summary.json"), str(late)]))
+
+    def test_compare_reports_one_sided_timeouts(self) -> None:
+        self.run_stub("clean", timeout="2")
+        self.run_stub("hang", at=2, timeout="2")
+        out = SCRATCH / "timeouts.md"
+        self.assertEqual(1, soak.main(["compare", str(SCRATCH / "run-clean" / "summary.json"),
+                                       str(SCRATCH / "run-hang" / "summary.json"), "--out", str(out)]))
+        self.assertIn(f"{self.planned_ids()[1]}: timeout on hang only", out.read_text(encoding="utf-8"))
+
+    def test_compare_rejects_runs_with_different_settings(self) -> None:
+        self.run_stub("clean")
+        clean = SCRATCH / "clean.json"
+        shutil.copy(SCRATCH / "run-clean" / "summary.json", clean)
+        shutil.rmtree(SCRATCH / "run-clean")
+        (SCRATCH / "run-clean.fired").unlink(missing_ok=True)
+        self.run_stub("clean", extra=["--skip-method", "textDocument/hover"])
+        self.assertEqual(2, soak.main(["compare", str(clean), str(SCRATCH / "run-clean" / "summary.json")]))
 
     def test_only_filter_matching_nothing_is_a_harness_error(self) -> None:
         code = soak.main(["run", "--plan", str(self.plan), "--label", "none", "--out", str(SCRATCH / "run-none"),

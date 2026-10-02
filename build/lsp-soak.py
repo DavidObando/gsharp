@@ -811,10 +811,12 @@ class FileRun:
         record["restarted"] = True
         # One round trip so the new server has handled initialize/initialized/didOpen before
         # its log is read; its startup errors then land on this step, tagged.
+        probe = next((m for m in ("textDocument/documentSymbol", "textDocument/foldingRange",
+                                  "textDocument/diagnostic") if m not in self.args.skip_method), None)
         try:
-            if self.client is not None:
-                crash = rpc_error_crash("textDocument/documentSymbol", self.client.request(
-                    "textDocument/documentSymbol", {"textDocument": {"uri": self.uri}}, self.args.request_timeout))
+            if self.client is not None and probe is not None:
+                crash = rpc_error_crash(probe, self.client.request(
+                    probe, {"textDocument": {"uri": self.uri}}, self.args.request_timeout))
                 if crash is not None:
                     record["crashes"].append({**crash, "afterRestart": True})
         except ServerExited as exc:
@@ -1028,6 +1030,27 @@ def write_markdown(summary: dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def file_summary(result: dict[str, Any]) -> dict[str, Any]:
+    """The per-file part of summary.json that compare aligns.
+
+    Background exceptions (workspace load, push-diagnostics binds) run asynchronously, so the
+    step that happens to read them from the log is not meaningful; they are kept per file.
+    """
+    def step_signatures(step: dict[str, Any]) -> list[str]:
+        return sorted({c["signature"] for c in step["crashes"] if not c.get("background")})
+
+    return {
+        **{k: v for k, v in result.items() if k != "steps"},
+        "stepCrashes": {s["id"]: step_signatures(s) for s in result["steps"] if step_signatures(s)},
+        "backgroundCrashes": sorted({c["signature"] for s in result["steps"] for c in s["crashes"]
+                                     if c.get("background")}),
+        "stepTimeouts": {s["id"]: len(s["timeouts"]) for s in result["steps"] if s["timeouts"]},
+    }
+
+
+COMPARED_SETTINGS = ("noLog", "skippedMethods", "workspaceRoot", "requestTimeout")
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     parse_pairs("--server-env", args.server_env)  # fail fast, before any server starts
     parse_pairs("--meta", args.meta)
@@ -1054,11 +1077,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         "meta": {**plan.get("meta", {}), **parse_pairs("--meta", args.meta)},
         "workspaceRoot": args.workspace_root,
         "noLog": args.no_log,
-        "skippedMethods": args.skip_method,
+        "skippedMethods": sorted(args.skip_method),
+        "requestTimeout": args.request_timeout,
         "finished": datetime.now(timezone.utc).isoformat(),
-        "files": [{**{k: v for k, v in r.items() if k != "steps"}, "stepCrashes": {
-            s["id"]: sorted({c["signature"] for c in s["crashes"]}) for s in r["steps"] if s["crashes"]}}
-            for r in results],
+        "files": [file_summary(r) for r in results],
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
     write_markdown(summary, out / "summary.md")
@@ -1081,6 +1103,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
     right = json.loads(Path(args.right).expanduser().read_text(encoding="utf-8"))
     if plan_identity(left) != plan_identity(right):
         raise HarnessError("the two runs used different plans")
+    for setting in COMPARED_SETTINGS:
+        if left.get(setting) != right.get(setting):
+            raise HarnessError(f"the two runs used different {setting}: {left.get(setting)!r} vs {right.get(setting)!r}")
     rows = [f"# LSP soak comparison: {left['label']} vs {right['label']}", "",
             f"| file | steps | {left['label']} crash steps | {right['label']} crash steps | "
             f"only {right['label']} | only {left['label']} | {left['label']} p50/p95 ms | {right['label']} p50/p95 ms |",
@@ -1112,6 +1137,16 @@ def cmd_compare(args: argparse.Namespace) -> int:
         for step in only_l:
             details.append(f"- {lf['name']} {step}: {left['label']} only: "
                            f"{sorted(set(lc[step]) - set(rc.get(step, [])))}")
+        lb, rb = set(lf.get("backgroundCrashes", [])), set(rf.get("backgroundCrashes", []))
+        for side, extra in ((right["label"], rb - lb), (left["label"], lb - rb)):
+            if extra:
+                divergent += 1
+                details.append(f"- {lf['name']} (background, any step): {side} only: {sorted(extra)}")
+        lt, rt = lf.get("stepTimeouts", {}), rf.get("stepTimeouts", {})
+        for step in sorted(set(lt) ^ set(rt)):
+            divergent += 1
+            side = left["label"] if step in lt else right["label"]
+            details.append(f"- {lf['name']} {step}: timeout on {side} only")
     rows += ["", "## Divergent steps", ""] + (details or ["None."])
     text = "\n".join(rows) + "\n"
     if args.out:
