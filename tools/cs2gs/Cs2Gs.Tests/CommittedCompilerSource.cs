@@ -51,7 +51,9 @@ internal static class CommittedCompilerSource
     /// <returns>The file paths, sorted.</returns>
     internal static IReadOnlyList<string> GSharpFiles(string root, params string[] relativeDirectories)
     {
-        var files = new List<string>();
+        // A set: overlapping directories ("src" and "src/Core") must not count
+        // a file twice.
+        var files = new HashSet<string>(StringComparer.Ordinal);
         foreach (string relative in relativeDirectories)
         {
             string directory = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
@@ -60,7 +62,8 @@ internal static class CommittedCompilerSource
                 throw new DirectoryNotFoundException($"Inventory directory '{relative}' does not exist under '{root}'.");
             }
 
-            files.AddRange(Directory.EnumerateFiles(directory, "*.gs", SearchOption.AllDirectories)
+            files.UnionWith(Directory.EnumerateFiles(directory, "*.gs", SearchOption.AllDirectories)
+                .Select(Path.GetFullPath)
                 .Where(path => !IsBuildOutput(root, path)));
         }
 
@@ -71,13 +74,13 @@ internal static class CommittedCompilerSource
                 "a count over nothing proves nothing (#4656).");
         }
 
-        files.Sort(StringComparer.Ordinal);
-        return files;
+        return files.OrderBy(path => path, StringComparer.Ordinal).ToList();
     }
 
     // Judged on the path BELOW the root: the root itself may sit under a bin/.
     private static bool IsBuildOutput(string root, string path) =>
         Path.GetRelativePath(root, path)
             .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Any(segment => segment is "obj" or "bin");
+            .Any(segment => string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase));
 }

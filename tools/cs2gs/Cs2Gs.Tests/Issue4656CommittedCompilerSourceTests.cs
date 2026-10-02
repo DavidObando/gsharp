@@ -20,22 +20,46 @@ public sealed class Issue4656CommittedCompilerSourceTests
         string csharp = Tree(".cs");
         string gsharp = Tree(".gs");
         string mixed = Tree(".cs", ".gs");
-
-        Assert.False(CommittedCompilerSource.IsGSharp(csharp));
-        Assert.True(CommittedCompilerSource.IsGSharp(gsharp));
-        Assert.Throws<InvalidOperationException>(() => CommittedCompilerSource.IsGSharp(mixed));
-        Assert.Throws<InvalidOperationException>(() => CommittedCompilerSource.IsGSharp(Tree()));
+        string neither = Tree();
+        try
+        {
+            Assert.False(CommittedCompilerSource.IsGSharp(csharp));
+            Assert.True(CommittedCompilerSource.IsGSharp(gsharp));
+            Assert.Throws<InvalidOperationException>(() => CommittedCompilerSource.IsGSharp(mixed));
+            Assert.Throws<InvalidOperationException>(() => CommittedCompilerSource.IsGSharp(neither));
+        }
+        finally
+        {
+            Delete(csharp, gsharp, mixed, neither);
+        }
     }
 
     [Fact]
     public void GSharpFiles_FailsOnAnEmptyOrMissingDirectory()
     {
+        // Deliberately under the test output (a bin/ directory): a root that
+        // itself sits below bin/ must still be scanned.
         string root = Tree(".gs");
+        try
+        {
+            Assert.Single(CommittedCompilerSource.GSharpFiles(root, "src/Core"));
+            Assert.Single(CommittedCompilerSource.GSharpFiles(root, "src", "src/Core"));
+            Directory.CreateDirectory(Path.Combine(root, "tools", "empty"));
+            Assert.Throws<InvalidOperationException>(() => CommittedCompilerSource.GSharpFiles(root, "tools/empty"));
+            Assert.Throws<DirectoryNotFoundException>(() => CommittedCompilerSource.GSharpFiles(root, "tools/missing"));
+        }
+        finally
+        {
+            Delete(root);
+        }
+    }
 
-        Assert.Single(CommittedCompilerSource.GSharpFiles(root, "src/Core"));
-        Directory.CreateDirectory(Path.Combine(root, "tools", "empty"));
-        Assert.Throws<InvalidOperationException>(() => CommittedCompilerSource.GSharpFiles(root, "tools/empty"));
-        Assert.Throws<DirectoryNotFoundException>(() => CommittedCompilerSource.GSharpFiles(root, "tools/missing"));
+    private static void Delete(params string[] roots)
+    {
+        foreach (string root in roots)
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private static string Tree(params string[] parserExtensions)
