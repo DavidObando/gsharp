@@ -167,16 +167,19 @@ public class Issue3902NodeBackedReceiveShapesTests
         await DrainAsync(ch, Operations);
         var perOperation = (GC.GetTotalAllocatedBytes(precise: true) - before) / (double)Operations;
 
-#if DEBUG
-        Assert.True(perOperation >= 0, "Debug builds do not carry a meaningful allocation number.");
-#else
-        Assert.True(
-            perOperation < 32,
-            $"expected a node-backed park to allocate ~nothing, measured {perOperation:F1} B/op. "
-            + "A number in the tens means the reshaping wrapper in ChannelOps.Awaited.cs is boxing "
-            + "its state machine again — check both the Chan<T> dispatch and the pooling builder "
-            + "on Unwrap/ToTuple's local functions (issue #3902 S2).");
-#endif
+        if (OptimizedBuild.IsOptimized())
+        {
+            Assert.True(
+                perOperation < 32,
+                $"expected a node-backed park to allocate ~nothing, measured {perOperation:F1} B/op. "
+                + "A number in the tens means the reshaping wrapper in ChannelOps.Awaited.cs is boxing "
+                + "its state machine again — check both the Chan<T> dispatch and the pooling builder "
+                + "on Unwrap/ToTuple's local functions (issue #3902 S2).");
+        }
+        else
+        {
+            Assert.True(perOperation >= 0, "Debug builds do not carry a meaningful allocation number.");
+        }
 
         static async Task DrainAsync(Channel<int> ch, int operations)
         {

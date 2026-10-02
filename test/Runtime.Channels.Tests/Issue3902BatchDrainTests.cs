@@ -169,15 +169,18 @@ public class Issue3902BatchDrainTests
         }
 
         var perProbe = (GC.GetTotalAllocatedBytes(precise: true) - before) / (double)Probes;
-#if DEBUG
-        Assert.True(perProbe >= 0, "Debug builds do not carry a meaningful allocation number.");
-#else
-        Assert.True(
-            perProbe < 16,
-            $"expected an empty chunked probe to allocate nothing, measured {perProbe:F1} B/probe. "
-            + "About 4096 means the chunk array is allocated before the count is known "
-            + "(issue #3902 S3).");
-#endif
+        if (OptimizedBuild.IsOptimized())
+        {
+            Assert.True(
+                perProbe < 16,
+                $"expected an empty chunked probe to allocate nothing, measured {perProbe:F1} B/probe. "
+                + "About 4096 means the chunk array is allocated before the count is known "
+                + "(issue #3902 S3).");
+        }
+        else
+        {
+            Assert.True(perProbe >= 0, "Debug builds do not carry a meaningful allocation number.");
+        }
     }
 
     [Fact]

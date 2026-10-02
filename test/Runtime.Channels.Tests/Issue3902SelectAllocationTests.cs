@@ -55,16 +55,19 @@ public class Issue3902SelectAllocationTests
         var perSelect = (GC.GetTotalAllocatedBytes(precise: true) - before) / (double)Selects;
 
         Assert.True(taken > 0, "the measured loop should have taken values");
-#if DEBUG
-        Assert.True(perSelect >= 0, "Debug builds do not carry a meaningful allocation number.");
-#else
-        Assert.True(
-            perSelect < 12,
-            $"expected a ready select to allocate ~nothing, measured {perSelect:F1} B/select. "
-            + "Roughly 104 B means the arm descriptors are being allocated per select again; "
-            + "a smaller excess means the winning value is boxing through SelectWaiter.Deposit "
-            + "instead of DepositFrom (issue #3902 S4).");
-#endif
+        if (OptimizedBuild.IsOptimized())
+        {
+            Assert.True(
+                perSelect < 12,
+                $"expected a ready select to allocate ~nothing, measured {perSelect:F1} B/select. "
+                + "Roughly 104 B means the arm descriptors are being allocated per select again; "
+                + "a smaller excess means the winning value is boxing through SelectWaiter.Deposit "
+                + "instead of DepositFrom (issue #3902 S4).");
+        }
+        else
+        {
+            Assert.True(perSelect >= 0, "Debug builds do not carry a meaningful allocation number.");
+        }
 
         // No xunit assertions inside the measured loop: Assert.Equal allocates,
         // and an earlier version of this test measured 448 B/select of its own
