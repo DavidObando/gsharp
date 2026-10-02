@@ -22,7 +22,7 @@ commit.
 | `build.yml` runs on `push` of tags matching `v*`. The same file runs for pushes to `main` and PRs into `main`. | `.github/workflows/build.yml:3-11` |
 | The tag only gets a clean version (no `-g<sha>` suffix) if it matches `^refs/tags/v\d+(?:\.\d+)*$`. A tag such as `v0.4.NNNN-rc1` still triggers `publish` (`startsWith(github.ref, 'refs/tags/v')`), but it publishes packages with a prerelease `-g<sha>` version. | `version.json:9-12`, `build.yml:717` |
 | The version comes from the tagged commit's git height, not from the tag name. Nothing compares the two (#4639). Builds on `main` are also public, so the `main` push run of the freeze commit already prints the version the tag will publish. | `version.json:7-12`, `build.yml:48-62` |
-| `publish` waits for `build, tests, test-partition, e2e, ilverify, cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix, visual-studio-extension`. `nullable-hygiene` and the hot-core guard are not in the list; the hot-core guard only runs on PRs. | `build.yml:716`, `:567` |
+| `publish` waits for `build, tests, test-partition, e2e, ilverify, cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix, visual-studio-extension`. `nullable-hygiene` and the hot-core guard are not in the list; the hot-core guard only runs on PRs. | `build.yml:716`, `build.yml:567` |
 | No job declares an `environment:`, so publishing has no approval gate: pushing the tag is the approval. Repository environments are only `copilot` and `github-pages` (`gh api repos/DavidObando/gsharp/environments`, read 2026-10-02). | `build.yml` (no `environment:` key) |
 
 ### Publish order (one tag run)
@@ -56,9 +56,9 @@ No workflow publishes to Open VSX.
 
 | Secret | Used by | Notes |
 |---|---|---|
-| `GITHUB_TOKEN` | GitHub release create/upload (`build.yml:743`); `publish` has `permissions: contents: write` (`:719-720`) | Automatic. |
+| `GITHUB_TOKEN` | GitHub release create/upload (`build.yml:743`); `publish` has `permissions: contents: write` (`build.yml:719-720`) | Automatic. |
 | `NUGET_API_KEY` | `dotnet nuget push` (`build.yml:755`) | The GitHub secret was last updated 2026-05-29; the key itself may be older. nuget.org keys expire after at most 365 days; check its expiry on nuget.org. Its scope must allow **pushing a new package id**, `GSharp.CodeAnalysis.Analyzers.Testing`, as well as new versions of the five existing ids. If it can't, that push is rejected and the step fails. Re-running is safe (`--skip-duplicate`). |
-| `VSCE_PAT` | VS Code Marketplace (`build.yml:764`) **and** Visual Studio Marketplace (`:784`, passed as `VS_MARKETPLACE_PAT`) | The GitHub secret was last updated 2026-05-30; the PAT itself may be older. One Azure DevOps PAT with Marketplace (Manage) scope for the `gsharplang` publisher. Check its expiry in Azure DevOps. |
+| `VSCE_PAT` | VS Code Marketplace (`build.yml:764`) **and** Visual Studio Marketplace (`build.yml:784`, passed as `VS_MARKETPLACE_PAT`) | The GitHub secret was last updated 2026-05-30; the PAT itself may be older. One Azure DevOps PAT with Marketplace (Manage) scope for the `gsharplang` publisher. Check its expiry in Azure DevOps. |
 
 There is no environment approval to give. The owner's approvals are pushing
 the tag, creating the C# branch and its ruleset, and merging the freeze and
@@ -154,7 +154,7 @@ re-run a failure you haven't explained.
 Re-running the GitHub release and NuGet steps is safe:
 
 - the GitHub release step is `view || create` plus `upload --clobber` (`build.yml:745-747`);
-- NuGet uses `--skip-duplicate` (`:755`).
+- NuGet uses `--skip-duplicate` (`build.yml:755`).
 
 The VS Code Marketplace step is not reliably idempotent. A timeout or an error
 page (both seen in past releases, #4640) doesn't prove the upload was rejected:
@@ -173,9 +173,18 @@ step 4) for `gsharplang.vscode-gsharp`:
   Then, on Windows with the Visual Studio SDK, run the same command as
   `build.yml:800-803`:
 
-  ```text
-  VsixPublisher.exe publish -payload GSharp.VisualStudio.vsix -publishManifest src/vs-gsharp/vs-publish.json -personalAccessToken <VSCE_PAT>
+  ```powershell
+  # Read the PAT without echoing it or leaving it in shell history.
+  $pat = [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Marketplace PAT')).Password
+  & $publisher publish -payload GSharp.VisualStudio.vsix `
+      -publishManifest src\vs-gsharp\vs-publish.json -personalAccessToken $pat
+  Remove-Variable pat
   ```
+
+  `$publisher` is `VSSDK\VisualStudioIntegration\Tools\Bin\VsixPublisher.exe`
+  under the Visual Studio installation, located the same way as
+  `build.yml:786-798`. Don't paste the PAT into a shared terminal, a log, or
+  an issue.
 
   Alternatively, upload the VSIX in the Marketplace publisher portal for
   `gsharplang`. The `publish` job stays red in the run history; record the
@@ -226,7 +235,7 @@ gh release view "v$V" --repo DavidObando/gsharp --json assets --jq '.assets[].na
 The owner creates the branch at the tag:
 
 ```sh
-git push origin v0.4.NNNN^{commit}:refs/heads/cs2gs/csharp-0.4
+git push origin 'v0.4.NNNN^{commit}:refs/heads/cs2gs/csharp-0.4'   # quoted: zsh expands ^ and {}
 ```
 
 Protection: ruleset "Lock Main" (id 17277774) covers only `~DEFAULT_BRANCH`.
