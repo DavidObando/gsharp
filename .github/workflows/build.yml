@@ -10,6 +10,20 @@ on:
     branches:
       - main
 
+# Cancel superseded PR runs: every push to a PR starts a new run, and without
+# this the older runs of the same PR keep consuming runners (and starve other
+# PRs and Copilot review) until they finish. The group is keyed on the PR
+# number for pull_request events, so only runs of the same PR share it.
+# Pushes to main and `v*` tags (which run the publish job) get a group unique
+# to the run (github.run_id), so they never cancel or queue behind each other,
+# and cancel-in-progress is false for them regardless.
+# The group name is `build-...`, distinct from the job-level
+# `hot-core-translation-guard-<PR>` group below, which is kept so the guard
+# job's own cancellation semantics stay unchanged.
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # Nerdbank.GitVersioning's GitHub Actions integration appends
   # GitBuildVersion* lines to $GITHUB_ENV from every MSBuild node; with
@@ -655,6 +669,7 @@ jobs:
       actions: read
       checks: read
       contents: read
+      pull-requests: read
 
     steps:
       - uses: actions/checkout@v5
@@ -662,6 +677,8 @@ jobs:
       - name: Report cancellation cause
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           job_id=$(
             gh api \
@@ -683,6 +700,18 @@ jobs:
             sleep 2
           done
           messages=$(jq -r '.[].message // empty' <<< "$annotations")
+
+          # The workflow-level `build-<PR>` concurrency group also cancels this
+          # run when a newer push arrives, and the job annotation for that
+          # path is not guaranteed to carry the job-level concurrency text.
+          # If the annotations were not recognized but the PR head has moved
+          # past this run's commit, the cancellation is supersession.
+          if [[ "$cause" == unknown ]]; then
+            current_head=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha || true)
+            if [[ -n "$current_head" && "$current_head" != "$RUN_HEAD_SHA" ]]; then
+              cause=superseded
+            fi
+          fi
 
           case "$cause" in
             superseded)
