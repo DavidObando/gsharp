@@ -571,9 +571,11 @@ public sealed class TriageBuilder
     /// artifact per app, not one per differing name: a whole class going
     /// missing would otherwise file thousands. The diagnostic id names the
     /// failure (<c>TEST-NAME-PARITY</c>, <c>TEST-ORACLE-MISSING</c>,
-    /// <c>TEST-ORACLE-INVALID</c>, <c>TEST-RESULTS-UNREADABLE</c>); the
-    /// fingerprint covers the whole message, which lists the sorted
-    /// differences, so the same mismatch set fingerprints identically.
+    /// <c>TEST-ORACLE-INVALID</c>, <c>TEST-RESULTS-UNREADABLE</c>). The
+    /// fingerprint is computed from <c>fingerprintKey</c> when given (the stage
+    /// passes the sorted differences, or the failure kind and app) and from the
+    /// message text only otherwise, so runner paths in a message never split
+    /// one failure into many fingerprints.
     /// </summary>
     /// <param name="id">The diagnostic id.</param>
     /// <param name="message">The human-readable description, differences included.</param>

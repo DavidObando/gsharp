@@ -226,6 +226,18 @@ public sealed class Issue4633TestNameParityTests
         Assert.True(TestParityStage.IsMirroredTestProject(true, plain));
     }
 
+    /// <summary>Review finding: a truncated or edited oracle (count disagrees with its list) is rejected.</summary>
+    [Fact]
+    public void Oracle_CountMismatch_IsRejected()
+    {
+        string dir = NewDirectory();
+        CSharpTestOracle oracle = CSharpTestOracle.Create(AppId, OracleNames);
+        oracle.TestCount = OracleNames.Length + 1;
+        oracle.Write(dir);
+
+        Assert.Throws<InvalidOperationException>(() => CSharpTestOracle.LoadOrNull(dir, AppId));
+    }
+
     // ---------------------------------------------------------------------
     // The baseline of justified differences.
     // ---------------------------------------------------------------------

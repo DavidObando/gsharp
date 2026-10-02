@@ -51,9 +51,11 @@ public static class TestNameParity
         }
 
         Dictionary<string, NameTally> expectedTally = Tally(expected);
-        Dictionary<string, NameTally> actualTally = Tally(actual
+        List<string> actualNames = actual
             .Where(result => result?.Name is not null)
-            .Select(result => result.Name));
+            .Select(result => result.Name)
+            .ToList();
+        Dictionary<string, NameTally> actualTally = Tally(actualNames);
 
         int matched = 0;
         foreach (KeyValuePair<string, NameTally> pair in expectedTally)
@@ -95,7 +97,7 @@ public static class TestNameParity
 
         return new TestNameParityResult(
             expected.Count,
-            actual.Count,
+            actualNames.Count,
             matched,
             theoryRows,
             Unmatched(expectedTally),

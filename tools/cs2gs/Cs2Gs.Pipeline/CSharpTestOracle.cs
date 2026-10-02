@@ -202,6 +202,13 @@ public sealed class CSharpTestOracle
             throw new InvalidOperationException(path + ": the C# test oracle lists no tests.");
         }
 
+        if (oracle.TestCount != oracle.Tests.Count)
+        {
+            throw new InvalidOperationException(
+                path + ": the C# test oracle says " + oracle.TestCount + " test(s) but lists " +
+                oracle.Tests.Count + "; the file is truncated or was edited.");
+        }
+
         if (!string.Equals(oracle.AppId, appId, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
