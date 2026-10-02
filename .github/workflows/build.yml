@@ -212,6 +212,9 @@ jobs:
       - name: Verify the concurrency benchmark harness
         run: python3 build/verify-concurrency-bench.py --smoke
 
+      - name: Verify the self-host compiler benchmark gate
+        run: python3 build/test-selfhost-bench.py
+
   e2e:
     runs-on: ubuntu-latest
 
