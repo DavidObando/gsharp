@@ -573,7 +573,14 @@ partial class Program {
         Assert.Contains("partial class Program {", printed, StringComparison.Ordinal);
         Assert.Contains("internal partial func Digits() Regex;", printed, StringComparison.Ordinal);
         Assert.Contains("internal func Describe(s string) string", printed, StringComparison.Ordinal);
-        Assert.Contains("internal func Echo(s string) string", printed, StringComparison.Ordinal);
+
+        // Issue #4676: `Echo` is an extension on an external receiver (`string`) of a class
+        // that has a private nested type (`Box`), so it is lifted once and hosted on its
+        // owner, which reaches `Box` and the other private members, instead of staying
+        // an in-owner helper.
+        Assert.Contains("@ExtensionOwner(typeof(Program))", printed, StringComparison.Ordinal);
+        Assert.Contains("internal func (s string) Echo() string -> s", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("internal func Echo(s string) string", printed, StringComparison.Ordinal);
         Assert.Contains("internal class Box", printed, StringComparison.Ordinal);
         Assert.Contains("func Secret() string", printed, StringComparison.Ordinal);
         Assert.Contains("Program.Digits()", printed, StringComparison.Ordinal);

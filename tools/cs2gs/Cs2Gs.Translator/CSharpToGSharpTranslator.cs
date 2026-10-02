@@ -990,8 +990,21 @@ public sealed partial class CSharpToGSharpTranslator
     private static bool RequiresOwnerScopedExtension(IMethodSymbol method)
     {
         IMethodSymbol original = method?.ReducedFrom ?? method;
+
+        // Issue #4676: only an extension whose receiver the project OWNS (a source
+        // type in the same namespace, or an enum) still needs the owner-scoped
+        // scheme, because such an extension is moved into the receiver type, which
+        // cannot reach the owner's private nested types. An extension on an
+        // external receiver (`this Type`, `this string`, `this T`) is lifted to a
+        // top-level function and hosted on its owner through `@ExtensionOwner`,
+        // which gives it the owner's private access: one function with the real
+        // body, one `[Extension]` method on the owner, as in C#. The scheme this
+        // replaces kept the body as an in-owner helper and published a forwarding
+        // companion on the package's public `<Program>`: an extra public type, and
+        // the owner's own method without its extension marker.
         return original?.IsExtensionMethod == true &&
-            HasPrivateNestedAggregate(original.ContainingType);
+            HasPrivateNestedAggregate(original.ContainingType) &&
+            TryGetOwnedExtensionReceiver(original, out _);
     }
 
     private static bool IsOwnerScopedCompanionShapeEligible(IMethodSymbol method)

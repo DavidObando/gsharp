@@ -170,6 +170,16 @@ Instance methods on a **`class`** (or `data class`) the package **owns** are dec
 
 C# **extension methods** (`static R M(this T self, …)`) translate to `func (self T) M(…) R` (ADR-0019; historically `func extension (self T) M(…) R` for enum/owned receivers per ADR-0165, superseded above — the plain form now covers every receiver kind and ownership).
 
+Issue #4676 narrows the exception below to extensions whose receiver the project
+*owns* (a source type in the same namespace, or an enum). An extension on an
+external receiver (`this Type`, `this string`, `this T`) of a static class with a
+private nested aggregate is lifted like any other and hosted on its owner through
+`@ExtensionOwner(typeof(Owner))` (issue #4234): a function hosted on its owner
+reaches the owner's private nested types and members, so the real body is kept in
+one function, the owner carries the one `[Extension]` method the C# assembly had,
+and no forwarding companion lands on the package's public `<Program>`. The
+description that follows applies to the owned-receiver case only.
+
 Issue #3413 adds one ownership-preserving exception: when the declaring static
 class contains a private nested aggregate, its extension methods stay as
 ordinary static methods in that owner's `shared` block. A forwarding
