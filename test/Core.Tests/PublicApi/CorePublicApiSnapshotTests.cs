@@ -44,6 +44,9 @@ public sealed class CorePublicApiSnapshotTests
 {
     private const string SnapshotFileName = "gsharp-core-public-api.txt";
 
+    // The modifier an init-only setter carries on its return type.
+    private const string InitOnlyModifier = "modreq(System.Runtime.CompilerServices.IsExternalInit)";
+
     /// <summary>
     /// The public surface of the built <c>GSharp.Core.dll</c> matches the
     /// committed snapshot. An intentional API change regenerates it with
@@ -81,6 +84,7 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("type class GSharp.Core.Tests.PublicApi.SnapshotFixture : System.Object", baseline, StringComparison.Ordinal);
         Assert.Contains("  method public static Int32 Add(Int32 left, Int32 right)", baseline, StringComparison.Ordinal);
         Assert.Contains("  field public const Int32 Answer = 42", baseline, StringComparison.Ordinal);
+        Assert.Contains("  method public static Int32 Take(Int32 count = 3)", baseline, StringComparison.Ordinal);
         Assert.Contains("  property public String Name { get; protected set; }", baseline, StringComparison.Ordinal);
         Assert.Contains("  property public Int32 Fixed { get; init; }", baseline, StringComparison.Ordinal);
 
@@ -206,16 +210,18 @@ public sealed class CorePublicApiSnapshotTests
 
     private static string EnumUnderlyingType(MetadataReader reader, TypeDefinition type, SignatureNames provider)
     {
+        // ECMA-335 II.14.3: the underlying type is the type of the instance
+        // field named `value__`.
         foreach (FieldDefinitionHandle handle in type.GetFields())
         {
             FieldDefinition field = reader.GetFieldDefinition(handle);
-            if ((field.Attributes & FieldAttributes.Static) == 0)
+            if ((field.Attributes & FieldAttributes.Static) == 0 && reader.GetString(field.Name) == "value__")
             {
                 return field.DecodeSignature(provider, null);
             }
         }
 
-        throw new InvalidOperationException("enum without an instance value field");
+        throw new InvalidOperationException("enum without a value__ field: " + reader.GetString(type.Name));
     }
 
     private static string RenderGenericParameters(
@@ -307,7 +313,7 @@ public sealed class CorePublicApiSnapshotTests
             var line = new StringBuilder("  method ").Append(access).Append(MethodModifiers(method.Attributes))
                 .Append(' ').Append(signature.ReturnType).Append(' ').Append(reader.GetString(method.Name))
                 .Append(RenderGenericParameters(reader, method.GetGenericParameters(), provider));
-            var names = new Dictionary<int, (string Name, bool Optional, bool Out)>();
+            var names = new Dictionary<int, (string Name, string Default, bool Out)>();
             foreach (ParameterHandle parameterHandle in method.GetParameters())
             {
                 Parameter parameter = reader.GetParameter(parameterHandle);
@@ -317,9 +323,18 @@ public sealed class CorePublicApiSnapshotTests
                     continue;
                 }
 
+                // An optional parameter's default is baked into callers, so the
+                // value itself is part of the API, not just its presence.
+                string defaultValue = null;
+                if ((parameter.Attributes & ParameterAttributes.Optional) != 0)
+                {
+                    ConstantHandle constant = parameter.GetDefaultValue();
+                    defaultValue = constant.IsNil ? "?" : ConstantValue(reader, constant);
+                }
+
                 names[parameter.SequenceNumber] = (
                     parameter.Name.IsNil ? "arg" + parameter.SequenceNumber : reader.GetString(parameter.Name),
-                    (parameter.Attributes & ParameterAttributes.Optional) != 0,
+                    defaultValue,
                     (parameter.Attributes & ParameterAttributes.Out) != 0);
             }
 
@@ -327,15 +342,19 @@ public sealed class CorePublicApiSnapshotTests
             for (int index = 0; index < signature.ParameterTypes.Length; index++)
             {
                 string rendered = signature.ParameterTypes[index];
-                if (names.TryGetValue(index + 1, out (string Name, bool Optional, bool Out) parameter))
+                // ECMA-335 allows a parameter without a Param row: name it
+                // positionally so every parameter renders the same shape.
+                if (!names.TryGetValue(index + 1, out (string Name, string Default, bool Out) parameter))
                 {
-                    if (parameter.Out && rendered.StartsWith("ref ", StringComparison.Ordinal))
-                    {
-                        rendered = "out " + rendered.Substring("ref ".Length);
-                    }
-
-                    rendered += " " + parameter.Name + (parameter.Optional ? " = ?" : string.Empty);
+                    parameter = ("arg" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), null, false);
                 }
+
+                if (parameter.Out && rendered.StartsWith("ref ", StringComparison.Ordinal))
+                {
+                    rendered = "out " + rendered.Substring("ref ".Length);
+                }
+
+                rendered += " " + parameter.Name + (parameter.Default is null ? string.Empty : " = " + parameter.Default);
 
                 parameters.Add(rendered);
             }
@@ -380,7 +399,7 @@ public sealed class CorePublicApiSnapshotTests
                 // An init-only setter carries modreq(IsExternalInit) on its
                 // return type; `set` and `init` are different contracts.
                 string keyword = reader.GetMethodDefinition(accessors.Setter).DecodeSignature(provider, null).ReturnType
-                    .Contains("modreq(System.Runtime.CompilerServices.IsExternalInit)", StringComparison.Ordinal)
+                    .Contains(InitOnlyModifier, StringComparison.Ordinal)
                     ? "init;"
                     : "set;";
                 line.Append(setter == widest ? " " + keyword : " " + setter + " " + keyword);
@@ -660,6 +679,11 @@ public class SnapshotFixture
     /// <param name="right">The right operand.</param>
     /// <returns>The sum.</returns>
     public static int Add(int left, int right) => left + right;
+
+    /// <summary>Has an optional parameter whose default value is part of the API.</summary>
+    /// <param name="count">How many.</param>
+    /// <returns>The count.</returns>
+    public static int Take(int count = 3) => count;
 
     /// <summary>A protected virtual hook.</summary>
     protected virtual void OnChanged()
