@@ -72,6 +72,19 @@ class CompareTests(unittest.TestCase):
                              trx.results(write_trx(self.root / "m.trx", migrated)), 0.5)
         self.assertEqual(["A.One.Run"], report["regressions"])
 
+    def test_missing_class_name_is_not_a_parser_crash(self) -> None:
+        path = write_trx(self.root / "missing-class.trx", {"A.One.Run": "Passed"})
+        path.write_text(path.read_text().replace('className="A.One" ', ""), encoding="utf-8")
+        self.assertEqual({"Run": "Passed"}, trx.results(path))
+
+    def test_already_qualified_names_are_not_prefixed_twice(self) -> None:
+        path = write_trx(self.root / "qualified.trx", {"A.One.Run": "Passed"})
+        path.write_text(path.read_text().replace('testName="Run"', 'testName="A.One.Run"'), encoding="utf-8")
+        self.assertEqual({"A.One.Run": "Passed"}, trx.results(path))
+
+    def test_an_empty_baseline_cannot_prove_parity(self) -> None:
+        self.assertEqual(1, self.run_compare({}, {"A.One.Run": "Passed"}))
+
 
 if __name__ == "__main__":
     unittest.main()

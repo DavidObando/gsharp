@@ -23,12 +23,12 @@ NS = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
 
 
 def results(trx: Path) -> dict[str, str]:
-    """Maps `Class.Method(args)` to its outcome."""
+    """Maps TRX testName (prefixed with className unless already present) to outcome."""
     root = ET.parse(trx).getroot()
     classes = {}
     for test in root.iterfind("t:TestDefinitions/t:UnitTest", NS):
         method = test.find("t:TestMethod", NS)
-        classes[test.get("id")] = method.get("className") if method is not None else ""
+        classes[test.get("id")] = method.get("className", "") if method is not None else ""
     outcomes = {}
     for result in root.iterfind("t:Results/t:UnitTestResult", NS):
         name = result.get("testName", "")
@@ -41,17 +41,19 @@ def results(trx: Path) -> dict[str, str]:
 def compare(baseline: dict[str, str], migrated: dict[str, str], min_ratio: float) -> dict:
     failed = lambda run: {name for name, outcome in run.items() if outcome not in ("Passed", "NotExecuted")}
     executed = lambda run: sum(1 for outcome in run.values() if outcome != "NotExecuted")
-    regressions = sorted(failed(migrated) - failed(baseline))
+    baseline_failed, migrated_failed = failed(baseline), failed(migrated)
+    regressions = sorted(migrated_failed - baseline_failed)
     report = {
         "baselineExecuted": executed(baseline), "migratedExecuted": executed(migrated),
-        "baselineFailed": len(failed(baseline)), "migratedFailed": len(failed(migrated)),
+        "baselineFailed": len(baseline_failed), "migratedFailed": len(migrated_failed),
         "regressions": regressions,
-        "sharedFailures": sorted(failed(migrated) & failed(baseline)),
-        "fixedInMigrated": sorted(failed(baseline) - failed(migrated)),
+        "sharedFailures": sorted(migrated_failed & baseline_failed),
+        "fixedInMigrated": sorted(baseline_failed - migrated_failed),
     }
     truncated = report["migratedExecuted"] < min_ratio * report["baselineExecuted"]
     report["truncated"] = truncated
-    report["ok"] = not regressions and not truncated and report["migratedExecuted"] > 0
+    report["ok"] = (not regressions and not truncated
+                    and report["baselineExecuted"] > 0 and report["migratedExecuted"] > 0)
     return report
 
 
@@ -77,6 +79,8 @@ def main(argv: list[str]) -> int:
         print(f"  REGRESSION {name}")
     if report["truncated"]:
         print("  TRUNCATED: the migrated run executed too few tests (crashed test host?)")
+    if report["baselineExecuted"] == 0:
+        print("  NO BASELINE: the C# run executed no tests")
     print("migrated suite: " + ("OK" if report["ok"] else "REGRESSED"))
     return 0 if report["ok"] else 1
 
