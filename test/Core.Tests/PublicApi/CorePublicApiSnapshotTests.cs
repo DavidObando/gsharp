@@ -90,6 +90,7 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("  field public const Int32 Answer = 42", baseline, StringComparison.Ordinal);
         Assert.Contains("  method public static Int32 Take(Int32 count = 3)", baseline, StringComparison.Ordinal);
         Assert.Contains("  method public static Int32 Peek(in Int32 value)", baseline, StringComparison.Ordinal);
+        Assert.Contains("  method public static System.Decimal Price(System.Decimal amount = 1.5m)", baseline, StringComparison.Ordinal);
         Assert.Contains(
             "type protected internal sealed class GSharp.Core.Tests.PublicApi.SnapshotFixture+Nested : System.Object",
             rendered);
@@ -113,6 +114,7 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains(
             "type enum GSharp.Core.Tests.PublicApi.SnapshotByteEnum : Byte",
             rendered);
+        Assert.Contains("  field public const GSharp.Core.Tests.PublicApi.SnapshotByteEnum One = 1", rendered);
     }
 
     internal static IReadOnlyList<string> RenderPublicApi(string assemblyPath)
@@ -306,9 +308,14 @@ public sealed class CorePublicApiSnapshotTests
 
             line.Append(' ').Append(field.DecodeSignature(provider, null)).Append(' ').Append(reader.GetString(field.Name));
             ConstantHandle constant = field.GetDefaultValue();
+            string attributeConstant = AttributeConstant(reader, field.GetCustomAttributes());
             if (!constant.IsNil)
             {
                 line.Append(" = ").Append(ConstantValue(reader, constant));
+            }
+            else if (attributeConstant is not null)
+            {
+                line.Append(" = ").Append(attributeConstant);
             }
 
             members.Add(line.ToString());
@@ -346,7 +353,8 @@ public sealed class CorePublicApiSnapshotTests
                 if ((parameter.Attributes & ParameterAttributes.Optional) != 0)
                 {
                     ConstantHandle constant = parameter.GetDefaultValue();
-                    defaultValue = constant.IsNil ? "?" : ConstantValue(reader, constant);
+                    defaultValue = !constant.IsNil ? ConstantValue(reader, constant)
+                        : AttributeConstant(reader, parameter.GetCustomAttributes()) ?? "?";
                 }
 
                 names[parameter.SequenceNumber] = (
@@ -511,6 +519,68 @@ public sealed class CorePublicApiSnapshotTests
         }
 
         return modifiers.ToString();
+    }
+
+    /// <summary>
+    /// A compile-time constant that metadata cannot store in the Constant table
+    /// and csc therefore encodes as an attribute: <c>decimal</c>
+    /// (<c>DecimalConstantAttribute</c>) and <c>DateTime</c>
+    /// (<c>DateTimeConstantAttribute</c>). Callers bake these in like any other
+    /// constant. Returns <see langword="null"/> when neither attribute is present.
+    /// </summary>
+    private static string AttributeConstant(MetadataReader reader, CustomAttributeHandleCollection attributes)
+    {
+        foreach (CustomAttributeHandle handle in attributes)
+        {
+            CustomAttribute attribute = reader.GetCustomAttribute(handle);
+            string name = AttributeTypeName(reader, attribute.Constructor);
+            BlobReader blob = reader.GetBlobReader(attribute.Value);
+            if (blob.Length < 2 || blob.ReadUInt16() != 1)
+            {
+                continue;
+            }
+
+            if (name == "System.Runtime.CompilerServices.DecimalConstantAttribute")
+            {
+                byte scale = blob.ReadByte();
+                byte sign = blob.ReadByte();
+                int high = blob.ReadInt32();
+                int middle = blob.ReadInt32();
+                int low = blob.ReadInt32();
+                decimal value = new decimal(low, middle, high, sign != 0, scale);
+                return value.ToString(System.Globalization.CultureInfo.InvariantCulture) + "m";
+            }
+
+            if (name == "System.Runtime.CompilerServices.DateTimeConstantAttribute")
+            {
+                return "DateTime(" + blob.ReadInt64().ToString(System.Globalization.CultureInfo.InvariantCulture) + ")";
+            }
+        }
+
+        return null;
+    }
+
+    private static string AttributeTypeName(MetadataReader reader, EntityHandle constructor)
+    {
+        EntityHandle type = constructor.Kind switch
+        {
+            HandleKind.MemberReference => reader.GetMemberReference((MemberReferenceHandle)constructor).Parent,
+            HandleKind.MethodDefinition => reader.GetMethodDefinition((MethodDefinitionHandle)constructor).GetDeclaringType(),
+            _ => default,
+        };
+        return type.Kind switch
+        {
+            HandleKind.TypeReference => QualifiedName(reader, reader.GetTypeReference((TypeReferenceHandle)type)),
+            HandleKind.TypeDefinition => SignatureNames.FullName(reader, (TypeDefinitionHandle)type),
+            _ => string.Empty,
+        };
+    }
+
+    private static string QualifiedName(MetadataReader reader, TypeReference reference)
+    {
+        string ns = reader.GetString(reference.Namespace);
+        string name = reader.GetString(reference.Name);
+        return ns.Length == 0 ? name : ns + "." + name;
     }
 
     private static string ConstantValue(MetadataReader reader, ConstantHandle handle)
@@ -725,6 +795,11 @@ public class SnapshotFixture
     /// <param name="value">The value.</param>
     /// <returns>The value.</returns>
     public static int Peek(in int value) => value;
+
+    /// <summary>Has a decimal default, which csc encodes as an attribute.</summary>
+    /// <param name="amount">The amount.</param>
+    /// <returns>The amount.</returns>
+    public static decimal Price(decimal amount = 1.5m) => amount;
 
     /// <summary>A protected virtual hook.</summary>
     protected virtual void OnChanged()
