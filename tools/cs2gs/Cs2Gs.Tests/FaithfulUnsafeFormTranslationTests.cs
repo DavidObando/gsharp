@@ -168,9 +168,10 @@ namespace Demo
 }");
 
         // `public` is G#'s default visibility, so the rendered head is bare
-        // `unsafe class` — what matters is that no accessibility keyword ever
+        // `unsafe open class` (issue #4674: a public non-sealed C# class stays
+        // inheritable) — what matters is that no accessibility keyword ever
         // follows the `unsafe` modifier.
-        Assert.Contains("unsafe class Native", printed);
+        Assert.Contains("unsafe open class Native", printed);
         Assert.DoesNotContain("unsafe public", printed);
     }
 
