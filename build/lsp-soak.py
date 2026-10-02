@@ -584,10 +584,12 @@ class LspClient:
         try:
             if self.process.poll() is not None:
                 raise self._exited()
-            self.request("shutdown", None, timeout)
+            shutdown_error = rpc_error_crash("shutdown", self.request("shutdown", None, timeout))
             replied = True
             self.notify("exit", None)
             code = self.process.wait(timeout=timeout)
+            if shutdown_error is not None:
+                return {**shutdown_error, "atShutdown": True}, None
             if code != 0:
                 return ({"kind": "process-exit", "code": code, "stderr": "\n".join(list(self.stderr_tail)[-40:]),
                          "atShutdown": True}, None)
@@ -679,6 +681,20 @@ def _signature(crash: dict[str, Any]) -> str:
     return kind
 
 
+def rpc_error_crash(method: str, reply: dict[str, Any]) -> dict[str, Any] | None:
+    """The crash record for a JSON-RPC error reply, or None for no error or a benign one."""
+    error = reply.get("error")
+    if error is None:
+        return None
+    code = error.get("code")
+    if code == METHOD_NOT_FOUND:
+        raise HarnessError(f"server does not implement {method}: {error}")
+    if code in BENIGN_RPC_ERRORS:
+        return None
+    return {"kind": "rpc-error", "method": method, "code": code,
+            "message": error.get("message"), "data": error.get("data")}
+
+
 def _ice_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     found = []
     for item in items or []:
@@ -732,11 +748,14 @@ class FileRun:
             },
         }
         try:
-            self.client.request("initialize", init, self.args.request_timeout)
+            reply = self.client.request("initialize", init, self.args.request_timeout)
         except RequestTimeout as exc:
             # No step can run against a server that never initializes; fail the run loudly.
             self.client.kill()
             raise HarnessError(f"server did not answer initialize: {exc}") from exc
+        if "error" in reply:
+            self.client.kill()
+            raise HarnessError(f"server failed initialize: {reply['error']}")
         self.client.notify("initialized", {})
         self.version += 1
         self.client.notify("textDocument/didOpen", {"textDocument": {
@@ -794,8 +813,10 @@ class FileRun:
         # its log is read; its startup errors then land on this step, tagged.
         try:
             if self.client is not None:
-                self.client.request("textDocument/documentSymbol", {"textDocument": {"uri": self.uri}},
-                                    self.args.request_timeout)
+                crash = rpc_error_crash("textDocument/documentSymbol", self.client.request(
+                    "textDocument/documentSymbol", {"textDocument": {"uri": self.uri}}, self.args.request_timeout))
+                if crash is not None:
+                    record["crashes"].append({**crash, "afterRestart": True})
         except ServerExited as exc:
             record["crashes"].append({"kind": "process-exit", "code": exc.code, "stderr": exc.stderr,
                                       "afterRestart": True})
@@ -838,14 +859,10 @@ class FileRun:
         record["timings"].setdefault(method, []).append(ms)
         if since is not None:
             record[since[1]] = round((time.perf_counter() - since[0]) * 1000, 1)
-        error = reply.get("error")
-        if error is not None:
-            code = error.get("code")
-            if code == METHOD_NOT_FOUND:
-                raise HarnessError(f"server does not implement {method}: {error}")
-            if code not in BENIGN_RPC_ERRORS:
-                record["crashes"].append({"kind": "rpc-error", "method": method, "code": code,
-                                          "message": error.get("message"), "data": error.get("data")})
+        if "error" in reply:
+            crash = rpc_error_crash(method, reply)
+            if crash is not None:
+                record["crashes"].append(crash)
             return
         if method == "textDocument/diagnostic":
             result = reply.get("result") or {}
@@ -1052,11 +1069,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 1 if crashes or timeouts else 0
 
 
-def plan_identity(summary: dict[str, Any]) -> Any:
-    """The plan hash, or for summaries written before it was recorded, every file's content and step count."""
-    if summary.get("planSha256"):
-        return summary["planSha256"]
-    return (summary["seed"], sorted((file_id(f), f["sha256"], f["summary"]["steps"]) for f in summary["files"]))
+def plan_identity(summary: dict[str, Any]) -> str:
+    """The hash of the plan file a run executed; summaries without one can't be aligned safely."""
+    if not summary.get("planSha256"):
+        raise HarnessError(f"summary of {summary.get('label')!r} has no planSha256; re-run it with this harness")
+    return summary["planSha256"]
 
 
 def cmd_compare(args: argparse.Namespace) -> int:

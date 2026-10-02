@@ -99,6 +99,9 @@ while True:
     result = None
     if method == "shutdown" and mode == "exit-on-shutdown":
         sys.exit(5)
+    if method == "shutdown" and mode == "error-on-shutdown":
+        send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32603, "message": "shutdown failed"}})
+        continue
     if method == "initialize":
         if mode == "hang-initialize":
             time.sleep(30)
@@ -301,6 +304,12 @@ class LspSoakTests(unittest.TestCase):
         self.assertEqual({last: ["process-exit"]}, self.crash_steps(result))
         self.assertTrue(result["steps"][-1]["crashes"][0]["atShutdown"])
 
+    def test_error_reply_to_shutdown_is_recorded_on_the_last_step(self) -> None:
+        code, result = self.run_stub("error-on-shutdown")
+        self.assertEqual(1, code)
+        crash = result["steps"][-1]["crashes"][0]
+        self.assertEqual(("rpc-error", "shutdown", True), (crash["kind"], crash["method"], crash["atShutdown"]))
+
     def test_only_filter_matching_nothing_is_a_harness_error(self) -> None:
         code = soak.main(["run", "--plan", str(self.plan), "--label", "none", "--out", str(SCRATCH / "run-none"),
                           "--server", f"{sys.executable} {self.stub}", "--only", "NoSuchFile"])
@@ -416,18 +425,15 @@ class LspSoakTests(unittest.TestCase):
                                        "--server", f"{sys.executable} {relative_stub}",
                                        "--server-env", f"STUB_FLAG={out}.fired"]))
 
-    def test_compare_refuses_summaries_of_different_plans_without_a_plan_hash(self) -> None:
+    def test_compare_refuses_summaries_without_a_plan_hash(self) -> None:
         self.run_stub("clean")
-        base = json.loads((SCRATCH / "run-clean" / "summary.json").read_text(encoding="utf-8"))
+        current = SCRATCH / "run-clean" / "summary.json"
+        self.assertEqual(0, soak.main(["compare", str(current), str(current)]))
+        base = json.loads(current.read_text(encoding="utf-8"))
         del base["planSha256"]
         old = SCRATCH / "old.json"
         old.write_text(json.dumps(base), encoding="utf-8")
-        self.assertEqual(0, soak.main(["compare", str(old), str(old)]))
-        other = json.loads(json.dumps(base))
-        other["files"][0]["id"] = "00-Other"  # a different file set under the same seed
-        changed = SCRATCH / "changed.json"
-        changed.write_text(json.dumps(other), encoding="utf-8")
-        self.assertEqual(2, soak.main(["compare", str(old), str(changed)]))
+        self.assertEqual(2, soak.main(["compare", str(old), str(old)]))
 
     def test_utf16_positions(self) -> None:
         index = soak.LineIndex("ab\n\U0001F600x\n")
