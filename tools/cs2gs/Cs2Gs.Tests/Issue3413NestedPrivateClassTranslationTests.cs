@@ -238,7 +238,11 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains("func (value int32) AddCached() int32 -> value + ExtensionOwner.cache.Value", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", rendered, StringComparison.Ordinal);
-        Assert.Contains("private open class Helper[TInner]", rendered, StringComparison.Ordinal);
+
+        // Issue #4674: `Helper` is a C# `sealed` class whose `protected override`
+        // members take their accessibility from the base, so it stays non-`open`.
+        Assert.Contains("private class Helper[TInner]", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("open class Helper[TInner]", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(
             context.Diagnostics,
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
@@ -819,7 +823,8 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.DoesNotContain("ExtensionOwner.DelayIdentityAsync", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("ExtensionOwner.ValueAsync", translated, StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", translated, StringComparison.Ordinal);
-        Assert.Contains("private open class Helper[TInner]", translated, StringComparison.Ordinal);
+        Assert.Contains("private class Helper[TInner]", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("open class Helper[TInner]", translated, StringComparison.Ordinal);
         if (!appResult.Succeeded)
         {
             Assert.Fail(PipelineFailureDetails(outputRoot, result, appResult));
