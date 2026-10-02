@@ -266,8 +266,9 @@ public sealed class Issue4580CapturingRefReturningLocalFunctionTests
             var output = process.StandardOutput.ReadToEndAsync();
             var error = process.StandardError.ReadToEndAsync();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
-            Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}:{Environment.NewLine}{error.Result}");
-            return output.Result.ReplaceLineEndings(Environment.NewLine);
+            var errorText = error.GetAwaiter().GetResult();
+            Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}:{Environment.NewLine}{errorText}");
+            return output.GetAwaiter().GetResult().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
