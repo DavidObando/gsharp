@@ -30,9 +30,14 @@ namespace GSharp.Core.Tests.PublicApi;
 /// type and member with the shape that binds callers: kind, base type,
 /// interfaces, generic parameters and constraints, member signatures with
 /// parameter names, and constant values (enum members included, since
-/// <c>SyntaxKind</c> values are compiled into analyzers). It deliberately omits
-/// what differs between compilers without changing the contract: attributes,
-/// <c>beforefieldinit</c>, layout flags and assembly scopes of referenced types.
+/// <c>SyntaxKind</c> values are compiled into analyzers). Property and event
+/// accessors are listed as methods on purpose: <c>get_X</c> and <c>add_E</c>
+/// are the members a compiled analyzer actually binds to, and they carry the
+/// static/abstract/virtual/sealed modifiers; the <c>property</c>/<c>event</c>
+/// lines add the grouping, the init-only setter and accessor accessibilities.
+/// It deliberately omits what differs between compilers without changing the
+/// contract: attributes, <c>beforefieldinit</c>, layout flags and assembly
+/// scopes of referenced types.
 /// </para>
 /// </summary>
 public sealed class CorePublicApiSnapshotTests
@@ -78,6 +83,14 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("  field public const Int32 Answer = 42", baseline, StringComparison.Ordinal);
         Assert.Contains("  property public String Name { get; protected set; }", baseline, StringComparison.Ordinal);
         Assert.Contains("  property public Int32 Fixed { get; init; }", baseline, StringComparison.Ordinal);
+
+        // Accessors are the bound members, so they are listed as methods too.
+        Assert.Contains("  method public String get_Name()", baseline, StringComparison.Ordinal);
+        Assert.Contains("  method protected Void set_Name(String value)", baseline, StringComparison.Ordinal);
+        Assert.Contains(
+            "  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Fixed(Int32 value)",
+            baseline,
+            StringComparison.Ordinal);
         Assert.Contains("  property protected internal Int32 Shared { get; set; }", baseline, StringComparison.Ordinal);
         Assert.Contains("  field public const String Quoted = \"a\\\"b\\\\c\\nd\"", baseline, StringComparison.Ordinal);
         Assert.Contains("  method protected virtual Void OnChanged()", baseline, StringComparison.Ordinal);
@@ -494,7 +507,12 @@ public sealed class CorePublicApiSnapshotTests
         throw new InvalidOperationException("repository root not found from " + AppContext.BaseDirectory);
     }
 
-    /// <summary>Renders metadata type signatures as namespace-qualified names.</summary>
+    /// <summary>
+    /// Renders metadata type signatures: types by namespace-qualified name
+    /// (nested types with <c>+</c>), primitives by their CLR type name
+    /// (<c>Int32</c>, <c>String</c>, <c>Void</c>), generic parameters by
+    /// position (<c>!0</c>, <c>!!0</c>).
+    /// </summary>
     private sealed class SignatureNames : ISignatureTypeProvider<string, object>
     {
         private readonly MetadataReader reader;
