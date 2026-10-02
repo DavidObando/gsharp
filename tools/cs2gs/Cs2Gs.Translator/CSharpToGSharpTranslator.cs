@@ -1008,9 +1008,10 @@ public sealed partial class CSharpToGSharpTranslator
         // return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
         // top-level function cannot name (or access) the private type, while the in-owner
         // helper can. A method whose SIGNATURE names such a type cannot be public API (CS0050);
-        // one that only has an attribute naming it can, and then keeps the helper plus its
-        // public forwarding companion, which carries no copy of the attribute (see
-        // CompanionAttributesNamePrivateNestedType).
+        // one that only has an attribute naming it can, and then keeps the helper alone: the
+        // top-level forwarding companion copies attributes in several positions (method,
+        // return, parameter) and could not bind the private type in any of them, so such a
+        // method gets no companion (IsOwnerScopedCompanionShapeEligible).
         return original?.IsExtensionMethod == true &&
             HasPrivateNestedAggregate(original.ContainingType) &&
             (TryGetOwnedExtensionReceiver(original, out _) || SignatureNamesPrivateNestedType(original));
@@ -1178,7 +1179,8 @@ public sealed partial class CSharpToGSharpTranslator
             || original.Parameters[0].RefKind != RefKind.None
             || original.Parameters.Any(parameter => parameter.IsParams)
             || original.ReturnsByRef
-            || original.ReturnsByRefReadonly)
+            || original.ReturnsByRefReadonly
+            || SignatureNamesPrivateNestedType(original))
         {
             return false;
         }

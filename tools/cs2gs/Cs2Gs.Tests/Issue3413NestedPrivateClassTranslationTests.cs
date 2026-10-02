@@ -312,7 +312,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static void Main() => Console.WriteLine(Owner.Run("ok"));
                 }
 
-                [AttributeUsage(AttributeTargets.Method)]
+                [AttributeUsage(AttributeTargets.Method | AttributeTargets.ReturnValue | AttributeTargets.Parameter)]
                 public sealed class MarkerAttribute : Attribute
                 {
                     public MarkerAttribute(Type type)
@@ -355,6 +355,11 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     [Marker(typeof(Box))]
                     public static int PublicTagged(this string value) => 4;
 
+                    [return: Marker(typeof(Box))]
+                    public static int PublicReturnTagged(this string value) => 6;
+
+                    public static int PublicParameterTagged(this string value, [Marker(typeof(Box))] int x) => 7;
+
                     [Marker((Type[])null)]
                     private static int NullArray(this string value) => 5;
 
@@ -373,7 +378,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static string Echo(this string value) => value;
 
                     public static int Run(string value) =>
-                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.NullArray();
+                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.PublicReturnTagged() + value.PublicParameterTagged(1) + value.NullArray();
                 }
             }
             """;
@@ -391,17 +396,18 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == name);
         }
 
-        // A PUBLIC extension whose only mention of the private type is an attribute argument is
-        // legal C# and API: it keeps the helper and its forwarding companion, and the
-        // companion (top level, where `Box` is out of scope) carries no copy of the attribute.
-        MethodDeclaration publicHelper = Assert.Single(
-            shared.OfType<MethodDeclaration>(),
-            method => method.Name == "PublicTagged");
-        Assert.NotEmpty(publicHelper.Attributes);
-        MethodDeclaration publicCompanion = Assert.Single(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "PublicTagged");
-        Assert.Empty(publicCompanion.Attributes);
+        // A PUBLIC extension whose only mention of the private type is an attribute (method,
+        // return or parameter target) is legal C# and API: it keeps the in-owner helper, with
+        // its attributes, and gets no top-level forwarding companion, whose copy of those
+        // attributes could not name the private type.
+        foreach (string name in new[] { "PublicTagged", "PublicReturnTagged", "PublicParameterTagged" })
+        {
+            MethodDeclaration publicHelper = Assert.Single(
+                shared.OfType<MethodDeclaration>(),
+                method => method.Name == name);
+            Assert.NotEmpty(publicHelper.Attributes.Concat(publicHelper.Parameters.SelectMany(parameter => parameter.Attributes)));
+            Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == name);
+        }
 
         // A null array argument (`[Marker(null)]` for a `Type[]` parameter) names no type and
         // must not break the check (its `Values` is the default array): the method is lifted.

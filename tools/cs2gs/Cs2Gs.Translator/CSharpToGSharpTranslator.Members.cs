@@ -1399,19 +1399,11 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #4370: a `[LibraryImport]` definition's import arguments
             // are re-spelled from their constant values; issue #4301: so are
             // a `[GeneratedRegex]` definition's.
-            //
-            // The forwarding companion of an owner-scoped extension sits at top level, where
-            // an attribute naming one of the owner's private nested types cannot resolve; the
-            // attribute stays on the in-owner helper, so the companion carries none then.
             List<AttributeUse> methodAttributes = isNativeImportDefinition
                 ? this.MapLibraryImportMethodAttributes(node, symbol)
                 : isGeneratedRegexDefinition
                     ? this.MapGeneratedRegexMethodAttributes(node, symbol)
-                    : forceExtensionReceiver
-                        && symbol != null
-                        && AttributesNamePrivateNestedType(symbol.GetAttributes(), symbol.ContainingType)
-                        ? new List<AttributeUse>()
-                        : this.MapAttributes(node.AttributeLists);
+                    : this.MapAttributes(node.AttributeLists);
 
             // ADR-0192 §C: method-level attributes are unioned across the
             // parts by gsc, so each part carries only its OWN — `node` is the
