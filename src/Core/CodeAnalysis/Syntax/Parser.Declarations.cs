@@ -241,21 +241,6 @@ public partial class Parser
             Diagnostics.ReportOpenAndSealedCannotCombine(sealedModifier.Location);
         }
 
-        // ADR-0195 / issue #4674: a `static` class is emitted CLR `abstract sealed`
-        // and holds only `shared` members, so it cannot also be inheritable
-        // (`open`, `abstract`), a closed hierarchy (`sealed`) or a record
-        // (`data`). `ref`/`inline` are struct-only and already diagnosed per kind.
-        if (staticModifier != null)
-        {
-            foreach (var conflicting in new[] { openModifier, sealedModifier, abstractModifier, dataKeyword })
-            {
-                if (conflicting != null)
-                {
-                    Diagnostics.ReportStaticClassModifierConflict(conflicting.Location, conflicting.Text);
-                }
-            }
-        }
-
         var aggregateKw = Current;
         var aggregateKind = aggregateKw.Kind;
         var aggregateText = aggregateKw.Text;
@@ -276,6 +261,22 @@ public partial class Parser
         switch (aggregateKind)
         {
             case SyntaxKind.ClassKeyword:
+                // ADR-0195 / issue #4674: a `static` class is emitted CLR `abstract sealed`
+                // and holds only `shared` members, so it cannot also be inheritable
+                // (`open`, `abstract`), a closed hierarchy (`sealed`) or a record
+                // (`data`). Checked only for a `class` head: on `struct`, `enum` and
+                // `interface` the modifier itself is the unexpected token.
+                if (staticModifier != null)
+                {
+                    foreach (var conflicting in new[] { openModifier, sealedModifier, abstractModifier, dataKeyword })
+                    {
+                        if (conflicting != null)
+                        {
+                            Diagnostics.ReportStaticClassModifierConflict(conflicting.Location, conflicting.Text);
+                        }
+                    }
+                }
+
                 if (inlineKeyword != null)
                 {
                     Diagnostics.ReportInlineOnlyValidOnStruct(inlineKeyword.Location);

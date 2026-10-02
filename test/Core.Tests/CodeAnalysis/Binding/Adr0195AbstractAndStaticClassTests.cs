@@ -82,6 +82,14 @@ var static = abstract + 1
     }
 
     [Fact]
+    public void Static_OnANonClassHead_ReportsOnlyTheMisplacedModifier_NotAConflict()
+    {
+        var tree = SyntaxTree.Parse(SourceText.From("static abstract struct S { var x int32 }\nstatic open interface I { }\n"));
+        Assert.DoesNotContain(tree.Diagnostics, d => d.Id == "GS0618");
+        Assert.Contains(tree.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
     public void AbstractClassWithoutAbstractMembers_CannotBeInstantiated()
     {
         var result = EmittedOracle.Evaluate(@"
