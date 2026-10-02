@@ -28,9 +28,8 @@ public enum SdkPinLocation
 
     /// <summary>
     /// Every generated project carries the bare <c>Sdk="Gsharp.NET.Sdk"</c>, and
-    /// the mirror's root <c>global.json</c> pins the version once under
-    /// <c>msbuild-sdks</c>. Bumping the SDK is then a one-line change instead of
-    /// a rewrite of every project file.
+    /// the mirror's root and nested <c>global.json</c> files pin the same version
+    /// under <c>msbuild-sdks</c> instead of rewriting every project file.
     /// </summary>
     GlobalJson,
 }
@@ -92,21 +91,22 @@ internal static class SdkPin
         || (sdkAttribute is not null
             && sdkAttribute.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Finds a nested <c>global.json</c> path in a repository file list.</summary>
+    /// <summary>Lists nested <c>global.json</c> paths in a repository file list.</summary>
     /// <param name="repositoryFiles">Repository-relative file paths.</param>
-    /// <returns>The first nested path, or <see langword="null"/> when only the root file exists.</returns>
-    internal static string? FindNestedGlobalJson(IEnumerable<string> repositoryFiles)
+    /// <returns>The nested paths.</returns>
+    internal static IReadOnlyList<string> EnumerateNestedGlobalJson(IEnumerable<string> repositoryFiles)
     {
+        var nestedPaths = new List<string>();
         foreach (string path in repositoryFiles)
         {
             string normalized = path.Replace('\\', '/');
             if (normalized.EndsWith("/" + GlobalJsonFileName, StringComparison.OrdinalIgnoreCase))
             {
-                return path;
+                nestedPaths.Add(path);
             }
         }
 
-        return null;
+        return nestedPaths;
     }
 
     /// <summary>
@@ -162,7 +162,14 @@ internal static class SdkPin
     /// </exception>
     internal static string? ReadGlobalJsonPin(string root)
     {
-        string path = Path.Combine(root, GlobalJsonFileName);
+        return ReadGlobalJsonPinFile(Path.Combine(root, GlobalJsonFileName));
+    }
+
+    /// <summary>Reads the SDK pin from a specific <c>global.json</c> file.</summary>
+    /// <param name="path">The file path.</param>
+    /// <returns>The pinned version, or <see langword="null"/> when there is none.</returns>
+    internal static string? ReadGlobalJsonPinFile(string path)
+    {
         if (!File.Exists(path))
         {
             return null;
@@ -226,13 +233,22 @@ internal static class SdkPin
     /// <param name="version">The SDK version to pin.</param>
     /// <returns><see langword="true"/> when the file did not exist and was created.</returns>
     internal static bool WriteGlobalJsonPin(string root, string version)
+        => WriteGlobalJsonPinFile(Path.Combine(root, GlobalJsonFileName), version);
+
+    /// <summary>
+    /// Pins <c>Gsharp.NET.Sdk</c> in a specific <c>global.json</c> file,
+    /// preserving every other setting.
+    /// </summary>
+    /// <param name="path">The file path.</param>
+    /// <param name="version">The SDK version to pin.</param>
+    /// <returns><see langword="true"/> when the file did not exist and was created.</returns>
+    internal static bool WriteGlobalJsonPinFile(string path, string version)
     {
         if (!IsValidVersion(version))
         {
             throw new ArgumentException("'" + version + "' is not a valid SDK version.", nameof(version));
         }
 
-        string path = Path.Combine(root, GlobalJsonFileName);
         bool created = !File.Exists(path);
         JsonObject document = created ? new JsonObject() : ParseGlobalJson(path);
         bool hasExisting = document.TryGetPropertyValue(MsbuildSdksProperty, out JsonNode? existing);

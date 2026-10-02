@@ -17,9 +17,10 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Issue #4631 (C1): a repository migration can pin an exact
 /// <c>Gsharp.NET.Sdk</c> version (<c>--sdk-version</c>) that no newer local
-/// build displaces, and can write that pin ONCE under <c>global.json</c>
+/// build displaces, and can write that pin under <c>global.json</c>
 /// <c>msbuild-sdks</c> (<c>--sdk-pin global-json</c>) instead of into every
-/// generated project. MSBuild lets a versioned <c>Sdk="Name/Version"</c>
+/// generated project, keeping nested scopes on the same version.
+/// MSBuild lets a versioned <c>Sdk="Name/Version"</c>
 /// attribute silently override a <c>global.json</c> pin, so in global-json
 /// mode every project in the mirror must carry the bare name, and
 /// <c>validate</c> must follow the tree's pin rather than re-resolve one.
@@ -366,10 +367,10 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Equal("Gsharp.NET.Sdk", SdkAttribute(fixture.MirroredWidget));
     }
 
-    /// <summary>Global-json mode rejects nested source configuration that can shadow its root pin.</summary>
+    /// <summary>Global-json mode updates nested configs so each scope uses the root pin.</summary>
     /// <returns>A task representing the asynchronous test.</returns>
     [Fact]
-    public async Task Migrate_GlobalJsonPin_RejectsNestedGlobalJson()
+    public async Task Migrate_GlobalJsonPin_UpdatesNestedGlobalJsonPin()
     {
         string compiler = FindCompiler();
         if (compiler is null)
@@ -380,17 +381,39 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
         File.WriteAllText(
             Path.Combine(fixture.Source, "src", "Widget", SdkPin.GlobalJsonFileName),
-            """{ "sdk": { "version": "10.0.300" } }""");
+            """{ "sdk": { "version": "10.0.300", "rollForward": "latestFeature" }, "msbuild-sdks": { "Other.Sdk": "1.2.3", "Gsharp.NET.Sdk": "0.3.356" } }""");
+        string sampleDirectory = Path.Combine(fixture.Source, "samples", "HotReload");
+        Directory.CreateDirectory(sampleDirectory);
+        File.WriteAllText(
+            Path.Combine(sampleDirectory, SdkPin.GlobalJsonFileName),
+            """{ "msbuild-sdks": { "Gsharp.NET.Sdk": "0.3.356" } }""");
         PipelineOptions options = this.RepositoryOptions(compiler, fixture);
         options.SdkVersion = PinnedVersion;
         options.SdkPinLocation = SdkPinLocation.GlobalJson;
 
-        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
-                .RunAsync(fixture.Apps));
+        RunResult run = await new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
 
-        Assert.Contains("nested global.json", error.Message, StringComparison.Ordinal);
-        Assert.Contains("src/Widget/global.json", error.Message, StringComparison.Ordinal);
+        Assert.True(run.Succeeded);
+        Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(fixture.Destination));
+        string nestedPath = Path.Combine(fixture.Destination, "src", "Widget", SdkPin.GlobalJsonFileName);
+        Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPinFile(nestedPath));
+        using JsonDocument nested = JsonDocument.Parse(File.ReadAllText(nestedPath));
+        Assert.Equal("10.0.300", nested.RootElement.GetProperty("sdk").GetProperty("version").GetString());
+        Assert.Equal("latestFeature", nested.RootElement.GetProperty("sdk").GetProperty("rollForward").GetString());
+        Assert.Equal("1.2.3", nested.RootElement.GetProperty("msbuild-sdks").GetProperty("Other.Sdk").GetString());
+        Assert.Equal(
+            PinnedVersion,
+            SdkPin.ReadGlobalJsonPinFile(Path.Combine(fixture.Destination, "samples", "HotReload", SdkPin.GlobalJsonFileName)));
+
+        var probe = new PinProbeStage();
+        RunResult validated = await new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { probe })
+            .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(options.ArtifactRoot, run.RunId));
+
+        Assert.True(validated.Succeeded);
+        PinObservation observation = Assert.Single(probe.Observations);
+        Assert.Equal("Gsharp.NET.Sdk", observation.SdkMoniker);
+        Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
     }
 
     /// <summary>
@@ -453,10 +476,14 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
     }
 
-    /// <summary>Validation rejects nested configuration that can override the tree's root pin.</summary>
+    /// <summary>Validation rejects nested configuration without the tree's root pin.</summary>
+    /// <param name="nestedJson">The nested configuration.</param>
+    /// <param name="actualPin">The pin named in the error.</param>
     /// <returns>A task representing the asynchronous test.</returns>
-    [Fact]
-    public async Task Validate_RejectsNestedGlobalJsonWithRootPin()
+    [Theory]
+    [InlineData("""{ "msbuild-sdks": { "Gsharp.NET.Sdk": "0.3.356" } }""", "0.3.356")]
+    [InlineData("""{ "sdk": { "version": "10.0.300", "rollForward": "latestFeature" } }""", "<missing>")]
+    public async Task Validate_RejectsNestedGlobalJsonWithoutMatchingRootPin(string nestedJson, string actualPin)
     {
         string compiler = FindCompiler();
         if (compiler is null)
@@ -474,13 +501,14 @@ public sealed class Issue4631SdkPinTests : IDisposable
 
         File.WriteAllText(
             Path.Combine(fixture.Destination, "src", "Widget", SdkPin.GlobalJsonFileName),
-            """{ "sdk": { "version": "10.0.300" } }""");
+            nestedJson);
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { new PinProbeStage() })
                 .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId)));
 
-        Assert.Contains("nested global.json", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Nested global.json", error.Message, StringComparison.Ordinal);
         Assert.Contains("src/Widget/global.json", error.Message, StringComparison.Ordinal);
+        Assert.Contains(actualPin, error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Validation checks pins in excluded mirrored projects, not just translated projects.</summary>

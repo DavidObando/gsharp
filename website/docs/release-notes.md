@@ -113,9 +113,11 @@ Before moving an application to a different compiler version, pin the intended S
   [#4631](https://github.com/DavidObando/gsharp/issues/4631)). A repository
   migration can now pin an exact `Gsharp.NET.Sdk` version, such as a published
   release, instead of the newest locally built package, and can write that pin
-  once under `msbuild-sdks` in the migrated repository's `global.json` instead
-  of into every generated project file. `cs2gs validate` follows the pin
-  recorded in the migrated tree, and accepts `--sdk-version` to check it.
+  under `msbuild-sdks` in the migrated repository's root and nested
+  `global.json` files instead of into every generated project file. All nested
+  scopes use the same version while retaining their other settings.
+  `cs2gs validate` follows the pin recorded in the migrated tree, rejects
+  missing or conflicting nested pins, and accepts `--sdk-version` to check it.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values

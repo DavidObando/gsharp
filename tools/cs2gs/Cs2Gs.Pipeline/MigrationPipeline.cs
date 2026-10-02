@@ -238,17 +238,16 @@ public sealed class MigrationPipeline
             string? mirroredGlobalJsonPin = SdkPin.ReadGlobalJsonPin(destinationRoot);
             if (this.options.SdkPinLocation == SdkPinLocation.GlobalJson)
             {
-                string? nestedGlobalJson = SdkPin.FindNestedGlobalJson(repositoryFiles);
-                if (nestedGlobalJson is not null)
-                {
-                    throw new InvalidOperationException(
-                        "Cannot pin Gsharp.NET.Sdk in the root global.json because nested global.json " +
-                        "files can override it: '" + nestedGlobalJson + "'.");
-                }
-
                 if (SdkPin.WriteGlobalJsonPin(destinationRoot, sdkVersion))
                 {
                     this.options.RepositoryAdditionalFiles.Add(SdkPin.GlobalJsonFileName);
+                }
+
+                foreach (string nestedGlobalJson in SdkPin.EnumerateNestedGlobalJson(repositoryFiles))
+                {
+                    SdkPin.WriteGlobalJsonPinFile(
+                        Path.Combine(destinationRoot, nestedGlobalJson),
+                        sdkVersion);
                 }
             }
             else if (mirroredGlobalJsonPin is not null)
@@ -727,16 +726,21 @@ public sealed class MigrationPipeline
         string? treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
         if (treePin is not null)
         {
-            string? nestedGlobalJson = SdkPin.FindNestedGlobalJson(
+            IReadOnlyList<string> nestedGlobalJsonFiles = SdkPin.EnumerateNestedGlobalJson(
                 Directory.EnumerateFiles(migratedRoot, SdkPin.GlobalJsonFileName, SearchOption.AllDirectories)
                     .Where(path => !RepositoryFileInventory.HasExcludedDirectory(
                         Path.GetRelativePath(migratedRoot, path)))
                     .Select(path => Path.GetRelativePath(migratedRoot, path)));
-            if (nestedGlobalJson is not null)
+            foreach (string nestedGlobalJson in nestedGlobalJsonFiles)
             {
-                throw new InvalidOperationException(
-                    "The migrated tree pins Gsharp.NET.Sdk in the root global.json, but nested global.json " +
-                    "files can override it: '" + nestedGlobalJson + "'.");
+                string nestedPath = Path.Combine(migratedRoot, nestedGlobalJson);
+                string? nestedPin = SdkPin.ReadGlobalJsonPinFile(nestedPath);
+                if (!string.Equals(treePin, nestedPin, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "Nested global.json '" + nestedGlobalJson + "' must pin Gsharp.NET.Sdk to the root " +
+                        "version " + treePin + ", but its pin is " + (nestedPin ?? "<missing>") + ".");
+                }
             }
         }
 

@@ -96,12 +96,14 @@ dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
 | `--config <name>` | Build config used to locate `gsc` (default `Release`). |
 | `--translate-only` | Repository mode: run stage 1 only, then stop (see `validate`). |
 | `--sdk-version <v>` | Repository mode: pin `Gsharp.NET.Sdk` to exactly `<v>` (default: the newest local nupkg). A local nupkg of `<v>` is staged into `.nugs`; otherwise `<v>` must be on nuget.org, such as a published release; the mirror's generated `nuget.config` lists only nuget.org and the local `.nugs` feed (issue #4631). |
-| `--sdk-pin <where>` | Repository mode: `project` (default) writes `Sdk="Gsharp.NET.Sdk/<v>"` into every generated project; `global-json` writes the version once under `msbuild-sdks` in the mirror's `global.json` and leaves every `Sdk` attribute bare. |
+| `--sdk-pin <where>` | Repository mode: `project` (default) writes `Sdk="Gsharp.NET.Sdk/<v>"` into every generated project; `global-json` writes the version under `msbuild-sdks` in the root and nested `global.json` files and leaves every `Sdk` attribute bare. |
 
 **SDK pinning (issue #4631).** MSBuild lets a versioned `Sdk="Name/Version"`
 attribute silently override a `global.json` `msbuild-sdks` pin, so the two
 modes never mix: under `--sdk-pin global-json` every mirrored project, including
-an excluded project rebound onto the SDK, gets the bare name, and a source
+an excluded project rebound onto the SDK, gets the bare name. Every nested
+`global.json` is updated with the same SDK pin because MSBuild uses the nearest
+file; all other settings in each file are preserved. A source
 `global.json` that already pins `Gsharp.NET.Sdk` is an error in `project` mode.
 `validate` takes the pin from the migrated tree: the `global.json` pin, or
 else the one version the generated projects record. A tree that pins in both
