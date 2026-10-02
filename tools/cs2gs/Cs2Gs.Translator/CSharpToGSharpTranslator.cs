@@ -1010,8 +1010,8 @@ public sealed partial class CSharpToGSharpTranslator
         // helper can. A method whose SIGNATURE names such a type cannot be public API (CS0050);
         // one that only has an attribute naming it can: it keeps the helper and its
         // forwarding companion, and the companion (top level, where the private type cannot
-        // be named) carries none of the source attributes, in any position (see
-        // TranslateMethod, `forceExtensionReceiver`).
+        // be named) leaves off only the attributes that name it, in any position (see
+        // TranslateOwnerScopedCompanion).
         return original?.IsExtensionMethod == true &&
             HasPrivateNestedAggregate(original.ContainingType) &&
             (TryGetOwnedExtensionReceiver(original, out _)
@@ -1056,9 +1056,8 @@ public sealed partial class CSharpToGSharpTranslator
     }
 
     /// <summary>
-    /// Whether an attribute on <paramref name="method"/>, its return value, a parameter or a
-    /// type parameter names one of its owner's private nested types (as the attribute class
-    /// or in an argument).
+    /// Whether an attribute on <paramref name="method"/>, its return value or a parameter
+    /// names one of its owner's private nested types (as the attribute class or in an argument).
     /// </summary>
     /// <param name="method">The extension method.</param>
     /// <returns><see langword="true"/> when an attribute names an owner-private nested type.</returns>
@@ -1067,7 +1066,7 @@ public sealed partial class CSharpToGSharpTranslator
 
     /// <summary>
     /// The syntax of every attribute on <paramref name="method"/>, its return value, a parameter
-    /// or a type parameter that names one of its owner's private nested types.
+    /// or a parameter that names one of its owner's private nested types.
     /// </summary>
     /// <param name="method">The extension method.</param>
     /// <returns>The attribute syntax nodes (empty when none names such a type).</returns>
@@ -1082,11 +1081,8 @@ public sealed partial class CSharpToGSharpTranslator
             CollectAttributeApplicationsNamingPrivateNestedType(parameter.GetAttributes(), owner, found);
         }
 
-        foreach (ITypeParameterSymbol typeParameter in method.TypeParameters)
-        {
-            CollectAttributeApplicationsNamingPrivateNestedType(typeParameter.GetAttributes(), owner, found);
-        }
-
+        // Type-parameter attributes are not translated (the code model's type parameter carries
+        // only constraints and variance), so no emitted declaration names the type through one.
         return found;
     }
 

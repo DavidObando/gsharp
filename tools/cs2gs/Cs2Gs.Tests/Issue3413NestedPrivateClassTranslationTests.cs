@@ -319,7 +319,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     }
                 }
 
-                [AttributeUsage(AttributeTargets.Method | AttributeTargets.ReturnValue | AttributeTargets.Parameter)]
+                [AttributeUsage(AttributeTargets.Method | AttributeTargets.ReturnValue | AttributeTargets.Parameter | AttributeTargets.GenericParameter)]
                 public sealed class MarkerAttribute : Attribute
                 {
                     public MarkerAttribute(Type type)
@@ -371,6 +371,8 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     [Obsolete("use something else")]
                     public static int PublicTaggedAndObsolete(this string value, [Marker(typeof(Box))] [System.Diagnostics.CodeAnalysis.NotNull] string note) => 9;
 
+                    public static int GenericTagged<[Marker(typeof(Box))] T>(this string value, T item) => 10;
+
                     [Marker((Type[])null)]
                     private static int NullArray(this string value) => 5;
 
@@ -391,7 +393,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static string Echo(this string value) => value;
 
                     public static int Run(string value) =>
-                        value.Make(new Box()).N + value.Deep(new Outer<Box>.Inner()) + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.PublicReturnTagged() + value.PublicParameterTagged(1) + value.PublicTaggedAndObsolete("") + value.NullArray();
+                        value.Make(new Box()).N + value.Deep(new Outer<Box>.Inner()) + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.PublicReturnTagged() + value.PublicParameterTagged(1) + value.PublicTaggedAndObsolete("") + value.GenericTagged(1) + value.NullArray();
                 }
             }
             """;
@@ -427,6 +429,11 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             Assert.Empty(companion.Attributes);
             Assert.Empty(companion.Parameters.SelectMany(parameter => parameter.Attributes));
         }
+
+        // A type-parameter attribute is not translated, so it does not pull the extension into
+        // the helper scheme: it is lifted onto the owner like any other external-receiver extension.
+        Assert.DoesNotContain(shared.OfType<MethodDeclaration>(), method => method.Name == "GenericTagged");
+        Assert.Contains(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "GenericTagged");
 
         // Only the attributes that name the private type are left off the companion: an unrelated
         // API-significant attribute in the same position survives (method and parameter).
