@@ -2254,6 +2254,16 @@ internal sealed partial class ExpressionBinder
         // use of the named type.
         reportObsoleteUseIfApplicable(syntax.TypeIdentifier.Location, structSymbol, structSymbol.Name);
 
+        // ADR-0195 / issue #4674: an `abstract` or `static` class cannot be
+        // constructed, whichever way it is spelled — `Foo()` reports GS0386
+        // from the constructor-call path, and the composite literal `Foo{}`
+        // must not slip past it into a `newobj` on an abstract type.
+        if (structSymbol.IsDeclaredAbstract || structSymbol.IsStaticClass)
+        {
+            Diagnostics.ReportCannotInstantiateAbstractType(syntax.TypeIdentifier.Location, structSymbol.Name);
+            return new BoundErrorExpression(syntax);
+        }
+
         // Phase 4.3 / ADR-0020: if the declared struct is generic, build a
         // type-argument substitution (explicit or inferred from initializers)
         // and construct a closed StructSymbol to bind against. Constructed

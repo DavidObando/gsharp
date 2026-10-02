@@ -1053,6 +1053,38 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.AbstractMemberNotImplemented, className, declaringTypeName, memberName);
 
     /// <summary>
+    /// ADR-0195 / issue #4674: GS0617 — a <c>static</c> class declares an instance
+    /// member (field, method, property, event, constructor or primary
+    /// constructor). A static class is emitted <c>abstract sealed</c>, so only
+    /// <c>shared</c> members and nested types belong in it.
+    /// </summary>
+    /// <param name="location">The source location of the offending member.</param>
+    /// <param name="className">The static class name.</param>
+    /// <param name="memberName">The offending instance member's name.</param>
+    public void ReportStaticClassCannotDeclareInstanceMember(TextLocation location, string className, string memberName)
+    => Report(location, DiagnosticDescriptors.StaticClassCannotDeclareInstanceMember, className, memberName);
+
+    /// <summary>
+    /// ADR-0195 / issue #4674: GS0618 — <c>static</c> is combined with another
+    /// class modifier (<c>open</c>, <c>sealed</c>, <c>abstract</c> or
+    /// <c>data</c>) that contradicts a class which is neither inheritable nor
+    /// instantiable.
+    /// </summary>
+    /// <param name="location">The source location of the conflicting modifier.</param>
+    /// <param name="modifier">The conflicting modifier's text.</param>
+    public void ReportStaticClassModifierConflict(TextLocation location, string modifier)
+    => Report(location, DiagnosticDescriptors.StaticClassModifierConflict, modifier);
+
+    /// <summary>
+    /// ADR-0195 / issue #4674: GS0619 — a <c>static</c> class lists a base class
+    /// or an interface.
+    /// </summary>
+    /// <param name="location">The source location of the base-type clause.</param>
+    /// <param name="className">The static class name.</param>
+    public void ReportStaticClassCannotHaveBaseTypes(TextLocation location, string className)
+    => Report(location, DiagnosticDescriptors.StaticClassCannotHaveBaseTypes, className);
+
+    /// <summary>
     /// Issue #987: GS0388 — a no-body method (an abstract member) appears where
     /// it is not permitted. An abstract method must be declared <c>open</c> and
     /// may only live inside an <c>open class</c>. Mirrors C#'s CS0513/CS0500.

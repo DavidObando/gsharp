@@ -58,7 +58,7 @@ public partial class Parser
             // ADR-0122 / issue #1202: `unsafe` composes with the other class
             // modifiers (in any order), establishing an unsafe context for the
             // whole aggregate. Treat it like the other contextual modifiers.
-            if (k.Kind == SyntaxKind.IdentifierToken && (k.Text == "data" || k.Text == "inline" || k.Text == "ref" || k.Text == "unsafe" || k.Text == "partial"))
+            if (k.Kind == SyntaxKind.IdentifierToken && (k.Text == "data" || k.Text == "inline" || k.Text == "ref" || k.Text == "unsafe" || k.Text == "partial" || k.Text == "abstract" || k.Text == "static"))
             {
                 // Bail out if the same contextual modifier appears twice — we are
                 // not in a declaration head; let the legacy / statement parser
@@ -106,6 +106,8 @@ public partial class Parser
         SyntaxToken? refModifier = null;
         SyntaxToken? unsafeModifier = null;
         SyntaxToken? partialModifier = null;
+        SyntaxToken? abstractModifier = null;
+        SyntaxToken? staticModifier = null;
 
         // Collect modifiers in any order. Re-issuing of a modifier is reported
         // as an unexpected token but parsing continues for recovery.
@@ -180,6 +182,33 @@ public partial class Parser
                 continue;
             }
 
+            // ADR-0195 / issue #4674: `abstract` and `static` are contextual
+            // class modifiers. The head lookahead (TryDetectAggregateDeclarationHead)
+            // only reaches this loop when a class/struct/enum/interface keyword
+            // follows the run, so an identifier named `abstract` or `static`
+            // elsewhere is unaffected.
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "abstract")
+            {
+                if (abstractModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+                }
+
+                abstractModifier = NextToken();
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "static")
+            {
+                if (staticModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+                }
+
+                staticModifier = NextToken();
+                continue;
+            }
+
             // ADR-0144 / issue #2201: `partial` is a contextual modifier that
             // composes with the other aggregate modifiers in any order. It is
             // valid on class/struct/interface (rejected on enum below).
@@ -210,6 +239,21 @@ public partial class Parser
         if (openModifier != null && sealedModifier != null)
         {
             Diagnostics.ReportOpenAndSealedCannotCombine(sealedModifier.Location);
+        }
+
+        // ADR-0195 / issue #4674: a `static` class is emitted CLR `abstract sealed`
+        // and holds only `shared` members, so it cannot also be inheritable
+        // (`open`, `abstract`), a closed hierarchy (`sealed`) or a record
+        // (`data`). `ref`/`inline` are struct-only and already diagnosed per kind.
+        if (staticModifier != null)
+        {
+            foreach (var conflicting in new[] { openModifier, sealedModifier, abstractModifier, dataKeyword })
+            {
+                if (conflicting != null)
+                {
+                    Diagnostics.ReportStaticClassModifierConflict(conflicting.Location, conflicting.Text);
+                }
+            }
         }
 
         var aggregateKw = Current;
@@ -245,6 +289,7 @@ public partial class Parser
                 break;
 
             case SyntaxKind.StructKeyword:
+                ReportAbstractAndStaticOnlyValidOnClass(abstractModifier, staticModifier, SyntaxKind.StructKeyword);
                 if (openModifier != null)
                 {
                     Diagnostics.ReportOpenOnlyValidOnClass(openModifier.Location, aggregateText);
@@ -258,6 +303,7 @@ public partial class Parser
                 break;
 
             case SyntaxKind.EnumKeyword:
+                ReportAbstractAndStaticOnlyValidOnClass(abstractModifier, staticModifier, SyntaxKind.EnumKeyword);
                 if (openModifier != null)
                 {
                     Diagnostics.ReportOpenOnlyValidOnClass(openModifier.Location, aggregateText);
@@ -296,6 +342,7 @@ public partial class Parser
                 break;
 
             case SyntaxKind.InterfaceKeyword:
+                ReportAbstractAndStaticOnlyValidOnClass(abstractModifier, staticModifier, SyntaxKind.InterfaceKeyword);
                 if (openModifier != null)
                 {
                     Diagnostics.ReportOpenOnlyValidOnClass(openModifier.Location, aggregateText);
@@ -361,6 +408,8 @@ public partial class Parser
             var structDecl = ParseStructDeclarationNew(accessibilityModifier, dataKeyword, inlineKeyword, openModifier, sealedModifier, refModifier, aggregateKeyword, identifier);
             structDecl.TypeParameterList = typeParameterList;
             structDecl.RefModifier = refModifier;
+            structDecl.AbstractModifier = abstractModifier;
+            structDecl.StaticModifier = staticModifier;
             structDecl.UnsafeModifier = unsafeModifier;
             structDecl.PartialModifier = partialModifier;
             return structDecl;
@@ -371,6 +420,28 @@ public partial class Parser
             {
                 this.unsafeDepth--;
             }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0195 / issue #4674: <c>abstract</c> and <c>static</c> describe a class
+    /// (an uninstantiable or all-<c>shared</c> reference type), so a
+    /// <c>struct</c>, <c>enum</c> or <c>interface</c> head that carries either is
+    /// an unexpected token, recovered like the other misplaced modifiers.
+    /// </summary>
+    private void ReportAbstractAndStaticOnlyValidOnClass(
+        SyntaxToken? abstractModifier,
+        SyntaxToken? staticModifier,
+        SyntaxKind aggregateKind)
+    {
+        if (abstractModifier != null)
+        {
+            Diagnostics.ReportUnexpectedToken(abstractModifier.Location, SyntaxKind.IdentifierToken, aggregateKind);
+        }
+
+        if (staticModifier != null)
+        {
+            Diagnostics.ReportUnexpectedToken(staticModifier.Location, SyntaxKind.IdentifierToken, aggregateKind);
         }
     }
 

@@ -528,7 +528,9 @@ internal sealed class TypeDefEmitter
             // Issue #987: a class with an abstract method (own or inherited and
             // not overridden) is itself abstract — emit TypeAttributes.Abstract
             // so the runtime forbids `newobj` on it. Such a class is always
-            // `open`, so it is never also Sealed.
+            // `open`, so it is never also Sealed. The one exception is ADR-0195's
+            // `static` class (IsAbstract, not open): CLR `abstract sealed`, which
+            // is how a static class is spelled in metadata.
             if (structSym.IsAbstract)
             {
                 classAttrs |= TypeAttributes.Abstract;
@@ -1507,9 +1509,17 @@ internal sealed class TypeDefEmitter
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        var visibility = classSym.HasPrimaryConstructor && !classSym.IsData
-            ? MethodAttributes.Assembly
-            : MethodAttributes.Public;
+        // ADR-0195 / issue #4674: a `static` class is not constructible, so its
+        // placeholder `.ctor` is private (C# emits none; a private member is not
+        // part of the API); an explicitly `abstract` class's implicit `.ctor` is
+        // `family`, as in C#, since only derived classes may chain to it.
+        var visibility = classSym.IsStaticClass
+            ? MethodAttributes.Private
+            : classSym.IsDeclaredAbstract
+                ? MethodAttributes.Family
+                : classSym.HasPrimaryConstructor && !classSym.IsData
+                    ? MethodAttributes.Assembly
+                    : MethodAttributes.Public;
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: visibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,

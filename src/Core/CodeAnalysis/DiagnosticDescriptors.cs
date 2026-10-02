@@ -611,6 +611,9 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor AttributeNamedArgumentTypeMismatch = new("GS0614", DiagnosticSeverity.Error, "Named attribute argument '{0}' of type '{1}' is not assignable to member type '{2}'.");
     internal static readonly DiagnosticDescriptor AttributeNamedMemberInvalidType = new("GS0615", DiagnosticSeverity.Error, "Named attribute member '{0}' has type '{1}', which cannot be encoded in a custom-attribute blob.");
     internal static readonly DiagnosticDescriptor AttributeConstructorArgumentAfterMemberAssignment = new("GS0616", DiagnosticSeverity.Error, "Attribute constructor arguments must precede property and field assignments.");
+    internal static readonly DiagnosticDescriptor StaticClassCannotDeclareInstanceMember = new("GS0617", DiagnosticSeverity.Error, "Static class '{0}' cannot declare the instance member '{1}'; declare it inside the 'shared' block (ADR-0195).");
+    internal static readonly DiagnosticDescriptor StaticClassModifierConflict = new("GS0618", DiagnosticSeverity.Error, "'static' cannot be combined with '{0}': a static class is neither inheritable nor instantiable (ADR-0195).");
+    internal static readonly DiagnosticDescriptor StaticClassCannotHaveBaseTypes = new("GS0619", DiagnosticSeverity.Error, "Static class '{0}' cannot declare a base class or implement interfaces (ADR-0195).");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

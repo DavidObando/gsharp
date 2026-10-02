@@ -249,6 +249,15 @@ internal static class PartialTypeMerger
         RequireOnEveryPart(parts, hasInline, "inline", name, diagnostics);
         RequireOnEveryPart(parts, hasRef, "ref", name, diagnostics);
 
+        // ADR-0195 / issue #4674: `abstract` and `static` change the type's CLR
+        // shape, so every part must agree on them like `data`/`inline`/`ref`.
+        System.Func<StructDeclarationSyntax, bool> hasAbstract =
+            part => part.AbstractModifier != null;
+        System.Func<StructDeclarationSyntax, bool> hasStatic =
+            part => part.StaticModifier != null;
+        RequireOnEveryPart(parts, hasAbstract, "abstract", name, diagnostics);
+        RequireOnEveryPart(parts, hasStatic, "static", name, diagnostics);
+
         // GS0480: identical type-parameter lists (names + arity + constraints).
         var primaryTypeParams = NormalizeNodeText(primary.TypeParameterList);
         var typeParametersMatch = true;
@@ -333,6 +342,8 @@ internal static class PartialTypeMerger
                 diagnostics),
             TypeParameterList = primary.TypeParameterList,
             RefModifier = parts.Select(p => p.RefModifier).FirstOrDefault(t => t != null),
+            AbstractModifier = parts.Select(p => p.AbstractModifier).FirstOrDefault(t => t != null),
+            StaticModifier = parts.Select(p => p.StaticModifier).FirstOrDefault(t => t != null),
             UnsafeModifier = parts.Select(p => p.UnsafeModifier).FirstOrDefault(t => t != null),
             PartialModifier = parts.Select(p => p.PartialModifier).FirstOrDefault(t => t != null),
             SealedKeyword = sealedKeyword,

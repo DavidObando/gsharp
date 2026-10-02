@@ -19,6 +19,8 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     private SyntaxToken? partialModifier;
     private TypeParameterListSyntax? typeParameterList;
     private SyntaxToken? refModifier;
+    private SyntaxToken? abstractModifier;
+    private SyntaxToken? staticModifier;
     private SharedBlockSyntax? sharedBlock;
     private SyntaxToken? baseConstructorOpenParenthesisToken;
     private SeparatedSyntaxList<ExpressionSyntax>? baseConstructorArguments;
@@ -439,6 +441,12 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets a value indicating whether this struct was declared with the <c>ref</c> contextual keyword (issue #367 — a by-ref-like / <c>ref struct</c> type emitted with <c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c>). Always false for <c>class</c>.</summary>
     public bool IsRef => RefModifier != null;
 
+    /// <summary>Gets a value indicating whether this class was declared with the <c>abstract</c> contextual keyword (ADR-0195 / issue #4674 — a class that cannot be instantiated even when it declares no abstract member).</summary>
+    public bool IsAbstract => AbstractModifier != null;
+
+    /// <summary>Gets a value indicating whether this class was declared with the <c>static</c> contextual keyword (ADR-0195 / issue #4674 — a class emitted <c>abstract sealed</c> that holds only <c>shared</c> members).</summary>
+    public bool IsStatic => StaticModifier != null;
+
     /// <summary>
     /// Gets or sets the optional <c>unsafe</c> contextual modifier (ADR-0122 / issue #1014)
     /// contextual modifier on the aggregate declaration (<c>unsafe class</c> /
@@ -531,6 +539,28 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         set
         {
             refModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets or sets the optional <c>abstract</c> contextual keyword (ADR-0195 / issue #4674). Non-null marks this <c>class</c> abstract: it is inheritable like an <c>open class</c> and cannot be instantiated. Assigned by the parser; <c>null</c> otherwise.</summary>
+    public SyntaxToken? AbstractModifier
+    {
+        get => abstractModifier;
+        set
+        {
+            abstractModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets or sets the optional <c>static</c> contextual keyword (ADR-0195 / issue #4674). Non-null marks this <c>class</c> static: emitted <c>abstract sealed</c> with no instance constructor, holding only <c>shared</c> members. Assigned by the parser; <c>null</c> otherwise.</summary>
+    public SyntaxToken? StaticModifier
+    {
+        get => staticModifier;
+        set
+        {
+            staticModifier = value;
             InvalidateCachedSpan();
         }
     }
@@ -699,6 +729,8 @@ public sealed class StructDeclarationSyntax : MemberSyntax
             PartialPartLocations = PartialPartLocations,
             TypeParameterList = TypeParameterList,
             RefModifier = RefModifier,
+            AbstractModifier = AbstractModifier,
+            StaticModifier = StaticModifier,
             SharedBlock = sharedBlock,
             BaseConstructorOpenParenthesisToken = BaseConstructorOpenParenthesisToken,
             BaseConstructorArguments = BaseConstructorArguments,
