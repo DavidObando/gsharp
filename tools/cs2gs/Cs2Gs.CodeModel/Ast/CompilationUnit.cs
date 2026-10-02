@@ -19,7 +19,13 @@ public sealed class CompilationUnit : GNode
     /// <param name="package">The package name, or <see langword="null"/> for none.</param>
     /// <param name="imports">The import directives, in original order.</param>
     /// <param name="members">The ordered top-level members and statements.</param>
-    /// <param name="leadingComments">Optional file-leading comment lines (without the <c>//</c> prefix).</param>
+    /// <param name="leadingComments">
+    /// Optional file-leading comment lines, printed as given before the package
+    /// declaration. Each line includes its comment markers; the translator
+    /// supplies them with trailing whitespace trimmed and no line endings: it
+    /// splits the header with Roslyn's own line model, so every C# line
+    /// terminator ends a line.
+    /// </param>
     /// <param name="fileAttributes">Assembly- or module-targeted file-level attributes, in source order.</param>
     public CompilationUnit(
         string package = null,
@@ -44,7 +50,7 @@ public sealed class CompilationUnit : GNode
     /// <summary>Gets the ordered top-level members and statements.</summary>
     public IReadOnlyList<GNode> Members { get; }
 
-    /// <summary>Gets the file-leading comment lines (without the <c>//</c> prefix).</summary>
+    /// <summary>Gets the file-leading comment lines, printed as given, including their comment markers.</summary>
     public IReadOnlyList<string> LeadingComments { get; }
 
     /// <summary>Gets assembly- or module-targeted file-level attributes.</summary>
