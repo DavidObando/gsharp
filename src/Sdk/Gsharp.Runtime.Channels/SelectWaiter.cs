@@ -448,7 +448,7 @@ public sealed class SelectWaiter : IValueTaskSource<int>
 
         var taken = value;
         value = null;
-        return taken is null ? default! : (T)taken;
+        return taken is null ? ReceiveResult<T>.ZeroValue() : (T)taken;
     }
 
     /// <summary>Deregisters every losing arm, tears down callbacks, and pools the waiter. Call exactly once per <see cref="Rent(int, Context)"/>.</summary>

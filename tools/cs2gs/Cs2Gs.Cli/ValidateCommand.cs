@@ -45,6 +45,8 @@ internal static class ValidateCommand
         string migrated = null;
         string manifests = null;
         string allowListPath = null;
+        string nameBaselinePath = null;
+        bool countOnlyParity = false;
         int shardIndex = -1;
         int shardCount = 0;
         var appIds = new List<string>();
@@ -73,6 +75,15 @@ internal static class ValidateCommand
                     break;
                 case "--test-allowlist":
                     allowListPath = Next(args, ref i, arg);
+                    break;
+                case "--csharp-test-oracle":
+                    options.CSharpTestOracleDirectory = Next(args, ref i, arg);
+                    break;
+                case "--test-name-baseline":
+                    nameBaselinePath = Next(args, ref i, arg);
+                    break;
+                case "--count-only-test-parity":
+                    countOnlyParity = true;
                     break;
                 case "--app":
                     appIds.Add(Next(args, ref i, arg).Replace('\\', '/'));
@@ -131,6 +142,35 @@ internal static class ValidateCommand
             ? options.OutputRoot + ".cs2gs-runs"
             : CanonicalRootPath.Resolve(options.ArtifactRoot);
 
+        // Issue #4633: per-test-name parity is the default the gate relies on,
+        // so it cannot be lost by dropping a flag. A shard must either name the
+        // C# test oracle or opt out of name parity explicitly.
+        bool hasOracle = !string.IsNullOrEmpty(options.CSharpTestOracleDirectory);
+        if (hasOracle && countOnlyParity)
+        {
+            Console.Error.WriteLine("cs2gs: --csharp-test-oracle and --count-only-test-parity are mutually exclusive.");
+            return 1;
+        }
+
+        if (!hasOracle && !countOnlyParity)
+        {
+            Console.Error.WriteLine(
+                "cs2gs: validate requires --csharp-test-oracle <dir> (see `cs2gs capture-test-oracle`), " +
+                "or --count-only-test-parity to knowingly skip per-test-name parity (#4633).");
+            return 1;
+        }
+
+        if (!countOnlyParity)
+        {
+            options.CSharpTestOracleDirectory = CanonicalRootPath.Resolve(options.CSharpTestOracleDirectory);
+            if (!Directory.Exists(options.CSharpTestOracleDirectory))
+            {
+                Console.Error.WriteLine(
+                    "cs2gs: the C# test oracle directory does not exist: " + options.CSharpTestOracleDirectory);
+                return 1;
+            }
+        }
+
         // Issue #3885: load the test-parity failure allow-list from the SOURCE
         // repository (never the migrated mirror — the list is a statement about
         // the migration, made by the repository being migrated). A malformed
@@ -140,6 +180,8 @@ internal static class ValidateCommand
         {
             options.TestParityAllowList = TestParityAllowList.LoadForRepository(
                 options.SourceRoot, allowListPath);
+            options.TestNameParityBaseline = TestNameParityBaseline.LoadForRepository(
+                options.SourceRoot, nameBaselinePath);
         }
         catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
         {
@@ -282,7 +324,7 @@ internal static class ValidateCommand
             && index <= count;
     }
 
-    private static IReadOnlyList<CorpusApp> ApplyExclusions(
+    internal static IReadOnlyList<CorpusApp> ApplyExclusions(
         IReadOnlyList<CorpusApp> apps,
         PipelineOptions options)
     {
@@ -363,5 +405,11 @@ internal static class ValidateCommand
         Console.WriteLine("  --gsgen <path>     Override gsgen.dll.");
         Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list (issue #3885); default:");
         Console.WriteLine("                     <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.");
+        Console.WriteLine("  --csharp-test-oracle <dir>  C# test-case names from `cs2gs capture-test-oracle`; every");
+        Console.WriteLine("                     mirrored test project is checked name for name (issue #4633).");
+        Console.WriteLine("  --test-name-baseline <file>  Justified per-test-name differences; default:");
+        Console.WriteLine("                     <corpus>/" + TestNameParityBaseline.DefaultRelativePath + " when present.");
+        Console.WriteLine("  --count-only-test-parity  Knowingly skip per-test-name parity (one of this or");
+        Console.WriteLine("                     --csharp-test-oracle is required).");
     }
 }

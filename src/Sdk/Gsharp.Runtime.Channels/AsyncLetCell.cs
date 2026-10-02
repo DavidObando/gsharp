@@ -113,9 +113,9 @@ public sealed class AsyncLetCell : IGoroutineSink
         Volatile.Write(ref read, 1);
         var value = await completion.Task.ConfigureAwait(false);
 
-        // TResult is unconstrained: `default!` is its zero value, which is
-        // what a child that deposited nothing is defined to yield.
-        return value is null ? default! : (TResult)value;
+        // TResult is unconstrained: its zero value is what a child that
+        // deposited nothing is defined to yield, and it may be null.
+        return value is null ? ReceiveResult<TResult>.ZeroValue() : (TResult)value;
     }
 
     /// <summary>

@@ -69,7 +69,8 @@ public static partial class ChannelOps
             {
                 // The pair IS the three-state encoding (ADR-0174 D3): a null
                 // `value` is meaningful here and `ok` tells the caller so.
-                return (value!, ok);
+                var delivered = new ReceiveResult<T>(value, ok);
+                return (delivered.Element, delivered.Ok);
             }
 
             return Block(chan.ReceiveAsync(cancellationToken)).ToTuple();
@@ -113,7 +114,7 @@ public static partial class ChannelOps
 
             if (!Block(reader.WaitToReadAsync(cancellationToken)))
             {
-                return (default!, false);
+                return (ReceiveResult<T>.ZeroValue(), false);
             }
         }
     }
@@ -339,5 +340,5 @@ public static partial class ChannelOps
 
     // The tuple IS the three-state encoding (ADR-0174 D3): the zero value
     // travels with `Ok` false, which is what the receiver deconstructs.
-    private static (T Value, bool Ok) ToTuple<T>(this ReceiveResult<T> result) => (result.Value!, result.Ok);
+    private static (T Value, bool Ok) ToTuple<T>(this ReceiveResult<T> result) => (result.Element, result.Ok);
 }

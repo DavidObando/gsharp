@@ -123,17 +123,29 @@ internal static class GSharpSourceSyntax
         return "<top-level>." + (member ?? "<none>");
     }
 
-    /// <summary>The name of the nearest enclosing member (not type), as Roslyn's <c>GetEnclosingMemberName</c> reports it.</summary>
+    /// <summary>
+    /// The shape key of the nearest enclosing member, mapped exactly like the
+    /// C# scan's <c>GetEnclosingMemberName</c> (DiagnosticIdUniquenessTests), so
+    /// distinct sites stay distinct in both languages: a function (local ones
+    /// included) by its name, a constructor by its containing type's name, an
+    /// accessor body as <c>Property.get</c> / <c>Property.set</c>. Anything else
+    /// keeps walking outward, and outside every member it is <c>&lt;top-level&gt;</c>.
+    /// </summary>
     /// <param name="node">The node.</param>
-    /// <returns>The member name, or <c>&lt;top-level&gt;</c>.</returns>
+    /// <returns>The member's shape key.</returns>
     internal static string NearestMemberName(SyntaxNode node)
     {
         foreach (var ancestor in node.Ancestors())
         {
-            string? member = MemberName(ancestor);
-            if (member is not null)
+            switch (ancestor)
             {
-                return member;
+                case FunctionDeclarationSyntax function:
+                    return function.Identifier.Text;
+                case ConstructorDeclarationSyntax:
+                    return ancestor.Ancestors().Select(TypeName).FirstOrDefault(name => name is not null) ?? "<top-level>";
+                case PropertyAccessorSyntax accessor:
+                    var property = accessor.Ancestors().OfType<PropertyDeclarationSyntax>().FirstOrDefault();
+                    return (property?.Identifier.Text ?? string.Empty) + "." + accessor.AccessorKeyword.Text;
             }
         }
 

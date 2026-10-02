@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 
 namespace Gsharp.Concurrency;
@@ -66,7 +67,8 @@ internal sealed class CoreReceiveArm<T> : ArmDescriptor, IArmValue<T>
 {
     private ISelectableCore<T>? selectable;
     private SelectNode<T>? node;
-    private T? pending;
+    [AllowNull]
+    private T pending;
 
     /// <summary>Initializes a new instance of the <see cref="CoreReceiveArm{T}"/> class.</summary>
     /// <param name="selectable">The selectable.</param>
@@ -95,7 +97,7 @@ internal sealed class CoreReceiveArm<T> : ArmDescriptor, IArmValue<T>
     {
         var taken = pending;
         pending = default;
-        return taken!;
+        return taken;
     }
 
     /// <summary>Points a cached descriptor at a new select's participants (issue #3902 S4).</summary>
@@ -135,7 +137,7 @@ internal sealed class CoreReceiveArm<T> : ArmDescriptor, IArmValue<T>
     /// <inheritdoc/>
     internal override void Register(SelectWaiter waiter, long generation)
     {
-        node = new SelectNode<T>(waiter, generation, Arm, Selectable, isSend: false, default!);
+        node = new SelectNode<T>(waiter, generation, Arm, Selectable, isSend: false, default);
         Selectable.RegisterReceiveLocked(node);
     }
 
@@ -155,7 +157,8 @@ internal sealed class CoreReceiveArm<T> : ArmDescriptor, IArmValue<T>
 internal sealed class CoreSendArm<T> : ArmDescriptor
 {
     private ISendSelectableCore<T>? selectable;
-    private T? value;
+    [AllowNull]
+    private T value;
     private SelectNode<T>? node;
 
     /// <summary>Initializes a new instance of the <see cref="CoreSendArm{T}"/> class.</summary>
@@ -208,7 +211,7 @@ internal sealed class CoreSendArm<T> : ArmDescriptor
         {
             // Set by the constructor or by Retarget, both of which run before
             // the waiter can probe this arm; Release only runs after it is done.
-            return Selectable.TrySendLocked(value!, ref completions);
+            return Selectable.TrySendLocked(value, ref completions);
         }
         catch (ChannelClosedException closed)
         {
@@ -222,7 +225,7 @@ internal sealed class CoreSendArm<T> : ArmDescriptor
     internal override void Register(SelectWaiter waiter, long generation)
     {
         // As in TryProbe: live between Retarget and Release.
-        node = new SelectNode<T>(waiter, generation, Arm, Selectable, isSend: true, value!);
+        node = new SelectNode<T>(waiter, generation, Arm, Selectable, isSend: true, value);
         Selectable.RegisterSendLocked(node);
     }
 

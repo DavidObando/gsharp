@@ -73,6 +73,27 @@ jq -n \
   '{labels: $labels, lifts: $lifts, longLines: $longLines, bangs: $bangs}' \
   > "$work_root/metrics.json"
 
+# Issue #4633: the per-test-name parity oracle. Every C# test project the
+# shards will mirror is built in Release and LISTED (not run): the shards then
+# compare each migrated run's TRX against these names. Captured AFTER the
+# translate pass on purpose, so the Release build it performs cannot change
+# what translation saw. A capture failure is not fatal here: the affected app
+# fails its own parity with TEST-ORACLE-MISSING, which names it, while every
+# other app still gets a verdict.
+set +e
+dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
+  --corpus "$repo_root" \
+  --out "$work_root/csharp-tests" \
+  --manifests "$run_dir" \
+  "${selfmig_project_filters[@]}" \
+  2>&1 | tee "$work_root/capture-test-oracle.log"
+capture_exit=${PIPESTATUS[0]}
+set -e
+if (( capture_exit != 0 )); then
+  echo "self-migration translate: capturing the C# test oracle FAILED for at least one test" \
+    "project (exit $capture_exit); those apps will fail test parity. See capture-test-oracle.log." >&2
+fi
+
 translated=$(jq '[.apps[] | select(.succeeded)] | length' "$run_json")
 total=$(jq '.apps | length' "$run_json")
 echo "self-migration translate: $translated/$total apps translated (migrate exit $migrate_exit)."
