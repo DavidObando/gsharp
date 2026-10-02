@@ -168,6 +168,31 @@ public class Issue1675SyntaxNodeChildEnumerationTests
     }
 
     /// <summary>
+    /// The child order itself, pinned in a golden. Both sides of the test
+    /// above come from <c>GetProperties()</c>, so they agree with each other
+    /// whatever order the compiler that built GSharp.Core emitted the
+    /// properties in. Production child order (and with it first/last token,
+    /// spans and diagnostic positions) follows that metadata order, so a
+    /// rebuild of Core that reorders properties must fail here rather than pass
+    /// both sides of a self-comparison.
+    /// </summary>
+    [Fact]
+    public void ChildPropertyOrder_MatchesGolden()
+    {
+        var lines = GetConcreteNodeTypes()
+            .Select(type => type.FullName + ": " + string.Join(", ",
+                SyntaxNode.GetChildPropertiesInEnumerationOrder(type).Select(p => p.Name)))
+            .ToList();
+        Assert.True(lines.Count > 100, $"only {lines.Count} concrete syntax node types");
+
+        GSharp.Tests.GoldenFile.AssertMatches(
+            Path.Combine(LocateRepoRoot(), "test", "Core.Tests", "Baselines", "syntax-child-order.txt"),
+            string.Join("\n", lines) + "\n",
+            "Syntax child order changed. If intended, regenerate with GSHARP_UPDATE_GOLDENS=1; it moves "
+            + "first/last tokens, spans and diagnostic positions.");
+    }
+
+    /// <summary>
     /// For every node of every tree in the corpus, the new
     /// <see cref="SyntaxNode.GetChildren"/> must yield exactly the same child
     /// instances, in exactly the same order, as the legacy reflection-based
@@ -269,6 +294,19 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         var after = block.Span;
         Assert.Equal(0, after.Start);
         Assert.Equal(before.End, after.End);
+    }
+
+    private static string LocateRepoRoot()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
+        {
+            if (Directory.Exists(Path.Combine(dir.FullName, "test", "Core.Tests", "Baselines")))
+            {
+                return dir.FullName;
+            }
+        }
+
+        throw new InvalidOperationException("repository root not found from " + AppContext.BaseDirectory);
     }
 
     private static List<Type> GetConcreteNodeTypes()

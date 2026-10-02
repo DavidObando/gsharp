@@ -1,0 +1,155 @@
+GSharp.Core.CodeAnalysis.Syntax.AccessorExpressionSyntax: LeftPart, DotToken, RightPart
+GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax: AtToken, Target, NameSegments, DotTokens, OpenParenthesisToken, Arguments, CloseParenthesisToken, TypeArgumentOpenBracketToken, TypeArguments, TypeArgumentCloseBracketToken
+GSharp.Core.CodeAnalysis.Syntax.AnnotationTargetSyntax: KindIdentifier, ColonToken
+GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax: DataKeyword, ObjectKeyword, BaseColonToken, BaseTypeClause, BaseConstructorOpenParenthesisToken, BaseConstructorArguments, BaseConstructorCloseParenthesisToken, AdditionalBaseTypeClauses, OpenBraceToken, Members, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.AnonymousClassMemberInitializerSyntax: LetOrVarKeyword, Identifier, TypeClause, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.ArrayCreationExpressionSyntax: OpenBracketToken, LengthToken, Dimensions, CloseBracketToken, ElementTypeIdentifier, ElementTypeClause, OpenBraceToken, Elements, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.AsExpressionSyntax: Expression, AsKeyword, TypeClause
+GSharp.Core.CodeAnalysis.Syntax.AssignmentExpressionSyntax: IdentifierToken, EqualsToken, Expression
+GSharp.Core.CodeAnalysis.Syntax.AwaitExpressionSyntax: AwaitKeyword, Expression
+GSharp.Core.CodeAnalysis.Syntax.AwaitForRangeStatementSyntax: AwaitKeyword, ForKeyword, Identifier, TypeClause, ColonEqualsToken, RangeKeyword, InToken, Stream, Body
+GSharp.Core.CodeAnalysis.Syntax.AwaitUsingStatementSyntax: AwaitKeyword, UsingKeyword, Declaration
+GSharp.Core.CodeAnalysis.Syntax.BaseClassCallExpressionSyntax: BaseKeyword, DotToken, Call
+GSharp.Core.CodeAnalysis.Syntax.BaseInterfaceCallExpressionSyntax: BaseKeyword, OpenBracketToken, InterfaceTypeClause, CloseBracketToken, DotToken, MethodIdentifier, MethodTypeArgumentList, OpenParenthesisToken, Arguments, CloseParenthesisToken, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.BinaryExpressionSyntax: Left, OperatorToken, Right
+GSharp.Core.CodeAnalysis.Syntax.BinaryPatternSyntax: Left, OperatorToken, Right
+GSharp.Core.CodeAnalysis.Syntax.BlockExpressionSyntax: OpenBraceToken, Statements, Expression, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax: UnsafeKeyword, CheckedKeyword, UncheckedKeyword, OpenBraceToken, Statements, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.BreakStatementSyntax: Keyword, LabelIdentifier
+GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax: ReadOnlyManagedModifier, Callee, ConversionTypeClause, Identifier, NullableQuestionToken, TypeArgumentList, OpenParenthesisToken, Arguments, CloseParenthesisToken
+GSharp.Core.CodeAnalysis.Syntax.CatchClauseSyntax: CatchKeyword, OpenParenthesisToken, Identifier, TypeClause, CloseParenthesisToken, WhenKeyword, Filter, Body
+GSharp.Core.CodeAnalysis.Syntax.ChannelCreationExpressionSyntax: TypeClause, OpenParenthesis, Arguments, CloseParenthesis
+GSharp.Core.CodeAnalysis.Syntax.ChannelSendStatementSyntax: Channel, LeftArrowToken, Value
+GSharp.Core.CodeAnalysis.Syntax.CheckedExpressionSyntax: Keyword, OpenParenthesis, Expression, CloseParenthesis
+GSharp.Core.CodeAnalysis.Syntax.CollectionInitializerExpressionSyntax: BufferType, Target, OpenBraceToken, Elements, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.CompilationUnitSyntax: FileAttributes, Members, EndOfFileToken
+GSharp.Core.CodeAnalysis.Syntax.CompoundIndexAssignmentExpressionSyntax: Target, OperatorToken, Value
+GSharp.Core.CodeAnalysis.Syntax.ConditionalExpressionSyntax: Condition, QuestionToken, WhenTrue, ColonToken, WhenFalse
+GSharp.Core.CodeAnalysis.Syntax.ConditionalRefArgumentExpressionSyntax: Condition, QuestionToken, WhenTrueRefKindModifier, WhenTrue, ColonToken, WhenFalseRefKindModifier, WhenFalse
+GSharp.Core.CodeAnalysis.Syntax.ConstantPatternSyntax: Expression
+GSharp.Core.CodeAnalysis.Syntax.ConstructorDeclarationSyntax: AccessibilityModifier, ConvenienceModifier, InitKeyword, OpenParenthesisToken, Parameters, CloseParenthesisToken, BaseColonToken, BaseKeyword, BaseOpenParenthesisToken, BaseArguments, BaseCloseParenthesisToken, Body, Annotations
+GSharp.Core.CodeAnalysis.Syntax.ContinueStatementSyntax: Keyword, LabelIdentifier
+GSharp.Core.CodeAnalysis.Syntax.DefaultExpressionSyntax: DefaultKeyword, OpenParenthesis, TypeClause, CloseParenthesis
+GSharp.Core.CodeAnalysis.Syntax.DeferStatementSyntax: DeferKeyword, Expression
+GSharp.Core.CodeAnalysis.Syntax.DeinitDeclarationSyntax: DeinitKeyword, Body, Annotations
+GSharp.Core.CodeAnalysis.Syntax.DelegateDeclarationSyntax: AccessibilityModifier, TypeKeyword, Identifier, TypeParameterList, EqualsToken, DelegateKeyword, FuncKeyword, SemicolonToken, OpenParenToken, Parameters, CloseParenToken, ReturnType, Annotations
+GSharp.Core.CodeAnalysis.Syntax.DiscardPatternSyntax: UnderscoreToken
+GSharp.Core.CodeAnalysis.Syntax.DoWhileStatementSyntax: DoKeyword, Body, WhileKeyword, Condition
+GSharp.Core.CodeAnalysis.Syntax.ElseClauseSyntax: ElseKeyword, ElseStatement
+GSharp.Core.CodeAnalysis.Syntax.EnumDeclarationSyntax: AccessibilityModifier, TypeKeyword, Identifier, EnumKeyword, OpenBraceToken, Members, CloseBraceToken, SealedKeyword, Annotations
+GSharp.Core.CodeAnalysis.Syntax.EnumMemberSyntax: Annotations, Identifier, PayloadOpenParenthesis, PayloadParameters, PayloadCloseParenthesis, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.EventAccessorSyntax: AccessorKeyword, Body, SemicolonToken
+GSharp.Core.CodeAnalysis.Syntax.EventDeclarationSyntax: Annotations, AccessibilityModifier, OpenModifier, OverrideModifier, EventKeyword, Identifier, Type, OpenBraceToken, Accessors, CloseBraceToken, ExplicitInterfaceOpenParenthesisToken, ExplicitInterfaceType, ExplicitInterfaceCloseParenthesisToken
+GSharp.Core.CodeAnalysis.Syntax.EventSubscriptionExpressionSyntax: LeftHandSide, OperatorToken, Value
+GSharp.Core.CodeAnalysis.Syntax.ExpressionCollectionElementSyntax: Expression
+GSharp.Core.CodeAnalysis.Syntax.ExpressionStatementSyntax: Expression
+GSharp.Core.CodeAnalysis.Syntax.FallthroughStatementSyntax: Keyword
+GSharp.Core.CodeAnalysis.Syntax.FieldAssignmentExpressionSyntax: Receiver, DotToken, FieldIdentifier, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.FieldDeclarationSyntax: Annotations, AccessibilityModifier, VarOrLetKeyword, Identifier, Type, EqualsToken, Initializer, FixedKeyword
+GSharp.Core.CodeAnalysis.Syntax.FieldInitializerSyntax: FieldIdentifier, ColonToken, Value
+GSharp.Core.CodeAnalysis.Syntax.FinallyClauseSyntax: FinallyKeyword, Body
+GSharp.Core.CodeAnalysis.Syntax.FixedStatementSyntax: FixedKeyword, Identifier, TypeClause, EqualsToken, PinnedSource, Body
+GSharp.Core.CodeAnalysis.Syntax.ForClauseStatementSyntax: Keyword, Initializer, FirstSemicolon, Condition, SecondSemicolon, Post, Body
+GSharp.Core.CodeAnalysis.Syntax.ForConditionStatementSyntax: Keyword, Condition, Body
+GSharp.Core.CodeAnalysis.Syntax.ForEllipsisStatementSyntax: Keyword, Identifier, InToken, LowerBound, EllipsisToken, UpperBound, Body
+GSharp.Core.CodeAnalysis.Syntax.ForInfiniteStatementSyntax: Keyword, Body
+GSharp.Core.CodeAnalysis.Syntax.ForRangeStatementSyntax: Keyword, FirstIdentifier, TypeClause, CommaToken, SecondIdentifier, ColonEqualsToken, RangeKeyword, InToken, Collection, Body
+GSharp.Core.CodeAnalysis.Syntax.ForTupleRangeStatementSyntax: Keyword, OpenParenToken, Identifiers, CloseParenToken, InToken, Collection, Body
+GSharp.Core.CodeAnalysis.Syntax.FromEndIndexExpressionSyntax: HatToken, Operand
+GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax: SemicolonBodyToken, PartialModifier, ReceiverOpenParenthesisToken, Receiver, ReceiverCloseParenthesisToken, ExplicitInterfaceOpenParenthesisToken, ExplicitInterfaceType, ExplicitInterfaceCloseParenthesisToken, AccessibilityModifier, OpenModifier, OverrideModifier, AsyncModifier, ReturnRefModifier, ReturnReadOnlyModifier, UnsafeModifier, FunctionKeyword, RetiredExtensionKeyword, Identifier, TypeParameterList, OpenParenthesisToken, Parameters, CloseParenthesisToken, Type, Body, Annotations
+GSharp.Core.CodeAnalysis.Syntax.FunctionLiteralExpressionSyntax: AsyncModifier, FuncKeyword, OpenParenToken, Parameters, CloseParenToken, ReturnRefModifier, ReturnReadOnlyModifier, ReturnTypeClause, Body
+GSharp.Core.CodeAnalysis.Syntax.GenericNameExpressionSyntax: ReadOnlySliceModifier, ReadOnlyManagedModifier, Identifier, TypeArgumentList
+GSharp.Core.CodeAnalysis.Syntax.GlobalStatementSyntax: Statement, Annotations
+GSharp.Core.CodeAnalysis.Syntax.GoStatementSyntax: GoKeyword, Expression
+GSharp.Core.CodeAnalysis.Syntax.GotoStatementSyntax: Keyword, LabelIdentifier
+GSharp.Core.CodeAnalysis.Syntax.GuardLetStatementSyntax: GuardKeyword, Bindings, ElseKeyword, ElseStatement
+GSharp.Core.CodeAnalysis.Syntax.IfExpressionSyntax: IfKeyword, Condition, ThenBlock, ElseKeyword, ElseExpression
+GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax: LetKeyword, Identifier, TypeClause, EqualsToken, Initializer
+GSharp.Core.CodeAnalysis.Syntax.IfLetExpressionSyntax: IfKeyword, Bindings, AmpersandAmpersandToken, Guard, ThenBlock, ElseKeyword, ElseExpression
+GSharp.Core.CodeAnalysis.Syntax.IfLetStatementSyntax: IfKeyword, Bindings, ThenStatement, ElseClause
+GSharp.Core.CodeAnalysis.Syntax.IfStatementSyntax: IfKeyword, Initializer, Semicolon, Condition, ThenStatement, ElseClause
+GSharp.Core.CodeAnalysis.Syntax.ImportSyntax: ImportKeyword, AliasIdentifier, EqualsToken, Identifiers, IdentifiersWithDots, Annotations
+GSharp.Core.CodeAnalysis.Syntax.IndexAssignmentExpressionSyntax: TargetIdentifier, OpenBracketToken, Indices, CloseBracketToken, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.IndexExpressionSyntax: Target, OpenBracketToken, Indices, CloseBracketToken
+GSharp.Core.CodeAnalysis.Syntax.IndexedCollectionElementSyntax: OpenBracketToken, Key, CloseBracketToken, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.IndirectAssignmentExpressionSyntax: Target, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.IndirectCompoundAssignmentExpressionSyntax: Target, OperatorToken, Value
+GSharp.Core.CodeAnalysis.Syntax.InterfaceDeclarationSyntax: AccessibilityModifier, TypeKeyword, Identifier, TypeParameterList, SealedKeyword, InterfaceKeyword, OpenBraceToken, Properties, Events, Methods, CloseBraceToken, BaseColonToken, BaseTypeClauses, PartialModifier, StaticFields, Annotations
+GSharp.Core.CodeAnalysis.Syntax.InterpolatedStringExpressionSyntax: StringToken, HoleExpressions
+GSharp.Core.CodeAnalysis.Syntax.IsExpressionSyntax: Expression, IsKeyword, Pattern
+GSharp.Core.CodeAnalysis.Syntax.KeyedCollectionElementSyntax: Key, ColonToken, Value
+GSharp.Core.CodeAnalysis.Syntax.LabeledStatementSyntax: LabelIdentifier, ColonToken, Statement
+GSharp.Core.CodeAnalysis.Syntax.LambdaExpressionSyntax: AsyncModifier, OpenParenToken, Parameters, CloseParenToken, ArrowToken, Body
+GSharp.Core.CodeAnalysis.Syntax.ListPatternSyntax: OpenSquareBracketToken, Elements, CloseSquareBracketToken
+GSharp.Core.CodeAnalysis.Syntax.LiteralExpressionSyntax: LiteralToken
+GSharp.Core.CodeAnalysis.Syntax.LockStatementSyntax: LockKeyword, Expression, Body
+GSharp.Core.CodeAnalysis.Syntax.MakeChannelExpressionSyntax: MakeIdentifier, OpenParenthesis, ChannelTypeClause, CommaToken, Capacity, CloseParenthesis
+GSharp.Core.CodeAnalysis.Syntax.MapCreationExpressionSyntax: TypeClause, OpenBraceToken, Entries, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.MapEntrySyntax: Key, ColonToken, Value
+GSharp.Core.CodeAnalysis.Syntax.MemberCollectionElementSyntax: DotToken, Initializer
+GSharp.Core.CodeAnalysis.Syntax.MemberFieldAssignmentExpressionSyntax: Receiver, DotToken, FieldIdentifier, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.MemberIndexAssignmentExpressionSyntax: Target, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.MultiAssignmentDeclarationExpressionSyntax: Keyword, Identifier
+GSharp.Core.CodeAnalysis.Syntax.MultiAssignmentStatementSyntax: Targets, OperatorToken, Values
+GSharp.Core.CodeAnalysis.Syntax.NameExpressionSyntax: IdentifierToken
+GSharp.Core.CodeAnalysis.Syntax.NameOfExpressionSyntax: NameOfIdentifier, OpenParenthesis, Argument, CloseParenthesis
+GSharp.Core.CodeAnalysis.Syntax.NamedArgumentExpressionSyntax: NameToken, EqualsToken, Expression
+GSharp.Core.CodeAnalysis.Syntax.NamedDeconstructionFieldSyntax: FieldIdentifier, EqualsToken, LocalIdentifier
+GSharp.Core.CodeAnalysis.Syntax.NamedDeconstructionStatementSyntax: Keyword, OpenBraceToken, Fields, CloseBraceToken, EqualsToken, Initializer
+GSharp.Core.CodeAnalysis.Syntax.NamedTupleElementSyntax: NameToken, ColonToken, Expression
+GSharp.Core.CodeAnalysis.Syntax.NotPatternSyntax: NotKeyword, Pattern
+GSharp.Core.CodeAnalysis.Syntax.NullCoalescingAssignmentStatementSyntax: Target, OperatorToken, Value
+GSharp.Core.CodeAnalysis.Syntax.ObjectCreationExpressionSyntax: Target, OpenBraceToken, Initializers, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.PackageSyntax: PackageKeyword, Identifiers, IdentifiersWithDots, Annotations
+GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax: Annotations, Identifier, DeconstructionPattern, EllipsisToken, Type, ScopedModifier, RefKindModifier, EqualsToken, DefaultValue
+GSharp.Core.CodeAnalysis.Syntax.ParenthesizedExpressionSyntax: OpenParenthesisToken, Expression, CloseParenthesisToken
+GSharp.Core.CodeAnalysis.Syntax.ParenthesizedPatternSyntax: OpenParenthesisToken, Pattern, CloseParenthesisToken
+GSharp.Core.CodeAnalysis.Syntax.PropertyAccessorSyntax: AccessibilityModifier, AccessorKeyword, OpenParenToken, ParameterIdentifier, CloseParenToken, Body, SemicolonToken
+GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax: Annotations, AccessibilityModifier, OpenModifier, OverrideModifier, ExplicitInterfaceOpenParenthesisToken, ExplicitInterfaceType, ExplicitInterfaceCloseParenthesisToken, PropKeyword, Identifier, ThisKeyword, OpenBracketToken, Parameters, CloseBracketToken, ReturnRefModifier, ReturnReadOnlyModifier, Type, OpenBraceToken, Accessors, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.PropertyInitializerSyntax: PropertyIdentifier, EqualsToken, Value
+GSharp.Core.CodeAnalysis.Syntax.PropertyPatternFieldSyntax: Identifier, ColonToken, Pattern
+GSharp.Core.CodeAnalysis.Syntax.PropertyPatternSyntax: OpenBraceToken, Fields, CloseBraceToken, Designation
+GSharp.Core.CodeAnalysis.Syntax.RangeExpressionSyntax: LowerBound, DotDotToken, UpperBound
+GSharp.Core.CodeAnalysis.Syntax.RefArgumentExpressionSyntax: RefKindModifier, Expression, DeclarationKeyword, DeclarationIdentifier, DiscardToken, DeclaredType
+GSharp.Core.CodeAnalysis.Syntax.RelationalPatternSyntax: OperatorToken, Expression
+GSharp.Core.CodeAnalysis.Syntax.RethrowStatementSyntax: RethrowKeyword
+GSharp.Core.CodeAnalysis.Syntax.ReturnStatementSyntax: ReturnKeyword, RefKeyword, Expression
+GSharp.Core.CodeAnalysis.Syntax.ScopeStatementSyntax: ScopeKeyword, Body
+GSharp.Core.CodeAnalysis.Syntax.SelectCaseSyntax: Keyword, Identifier, Channel, Value, WhenKeyword, Guard, Body
+GSharp.Core.CodeAnalysis.Syntax.SelectStatementSyntax: SelectKeyword, OpenBraceToken, Cases, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.SharedBlockSyntax: SharedKeyword, OpenBraceToken, Fields, Properties, Events, Methods, InitBlocks, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.SizeOfExpressionSyntax: SizeOfIdentifier, OpenParenthesis, TypeClause, CloseParenthesis
+GSharp.Core.CodeAnalysis.Syntax.SlicePatternSyntax: DotDotToken, CaptureIdentifier, Pattern
+GSharp.Core.CodeAnalysis.Syntax.SpreadElementExpressionSyntax: EllipsisToken, Expression
+GSharp.Core.CodeAnalysis.Syntax.StackAllocExpressionSyntax: StackAllocKeyword, OpenBracketToken, CountExpression, CloseBracketToken, ElementTypeIdentifier, OpenBraceToken, Elements, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.StaticInitializerBlockSyntax: InitKeyword, Body
+GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax: AccessibilityModifier, TypeKeyword, Identifier, DataKeyword, InlineKeyword, OpenModifier, StructKeyword, PrimaryConstructorOpenParenthesisToken, PrimaryConstructorParameters, PrimaryConstructorCloseParenthesisToken, BaseColonToken, BaseTypeIdentifier, AdditionalBaseTypeIdentifiers, BaseTypeClauses, UnsafeModifier, PartialModifier, OpenBraceToken, Fields, Properties, Events, Methods, CloseBraceToken, TypeParameterList, RefModifier, SharedBlock, BaseConstructorOpenParenthesisToken, BaseConstructorArguments, BaseConstructorCloseParenthesisToken, SealedKeyword, Constructors, Deinitializer, NestedTypes, Annotations
+GSharp.Core.CodeAnalysis.Syntax.StructLiteralContentElementSyntax: Expression
+GSharp.Core.CodeAnalysis.Syntax.StructLiteralExpressionSyntax: TypeIdentifier, OpenBraceToken, SpreadToken, SpreadExpression, SpreadSeparatorToken, Elements, CloseBraceToken, TypeArgumentList
+GSharp.Core.CodeAnalysis.Syntax.SwitchCaseSyntax: Keyword, Value, WhenKeyword, Guard, Body
+GSharp.Core.CodeAnalysis.Syntax.SwitchExpressionArmSyntax: Keyword, Value, WhenKeyword, Guard, ArrowToken, Result
+GSharp.Core.CodeAnalysis.Syntax.SwitchExpressionSyntax: SwitchKeyword, Expression, OpenBraceToken, Arms, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.SwitchStatementSyntax: SwitchKeyword, Expression, OpenBraceToken, Cases, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.SyntaxToken: 
+GSharp.Core.CodeAnalysis.Syntax.ThrowExpressionSyntax: ThrowKeyword, Expression
+GSharp.Core.CodeAnalysis.Syntax.ThrowStatementSyntax: ThrowKeyword, Expression
+GSharp.Core.CodeAnalysis.Syntax.TryStatementSyntax: TryKeyword, TryBlock, CatchClauses, FinallyClause
+GSharp.Core.CodeAnalysis.Syntax.TupleDeconstructionPatternSyntax: OpenParenToken, Elements, CloseParenToken
+GSharp.Core.CodeAnalysis.Syntax.TupleDeconstructionStatementSyntax: Keyword, OpenParenToken, Identifiers, CloseParenToken, EqualsToken, Initializer
+GSharp.Core.CodeAnalysis.Syntax.TupleLiteralExpressionSyntax: OpenParenToken, Elements, CloseParenToken
+GSharp.Core.CodeAnalysis.Syntax.TypeAliasDeclarationSyntax: AccessibilityModifier, TypeKeyword, Identifier, EqualsToken, AliasedType, Annotations
+GSharp.Core.CodeAnalysis.Syntax.TypeArgumentListSyntax: OpenBracketToken, Arguments, CloseBracketToken
+GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax: ReadOnlySliceModifier, ReadOnlyManagedModifier, OpenBracketToken, LengthToken, ArrayCommaTokens, CloseBracketToken, Identifier, QualifierDotTokens, QualifierIdentifierTokens, ArrayElementType, QuestionToken, ArrayQuestionToken, ParenthesizedQuestionToken, TupleElementNameToken, OpenParenToken, CloseParenToken, TupleElements, FuncKeyword, ArrowToken, FunctionParameterTypes, FunctionParameterEllipsisTokens, FunctionParameterRefKindTokens, ReturnTypeClause, UnmanagedKeyword, CallingConventionOpenBracketToken, CallingConventionIdentifierToken, CallingConventionRestTokens, CallingConventionCloseBracketToken, ManagedFunctionPointerStarToken, ManagedFunctionPointerFuncKeyword, TypeArgumentOpenBracketToken, TypeArguments, TypeArgumentCloseBracketToken, OuterSegmentTypeArgumentChildren, MapKeyword, MapOpenBracketToken, MapKeyType, MapCommaToken, MapCloseBracketToken, MapValueType, ChanDirectionToken, ChanKeyword, ChanOpenBracketToken, ChanElementType, ChanCloseBracketToken, PointerStarToken, PointerPointeeType, SequenceKeyword, SequenceOpenBracketToken, SequenceElementType, SequenceCloseBracketToken, AsyncModifier
+GSharp.Core.CodeAnalysis.Syntax.TypeOfExpressionSyntax: TypeOfIdentifier, OpenParenthesis, TypeClause, CloseParenthesis
+GSharp.Core.CodeAnalysis.Syntax.TypeOrConstantPatternSyntax: Expression, PropertyPattern
+GSharp.Core.CodeAnalysis.Syntax.TypeParameterListSyntax: OpenBracketToken, Parameters, CloseBracketToken
+GSharp.Core.CodeAnalysis.Syntax.TypeParameterSyntax: VarianceModifier, Identifier, Constraint, ConstraintType, ConstraintTypeArgumentOpenBracketToken, ConstraintTypeArguments, ConstraintTypeArgumentCloseBracketToken, ClassConstraintKeyword, StructConstraintKeyword, InitConstraintKeyword, InitConstraintOpenParenToken, InitConstraintCloseParenToken, UnmanagedConstraintKeyword
+GSharp.Core.CodeAnalysis.Syntax.TypePatternSyntax: Identifier, IsKeyword, Type, PropertyPattern, Designation
+GSharp.Core.CodeAnalysis.Syntax.UnaryExpressionSyntax: OperatorToken, Operand
+GSharp.Core.CodeAnalysis.Syntax.UsingStatementSyntax: UsingKeyword, Declaration
+GSharp.Core.CodeAnalysis.Syntax.VarPatternSyntax: VarKeyword, Designation
+GSharp.Core.CodeAnalysis.Syntax.VariableDeclarationSyntax: Annotations, AccessibilityModifier, AsyncModifier, Keyword, ScopedModifier, RefKindModifier, ReadOnlyRefModifier, Identifier, TypeParameterList, TypeClause, EqualsToken, Initializer
+GSharp.Core.CodeAnalysis.Syntax.WhileLetStatementSyntax: WhileKeyword, Bindings, Body
+GSharp.Core.CodeAnalysis.Syntax.WhileStatementSyntax: WhileKeyword, Condition, Body
+GSharp.Core.CodeAnalysis.Syntax.WithExpressionSyntax: Receiver, WithToken, OpenBraceToken, Initializers, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.YieldStatementSyntax: YieldKeyword, Expression, BreakKeyword

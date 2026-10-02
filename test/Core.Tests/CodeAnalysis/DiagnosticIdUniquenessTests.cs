@@ -263,11 +263,20 @@ public class DiagnosticIdUniquenessTests
             "Diagnostic reference rows differ:\n" + string.Join("\n", differingRows));
     }
 
-    private static FieldInfo[] GetDescriptorFields() =>
-        typeof(DiagnosticDescriptors)
+    private static FieldInfo[] GetDescriptorFields()
+    {
+        var fields = typeof(DiagnosticDescriptors)
             .GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
             .Where(field => field.FieldType == typeof(CoreDiagnosticDescriptor))
             .ToArray();
+
+        // Every guard in this class quantifies over these fields. If the
+        // descriptors stop being static fields of this exact type (a different
+        // emit of the same source, for one), an empty set would make them all
+        // pass having checked nothing.
+        Assert.True(fields.Length > 400, $"only {fields.Length} diagnostic descriptor fields were reflected");
+        return fields;
+    }
 
     private static IReadOnlyDictionary<string, string> AssertDocumentationMatches(
         string path,
