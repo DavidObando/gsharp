@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import sys
 import unittest
@@ -52,6 +53,7 @@ at = int(os.environ.get("STUB_AT", "3"))
 log = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--log=")), None)
 stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
 diagnostics = 0
+doc_lines = 0
 
 def log_line(level, message, exc_type=None, exc=None):
     if log:
@@ -81,6 +83,10 @@ while True:
     log_line("Debug", "[IN] " + json.dumps(msg)[:300] + ' "Level":"Error","Message":')
     if method == "exit":
         sys.exit(0)
+    if method == "textDocument/didOpen":
+        doc_lines = msg["params"]["textDocument"]["text"].count("\n")
+    if method == "textDocument/didChange":
+        doc_lines = msg["params"]["contentChanges"][-1]["text"].count("\n")
     if rid is None:
         continue
     result = None
@@ -110,6 +116,9 @@ while True:
                 send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32800, "message": "cancelled"}})
                 continue
         result = {"kind": "full", "items": items}
+    elif method == "textDocument/inlayHint" and msg["params"]["range"]["end"]["line"] > doc_lines:
+        send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "range past the end"}})
+        continue
     elif method == "textDocument/hover" and mode == "no-hover":
         send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}})
         continue
@@ -285,6 +294,26 @@ class LspSoakTests(unittest.TestCase):
         self.assertNotIn("changeToDiagnosticsMs", first)
         self.assertIn("changeToDiagnosticsMs", second)
         self.assertIsNotNone(soak.summarize_file(result)["openToDiagnosticsMs"])
+
+    def test_tiny_inputs_plan_and_run(self) -> None:
+        empty = SCRATCH / "Empty.gs"
+        empty.write_text("", encoding="utf-8")
+        one_line = SCRATCH / "OneLine.gs"
+        one_line.write_text("package P", encoding="utf-8")
+        plan = SCRATCH / "tiny.json"
+        self.assertEqual(0, soak.main(["plan", str(empty), str(one_line), "--out", str(plan)]))
+        out = SCRATCH / "run-tiny"
+        self.assertEqual(0, soak.main(["run", "--plan", str(plan), "--label", "tiny", "--out", str(out),
+                                       "--server", f"{sys.executable} {self.stub}",
+                                       "--server-env", f"STUB_FLAG={out}.fired"]))
+
+    def test_server_command_resolves_relative_to_the_callers_directory(self) -> None:
+        out = SCRATCH / "run-relative"
+        relative_stub = os.path.relpath(self.stub)
+        self.assertFalse(os.path.isabs(relative_stub))
+        self.assertEqual(0, soak.main(["run", "--plan", str(self.plan), "--label", "relative", "--out", str(out),
+                                       "--server", f"{sys.executable} {relative_stub}",
+                                       "--server-env", f"STUB_FLAG={out}.fired"]))
 
     def test_utf16_positions(self) -> None:
         index = soak.LineIndex("ab\n\U0001F600x\n")

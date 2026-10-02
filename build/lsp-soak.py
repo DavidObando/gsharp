@@ -231,7 +231,7 @@ def _truncation_points(rng: random.Random, text: str, random_count: int) -> list
     for fraction in (10, 50, 90):
         points.append((f"at-{fraction}pct", len(text) * fraction // 100))
     for i in range(random_count):
-        points.append((f"random-{i}", rng.randrange(1, max(2, len(text)))))
+        points.append((f"random-{i}", rng.randrange(1, len(text)) if len(text) > 1 else 0))
     return points
 
 
@@ -246,17 +246,17 @@ def _signature_edit_steps(rng: random.Random, text: str) -> tuple[list[dict[str,
     steps: list[dict[str, Any]] = []
     edits: list[list[Any]] = []
     for i, ch in enumerate(TYPED_PARAMETER):
-        edits = edits + [[caret + i, 0, ch]]
-        steps.append({"kind": "edit-type-param", "edits": edits, "focus": caret + i + 1, "keystroke": True})
+        edits.append([caret + i, 0, ch])
+        steps.append({"kind": "edit-type-param", "edits": list(edits), "focus": caret + i + 1, "keystroke": True})
     for i in range(len(TYPED_PARAMETER)):
         at = caret + len(TYPED_PARAMETER) - i - 1
-        edits = edits + [[at, 1, ""]]
-        steps.append({"kind": "edit-backspace-param", "edits": edits, "focus": at, "keystroke": True})
+        edits.append([at, 1, ""])
+        steps.append({"kind": "edit-backspace-param", "edits": list(edits), "focus": at, "keystroke": True})
     for i, ch in enumerate(RENAME_SUFFIX):
-        edits = edits + [[name_end + i, 0, ch]]
-        steps.append({"kind": "edit-rename", "edits": edits, "focus": name_end + i + 1, "keystroke": True})
-    edits = edits + [[name_end, len(RENAME_SUFFIX), ""]]
-    steps.append({"kind": "edit-undo-rename", "edits": edits, "focus": name_end, "keystroke": False})
+        edits.append([name_end + i, 0, ch])
+        steps.append({"kind": "edit-rename", "edits": list(edits), "focus": name_end + i + 1, "keystroke": True})
+    edits.append([name_end, len(RENAME_SUFFIX), ""])
+    steps.append({"kind": "edit-undo-rename", "edits": list(edits), "focus": name_end, "keystroke": False})
     return steps, m.start()
 
 
@@ -275,7 +275,7 @@ def plan_file(path: Path, seed: int, truncations: int, line_deletions: int, brac
                       "focus": max(0, offset - 1), "keystroke": False})
 
     line_starts = LineIndex(text).starts
-    for i in range(line_deletions):
+    for i in range(line_deletions if len(line_starts) > 1 else 0):
         first = rng.randrange(0, len(line_starts) - 1)
         span = rng.randint(1, 40)
         last = min(len(line_starts) - 1, first + span)
@@ -417,6 +417,9 @@ class LspClient:
         self.next_id = 0
         self.pending: dict[int, queue.Queue[dict[str, Any]]] = {}
         self.lock = threading.Lock()
+        # Requests go out from the main thread, acknowledgements of server-to-client requests
+        # from the reader thread; one writer at a time keeps the framing intact.
+        self.send_lock = threading.Lock()
         self.notifications: list[dict[str, Any]] = []
         self.stderr_tail: list[str] = []
         self.closed = threading.Event()
@@ -432,8 +435,9 @@ class LspClient:
         if stdin is None:
             raise HarnessError("server stdin is not a pipe")
         try:
-            stdin.write(header + body)
-            stdin.flush()
+            with self.send_lock:
+                stdin.write(header + body)
+                stdin.flush()
         except (BrokenPipeError, OSError) as exc:
             raise self._exited() from exc
 
@@ -653,7 +657,7 @@ class FileRun:
 
     def start(self, text: str) -> None:
         self.client = LspClient(shlex.split(self.args.server, posix=os.name != "nt"), self.log_path,
-                                self.out_dir, parse_pairs("--server-env", self.args.server_env))
+                                Path.cwd(), parse_pairs("--server-env", self.args.server_env))
         root = self.args.workspace_root
         init = {
             "processId": os.getpid(),
@@ -729,9 +733,10 @@ class FileRun:
         yield "textDocument/foldingRange", {"textDocument": doc}
         yield "textDocument/formatting", {"textDocument": doc, "options": {"tabSize": 4, "insertSpaces": True}}
         lo = max(0, caret["line"] - 50)
-        hi = min(index.line_count, caret["line"] + 51)  # exclusive end: the next line's start
+        hi = caret["line"] + 51  # exclusive end: the start of the line after the band, or EOF
+        end = {"line": hi, "character": 0} if hi < index.line_count else index.position(len(index.text))
         yield "textDocument/inlayHint", {"textDocument": doc, "range": {
-            "start": {"line": lo, "character": 0}, "end": {"line": hi, "character": 0}}}
+            "start": {"line": lo, "character": 0}, "end": end}}
         for offset in step["probes"]:
             position = index.position(offset)
             yield "textDocument/hover", {"textDocument": doc, "position": position}
