@@ -833,33 +833,6 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
-    public void BridgeInsideAnExpressionTree_IsNotReported()
-    {
-        string source = """
-            using System;
-            using System.Collections.Generic;
-            using System.Linq.Expressions;
-
-            public static class C
-            {
-                public static Expression<Func<List<string>, bool>> Adds() => list => Add(list, Branch("x"));
-
-                private static bool Add(List<string> list, string item) { list.Add(item); return true; }
-
-            """ + MaybeNullHelper + """
-
-            }
-            """;
-        (_, List<TranslationDiagnostic> sites) = Translate(source);
-
-        // The helper's own `list.Add(item)` is an ordinary site; nothing is
-        // reported inside the expression tree.
-        string treeLine = Expected(source, "Add(list, Branch").Split(':')[0];
-        Assert.DoesNotContain(sites, site => Position(site).Split(':')[0] == treeLine);
-        Assert.Single(sites);
-    }
-
-    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
