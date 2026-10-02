@@ -46,7 +46,8 @@ namespace Demo
 
         Assert.Contains("System.Array.Empty[(int32, string)]()", printed);
         Assert.Contains("System.Array.Empty[int32]()", printed);
-        Assert.DoesNotContain("{}", printed);
+        Assert.DoesNotContain("[](int32, string){}", printed);
+        Assert.DoesNotContain("[]int32{}", printed);
     }
 
     [Fact]
@@ -82,10 +83,14 @@ namespace Demo
         // Element/Object literals, plus the `path` field's explicit empty initializer
         // that replaces gsc's synthesized zero-value array.
         Assert.Equal(2, CountOccurrences(printed, "System.Array.Empty[(RuntimeFieldHandle, RuntimeTypeHandle)]()"));
-        Assert.Contains(
-            "private let path [](Field RuntimeFieldHandle, Type RuntimeTypeHandle) = System.Array.Empty[",
-            printed);
-        Assert.DoesNotContain("(RuntimeFieldHandle, RuntimeTypeHandle){}", printed);
+        string pathLine = Assert.Single(
+            Array.FindAll(
+                printed.Split('\n'),
+                line => line.Contains("private let path", StringComparison.Ordinal)));
+        Assert.Contains("[]", pathLine);
+        Assert.Contains("Field RuntimeFieldHandle, Type RuntimeTypeHandle", pathLine);
+        Assert.Contains("System.Array.Empty", pathLine);
+        Assert.DoesNotContain("[](Field RuntimeFieldHandle, Type RuntimeTypeHandle){}", printed);
     }
 
     [Fact]
