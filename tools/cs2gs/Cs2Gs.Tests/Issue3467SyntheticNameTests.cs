@@ -331,6 +331,71 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_OwnedExtensionAllocatesAgainstReceiverAggregate()
+        {
+            // Issue #4302: an owned extension's local functions belong to the
+            // extension container in Roslyn, but the lifted helper is emitted
+            // into the receiver type, so the name must avoid C.Helper.
+            string printed = Translate("""
+                public class C
+                {
+                    public int Helper(int n) => n + 100;
+                }
+
+                public static class CExtensions
+                {
+                    public static int Extra(this C c, int n)
+                    {
+                        return Helper(n);
+                        static int Helper(int n) => n == 0 ? 7 : Other<int>(n - 1);
+                        static int Other<T>(int n) => Helper(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("func Helper_2(", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Extra(2) + C().Helper(1))",
+                "108");
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_DoesNotCaptureReceiverExtensionCalls()
+        {
+            // Issue #4302: an interface-receiver extension is not folded into
+            // C, so it is absent from C's members. A lifted instance helper
+            // spelled `Helper` would silently capture `this.Helper(1)`.
+            string printed = Translate("""
+                public interface IThing
+                {
+                }
+
+                public static class ThingExtensions
+                {
+                    public static int Helper(this IThing thing, int n) => 1000 + n;
+                }
+
+                public class C : IThing
+                {
+                    public int Run(int value)
+                    {
+                        int viaExtension = this.Helper(1);
+                        return viaExtension + Helper(value);
+                        int Helper(int n) => n == 0 ? 0 : Other<int>(n - 1);
+                        int Other<T>(int n) => Helper(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("func Helper_2(", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run(2))",
+                "1001");
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReusesNameAcrossUnrelatedTypes()
         {
             string printed = Translate("""

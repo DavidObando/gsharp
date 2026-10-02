@@ -1980,32 +1980,86 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
+        // Issue #4302: the single decision point for a lifted local-function
+        // helper's readable name. The name is allocated against the aggregate
+        // the helper is EMITTED into (owned extensions fold their local
+        // functions into the receiver type, not the extension container), and
+        // a candidate is accepted only when it is provably collision-free: it
+        // is absent from that aggregate's occupied set, no document-scope name
+        // claims it, and no source identifier spelled the same way can observe
+        // it (`IsLiftedHelperNameMentionedInSource`). Ordinal-suffixed
+        // candidates go through the same predicate, so allocation always ends
+        // on a proven name; an occupied-set shape this misses becomes a
+        // suffix, never a silently rebound call.
         private string AllocateLiftedLocalFunctionName(IMethodSymbol localFunction, string localName)
         {
-            INamedTypeSymbol emittedOwner =
-                this.state.CurrentEmittedAggregate ?? localFunction.ContainingType;
+            INamedTypeSymbol aggregate = this.state.CurrentEmittedAggregate ?? localFunction.ContainingType;
+            HashSet<string> occupied = this.CollectLiftedHelperOccupiedNames(aggregate, localFunction);
+            return LiftedLocalFunctionNames
+                .GetValue(
+                    this.context.Compilation,
+                    static _ => new LiftedLocalFunctionNameAllocator())
+                .Allocate(
+                    localFunction,
+                    aggregate,
+                    occupied,
+                    localName,
+                    candidate => this.typeMapper.ClaimsDocumentScopeName(candidate, this.context)
+                        || this.IsLiftedHelperNameMentionedInSource(candidate, aggregate, localFunction));
+        }
+
+        // Issue #4302: the names a lifted helper emitted into `aggregate`
+        // could collide with that are not visible as source identifiers:
+        // metadata members of the aggregate's (and the Roslyn containing
+        // type's) hierarchy and interfaces, using-static imports, and the
+        // translator's own synthesized helpers and backing fields.
+        private HashSet<string> CollectLiftedHelperOccupiedNames(
+            INamedTypeSymbol aggregate,
+            IMethodSymbol localFunction)
+        {
             var occupied = new HashSet<string>(StringComparer.Ordinal);
-            for (INamedTypeSymbol type = emittedOwner; type != null; type = type.BaseType)
+            var roots = new List<INamedTypeSymbol>();
+            if (aggregate != null)
             {
-                occupied.Add(this.EmittedName(type, type.Name));
-                occupied.UnionWith(type.GetMembers().Select(member => this.EmittedName(member, member.Name)));
+                roots.Add(aggregate);
             }
 
-            if (emittedOwner != null)
+            if (localFunction.ContainingType != null
+                && !SymbolEqualityComparer.Default.Equals(localFunction.ContainingType, aggregate))
             {
-                occupied.UnionWith(emittedOwner.AllInterfaces
+                roots.Add(localFunction.ContainingType);
+            }
+
+            var containingTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            foreach (INamedTypeSymbol root in roots)
+            {
+                for (INamedTypeSymbol type = root; type != null; type = type.BaseType)
+                {
+                    containingTypes.Add(type);
+                    occupied.Add(this.EmittedName(type, type.Name));
+                    occupied.UnionWith(type.GetMembers().Select(member => this.EmittedName(member, member.Name)));
+                }
+
+                occupied.UnionWith(root.AllInterfaces
                     .SelectMany(type => type.GetMembers())
                     .Select(member => this.EmittedName(member, member.Name)));
-                if (this.ownedExtensions.TryGetMethods(
-                    emittedOwner,
-                    out IReadOnlyList<MethodDeclarationSyntax> ownedExtensionMethods))
+                occupied.UnionWith(
+                    root.InstanceConstructors
+                        .SelectMany(constructor => constructor.Parameters)
+                        .Where(parameter =>
+                            parameter.DeclaringSyntaxReferences.Any(reference =>
+                                reference.GetSyntax().Parent?.Parent is TypeDeclarationSyntax))
+                        .Select(parameter => this.EmittedName(parameter, parameter.Name)));
+                if (this.ownedExtensions.TryGetMethods(root, out IReadOnlyList<MethodDeclarationSyntax> ownedMethods))
                 {
-                    occupied.UnionWith(
-                        ownedExtensionMethods
-                            .Where(this.CanLowerOwnedExtension)
-                            .Select(this.context.GetDeclaredSymbol)
-                            .OfType<IMethodSymbol>()
-                            .Select(method => this.EmittedName(method, method.Name)));
+                    foreach (MethodDeclarationSyntax ownedMethod in ownedMethods.Where(this.CanLowerOwnedExtension))
+                    {
+                        using IDisposable ownedModelScope = this.context.UseSemanticModelFor(ownedMethod.SyntaxTree);
+                        if (this.context.GetDeclaredSymbol(ownedMethod) is IMethodSymbol ownedSymbol)
+                        {
+                            occupied.Add(this.EmittedName(ownedSymbol, ownedSymbol.Name));
+                        }
+                    }
                 }
             }
 
@@ -2023,13 +2077,6 @@ public sealed partial class CSharpToGSharpTranslator
                 ?? Enumerable.Empty<string>());
             occupied.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
                 ?? Enumerable.Empty<string>());
-            occupied.UnionWith(
-                emittedOwner.InstanceConstructors
-                    .SelectMany(constructor => constructor.Parameters)
-                    .Where(parameter =>
-                        parameter.DeclaringSyntaxReferences.Any(reference =>
-                            reference.GetSyntax().Parent?.Parent is TypeDeclarationSyntax))
-                    .Select(parameter => this.EmittedName(parameter, parameter.Name)));
             for (ISymbol scope = localFunction.ContainingSymbol;
                 scope is IMethodSymbol;
                 scope = scope.ContainingSymbol)
@@ -2050,12 +2097,6 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            var containingTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-            for (INamedTypeSymbol type = emittedOwner; type != null; type = type.BaseType)
-            {
-                containingTypes.Add(type);
-            }
-
             occupied.UnionWith(this.state.SynthesizedPropertyBackingFieldNames
                 .Where(pair => containingTypes.Contains(pair.Key.ContainingType))
                 .Select(pair => pair.Value));
@@ -2069,19 +2110,215 @@ public sealed partial class CSharpToGSharpTranslator
                         ? char.ToLowerInvariant(name[0]) + name.Substring(1)
                         : name);
                 }));
+            return occupied;
+        }
 
-            string candidate = LiftedLocalFunctionNames
-                .GetValue(
-                    this.context.Compilation,
-                    static _ => new LiftedLocalFunctionNameAllocator())
-                .Allocate(
-                    localFunction,
-                    emittedOwner,
-                    occupied,
-                    localName,
-                    candidate => this.typeMapper.ClaimsDocumentScopeName(candidate, this.context));
+        // Issue #4302 fail-safe: a readable lifted-helper name is rejected
+        // when any identifier token in the compilation spelled the same way
+        // could observe the new member. Every source-declared or
+        // source-referenced symbol that can shadow or be shadowed by the
+        // helper (members in other partial documents, receiver extensions,
+        // `this.Helper(1)` calls, using-static imports) leaves such a token.
+        // Only tokens that provably cannot interact are ignored: the local
+        // function itself, member-scoped symbols declared outside the
+        // enclosing member, and members of types unrelated to the emitted
+        // aggregate referenced from outside it (or through a qualified
+        // access).
+        private bool IsLiftedHelperNameMentionedInSource(
+            string name,
+            INamedTypeSymbol aggregate,
+            IMethodSymbol localFunction)
+        {
+            var owners = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            if (aggregate != null)
+            {
+                owners.Add(aggregate.OriginalDefinition);
+            }
 
-            return candidate;
+            if (localFunction.ContainingType != null)
+            {
+                owners.Add(localFunction.ContainingType.OriginalDefinition);
+            }
+
+            ISymbol enclosingMember = localFunction.ContainingSymbol;
+            while (enclosingMember is IMethodSymbol enclosingMethod
+                && enclosingMethod.MethodKind is MethodKind.LocalFunction or MethodKind.AnonymousFunction)
+            {
+                enclosingMember = enclosingMethod.ContainingSymbol;
+            }
+
+            var enclosingSpans = new List<SyntaxReference>();
+            if (enclosingMember != null)
+            {
+                enclosingSpans.AddRange(enclosingMember.DeclaringSyntaxReferences);
+            }
+
+            var aggregateSpans = new List<SyntaxReference>();
+            foreach (INamedTypeSymbol owner in owners)
+            {
+                aggregateSpans.AddRange(owner.DeclaringSyntaxReferences);
+                if (this.ownedExtensions.TryGetMethods(owner, out IReadOnlyList<MethodDeclarationSyntax> ownedMethods))
+                {
+                    aggregateSpans.AddRange(ownedMethods.Select(method => method.GetReference()));
+                }
+            }
+
+            foreach (SyntaxTree tree in this.context.Compilation.SyntaxTrees)
+            {
+                var tokens = tree.GetRoot()
+                    .DescendantTokens()
+                    .Where(token => token.IsKind(SyntaxKind.IdentifierToken)
+                        && string.Equals(token.ValueText, name, StringComparison.Ordinal))
+                    .ToList();
+                if (tokens.Count == 0)
+                {
+                    continue;
+                }
+
+                using IDisposable modelScope = this.context.UseSemanticModelFor(tree);
+                foreach (SyntaxToken token in tokens)
+                {
+                    if (this.LiftedHelperNameTokenCanCollide(
+                        token,
+                        localFunction,
+                        owners,
+                        enclosingSpans,
+                        aggregateSpans))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool LiftedHelperNameTokenCanCollide(
+            SyntaxToken token,
+            IMethodSymbol localFunction,
+            HashSet<INamedTypeSymbol> owners,
+            List<SyntaxReference> enclosingSpans,
+            List<SyntaxReference> aggregateSpans)
+        {
+            SyntaxNode parent = token.Parent;
+            if (parent == null)
+            {
+                return true;
+            }
+
+            var symbols = new List<ISymbol>();
+            bool qualified = false;
+            if (parent is SimpleNameSyntax simpleName)
+            {
+                SymbolInfo info = this.context.GetSymbolInfo(simpleName);
+                if (info.Symbol != null)
+                {
+                    symbols.Add(info.Symbol);
+                }
+                else
+                {
+                    symbols.AddRange(info.CandidateSymbols);
+                }
+
+                qualified = simpleName.Parent switch
+                {
+                    MemberAccessExpressionSyntax access => access.Name == simpleName,
+                    MemberBindingExpressionSyntax => true,
+                    QualifiedNameSyntax qualifiedName => qualifiedName.Right == simpleName,
+                    _ => false,
+                };
+            }
+            else
+            {
+                ISymbol declared = this.context.GetDeclaredSymbol(parent);
+                if (declared != null)
+                {
+                    symbols.Add(declared);
+                }
+            }
+
+            if (symbols.Count == 0)
+            {
+                return true;
+            }
+
+            bool insideEnclosingMember = ContainsToken(enclosingSpans, token);
+            bool insideAggregate = ContainsToken(aggregateSpans, token);
+            foreach (ISymbol candidate in symbols)
+            {
+                ISymbol symbol = candidate is IMethodSymbol { ReducedFrom: IMethodSymbol reducedFrom }
+                    ? reducedFrom
+                    : candidate.OriginalDefinition;
+                if (SymbolEqualityComparer.Default.Equals(symbol, localFunction.OriginalDefinition))
+                {
+                    continue;
+                }
+
+                bool memberScoped = symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol or ILabelSymbol
+                    || (symbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction })
+                    || (symbol is ITypeParameterSymbol typeParameter && typeParameter.ContainingSymbol is IMethodSymbol);
+                if (memberScoped)
+                {
+                    if (insideEnclosingMember)
+                    {
+                        return true;
+                    }
+
+                    continue;
+                }
+
+                bool unrelatedMember = (symbol is IFieldSymbol or IPropertySymbol or IEventSymbol
+                        || (symbol is IMethodSymbol method && !method.IsExtensionMethod))
+                    && symbol.ContainingType != null
+                    && !IsTypeRelatedToLiftedHelperOwners(symbol.ContainingType, owners);
+                if (unrelatedMember && (qualified || !insideAggregate))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool ContainsToken(List<SyntaxReference> references, SyntaxToken token) =>
+            references.Any(reference =>
+                reference.SyntaxTree == token.SyntaxTree && reference.Span.Contains(token.Span));
+
+        private static bool IsTypeRelatedToLiftedHelperOwners(
+            INamedTypeSymbol type,
+            HashSet<INamedTypeSymbol> owners)
+        {
+            INamedTypeSymbol definition = type.OriginalDefinition;
+            foreach (INamedTypeSymbol owner in owners)
+            {
+                for (INamedTypeSymbol current = definition; current != null; current = current.BaseType?.OriginalDefinition)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(current, owner))
+                    {
+                        return true;
+                    }
+                }
+
+                for (INamedTypeSymbol current = owner; current != null; current = current.BaseType?.OriginalDefinition)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(current, definition))
+                    {
+                        return true;
+                    }
+                }
+
+                if (owner.AllInterfaces.Any(candidate =>
+                        SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, definition))
+                    || definition.AllInterfaces.Any(candidate =>
+                        SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, owner)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool IsLocalFunctionReferencedAsValue(
