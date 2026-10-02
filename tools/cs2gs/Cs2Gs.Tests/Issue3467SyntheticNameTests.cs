@@ -409,22 +409,23 @@ namespace Cs2Gs.Tests
                 {
                     public int A(int value)
                     {
-                        return First<int>(value, 0);
-                        static int First<T>(int n, T tag) => n == 0 ? 1 : Second(n - 1);
-                        static int Second(int n) => First<int>(n, 0);
+                        return First<int>(value);
+                        static int First<T>(int n) => n == 0 ? 1 : Second(n - 1);
+                        static int Second(int n) => First<int>(n);
                     }
 
                     public int B(int value)
                     {
-                        Func<int, int, int> f = First<int>;
-                        return f(value, 0);
-                        static int First<T>(int n, T tag) => n == 0 ? 2 : Second(n - 1);
-                        static int Second(int n) => First<int>(n, 0);
+                        Func<int, int> f = First<int>;
+                        return f(value);
+                        static int First<T>(int n) => n == 0 ? 2 : Second(n - 1);
+                        static int Second(int n) => First<int>(n);
                     }
                 }
                 """);
 
             Assert.Contains("func First_2[", printed, StringComparison.Ordinal);
+            Assert.Contains("First_2[int32](", printed, StringComparison.Ordinal);
             LocalFunctionHoistTranslationTests.CompileAndRun(
                 printed,
                 "Console.WriteLine(C().A(2) * 10 + C().B(2))",
