@@ -132,19 +132,20 @@ class LspSoakTests(unittest.TestCase):
 
     def run_stub(self, mode: str, at: int = 3, timeout: str = "300", extra: list[str] | None = None) -> tuple[int, dict]:
         out = SCRATCH / f"run-{mode}"
-        env_prefix = f"env STUB_MODE={mode} STUB_AT={at} STUB_FLAG={out}.fired "
         code = soak.main(["run", "--plan", str(self.plan), "--label", mode, "--out", str(out),
                           "--request-timeout", timeout,
-                          "--server", env_prefix + f"{sys.executable} {self.stub}"] + (extra or []))
-        steps_file = out / "Widget.steps.json"
-        result = json.loads(steps_file.read_text()) if steps_file.exists() else {}
+                          "--server", f"{sys.executable} {self.stub}",
+                          "--server-env", f"STUB_MODE={mode}", "--server-env", f"STUB_AT={at}",
+                          "--server-env", f"STUB_FLAG={out}.fired"] + (extra or []))
+        steps_file = out / "00-Widget.steps.json"
+        result = json.loads(steps_file.read_text(encoding="utf-8")) if steps_file.exists() else {}
         return code, result
 
     def crash_steps(self, result: dict) -> dict[str, list[str]]:
         return {s["id"]: [c["kind"] for c in s["crashes"]] for s in result["steps"] if s["crashes"]}
 
     def planned_ids(self) -> list[str]:
-        plan = json.loads(self.plan.read_text())
+        plan = json.loads(self.plan.read_text(encoding="utf-8"))
         return [s["id"] for s in plan["files"][0]["steps"]]
 
     def test_clean_server_records_every_step_and_no_crash(self) -> None:
@@ -208,7 +209,7 @@ class LspSoakTests(unittest.TestCase):
         other = SCRATCH / "other.json"
         soak.main(["plan", str(self.source), "--seed", "7", "--out", str(again)])
         soak.main(["plan", str(self.source), "--seed", "8", "--out", str(other)])
-        steps = lambda p: json.loads(p.read_text())["files"][0]["steps"]  # noqa: E731
+        steps = lambda p: json.loads(p.read_text(encoding="utf-8"))["files"][0]["steps"]  # noqa: E731
         self.assertEqual(steps(self.plan), steps(again))
         self.assertNotEqual(steps(self.plan), steps(other))
         kinds = {s["kind"] for s in steps(self.plan)}
@@ -227,8 +228,24 @@ class LspSoakTests(unittest.TestCase):
         code = soak.main(["compare", str(SCRATCH / "run-clean" / "summary.json"),
                           str(SCRATCH / "run-log-error" / "summary.json"), "--out", str(out)])
         self.assertEqual(1, code)
-        text = out.read_text()
+        text = out.read_text(encoding="utf-8")
         self.assertIn(f"{self.planned_ids()[3]}: log-error only", text)
+
+    def test_files_sharing_a_basename_keep_separate_results(self) -> None:
+        other_dir = SCRATCH / "other"
+        other_dir.mkdir()
+        twin = other_dir / "Widget.gs"
+        twin.write_text(SOURCE.replace("Widget", "Gadget"), encoding="utf-8")
+        plan = SCRATCH / "twins.json"
+        self.assertEqual(0, soak.main(["plan", str(self.source), str(twin), "--out", str(plan)]))
+        out = SCRATCH / "run-twins"
+        self.assertEqual(0, soak.main(["run", "--plan", str(plan), "--label", "twins", "--out", str(out),
+                                       "--server", f"{sys.executable} {self.stub}",
+                                       "--server-env", f"STUB_FLAG={out}.fired"]))
+        self.assertTrue((out / "00-Widget.steps.json").exists())
+        self.assertTrue((out / "01-Widget.steps.json").exists())
+        summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(["00-Widget", "01-Widget"], [f["id"] for f in summary["files"]])
 
     def test_utf16_positions(self) -> None:
         index = soak.LineIndex("ab\n\U0001F600x\n")

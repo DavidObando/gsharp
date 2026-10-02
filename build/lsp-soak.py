@@ -262,7 +262,7 @@ def plan_file(path: Path, seed: int, truncations: int, line_deletions: int, brac
               garbage: int, probes: int) -> dict[str, Any]:
     raw = path.read_bytes()
     text = raw.decode("utf-8-sig")
-    rng = random.Random(f"{seed}:{path.name}:{len(raw)}")
+    rng = random.Random(f"{seed}:{hashlib.sha256(raw).hexdigest()}")
     steps: list[dict[str, Any]] = [{"kind": "open-full", "edits": [], "focus": 0, "keystroke": False}]
 
     for name, offset in _truncation_points(rng, text, truncations):
@@ -313,21 +313,14 @@ def plan_file(path: Path, seed: int, truncations: int, line_deletions: int, brac
     }
 
 
+def file_id(entry: dict[str, Any]) -> str:
+    return entry.get("id") or Path(entry["name"]).stem
+
+
 def find_largest(tree: Path, largest: int) -> list[Path]:
     candidates = [p for p in tree.rglob("*.gs") if p.is_file()]
     candidates.sort(key=lambda p: (-p.stat().st_size, str(p)))
-    # The same file can exist under several mirrors (e.g. run/ and polished/); keep the
-    # first (largest) copy of each repository-relative name.
-    seen: set[str] = set()
-    chosen: list[Path] = []
-    for p in candidates:
-        if p.name in seen:
-            continue
-        seen.add(p.name)
-        chosen.append(p)
-        if len(chosen) == largest:
-            break
-    return chosen
+    return candidates[:largest]
 
 
 def sample_band(tree: Path, count: int, min_lines: int, max_lines: int, seed: int) -> list[Path]:
@@ -368,6 +361,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
             for f in files
         ],
     }
+    for i, entry in enumerate(plan["files"]):
+        # Unique per plan even when two files share a basename; names the output files.
+        entry["id"] = f"{i:02d}-{Path(entry['name']).stem}"
     out = Path(args.out).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(plan, indent=1) + "\n", encoding="utf-8")
@@ -395,12 +391,14 @@ class RequestTimeout(Exception):
 
 
 class LspClient:
-    def __init__(self, command: list[str], log_path: Path | None, cwd: Path) -> None:
+    def __init__(self, command: list[str], log_path: Path | None, cwd: Path,
+                 env: dict[str, str] | None = None) -> None:
         argv = list(command)
         if log_path is not None:
             argv.append(f"--log={log_path}")
         self.process = subprocess.Popen(
-            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd,
+            env={**os.environ, **env} if env else None)
         self.next_id = 0
         self.pending: dict[int, queue.Queue[dict[str, Any]]] = {}
         self.lock = threading.Lock()
@@ -622,7 +620,7 @@ class FileRun:
         if hashlib.sha256(Path(entry["path"]).read_bytes()).hexdigest() != entry["sha256"]:
             raise HarnessError(f"{entry['path']} changed since the plan was made")
         self.uri = Path(entry["path"]).resolve().as_uri()
-        self.log_path = None if args.no_log else out_dir / (Path(entry["name"]).stem + ".server.log")
+        self.log_path = None if args.no_log else out_dir / (file_id(entry) + ".server.log")
         if self.log_path is not None and self.log_path.exists():
             self.log_path.unlink()  # FileLogger appends; start every file from an empty log
         self.client: LspClient | None = None
@@ -634,7 +632,8 @@ class FileRun:
     # -- server lifecycle --------------------------------------------------
 
     def start(self, text: str) -> None:
-        self.client = LspClient(shlex.split(self.args.server), self.log_path, self.out_dir)
+        self.client = LspClient(shlex.split(self.args.server, posix=os.name != "nt"), self.log_path,
+                                self.out_dir, dict(item.split("=", 1) for item in self.args.server_env))
         root = self.args.workspace_root
         init = {
             "processId": os.getpid(),
@@ -793,6 +792,7 @@ class FileRun:
         if self.log_path is not None and self.log_path.exists() and not self.args.keep_logs:
             self.log_path.unlink()
         return {
+            "id": file_id(self.entry),
             "path": self.entry["path"],
             "name": self.entry["name"],
             "lines": self.entry["lines"],
@@ -894,7 +894,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         result = FileRun(args, entry, out).run()
         result["summary"] = summarize_file(result)
         results.append(result)
-        (out / (Path(entry["name"]).stem + ".steps.json")).write_text(json.dumps(result, indent=1) + "\n")
+        (out / (file_id(entry) + ".steps.json")).write_text(json.dumps(result, indent=1) + "\n")
     summary = {
         "label": args.label,
         "server": args.server,
@@ -929,9 +929,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
             "|---|---:|---:|---:|---|---|---:|---:|"]
     details = []
     divergent = 0
-    by_name = {f["name"]: f for f in right["files"]}
+    by_id = {file_id(f): f for f in right["files"]}
     for lf in left["files"]:
-        rf = by_name.get(lf["name"])
+        rf = by_id.get(file_id(lf))
         if rf is None:
             continue
         if lf["sha256"] != rf["sha256"]:
@@ -984,6 +984,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--server", required=True, help='server command line, e.g. "dotnet GSharp.LanguageServer.dll"')
     r.add_argument("--label", required=True)
     r.add_argument("--out", required=True)
+    r.add_argument("--server-env", action="append", default=[], help="KEY=VALUE set in the server's environment")
     r.add_argument("--workspace-root", help="send this as rootUri (project mode); default is loose files")
     r.add_argument("--request-timeout", type=float, default=300)
     r.add_argument("--only", action="append", default=[], help="run only files whose name contains this")
