@@ -1364,7 +1364,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundBaseClassCallExpression 
   property public GSharp.Core.CodeAnalysis.Symbols.StructSymbol BaseClass { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol Type { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundExpression> Arguments { get; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> MethodTypeArguments { get; set; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> MethodTypeArguments { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundBaseInterfaceCallExpression : GSharp.Core.CodeAnalysis.Binding.BoundCallOperationExpression
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Receiver()
   method public GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol get_Method()
@@ -2349,8 +2349,8 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundMethodGroupExpression : 
   method public virtual GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.Symbol get_Method()
   method public virtual GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
-  property public Boolean ForceNonVirtualDispatch { get; set; }
-  property public Boolean HasTargetDelegateType { get; set; }
+  property public Boolean ForceNonVirtualDispatch { get; init; }
+  property public Boolean HasTargetDelegateType { get; init; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Instance { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Receiver { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundNodeKind Kind { get; }
@@ -2960,9 +2960,9 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.ImportedTypeAmbiguity : Syste
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public System.Type Chosen { get; set; }
-  property public System.Type First { get; set; }
-  property public System.Type Second { get; set; }
+  property public System.Type Chosen { get; init; }
+  property public System.Type First { get; init; }
+  property public System.Type Second { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Binding.InterpolatedStringHandlerInfo : System.Object
   field public const String ArgumentAttributeName = "System.Runtime.CompilerServices.InterpolatedStringHandlerArgumentAttribute"
   field public const String HandlerAttributeName = "System.Runtime.CompilerServices.InterpolatedStringHandlerAttribute"
@@ -3595,8 +3595,8 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocException : System.O
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public String Cref { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; set; }
+  property public String Cref { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Code : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Code>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3613,7 +3613,7 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Code : GSharp
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public String Value { get; set; }
+  property public String Value { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3632,8 +3632,8 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock : G
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public String Language { get; set; }
-  property public String Value { get; set; }
+  property public String Language { get; init; }
+  property public String Value { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3650,7 +3650,7 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc : 
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public String Cref { get; set; }
+  property public String Cref { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Link : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Link>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3669,8 +3669,8 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Link : GSharp
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public String Href { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner { get; set; }
+  property public String Href { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+List : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+List>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3689,8 +3689,8 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+List : GSharp
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public String ListType { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> Items { get; set; }
+  property public String ListType { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> Items { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Para : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Para>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3707,7 +3707,7 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Para : GSharp
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; set; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3724,7 +3724,7 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef : GS
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public String Name { get; set; }
+  property public String Name { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3743,8 +3743,8 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef : G
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public String DocId { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner { get; set; }
+  property public String DocId { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Text : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Text>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3761,7 +3761,7 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Text : GSharp
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public String Value { get; set; }
+  property public String Value { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement>
   method protected virtual Boolean PrintMembers(System.Text.StringBuilder builder)
   method protected virtual System.Type get_EqualityContract()
@@ -3778,7 +3778,7 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlEle
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property protected System.Type EqualityContract { get; }
-  property public String RawXml { get; set; }
+  property public String RawXml { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocListItem : System.Object, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem>
   method public GSharp.Core.CodeAnalysis.Documentation.DocListItem <Clone>$()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> get_Description()
@@ -3793,8 +3793,8 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocListItem : System.Ob
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Description { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Term { get; set; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Description { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Term { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocParam : System.Object, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocParam>
   method public GSharp.Core.CodeAnalysis.Documentation.DocParam <Clone>$()
   method public String get_Name()
@@ -3809,8 +3809,8 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocParam : System.Objec
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public String Name { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; set; }
+  property public String Name { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocReference : System.Object, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocReference>
   method public GSharp.Core.CodeAnalysis.Documentation.DocReference <Clone>$()
   method public String get_Cref()
@@ -3827,9 +3827,9 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocReference : System.O
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public String Cref { get; set; }
-  property public String Href { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; set; }
+  property public String Cref { get; init; }
+  property public String Href { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocumentationComment : System.Object, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocumentationComment>
   field public static readonly GSharp.Core.CodeAnalysis.Documentation.DocumentationComment Empty
   method public GSharp.Core.CodeAnalysis.Documentation.DocumentationComment <Clone>$()
@@ -3857,14 +3857,14 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocumentationComment : 
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocException> Exceptions { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Remarks { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Returns { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Summary { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Value { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocParam> Parameters { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocParam> TypeParameters { get; set; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocReference> SeeAlso { get; set; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocException> Exceptions { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Remarks { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Returns { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Summary { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Value { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocParam> Parameters { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocParam> TypeParameters { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocReference> SeeAlso { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Emit.DebugInformationOptions : System.Object
   method public Boolean get_Deterministic()
   method public Boolean get_EmbedAllSources()
@@ -4339,11 +4339,11 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat :
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public Boolean IncludeConstantValue { get; set; }
-  property public Boolean IncludeDescriptorPrefix { get; set; }
-  property public Boolean IncludeModifiers { get; set; }
-  property public Boolean IncludePropertyAccessors { get; set; }
-  property public Boolean QualifyNames { get; set; }
+  property public Boolean IncludeConstantValue { get; init; }
+  property public Boolean IncludeDescriptorPrefix { get; init; }
+  property public Boolean IncludeModifiers { get; init; }
+  property public Boolean IncludePropertyAccessors { get; init; }
+  property public Boolean QualifyNames { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.EnumMemberSymbol : GSharp.Core.CodeAnalysis.Symbols.Symbol
   method public GSharp.Core.CodeAnalysis.Symbols.EnumSymbol get_EnumType()
   method public Int32 get_Value()
@@ -5037,7 +5037,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.PropertySymbol : GSharp.Core.
   property public Boolean HasSetter { get; }
   property public Boolean IsAbstract { get; }
   property public Boolean IsAutoProperty { get; }
-  property public Boolean IsIndexer { get; set; }
+  property public Boolean IsIndexer { get; init; }
   property public Boolean IsInitOnly { get; }
   property public Boolean IsOverride { get; }
   property public Boolean IsStatic { get; }
@@ -5060,7 +5060,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.PropertySymbol : GSharp.Core.
   property public GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax SetterBodySyntax { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax Declaration { get; }
   property public String SetterParameterName { get; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> Parameters { get; set; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> Parameters { get; init; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxNode> DeclaringSyntaxNodes { get; }
   property public System.Nullable`1<Boolean> MetadataIsAbstract { get; }
   property public System.Reflection.MethodInfo ExplicitInterfaceGetterSlot { get; set; }
@@ -8337,8 +8337,8 @@ type struct GSharp.Core.CodeAnalysis.OptionalValue : System.IEquatable`1<GSharp.
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public Boolean HasValue { get; set; }
-  property public Object Value { get; set; }
+  property public Boolean HasValue { get; init; }
+  property public Object Value { get; init; }
 type struct GSharp.Core.CodeAnalysis.SymbolInfo : System.IEquatable`1<GSharp.Core.CodeAnalysis.SymbolInfo>
   method public GSharp.Core.CodeAnalysis.Symbols.Symbol get_Symbol()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Symbols.Symbol Symbol)
@@ -8352,7 +8352,7 @@ type struct GSharp.Core.CodeAnalysis.SymbolInfo : System.IEquatable`1<GSharp.Cor
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
   property public GSharp.Core.CodeAnalysis.SymbolInfo None { get; }
-  property public GSharp.Core.CodeAnalysis.Symbols.Symbol Symbol { get; set; }
+  property public GSharp.Core.CodeAnalysis.Symbols.Symbol Symbol { get; init; }
 type struct GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart : System.IEquatable`1<GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart>
   method public GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind get_Kind()
   method public GSharp.Core.CodeAnalysis.Symbols.Symbol get_Symbol()
@@ -8368,9 +8368,9 @@ type struct GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart : System.
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind Kind { get; set; }
-  property public GSharp.Core.CodeAnalysis.Symbols.Symbol Symbol { get; set; }
-  property public String Text { get; set; }
+  property public GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind Kind { get; init; }
+  property public GSharp.Core.CodeAnalysis.Symbols.Symbol Symbol { get; init; }
+  property public String Text { get; init; }
 type struct GSharp.Core.CodeAnalysis.Symbols.MemberQuery
   method public Boolean get_IncludeInherited()
   method public Boolean get_IncludeInstance()
@@ -8463,5 +8463,5 @@ type struct GSharp.Core.CodeAnalysis.TypeInfo : System.IEquatable`1<GSharp.Core.
   method public virtual Boolean Equals(Object obj)
   method public virtual Int32 GetHashCode()
   method public virtual String ToString()
-  property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol Type { get; set; }
+  property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol Type { get; init; }
   property public GSharp.Core.CodeAnalysis.TypeInfo None { get; }
