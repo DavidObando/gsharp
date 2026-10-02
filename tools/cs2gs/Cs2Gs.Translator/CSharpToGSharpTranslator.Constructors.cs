@@ -2083,6 +2083,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 foreach (SyntaxReference reference in scope.DeclaringSyntaxReferences)
                 {
+                    using IDisposable scopeModel = this.context.UseSemanticModelFor(reference.SyntaxTree);
                     SyntaxNode declaration = reference.GetSyntax();
                     occupied.UnionWith(
                         declaration
@@ -2163,7 +2164,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            foreach (SyntaxTree tree in this.context.Compilation.SyntaxTrees)
+            foreach (SyntaxTree tree in GetSyntaxTreesMentioningIdentifier(this.context.Compilation, name))
             {
                 var tokens = tree.GetRoot()
                     .DescendantTokens()
@@ -2191,6 +2192,43 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return false;
+        }
+
+        // Identifier spelling -> the syntax trees that contain it, built once
+        // per compilation so each lifted-helper candidate only rescans the
+        // trees that can mention it.
+        private static IReadOnlyList<SyntaxTree> GetSyntaxTreesMentioningIdentifier(
+            Compilation compilation,
+            string name)
+        {
+            Dictionary<string, List<SyntaxTree>> index = IdentifierTreeIndexes.GetValue(
+                compilation,
+                static target =>
+                {
+                    var built = new Dictionary<string, List<SyntaxTree>>(StringComparer.Ordinal);
+                    foreach (SyntaxTree tree in target.SyntaxTrees)
+                    {
+                        var seen = new HashSet<string>(StringComparer.Ordinal);
+                        foreach (SyntaxToken token in tree.GetRoot().DescendantTokens())
+                        {
+                            if (token.IsKind(SyntaxKind.IdentifierToken) && seen.Add(token.ValueText))
+                            {
+                                if (!built.TryGetValue(token.ValueText, out List<SyntaxTree> trees))
+                                {
+                                    trees = new List<SyntaxTree>();
+                                    built.Add(token.ValueText, trees);
+                                }
+
+                                trees.Add(tree);
+                            }
+                        }
+                    }
+
+                    return built;
+                });
+            return index.TryGetValue(name, out List<SyntaxTree> found)
+                ? found
+                : Array.Empty<SyntaxTree>();
         }
 
         private bool LiftedHelperNameTokenCanCollide(
