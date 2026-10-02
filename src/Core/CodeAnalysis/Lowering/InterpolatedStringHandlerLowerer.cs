@@ -91,7 +91,9 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         var changed = false;
 
         var functions = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
-        foreach (var pair in program.Functions)
+
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var pair in BoundProgramOrder.Functions(program))
         {
             var newBody = (BoundBlockStatement)lowerer.RewriteStatement(pair.Value);
             functions[pair.Key] = newBody;

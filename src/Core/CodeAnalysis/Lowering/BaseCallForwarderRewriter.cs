@@ -61,7 +61,8 @@ public static class BaseCallForwarderRewriter
         var ordinalByClass = new Dictionary<StructSymbol, int>();
         var rewrittenBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
 
-        foreach (var pair in program.Functions)
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var pair in BoundProgramOrder.Functions(program))
         {
             var function = pair.Key;
             var body = pair.Value;
@@ -95,7 +96,9 @@ public static class BaseCallForwarderRewriter
         // arguments can call `base.M()` and needs the forwarder just as much.
         // Static plans have no `base`.
         var rewrittenPlans = new Dictionary<(Symbol Owner, bool Static), BoundInitializationPlan>();
-        foreach (var pair in program.Initializers)
+
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var pair in BoundProgramOrder.Initializers(program))
         {
             var plan = pair.Value;
             if (plan.Function.ReceiverType is not StructSymbol planType)

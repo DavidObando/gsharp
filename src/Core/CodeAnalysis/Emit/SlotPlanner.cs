@@ -100,14 +100,14 @@ internal sealed class SlotPlanner
         // Issue #598: iterate Program.Functions in deterministic order
         // (source-position, then name) so lambda literals are collected in a
         // stable sequence regardless of ImmutableDictionary iteration order.
-        foreach (var kvp in this.emitCtx.Program.Functions
-            .OrderBy(p => p.Key.Declaration?.Span.Start ?? int.MaxValue)
-            .ThenBy(p => p.Key.Name ?? string.Empty, StringComparer.Ordinal))
+        // Issues #598/#4663: deterministic order, never identity-hash order.
+        foreach (var kvp in BoundProgramOrder.Functions(this.emitCtx.Program))
         {
             collector.Visit(kvp.Value);
         }
 
-        foreach (var plan in this.emitCtx.Program.Initializers.Values)
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var plan in BoundProgramOrder.Initializers(this.emitCtx.Program).Select(pair => pair.Value))
         {
             collector.Visit(plan.Prologue);
             foreach (var argument in plan.Arguments)
@@ -197,14 +197,14 @@ internal sealed class SlotPlanner
         var collector = new GoStatementCollector(sink);
 
         // Issue #598: iterate Program.Functions in deterministic order.
-        foreach (var kvp in this.emitCtx.Program.Functions
-            .OrderBy(p => p.Key.Declaration?.Span.Start ?? int.MaxValue)
-            .ThenBy(p => p.Key.Name ?? string.Empty, StringComparer.Ordinal))
+        // Issues #598/#4663: deterministic order, never identity-hash order.
+        foreach (var kvp in BoundProgramOrder.Functions(this.emitCtx.Program))
         {
             collector.Visit(kvp.Value);
         }
 
-        foreach (var plan in this.emitCtx.Program.Initializers.Values)
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var plan in BoundProgramOrder.Initializers(this.emitCtx.Program).Select(pair => pair.Value))
         {
             collector.Visit(plan.Prologue);
             foreach (var argument in plan.Arguments)

@@ -47,7 +47,10 @@ public static class AsyncIteratorRewriter
 
         var plans = ImmutableArray.CreateBuilder<AsyncIteratorPlan>();
 
-        foreach (var pair in program.Functions.OrderBy(p => p.Key.Name, StringComparer.Ordinal))
+        // Issue #4663: the name order ties for same-named functions; break ties stably.
+        foreach (var pair in program.Functions
+            .OrderBy(p => p.Key.Name, StringComparer.Ordinal)
+            .ThenBy(p => p.Key, SymbolSourceOrderComparer.Instance))
         {
             var function = pair.Key;
             var body = pair.Value;
