@@ -2143,7 +2143,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             ISymbol enclosingMember = localFunction.ContainingSymbol;
             while (enclosingMember is IMethodSymbol enclosingMethod
-                && enclosingMethod.MethodKind is MethodKind.LocalFunction or MethodKind.AnonymousFunction)
+                && (enclosingMethod.MethodKind == MethodKind.LocalFunction
+                    || enclosingMethod.MethodKind == MethodKind.AnonymousFunction))
             {
                 enclosingMember = enclosingMethod.ContainingSymbol;
             }
@@ -2293,7 +2294,8 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 bool memberScoped = symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol or ILabelSymbol
-                    || (symbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction })
+                    || (symbol is IMethodSymbol localMethod
+                        && localMethod.MethodKind == MethodKind.LocalFunction)
                     || (symbol is ITypeParameterSymbol typeParameter && typeParameter.ContainingSymbol is IMethodSymbol);
                 if (memberScoped)
                 {
