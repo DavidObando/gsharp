@@ -111,7 +111,7 @@ internal static class TestSource
     /// <param name="relativePathWithoutExtension">For example <c>src/Core/CodeAnalysis/Emit/SlotPlanner</c>.</param>
     /// <returns>The path in the tree's language.</returns>
     internal static string SourcePath(string relativePathWithoutExtension) =>
-        Path.Combine(Root, relativePathWithoutExtension.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar) + SourceExtension);
+        Path.Combine(Root, NormalizeRelative(relativePathWithoutExtension) + SourceExtension);
 
     /// <summary>
     /// Every compiler source file under the given repository-relative
@@ -145,7 +145,7 @@ internal static class TestSource
             OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         foreach (string relative in relativeDirectories)
         {
-            string directory = Path.Combine(root, relative.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar));
+            string directory = Path.Combine(root, NormalizeRelative(relative));
             if (!Directory.Exists(directory))
             {
                 throw new DirectoryNotFoundException(
@@ -199,6 +199,12 @@ internal static class TestSource
     /// <returns>The fixture's C# source.</returns>
     internal static string CSharpFixtureSource(string root, string fileName)
     {
+        if (string.IsNullOrEmpty(fileName) || fileName != Path.GetFileName(fileName)
+            || !fileName.EndsWith(CSharpExtension, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"'{fileName}' must be a bare C# fixture file name.", nameof(fileName));
+        }
+
         string snapshotPath = Path.Combine(root, "test", "Core.Tests", "TestData", "CSharpFixtureSources", fileName + ".txt");
         if (!File.Exists(snapshotPath))
         {
@@ -260,6 +266,10 @@ internal static class TestSource
             }
         }
     }
+
+    // Repository-relative paths may be written with either separator.
+    private static string NormalizeRelative(string relative) =>
+        relative.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar);
 
     private static bool HasSolution(string directory) =>
         File.Exists(Path.Combine(directory, "GSharp.sln")) || File.Exists(Path.Combine(directory, "GSharp.slnx"));
