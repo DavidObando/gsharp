@@ -43,3 +43,24 @@ Measured on the nightly 36930275716 tree (main `6c4824cbc`):
 - Package payload: 150 entries.
 - Extras over stage 0: G#-built executables also ship `Gsharp.Extensions`, `Gsharp.Runtime.Channels` and `Gsharp.Runtime.Values`.
 - Missing docs: the XML documentation of the three executables.
+
+## Stage 2: the equivalence check
+
+```sh
+python3 build/selfhost-stage2.py \
+  --tree <tree prepared by selfhost-pack-stage1.py> \
+  --bootstrap <stage-0 nupkg> --stage1 <stage-1 nupkg> --work <dir> \
+  [--project src/Core/Core.gsproj ...] [--assembly out/bin/Release/Core/GSharp.Core.dll ...] \
+  [--test 'test/Core.Tests/Core.Tests.gsproj::FullyQualifiedName~RefactoringBaselineTests' ...]
+```
+
+How it works:
+- It builds the projects twice in the **same tree path**: first pinned to stage 0 (which yields the stage-1 assemblies), then pinned to stage 1 (which yields the stage-2 assemblies). Each stage gets its own isolated package cache.
+- For each assembly pair it compares the full-file SHA-256 and the IL+metadata hash with the MVID zeroed. `build/selfhost/PeContentHash.cs` computes that hash the same way RefactoringBaselineTests does.
+- Test projects run while pinned to stage 1, so everything they compile against is a stage-2 assembly.
+- The verdict is "equivalent" only when every IL+metadata hash matches. A full-file difference with matching IL+metadata is reported, not hidden.
+- `build/selfhost/PeDiff.cs` explains a difference: it compares table row counts, heap sizes and per-method IL keyed by type, name and signature.
+
+Results:
+- **First run (2026-10-01, main `6c4824cbc`): not equivalent.** Stage-1 and stage-2 `GSharp.Core.dll` had identical tables and heaps but different numbering on 1,093 capture-box classes. The cause was a gsc determinism bug: lowering passes numbered synthesized types in identity-hash order ([#4663](https://github.com/DavidObando/gsharp/issues/4663)). The C#-built compiler had the same bug: adding an unrelated file renumbered its boxes. RefactoringBaselineTests passed under stage 2. All 162 `samples/` compiled to identical IL+metadata with either compiler.
+- **With the #4663 fix:** `GSharp.Core.dll`, `GSharp.Cs2Gs.Translator.dll` and `GSharp.Cs2Gs.CodeModel.dll` are **byte-identical** between stage 1 and stage 2.

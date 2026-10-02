@@ -1,0 +1,3 @@
+<Project>
+  <!-- Isolates the self-host helper apps from the repository build props. -->
+</Project>
