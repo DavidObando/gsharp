@@ -527,6 +527,65 @@ namespace Demo
     }
 
     [Fact]
+    public void EmptyStatementBeforeCapturingDelegateLocal_DoesNotIsolateNativeGroup()
+    {
+        // Issue #4302: `;` emits nothing, so it cannot separate the native
+        // `First`/`Second` group from the capturing `Callback` literal.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private static int Apply(System.Func<int, int> callback) => callback(2);
+
+                    public int Run(int seed) {
+                        ;
+                        static int First(int value, params int[] rest) =>
+                            value == 0 ? 0 : Second(value - 1);
+                        static int Second(int value) =>
+                            value == 0 ? 0 : First(value - 1);
+                        ;
+                        int Callback(int value) => value + seed;
+                        return Apply(Callback) + First(2);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Callback = func", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(40))",
+            "42");
+    }
+
+    [Fact]
+    public void GenericGroupInGenericOwner_KeepsPrivateMemberAccess()
+    {
+        // Issue #4302: gsc hosts a native generic local group under a generic
+        // type without the owner's private access (GS0472), so this group
+        // keeps the member-helper lowering.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class Holder<TOuter> {
+                    private static int Secret() => 42;
+
+                    public static int Run() {
+                        return First(1, 2);
+                        static int First<T>(T x, int n) => n == 0 ? Secret() : Second(x, n - 1);
+                        static int Second<U>(U x, int n) => First(x, n);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("let First[T] = func", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(Holder[string].Run())",
+            "42");
+    }
+
+    [Fact]
     public void LeadingAdjacentDelegateLocal_IsNotSwallowedByNativeGroup()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""

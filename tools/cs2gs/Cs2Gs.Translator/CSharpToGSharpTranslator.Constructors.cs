@@ -2270,12 +2270,14 @@ public sealed partial class CSharpToGSharpTranslator
 
                 qualified = simpleName.Parent switch
                 {
-                    // A receiver spelled like an owning type (`D C`, then
-                    // `C.Helper()`) binds the type's static member in gsc,
-                    // so such an access can observe the helper.
+                    // gsc resolves a simple-name receiver spelled like a type
+                    // (an owner, or any alias of one) before a same-named
+                    // value (`D C; C.Helper()`), so only a receiver Roslyn
+                    // itself binds to a type or namespace proves the access
+                    // cannot observe the helper.
                     MemberAccessExpressionSyntax access => access.Name == simpleName
-                        && !(access.Expression is SimpleNameSyntax receiver
-                            && owners.Any(owner => owner.Name == receiver.Identifier.ValueText)),
+                        && (access.Expression is not SimpleNameSyntax receiver
+                            || this.context.GetSymbolInfo(receiver).Symbol is INamespaceOrTypeSymbol),
                     MemberBindingExpressionSyntax => true,
                     QualifiedNameSyntax qualifiedName => qualifiedName.Right == simpleName,
                     _ => false,
@@ -2768,7 +2770,9 @@ public sealed partial class CSharpToGSharpTranslator
             bool IsCapturingRecursiveGroupMember(IMethodSymbol symbol) =>
                 this.state.RecursiveLocalFunctionGroups.ContainsKey(symbol);
 
-            var statementList = statements.ToList();
+            // Empty statements emit nothing, so they must not separate a
+            // native group from an adjacent local function.
+            var statementList = statements.Where(statement => statement is not EmptyStatementSyntax).ToList();
             var statementIndexes = new Dictionary<StatementSyntax, int>();
             for (int index = 0; index < statementList.Count; index++)
             {
@@ -2881,11 +2885,22 @@ public sealed partial class CSharpToGSharpTranslator
 
                 bool generic = component[0].Syntax.TypeParameterList != null;
                 bool refReturn = component[0].Symbol.ReturnsByRef;
+
+                // gsc hosts a generic local group under a generic type without
+                // the owner's private access (GS0472/GS0586); the member helper
+                // keeps it, unless the group names a method type parameter the
+                // helper cannot see.
                 if (component.Any(candidate =>
                         candidate.Symbol.ReturnsByRefReadonly
                         || (candidate.Syntax.TypeParameterList != null) != generic
                         || candidate.Symbol.ReturnsByRef != refReturn)
                     || (generic && refReturn)
+                    || (generic
+                        && HasGenericContainingType(component[0].Symbol)
+                        && !GetDependencyClosure(component).Any(candidate =>
+                            ReferencesEnclosingTypeParameter(
+                                candidate,
+                                includeContainingTypeParameters: false)))
                     || component.Any(candidate => candidate.Syntax.ConstraintClauses.Count > 0)
                     || (refReturn && component.Any(candidate => !candidate.Symbol.IsStatic))
                     || component.Any(candidate =>
@@ -2922,6 +2937,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return (indexes[0] == 0 || statementList[indexes[0] - 1] is not LocalFunctionStatementSyntax)
                     && (indexes[^1] == statementList.Count - 1
                         || statementList[indexes[^1] + 1] is not LocalFunctionStatementSyntax);
+            }
+
+            static bool HasGenericContainingType(IMethodSymbol symbol)
+            {
+                for (INamedTypeSymbol type = symbol.ContainingType; type != null; type = type.ContainingType)
+                {
+                    if (type.IsGenericType)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             }
 
             bool CapturesOuterValue(

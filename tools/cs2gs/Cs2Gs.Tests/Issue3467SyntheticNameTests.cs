@@ -527,6 +527,41 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_LocalNamedLikeOwnerAliasCannotCaptureHelperValue()
+        {
+            // Issue #4302: `Alias.First` binds through the local `Alias` to
+            // `D.First` in C#, but gsc resolves the owner alias first, so the
+            // helper must not keep the name `First`.
+            string printed = Translate("""
+                using System;
+                using Alias = C;
+
+                public class D
+                {
+                    public int First(int n) => 100;
+                }
+
+                public class C
+                {
+                    public int Run()
+                    {
+                        D Alias = new D();
+                        Func<int, int> f = First;
+                        return f(1) + Alias.First(0);
+                        static int First(int n) => n == 0 ? 7 : Second<int>(n - 1);
+                        static int Second<T>(int n) => First(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("func First_2(", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run())",
+                "107");
+        }
+
+        [Fact]
         public void ReadableLiftFallback_PatternDesignatorCannotShadowStaticHelper()
         {
             // Issue #4302: `case Callback { }` synthesizes a readable designator
