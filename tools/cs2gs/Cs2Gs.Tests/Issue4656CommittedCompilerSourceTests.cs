@@ -1,0 +1,107 @@
+// <copyright file="Issue4656CommittedCompilerSourceTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.IO;
+using Xunit;
+
+namespace Cs2Gs.Tests;
+
+/// <summary>
+/// Issue #4656: the self-migration inventories read the committed tree in its
+/// own language, and a count over nothing is a failure, not a zero.
+/// </summary>
+public sealed class Issue4656CommittedCompilerSourceTests
+{
+    [Fact]
+    public void Language_IsDecidedByTheParserFile_AndAMixedTreeIsRejected()
+    {
+        string csharp = Tree(".cs");
+        string gsharp = Tree(".gs");
+        string mixed = Tree(".cs", ".gs");
+        string neither = Tree();
+        try
+        {
+            Assert.False(CommittedCompilerSource.IsGSharp(csharp));
+            Assert.True(CommittedCompilerSource.IsGSharp(gsharp));
+            Assert.Throws<InvalidOperationException>(() => CommittedCompilerSource.IsGSharp(mixed));
+            Assert.Throws<InvalidOperationException>(() => CommittedCompilerSource.IsGSharp(neither));
+        }
+        finally
+        {
+            Delete(csharp, gsharp, mixed, neither);
+        }
+    }
+
+    [Fact]
+    public void GSharpFiles_FailsOnAnEmptyOrMissingDirectory()
+    {
+        // Deliberately under the test output (a bin/ directory): a root that
+        // itself sits below bin/ must still be scanned.
+        string root = Tree(".gs");
+        try
+        {
+            Assert.Single(CommittedCompilerSource.GSharpFiles(root, "src/Core"));
+            Assert.Single(CommittedCompilerSource.GSharpFiles(root, "src", "src/Core"));
+            Directory.CreateDirectory(Path.Combine(root, "tools", "empty"));
+            Assert.Throws<InvalidOperationException>(() => CommittedCompilerSource.GSharpFiles(root, "tools/empty"));
+            Assert.Throws<DirectoryNotFoundException>(() => CommittedCompilerSource.GSharpFiles(root, "tools/missing"));
+        }
+        finally
+        {
+            Delete(root);
+        }
+    }
+
+    /// <summary>
+    /// Build output is judged below the scanned root only: obj/ and bin/
+    /// beneath it are skipped (any case), a root that itself sits under a bin/
+    /// directory is not.
+    /// </summary>
+    [Fact]
+    public void IsBuildOutput_JudgesOnlySegmentsBelowTheRoot()
+    {
+        string root = Path.Combine(Path.DirectorySeparatorChar + "work", "bin", "Release", "tree");
+
+        Assert.True(CommittedCompilerSource.IsBuildOutput(root, Path.Combine(root, "src", "obj", "A.gs")));
+        Assert.True(CommittedCompilerSource.IsBuildOutput(root, Path.Combine(root, "src", "Bin", "A.gs")));
+        Assert.False(CommittedCompilerSource.IsBuildOutput(root, Path.Combine(root, "src", "Core", "A.gs")));
+        Assert.False(CommittedCompilerSource.IsBuildOutput(root, Path.Combine(root, "src", "binary", "A.gs")));
+    }
+
+    private static void Delete(params string[] roots)
+    {
+        // Best-effort cleanup: a failure here must never mask the test's own result.
+        foreach (string root in roots)
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private static string Tree(params string[] parserExtensions)
+    {
+        string root = Path.Combine(
+            AppContext.BaseDirectory, "issue-4656-committed-source", Guid.NewGuid().ToString("N"));
+        string syntax = Path.Combine(root, "src", "Core", "CodeAnalysis", "Syntax");
+        Directory.CreateDirectory(syntax);
+        foreach (string extension in parserExtensions)
+        {
+            File.WriteAllText(Path.Combine(syntax, "Parser" + extension), string.Empty);
+        }
+
+        return root;
+    }
+}

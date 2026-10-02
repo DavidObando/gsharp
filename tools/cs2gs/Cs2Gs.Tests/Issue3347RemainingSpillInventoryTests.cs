@@ -43,12 +43,39 @@ public sealed class Issue3347RemainingSpillInventoryTests
     public async Task CoreMigration_Issue3421CheckedCastNoiseAndSynthesizedNameFamiliesStayRetired()
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        if (CommittedCompilerSource.IsGSharp(repoRoot))
+        {
+            // Issue #4656: after the cut-over the committed G# IS the
+            // translation. The same four families must not appear in it.
+            int committedCasts = 0;
+            int committedDeconstructions = 0;
+            int committedSpills = 0;
+            int committedUsings = 0;
+            foreach (string file in CommittedCompilerSource.GSharpFiles(repoRoot, "src/Core"))
+            {
+                string committed = File.ReadAllText(file);
+                committedCasts += CountOccurrences(committed, "__cast");
+                committedDeconstructions += CountOccurrences(committed, "__decon");
+                committedSpills += CountOccurrences(StripCommentLines(committed), "let __spill");
+                committedUsings += CountOccurrences(committed, "__using");
+            }
+
+            Assert.Equal(0, committedCasts);
+            Assert.Equal(0, committedDeconstructions);
+            Assert.Equal(0, committedSpills);
+            Assert.Equal(0, committedUsings);
+            return;
+        }
+
         LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
             Path.Combine(repoRoot, "src", "Core", "Core.csproj"));
         Assert.True(
             project.BoundWithoutErrors,
             "Core should bind with no C# errors: "
                 + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        // Issue #4656: zero documents would count zero of everything and pass.
+        Assert.NotEmpty(project.Documents);
 
         var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
         int castCount = 0;
@@ -87,6 +114,16 @@ public sealed class Issue3347RemainingSpillInventoryTests
     public async Task TranslatorMigration_SpillFamilyStaysRetired()
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        if (CommittedCompilerSource.IsGSharp(repoRoot))
+        {
+            // Issue #4656: the committed G# translator is checked directly.
+            int committedSpills = CommittedCompilerSource
+                .GSharpFiles(repoRoot, "tools/cs2gs/Cs2Gs.Translator")
+                .Sum(file => CountOccurrences(StripCommentLines(File.ReadAllText(file)), "let __spill"));
+            Assert.Equal(0, committedSpills);
+            return;
+        }
+
         LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
             Path.Combine(
                 repoRoot,
@@ -98,6 +135,9 @@ public sealed class Issue3347RemainingSpillInventoryTests
             project.BoundWithoutErrors,
             "Translator should bind with no C# errors: "
                 + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        // Issue #4656: zero documents would count zero spills and pass.
+        Assert.NotEmpty(project.Documents);
 
         var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
         int spillCount = 0;
