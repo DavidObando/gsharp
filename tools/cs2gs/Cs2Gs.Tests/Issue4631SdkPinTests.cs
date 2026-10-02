@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -164,6 +165,62 @@ public sealed class Issue4631SdkPinTests : IDisposable
             () => SdkPin.ReadProjectPin(new[] { project }));
         Assert.Contains("Broken.gsproj", error.Message, StringComparison.Ordinal);
         Assert.Contains("'latest'", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Every MSBuild SDK declaration form participates in pin validation.</summary>
+    /// <param name="projectXml">The project declaring the pinned SDK.</param>
+    [Theory]
+    [InlineData("""<Project Sdk="Gsharp.NET.Sdk/0.3.1;Other.Sdk/1.2.3" />""")]
+    [InlineData("""<Project Sdk="Other.Sdk/1.2.3;Gsharp.NET.Sdk/0.3.1" />""")]
+    [InlineData("""<Project><Sdk Name="Other.Sdk" Version="1.2.3" /><Sdk Name="Gsharp.NET.Sdk" Version="0.3.1" /></Project>""")]
+    [InlineData("""<Project><Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk" Version="0.3.1" /><Import Project="Sdk.targets" Sdk="Gsharp.NET.Sdk" Version="0.3.1" /></Project>""")]
+    public void ReadProjectPin_RecognizesAllSdkDeclarations(string projectXml)
+    {
+        string project = Path.Combine(this.root, "Existing.gsproj");
+        File.WriteAllText(project, projectXml);
+
+        Assert.Equal("0.3.1", SdkPin.ReadProjectPin(new[] { project }));
+    }
+
+    /// <summary>Translated projects cannot retain an old version in an explicit SDK declaration.</summary>
+    /// <param name="declaration">The SDK declaration in the source project.</param>
+    [Theory]
+    [InlineData("""<Sdk Name="Gsharp.NET.Sdk" Version="0.3.1" />""")]
+    [InlineData("""<Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk" Version="0.3.1" />""")]
+    public void Transform_RemovesExplicitSdkVersionsInGlobalJsonMode(string declaration)
+    {
+        string project = Path.Combine(this.root, "Existing.csproj");
+        File.WriteAllText(project, "<Project>" + declaration + "</Project>");
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            project,
+            this.root,
+            "Gsharp.NET.Sdk",
+            new Dictionary<string, string>());
+
+        Assert.Equal("Gsharp.NET.Sdk", transformed.Root.Attribute("Sdk").Value);
+        XElement explicitSdk = transformed.Root.Element("Sdk") ?? transformed.Root.Element("Import");
+        Assert.NotNull(explicitSdk);
+        Assert.Null(explicitSdk.Attribute("Version"));
+    }
+
+    /// <summary>Per-project mode pins explicit SDK elements and imports without losing their shape.</summary>
+    /// <param name="declaration">The SDK declaration in the source project.</param>
+    [Theory]
+    [InlineData("""<Sdk Name="Gsharp.NET.Sdk" Version="0.3.1" />""")]
+    [InlineData("""<Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk" Version="0.3.1" />""")]
+    public void RebindProjectSdk_UpdatesExplicitVersions(string declaration)
+    {
+        XElement project = XElement.Parse(
+            "<Project>" + declaration + """<Sdk Name="Other.Sdk" Version="1.2.3" /></Project>""");
+
+        Assert.True(SdkPin.RebindProjectSdk(project, "Gsharp.NET.Sdk/" + PinnedVersion));
+
+        XElement explicitSdk = project.Element("Import") ?? project.Element("Sdk");
+        Assert.Equal(PinnedVersion, explicitSdk.Attribute("Version")?.Value);
+        XElement otherSdk = project.Elements("Sdk").Last();
+        Assert.Equal("Other.Sdk", otherSdk.Attribute("Name").Value);
+        Assert.Equal("1.2.3", otherSdk.Attribute("Version").Value);
     }
 
     /// <summary>A malformed pin in a tree is an error, not "no pin".</summary>
@@ -414,6 +471,87 @@ public sealed class Issue4631SdkPinTests : IDisposable
         PinObservation observation = Assert.Single(probe.Observations);
         Assert.Equal("Gsharp.NET.Sdk", observation.SdkMoniker);
         Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
+    }
+
+    /// <summary>Rebinding preserves other SDKs and removes every version overriding the root pin.</summary>
+    /// <param name="sourceXml">The excluded project's SDK declarations.</param>
+    /// <param name="expectedXml">The declarations after rebinding to the root pin.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Theory]
+    [InlineData(
+        """<Project Sdk="Gsharp.NET.Sdk/0.3.1;Other.Sdk/1.2.3" />""",
+        """<Project Sdk="Gsharp.NET.Sdk;Other.Sdk/1.2.3" />""")]
+    [InlineData(
+        """<Project Sdk="Other.Sdk/1.2.3;Gsharp.NET.Sdk/0.3.1" />""",
+        """<Project Sdk="Other.Sdk/1.2.3;Gsharp.NET.Sdk" />""")]
+    [InlineData(
+        """<Project><Sdk Name="Other.Sdk" Version="1.2.3" /><Sdk Name="Gsharp.NET.Sdk" Version="0.3.1" /></Project>""",
+        """<Project><Sdk Name="Other.Sdk" Version="1.2.3" /><Sdk Name="Gsharp.NET.Sdk" /></Project>""")]
+    [InlineData(
+        """<Project><Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk" Version="0.3.1" /><Import Project="Sdk.props" Sdk="Other.Sdk" Version="1.2.3" /><Import Project="Sdk.targets" Sdk="Gsharp.NET.Sdk" Version="0.3.1" /></Project>""",
+        """<Project><Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk" /><Import Project="Sdk.props" Sdk="Other.Sdk" Version="1.2.3" /><Import Project="Sdk.targets" Sdk="Gsharp.NET.Sdk" /></Project>""")]
+    public async Task Migrate_GlobalJsonPin_RebindsAllSdkDeclarationsWithoutDroppingOtherSdks(
+        string sourceXml,
+        string expectedXml)
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        string legacy = Path.Combine(fixture.Source, "src", "Legacy", "Legacy.csproj");
+        File.WriteAllText(legacy, sourceXml);
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+        options.SdkPinLocation = SdkPinLocation.GlobalJson;
+
+        RunResult migrated = await new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+
+        Assert.True(migrated.Succeeded);
+        Assert.True(XNode.DeepEquals(XDocument.Parse(expectedXml).Root, XDocument.Load(fixture.MirroredLegacy).Root));
+        var probe = new PinProbeStage();
+        RunResult validated = await new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { probe })
+            .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(options.ArtifactRoot, migrated.RunId));
+        Assert.True(validated.Succeeded);
+        Assert.Equal("Gsharp.NET.Sdk", Assert.Single(probe.Observations).SdkMoniker);
+
+        File.WriteAllText(fixture.MirroredLegacy, sourceXml);
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { new PinProbeStage() })
+                .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(options.ArtifactRoot, migrated.RunId)));
+        Assert.Contains("both in global.json", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Bootstrap rebinding must not discard an unrelated SDK import.</summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Migrate_GlobalJsonPin_BootstrapRebindingPreservesOtherSdkImports()
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        File.WriteAllText(
+            Path.Combine(fixture.Source, "src", "Extensions", "Extensions.csproj"),
+            """
+            <Project>
+              <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+              <Import Project="Gsharp.NET.Sdk.Bootstrap.targets" />
+              <Import Project="Sdk.targets" Sdk="Other.Sdk" Version="1.2.3" />
+            </Project>
+            """);
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+        options.SdkPinLocation = SdkPinLocation.GlobalJson;
+
+        RunResult run = await new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+
+        Assert.True(run.Succeeded);
+        XDocument project = XDocument.Load(fixture.MirroredExtensions);
+        Assert.Equal("Gsharp.NET.Sdk", project.Root.Attribute("Sdk").Value);
+        XElement import = Assert.Single(project.Root.Elements("Import"));
+        Assert.Equal("Other.Sdk", import.Attribute("Sdk").Value);
+        Assert.Equal("1.2.3", import.Attribute("Version").Value);
+        Assert.Equal("Sdk.targets", import.Attribute("Project").Value);
     }
 
     /// <summary>

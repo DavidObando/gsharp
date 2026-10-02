@@ -105,6 +105,9 @@ an excluded project rebound onto the SDK, gets the bare name. Every nested
 `global.json` is updated with the same SDK pin because MSBuild uses the nearest
 file; all other settings in each file are preserved. A source
 `global.json` that already pins `Gsharp.NET.Sdk` is an error in `project` mode.
+Rebinding and validation recognize each entry in a multi-SDK `Sdk` attribute,
+top-level `<Sdk Name="..." Version="...">` elements, and SDK `<Import>` elements.
+Excluded projects retain unrelated SDK declarations and their order.
 `validate` takes the pin from the migrated tree: the `global.json` pin, or
 else the one version the generated projects record. A tree that pins in both
 places, or a disagreeing `validate --sdk-version`, is an error rather than a

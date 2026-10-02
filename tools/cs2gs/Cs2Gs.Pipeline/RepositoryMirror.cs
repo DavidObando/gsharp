@@ -406,18 +406,15 @@ internal static class RepositoryMirror
             return;
         }
 
-        string existingSdk = project.Root.Attribute("Sdk")?.Value;
-        if (existingSdk is not null)
+        // Bootstrap projects can explicitly import Microsoft.NET.Sdk before
+        // their bootstrap targets; both imports must still be replaced.
+        bool bootstrapProject = project.Root.Attribute("Sdk") is null
+            && project.Root.Descendants().Any(element =>
+                element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase)
+                && element.Attribute("Project")?.Value?.Contains(
+                    "Gsharp.NET.Sdk.Bootstrap", StringComparison.OrdinalIgnoreCase) == true);
+        if (SdkPin.RebindProjectSdk(project.Root, sdkMoniker) && !bootstrapProject)
         {
-            // A project already built with Gsharp.NET.Sdk keeps its shape but
-            // takes the run's pin: an older versioned attribute would
-            // otherwise override it (silently, under a global.json pin). Any
-            // other SDK is not ours to rebind.
-            if (SdkPin.IsGsharpSdkAttribute(existingSdk))
-            {
-                project.Root.SetAttributeValue("Sdk", sdkMoniker);
-            }
-
             return;
         }
 
@@ -432,6 +429,14 @@ internal static class RepositoryMirror
             .Where(element => element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase))
             .ToList())
         {
+            string importedSdk = import.Attribute("Sdk")?.Value;
+            if (!string.IsNullOrWhiteSpace(importedSdk)
+                && !SdkPin.IsGsharpSdkAttribute(importedSdk)
+                && !string.Equals(importedSdk.Trim(), "Microsoft.NET.Sdk", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             import.Remove();
         }
 

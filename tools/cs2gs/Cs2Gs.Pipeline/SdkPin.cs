@@ -86,10 +86,67 @@ internal static class SdkPin
     /// </summary>
     /// <param name="sdkAttribute">The attribute value.</param>
     /// <returns><see langword="true"/> for <c>Gsharp.NET.Sdk</c> and <c>Gsharp.NET.Sdk/&lt;version&gt;</c>.</returns>
-    internal static bool IsGsharpSdkAttribute(string? sdkAttribute) =>
-        string.Equals(sdkAttribute, PackageId, StringComparison.OrdinalIgnoreCase)
-        || (sdkAttribute is not null
-            && sdkAttribute.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase));
+    internal static bool IsGsharpSdkAttribute(string? sdkAttribute)
+    {
+        if (sdkAttribute is null)
+        {
+            return false;
+        }
+
+        foreach (string sdk in sdkAttribute.Split(';'))
+        {
+            if (IsGsharpSdkMoniker(sdk))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Rebinds only G# SDK declarations, retaining other SDKs and their order.</summary>
+    /// <param name="root">The project's root element.</param>
+    /// <param name="sdkMoniker">The SDK name with an optional version suffix.</param>
+    /// <returns>Whether the project declares any SDK, including an unrelated one.</returns>
+    internal static bool RebindProjectSdk(XElement root, string sdkMoniker)
+    {
+        IReadOnlyList<XAttribute> declarations = ProjectSdkAttributes(root);
+        foreach (XAttribute declaration in declarations)
+        {
+            string[] sdks = declaration.Value.Split(';');
+            bool changed = false;
+            for (int i = 0; i < sdks.Length; i++)
+            {
+                if (!IsGsharpSdkMoniker(sdks[i]))
+                {
+                    continue;
+                }
+
+                XElement? element = declaration.Parent;
+                if (element is not null && element != root)
+                {
+                    sdks[i] = PackageId;
+                    string? version = sdkMoniker.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase)
+                        ? sdkMoniker.Substring(PackageId.Length + 1)
+                        : null;
+                    element.SetAttributeValue("Version", version);
+                }
+                else
+                {
+                    sdks[i] = sdkMoniker;
+                }
+
+                changed = true;
+            }
+
+            if (changed)
+            {
+                declaration.Value = string.Join(";", sdks);
+            }
+        }
+
+        return declarations.Count > 0;
+    }
 
     /// <summary>Lists nested <c>global.json</c> paths in a repository file list.</summary>
     /// <param name="repositoryFiles">Repository-relative file paths.</param>
@@ -111,8 +168,8 @@ internal static class SdkPin
 
     /// <summary>
     /// Reads the per-project pin a migrated tree recorded: the one version
-    /// carried by every versioned <c>Sdk="Gsharp.NET.Sdk/&lt;version&gt;"</c>
-    /// attribute among <paramref name="projectPaths"/>.
+    /// carried by G# SDK attributes, SDK elements, and SDK imports among
+    /// <paramref name="projectPaths"/>.
     /// </summary>
     /// <param name="projectPaths">The generated project files (missing files are skipped).</param>
     /// <returns>The recorded version, or <see langword="null"/> when no project carries one.</returns>
@@ -127,17 +184,50 @@ internal static class SdkPin
                 continue;
             }
 
-            string? sdk = XDocument.Load(path).Root?.Attribute("Sdk")?.Value;
-            if (sdk is not null && sdk.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase))
+            XElement? root = XDocument.Load(path).Root;
+            if (root is null)
             {
-                string version = sdk.Substring(PackageId.Length + 1);
-                if (!IsValidVersion(version))
-                {
-                    throw new InvalidOperationException(
-                        "'" + path + "' pins " + PackageId + " to '" + version + "', which is not a valid SDK version.");
-                }
+                continue;
+            }
 
-                versions.Add(version);
+            foreach (XAttribute declaration in ProjectSdkAttributes(root))
+            {
+                foreach (string entry in declaration.Value.Split(';'))
+                {
+                    string sdk = entry.Trim();
+                    if (!IsGsharpSdkMoniker(sdk))
+                    {
+                        continue;
+                    }
+
+                    string? inlineVersion = sdk.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase)
+                        ? sdk.Substring(PackageId.Length + 1)
+                        : null;
+                    string? elementVersion = declaration.Parent != root
+                        ? declaration.Parent?.Attribute("Version")?.Value
+                        : null;
+                    if (inlineVersion is not null && elementVersion is not null
+                        && !string.Equals(inlineVersion, elementVersion, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "'" + path + "' declares conflicting " + PackageId + " versions: " +
+                            inlineVersion + " and " + elementVersion + ".");
+                    }
+
+                    string? version = inlineVersion ?? elementVersion;
+                    if (version is null)
+                    {
+                        continue;
+                    }
+
+                    if (!IsValidVersion(version))
+                    {
+                        throw new InvalidOperationException(
+                            "'" + path + "' pins " + PackageId + " to '" + version + "', which is not a valid SDK version.");
+                    }
+
+                    versions.Add(version);
+                }
             }
         }
 
@@ -286,6 +376,40 @@ internal static class SdkPin
         string text = document.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(path, text.ReplaceLineEndings("\n") + "\n");
         return created;
+    }
+
+    private static bool IsGsharpSdkMoniker(string sdk)
+    {
+        string moniker = sdk.Trim();
+        return string.Equals(moniker, PackageId, StringComparison.OrdinalIgnoreCase)
+            || moniker.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<XAttribute> ProjectSdkAttributes(XElement root)
+    {
+        var declarations = new List<XAttribute>();
+        XAttribute? projectSdk = root.Attribute("Sdk");
+        if (projectSdk is not null)
+        {
+            declarations.Add(projectSdk);
+        }
+
+        foreach (XElement element in root.Descendants())
+        {
+            string? attributeName = element.Name.LocalName switch
+            {
+                "Sdk" => "Name",
+                "Import" => "Sdk",
+                _ => null,
+            };
+            XAttribute? declaration = attributeName is null ? null : element.Attribute(attributeName);
+            if (declaration is not null)
+            {
+                declarations.Add(declaration);
+            }
+        }
+
+        return declarations;
     }
 
     private static JsonObject ParseGlobalJson(string path)

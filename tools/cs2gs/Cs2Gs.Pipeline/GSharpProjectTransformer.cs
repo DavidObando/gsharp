@@ -85,6 +85,7 @@ internal static class GSharpProjectTransformer
         XDocument document = XDocument.Parse(projectXml, LoadOptions.PreserveWhitespace);
         string sourceSdk = document.Root.Attribute("Sdk")?.Value;
         document.Root.SetAttributeValue("Sdk", gsharpSdk);
+        SdkPin.RebindProjectSdk(document.Root, gsharpSdk);
         AddSourceSdkDefaults(document, sourceSdk);
 
         string sourceProjectDirectory = Path.GetDirectoryName(Path.GetFullPath(sourceProjectPath));
