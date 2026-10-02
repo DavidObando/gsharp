@@ -333,7 +333,9 @@ public sealed class CorePublicApiSnapshotTests
                 }
 
                 names[parameter.SequenceNumber] = (
-                    parameter.Name.IsNil ? "arg" + parameter.SequenceNumber : reader.GetString(parameter.Name),
+                    parameter.Name.IsNil
+                        ? "arg" + parameter.SequenceNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        : reader.GetString(parameter.Name),
                     defaultValue,
                     (parameter.Attributes & ParameterAttributes.Out) != 0);
             }
@@ -552,7 +554,7 @@ public sealed class CorePublicApiSnapshotTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (Directory.Exists(Path.Combine(dir.FullName, "test", "Core.Tests", "Baselines")))
+            if (File.Exists(Path.Combine(dir.FullName, "test", "Core.Tests", "Baselines", SnapshotFileName)))
             {
                 return dir.FullName;
             }
@@ -560,7 +562,8 @@ public sealed class CorePublicApiSnapshotTests
             dir = dir.Parent;
         }
 
-        throw new InvalidOperationException("repository root not found from " + AppContext.BaseDirectory);
+        throw new InvalidOperationException(
+            "no ancestor of " + AppContext.BaseDirectory + " holds test/Core.Tests/Baselines/" + SnapshotFileName);
     }
 
     /// <summary>
