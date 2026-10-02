@@ -70,6 +70,15 @@ Usage
   python3 build/lsp-soak.py compare ~/.cache/soak/native/summary.json \\
       ~/.cache/soak/migrated/summary.json --out ~/.cache/soak/compare.md
 
+`plan --sample N --min-lines A --max-lines B` picks a seeded sample of
+mid-sized files instead of the largest ones. `run --skip-method M` (repeatable)
+leaves a request out of every step. The language server's semantic model
+build does not finish on the largest migrated files (issue #4659), so on those
+files every model-backed request (semanticTokens/full, inlayHint, hover,
+completion, definition, documentHighlight) times out. Until that is fixed, soak
+the largest files with those methods skipped and a mid-sized sample with the
+full set.
+
 `run --no-log` skips the server's `--log` file. Use it for latency numbers:
 `--log` makes the server echo every message (whole documents included) into
 the log, which inflates timings. Without it, logged-exception detection is off
@@ -321,10 +330,29 @@ def find_largest(tree: Path, largest: int) -> list[Path]:
     return chosen
 
 
+def sample_band(tree: Path, count: int, min_lines: int, max_lines: int, seed: int) -> list[Path]:
+    """A seeded sample of .gs files whose line count lies in [min_lines, max_lines]."""
+    band = []
+    for p in sorted(tree.rglob("*.gs")):
+        if not p.is_file():
+            continue
+        with p.open("rb") as stream:
+            lines = sum(1 for _ in stream)
+        if min_lines <= lines <= max_lines:
+            band.append(p)
+    rng = random.Random(f"sample:{seed}")
+    chosen = rng.sample(band, min(count, len(band)))
+    return sorted(chosen, key=lambda p: (-p.stat().st_size, str(p)))
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     files = [Path(f) for f in args.files]
     if args.tree:
-        files += find_largest(Path(args.tree).expanduser(), args.largest)
+        tree = Path(args.tree).expanduser()
+        if args.sample:
+            files += sample_band(tree, args.sample, args.min_lines, args.max_lines, args.seed)
+        else:
+            files += find_largest(tree, args.largest)
     if not files:
         raise HarnessError("no input files: pass --tree and/or file paths")
     meta = dict(item.split("=", 1) for item in args.meta)
@@ -652,6 +680,8 @@ class FileRun:
                 self.client.notify("textDocument/didChange", {
                     "textDocument": {"uri": self.uri, "version": self.version}, "contentChanges": [change]})
             for method, params in self._requests(step, index, doc):
+                if method in self.args.skip_method:
+                    continue
                 self._request(record, method, params, started if method == "textDocument/diagnostic" else None)
         except ServerExited as exc:
             record["crashes"].append({"kind": "process-exit", "code": exc.code, "stderr": exc.stderr})
@@ -749,7 +779,7 @@ class FileRun:
             self.steps.append(record)
             if record["crashes"] or record["timeouts"] or self.args.verbose:
                 kinds = sorted({c["signature"] for c in record["crashes"]})
-                print(f"  {record['id']}: {record['elapsedMs']} ms crashes={kinds} timeouts={len(record['timeouts'])}",
+                print(f"  {record['id']}: {record['elapsedMs']} ms crashes={kinds} timeouts={record['timeouts']}",
                       flush=True)
         if self.client is not None:
             self.client.shutdown()
@@ -818,6 +848,8 @@ def write_markdown(summary: dict[str, Any], path: Path) -> None:
     for key, value in summary.get("meta", {}).items():
         lines.append(f"- {key}: {value}")
     lines.append(f"- logged-exception detection: {'off (--no-log)' if summary['noLog'] else 'on'}")
+    if summary.get("skippedMethods"):
+        lines.append(f"- skipped methods: {', '.join(summary['skippedMethods'])}")
     lines.append(f"- finished: {summary['finished']}")
     lines.append("")
     lines.append("| file | lines | steps | steps with crash | timeouts | restarts | didChange->diagnostics p50 / p95 ms | keystroke p50 / p95 ms |")
@@ -871,6 +903,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "meta": {**plan.get("meta", {}), **dict(item.split("=", 1) for item in args.meta)},
         "workspaceRoot": args.workspace_root,
         "noLog": args.no_log,
+        "skippedMethods": args.skip_method,
         "finished": datetime.now(timezone.utc).isoformat(),
         "files": [{k: v for k, v in r.items() if k != "steps"} | {"stepCrashes": {
             s["id"]: sorted({c["signature"] for c in s["crashes"]}) for s in r["steps"] if s["crashes"]}}
@@ -932,6 +965,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("files", nargs="*", help="explicit .gs files")
     p.add_argument("--tree", help="pick the --largest .gs files under this directory")
     p.add_argument("--largest", type=int, default=6)
+    p.add_argument("--sample", type=int, default=0,
+                   help="instead of the largest files, a seeded sample of this many files in the line band")
+    p.add_argument("--min-lines", type=int, default=300)
+    p.add_argument("--max-lines", type=int, default=1500)
     p.add_argument("--seed", type=int, default=4242)
     p.add_argument("--truncations", type=int, default=4, help="random truncation offsets (targeted ones are extra)")
     p.add_argument("--line-deletions", type=int, default=6)
@@ -951,6 +988,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--request-timeout", type=float, default=300)
     r.add_argument("--only", action="append", default=[], help="run only files whose name contains this")
     r.add_argument("--no-log", action="store_true", help="no server --log (timing pass; no logged-exception channel)")
+    r.add_argument("--skip-method", action="append", default=[],
+                   help="do not send this request method (e.g. textDocument/semanticTokens/full)")
     r.add_argument("--keep-logs", action="store_true", help="keep the per-file server logs")
     r.add_argument("--meta", action="append", default=[])
     r.add_argument("--verbose", action="store_true")

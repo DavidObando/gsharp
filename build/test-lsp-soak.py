@@ -130,12 +130,12 @@ class LspSoakTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(SCRATCH, ignore_errors=True)
 
-    def run_stub(self, mode: str, at: int = 3, timeout: str = "300") -> tuple[int, dict]:
+    def run_stub(self, mode: str, at: int = 3, timeout: str = "300", extra: list[str] | None = None) -> tuple[int, dict]:
         out = SCRATCH / f"run-{mode}"
         env_prefix = f"env STUB_MODE={mode} STUB_AT={at} STUB_FLAG={out}.fired "
         code = soak.main(["run", "--plan", str(self.plan), "--label", mode, "--out", str(out),
                           "--request-timeout", timeout,
-                          "--server", env_prefix + f"{sys.executable} {self.stub}"])
+                          "--server", env_prefix + f"{sys.executable} {self.stub}"] + (extra or []))
         steps_file = out / "Widget.steps.json"
         result = json.loads(steps_file.read_text()) if steps_file.exists() else {}
         return code, result
@@ -197,6 +197,11 @@ class LspSoakTests(unittest.TestCase):
     def test_method_not_found_is_a_harness_error(self) -> None:
         code, _ = self.run_stub("no-hover")
         self.assertEqual(2, code)
+
+    def test_skipped_method_is_never_sent(self) -> None:
+        code, result = self.run_stub("no-hover", extra=["--skip-method", "textDocument/hover"])
+        self.assertEqual(0, code)
+        self.assertTrue(all("textDocument/hover" not in s["timings"] for s in result["steps"]))
 
     def test_plan_is_deterministic_and_reproduces_each_document(self) -> None:
         again = SCRATCH / "again.json"
