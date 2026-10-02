@@ -367,6 +367,10 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
 
                     public static int PublicParameterTagged(this string value, [Marker(typeof(Box))] int x) => 7;
 
+                    [Marker(typeof(Box))]
+                    [Obsolete("use something else")]
+                    public static int PublicTaggedAndObsolete(this string value, [Marker(typeof(Box))] [System.Diagnostics.CodeAnalysis.NotNull] string note) => 9;
+
                     [Marker((Type[])null)]
                     private static int NullArray(this string value) => 5;
 
@@ -387,7 +391,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static string Echo(this string value) => value;
 
                     public static int Run(string value) =>
-                        value.Make(new Box()).N + value.Deep(new Outer<Box>.Inner()) + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.PublicReturnTagged() + value.PublicParameterTagged(1) + value.NullArray();
+                        value.Make(new Box()).N + value.Deep(new Outer<Box>.Inner()) + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.PublicReturnTagged() + value.PublicParameterTagged(1) + value.PublicTaggedAndObsolete("") + value.NullArray();
                 }
             }
             """;
@@ -423,6 +427,17 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             Assert.Empty(companion.Attributes);
             Assert.Empty(companion.Parameters.SelectMany(parameter => parameter.Attributes));
         }
+
+        // Only the attributes that name the private type are left off the companion: an unrelated
+        // API-significant attribute in the same position survives (method and parameter).
+        MethodDeclaration obsoleteCompanion = Assert.Single(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "PublicTaggedAndObsolete");
+        Assert.Contains(obsoleteCompanion.Attributes, attribute => attribute.Name.Contains("Obsolete"));
+        Assert.DoesNotContain(obsoleteCompanion.Attributes, attribute => attribute.Name.Contains("Marker"));
+        Parameter noteParameter = Assert.Single(obsoleteCompanion.Parameters, parameter => parameter.Name == "note");
+        Assert.Contains(noteParameter.Attributes, attribute => attribute.Name.Contains("NotNull"));
+        Assert.DoesNotContain(noteParameter.Attributes, attribute => attribute.Name.Contains("Marker"));
 
         // A null array argument (`[Marker(null)]` for a `Type[]` parameter) names no type and
         // must not break the check (its `Values` is the default array): the method is lifted.

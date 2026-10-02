@@ -183,8 +183,8 @@ the owner's private nested types (gsc binds a function's receiver, parameter and
 return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
 function cannot name the private type; a method whose signature names one cannot be
 public API, and one that only has an attribute naming it keeps the in-owner helper and
-its forwarding companion, the companion carrying none of the source attributes, since
-at top level it cannot name the private type in any attribute position). The
+its forwarding companion, the companion leaving off only the attributes that name the
+private type, since at top level they cannot resolve; every other attribute is copied). The
 description that follows applies to those two cases only.
 
 Issue #3413 adds one ownership-preserving exception: when the declaring static

@@ -1062,32 +1062,47 @@ public sealed partial class CSharpToGSharpTranslator
     /// </summary>
     /// <param name="method">The extension method.</param>
     /// <returns><see langword="true"/> when an attribute names an owner-private nested type.</returns>
-    private static bool AttributesNamePrivateNestedType(IMethodSymbol method)
-    {
-        INamedTypeSymbol owner = method.ContainingType;
-        if (AttributesNamePrivateNestedType(method.GetAttributes(), owner)
-            || AttributesNamePrivateNestedType(method.GetReturnTypeAttributes(), owner))
-        {
-            return true;
-        }
+    private static bool AttributesNamePrivateNestedType(IMethodSymbol method) =>
+        AttributeApplicationsNamingPrivateNestedType(method).Count > 0;
 
+    /// <summary>
+    /// The syntax of every attribute on <paramref name="method"/>, its return value, a parameter
+    /// or a type parameter that names one of its owner's private nested types.
+    /// </summary>
+    /// <param name="method">The extension method.</param>
+    /// <returns>The attribute syntax nodes (empty when none names such a type).</returns>
+    private static HashSet<SyntaxNode> AttributeApplicationsNamingPrivateNestedType(IMethodSymbol method)
+    {
+        var found = new HashSet<SyntaxNode>();
+        INamedTypeSymbol owner = method.ContainingType;
+        CollectAttributeApplicationsNamingPrivateNestedType(method.GetAttributes(), owner, found);
+        CollectAttributeApplicationsNamingPrivateNestedType(method.GetReturnTypeAttributes(), owner, found);
         foreach (IParameterSymbol parameter in method.Parameters)
         {
-            if (AttributesNamePrivateNestedType(parameter.GetAttributes(), owner))
-            {
-                return true;
-            }
+            CollectAttributeApplicationsNamingPrivateNestedType(parameter.GetAttributes(), owner, found);
         }
 
         foreach (ITypeParameterSymbol typeParameter in method.TypeParameters)
         {
-            if (AttributesNamePrivateNestedType(typeParameter.GetAttributes(), owner))
-            {
-                return true;
-            }
+            CollectAttributeApplicationsNamingPrivateNestedType(typeParameter.GetAttributes(), owner, found);
         }
 
-        return false;
+        return found;
+    }
+
+    private static void CollectAttributeApplicationsNamingPrivateNestedType(
+        ImmutableArray<AttributeData> attributes,
+        INamedTypeSymbol owner,
+        HashSet<SyntaxNode> found)
+    {
+        foreach (AttributeData attribute in attributes)
+        {
+            if (AttributesNamePrivateNestedType(ImmutableArray.Create(attribute), owner)
+                && attribute.ApplicationSyntaxReference?.GetSyntax() is SyntaxNode syntax)
+            {
+                found.Add(syntax);
+            }
+        }
     }
 
     private static bool AttributesNamePrivateNestedType(
@@ -1929,6 +1944,9 @@ public sealed partial class CSharpToGSharpTranslator
         // UNQUALIFIED (gsc resolves it through `import X`), unlike a sibling
         // static, which is qualified through its owning type.
         private readonly HashSet<INamedTypeSymbol> staticUsingTargets;
+
+        // Set only while translating an owner-scoped extension's forwarding companion.
+        private Func<AttributeSyntax, bool> attributeOmission;
 
         // gsc's ADR-0044 implicit numeric widening lattice (mirrors
         // Conversion.NumericWideningTargets), keyed on the C# SpecialType of the

@@ -1444,6 +1444,14 @@ public sealed partial class CSharpToGSharpTranslator
                 string target = list.Target?.Identifier.Text;
                 foreach (AttributeSyntax attribute in list.Attributes)
                 {
+                    // An owner-scoped extension's forwarding companion leaves off the attributes
+                    // that name one of the owner's private nested types (see
+                    // TranslateOwnerScopedCompanion).
+                    if (this.attributeOmission != null && this.attributeOmission(attribute))
+                    {
+                        continue;
+                    }
+
                     using IDisposable modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree);
 
                     // ADR-0169 analyzer mode: [DiagnosticAnalyzer(...)] ->

@@ -71,10 +71,10 @@ public sealed partial class CSharpToGSharpTranslator
                         && this.context.GetDeclaredSymbol(method) is IMethodSymbol companionSymbol
                         && this.HasReceiverCompanion(companionSymbol))
                     {
-                        (GMember companion, bool companionIsStatic) = this.TranslateMethod(
+                        (GMember companion, bool companionIsStatic) = this.TranslateOwnerScopedCompanion(
                             method,
                             ownerKind,
-                            forceExtensionReceiver: true);
+                            companionSymbol);
                         if (companion != null)
                         {
                             yield return (companion, companionIsStatic);
@@ -1229,20 +1229,6 @@ public sealed partial class CSharpToGSharpTranslator
                         spellingLocation: symbol.PartialDefinitionPart.Parameters[index].Locations.FirstOrDefault()))
                     .ToList()
                 : this.MapParameters(symbol, node.ParameterList, skipFirstParameter);
-            if (forceExtensionReceiver && symbol != null && AttributesNamePrivateNestedType(symbol))
-            {
-                parameters = parameters
-                    .Select(parameter => parameter.Name == null
-                        ? parameter
-                        : new Parameter(
-                            parameter.Name,
-                            parameter.Type,
-                            parameter.IsVariadic,
-                            parameter.RefKind,
-                            parameter.DefaultValue))
-                    .ToList();
-            }
-
             if (isPartialPart)
             {
                 parameters = this.ReconcilePartialMethodParameters(symbol, parameters, isDeclaringPart);
@@ -1413,21 +1399,11 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #4370: a `[LibraryImport]` definition's import arguments
             // are re-spelled from their constant values; issue #4301: so are
             // a `[GeneratedRegex]` definition's.
-            //
-            // The forwarding companion of an owner-scoped extension sits at top level, where an
-            // attribute naming one of the owner's private nested types cannot resolve. Those
-            // attributes stay on the in-owner helper; the companion, a thin forwarder, carries
-            // none of the source attributes, in any position (method, return, parameter).
-            bool omitCompanionAttributes = forceExtensionReceiver
-                && symbol != null
-                && AttributesNamePrivateNestedType(symbol);
             List<AttributeUse> methodAttributes = isNativeImportDefinition
                 ? this.MapLibraryImportMethodAttributes(node, symbol)
                 : isGeneratedRegexDefinition
                     ? this.MapGeneratedRegexMethodAttributes(node, symbol)
-                    : omitCompanionAttributes
-                        ? new List<AttributeUse>()
-                        : this.MapAttributes(node.AttributeLists);
+                    : this.MapAttributes(node.AttributeLists);
 
             // ADR-0192 §C: method-level attributes are unioned across the
             // parts by gsc, so each part carries only its OWN — `node` is the
@@ -1805,6 +1781,39 @@ public sealed partial class CSharpToGSharpTranslator
                 ? new ExpressionStatement(forwarded)
                 : new ReturnStatement(forwarded);
             return new BlockStatement(new[] { statement });
+        }
+
+        /// <summary>
+        /// Translates the top-level forwarding companion of an owner-scoped extension. It sits
+        /// outside the owner, so a source attribute that names one of the owner's private
+        /// nested types (as the attribute class or in an argument) cannot resolve there; it is
+        /// left off the companion, in every position (method, return value, parameter), and
+        /// stays on the in-owner helper. Every other attribute is copied as before.
+        /// </summary>
+        /// <param name="method">The extension's declaration.</param>
+        /// <param name="ownerKind">The G# kind of the owner.</param>
+        /// <param name="symbol">The extension's symbol.</param>
+        /// <returns>The translated companion and whether it is static.</returns>
+        private (GMember Member, bool IsStatic) TranslateOwnerScopedCompanion(
+            MethodDeclarationSyntax method,
+            TypeDeclarationKind ownerKind,
+            IMethodSymbol symbol)
+        {
+            HashSet<SyntaxNode> privateTypeAttributes = AttributeApplicationsNamingPrivateNestedType(symbol);
+            Func<AttributeSyntax, bool> previous = this.attributeOmission;
+            if (privateTypeAttributes.Count > 0)
+            {
+                this.attributeOmission = attribute => privateTypeAttributes.Contains(attribute);
+            }
+
+            try
+            {
+                return this.TranslateMethod(method, ownerKind, forceExtensionReceiver: true);
+            }
+            finally
+            {
+                this.attributeOmission = previous;
+            }
         }
 
         private bool HasReceiverCompanion(IMethodSymbol method)
