@@ -98,38 +98,37 @@ class Allowed:
     why: str
 
 
+# Pages whose release references must agree in both the development docs
+# (website/docs) and the default released snapshot
+# (website/versioned_docs/version-<docsVersion>): the snapshot is what /docs
+# serves, so a stale reference there is the one most readers see.
+DOC_PAGES: tuple[tuple[str, str, str], ...] = (
+    ("getting-started/install.md", r"published \*\*({V})\*\*",
+     "install page names the release it installs"),
+    ("getting-started/install.md", r"Gsharp\.Templates::({V})", "template install command"),
+    ("getting-started/install.md", r"Gsharp\.NET\.Sdk/({V})", "project-file example"),
+    ("tutorials/trail.md", r"G# SDK ({V})", "Trail verified-example banner"),
+    ("tutorials/trail.md", r"Trail for SDK ({V})", "Trail download link text"),
+    ("tutorials/trail.md", r"/downloads/trail-({V})\.zip", "Trail download link target"),
+    ("tooling/sdk-projects.md", r"\"Gsharp\.NET\.Sdk\":\s*\"({V})\"", "global.json pin example"),
+    ("contributing/docs-authoring.md", r"refreshed against `v({V})`",
+     "names the tag the default snapshot was refreshed from"),
+)
+
 TRACKED: tuple[Tracked, ...] = (
-    Tracked("website/docs/getting-started/install.md", r"published \*\*({V})\*\*", 1,
-            "install page names the release it installs"),
-    Tracked("website/docs/getting-started/install.md", r"Gsharp\.Templates::({V})", 1,
-            "template install command"),
-    Tracked("website/docs/getting-started/install.md", r"Gsharp\.NET\.Sdk/({V})", 1,
-            "project-file example"),
-    Tracked("website/docs/tutorials/trail.md", r"G# SDK ({V})", 1,
-            "verified-example banner"),
-    Tracked("website/docs/tutorials/trail.md", r"Trail for SDK ({V})", 1,
-            "download link text"),
-    Tracked("website/docs/tutorials/trail.md", r"/downloads/trail-({V})\.zip", 1,
-            "download link target"),
+    *(Tracked(f"{root}/{page}", pattern, 1, f"{label}: {why}")
+      for root, label in (("website/docs", "docs"),
+                          ("website/versioned_docs/version-{D}", "default snapshot"))
+      for page, pattern, why in DOC_PAGES),
     Tracked("website/docs/release-notes.md", r"The published \*\*({V})\*\* release", 1,
             "release notes name the release the website installs"),
-    Tracked("website/docs/tooling/sdk-projects.md", r"\"Gsharp\.NET\.Sdk\":\s*\"({V})\"", 1,
-            "global.json pin example"),
-    Tracked("website/docs/contributing/docs-authoring.md", r"refreshed against `v({V})`", 1,
-            "names the tag the default snapshot was refreshed from"),
-    Tracked("website/README.md", r"refreshed from `v({V})`", 1,
-            "names the tag the default snapshot was refreshed from"),
-    Tracked("website/versioned_docs/version-{D}/getting-started/install.md",
-            r"Gsharp\.Templates::({V})", 1, "default snapshot install command"),
-    Tracked("website/versioned_docs/version-{D}/getting-started/install.md",
-            r"Gsharp\.NET\.Sdk/({V})", 1, "default snapshot project-file example"),
-    Tracked("website/versioned_docs/version-{D}/tutorials/trail.md",
-            r"/downloads/trail-({V})\.zip", 1, "default snapshot download link"),
-    Tracked("website/versioned_docs/version-{D}/tooling/sdk-projects.md",
-            r"\"Gsharp\.NET\.Sdk\":\s*\"({V})\"", 1, "default snapshot global.json pin example"),
+    Tracked("website/versioned_docs/version-{D}/release-notes.md", r"^## ({V}) at a glance$", 1,
+            "default snapshot release notes are headed by their release"),
     Tracked("website/versioned_docs/version-{D}/release-notes.md",
             r"follows the published `v({V})` Git tag", 1,
             "default snapshot names its source tag"),
+    Tracked("website/README.md", r"refreshed from `v({V})`", 1,
+            "names the tag the default snapshot was refreshed from"),
     Tracked("website/static/data/concurrency-checks.json", r"\"sdkVersion\":\s*\"({V})\"", 1,
             "evidence from website/tests/verify-concurrency-patterns.py"),
     Tracked("website/static/img/trail-editor.json", r"\"applicationSdk\":\s*\"({V})\"", 1,
@@ -289,7 +288,7 @@ def check(tree: Tree) -> list[str]:
         if text is None:
             problems.append(f"{path}: missing (tracked: {entry.why})")
             continue
-        pattern = re.compile(entry.pattern.replace("{V}", VER))
+        pattern = re.compile(entry.pattern.replace("{V}", VER), re.MULTILINE)
         matches = list(pattern.finditer(text))
         if len(matches) < entry.minimum:
             problems.append(

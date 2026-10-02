@@ -60,6 +60,35 @@ class ReleaseVersionRefsTests(unittest.TestCase):
         problems = self.problems_with(self.replaced(path, f"G# SDK {VERSION}", f"G# SDK {OTHER}"))
         self.assertReported(problems, path, OTHER)
 
+    def test_stale_default_snapshot_prose_is_reported(self) -> None:
+        root = f"website/versioned_docs/version-{RELEASE['docsVersion']}"
+        cases = [
+            (f"{root}/getting-started/install.md", f"published **{VERSION}**", f"published **{OTHER}**"),
+            (f"{root}/tutorials/trail.md", f"G# SDK {VERSION}", f"G# SDK {OTHER}"),
+            (f"{root}/release-notes.md", f"## {VERSION} at a glance", f"## {OTHER} at a glance"),
+            (f"{root}/contributing/docs-authoring.md", f"against `v{VERSION}`", f"against `v{OTHER}`"),
+        ]
+        for path, old, new in cases:
+            with self.subTest(path=path):
+                problems = self.problems_with(self.replaced(path, old, new))
+                self.assertReported(problems, path, f"{OTHER} != release {VERSION}")
+
+    def test_every_default_snapshot_reference_is_checked(self) -> None:
+        docs_version = RELEASE["docsVersion"]
+        snapshot_entries = [e for e in refs.TRACKED if "{D}" in e.path]
+        self.assertGreaterEqual(len(snapshot_entries), 10)
+        for entry in snapshot_entries:
+            path = entry.path.replace("{D}", docs_version)
+            pattern = entry.pattern.replace("{V}", refs.VER)
+            text = BASE.read(path)
+            assert text is not None, path
+            # Make only this entry's references stale; other refs stay current.
+            stale = refs.re.sub(
+                pattern, lambda m: m.group(0).replace(VERSION, OTHER), text, flags=refs.re.MULTILINE)
+            self.assertNotEqual(stale, text, f"{path}: /{entry.pattern}/ matched nothing")
+            with self.subTest(path=path, pattern=entry.pattern):
+                self.assertReported(self.problems_with({path: stale}), path, f"{OTHER} != release {VERSION}")
+
     def test_reworded_tracked_reference_fails_instead_of_passing_vacuously(self) -> None:
         path = "website/docs/release-notes.md"
         problems = self.problems_with(self.replaced(
