@@ -99,7 +99,8 @@ Order matters: publish first, then point the website at the published package.
 1. Tag and publish the release: push tag `vM` on the commit whose
    `build.yml` run printed `M`. The `publish` and
    `publish-visual-studio-extension` jobs in `build.yml` do the rest. The
-   release runbook (`docs/release/final-csharp-release.md`, added by #4647) covers the
+   release runbook (`docs/release/final-csharp-release.md`, which lands in a
+   separate PR) covers the
    secrets and verification in detail. Confirm every package is on nuget.org
    at `M` before step 2.
 2. In one post-publish PR:
@@ -157,9 +158,13 @@ Everything in the patch procedure, plus:
 
 ## Refreshing a docs snapshot
 
-`npm run docusaurus docs:version X` refuses a version that `versions.json`
-already lists ("this version already exists"). It also copies into an existing
-directory without deleting files that are already there.
+Placeholders in this section: `DOCS_VERSION` is the docs snapshot name
+(`release.json` `docsVersion`, e.g. `0.4`), and `RELEASE_VERSION` is the
+published release (`release.json` `version`, e.g. `0.4.1130`).
+
+`npm run docusaurus docs:version DOCS_VERSION` refuses a version that
+`versions.json` already lists ("this version already exists"). It also copies
+into an existing directory without deleting files that are already there.
 
 Cut the snapshot from the post-publish branch, **after** step 2.2 has moved
 `website/docs` to the new release. Don't cut it from the tag. The tag's docs
@@ -172,22 +177,24 @@ Under a merge freeze, the post-publish branch's `website/docs` is the tag's
 content plus those version pointers. Check that before cutting:
 
 ```sh
-git diff vX.Y.Z -- website/docs      # only the step 2.2 version edits
+DOCS_VERSION=0.4 RELEASE_VERSION=0.4.NNNN   # set to the real values
+git diff "v$RELEASE_VERSION" -- website/docs     # only the step 2.2 version edits
 cd website && npm ci
 # Remove the old snapshot first; the copy does not delete stale files.
-rm -rf versioned_docs/version-X versioned_sidebars/version-X-sidebars.json
-# Drop "X" from versions.json, keeping the older entries.
-node -e 'const f="versions.json",v=require("./"+f).filter(x=>x!=="X");require("fs").writeFileSync(f,JSON.stringify(v,null,2)+"\n")'
-npm run docusaurus docs:version X    # copies website/docs, prepends "X" again
+rm -rf "versioned_docs/version-$DOCS_VERSION" "versioned_sidebars/version-$DOCS_VERSION-sidebars.json"
+# Drop DOCS_VERSION from versions.json, keeping the older entries.
+node -e 'const f="versions.json",d=process.argv[1],v=require("./"+f).filter(x=>x!==d);require("fs").writeFileSync(f,JSON.stringify(v,null,2)+"\n")' "$DOCS_VERSION"
+npm run docusaurus docs:version "$DOCS_VERSION"   # copies website/docs, prepends DOCS_VERSION
 ```
 
 Then:
 
-- Restore the snapshot's hand-written release-notes preamble ("X.Y.Z at a
-  glance", ``follows the published `vX.Y.Z` Git tag``, and the link to Next
-  release notes). A copy of `website/docs/release-notes.md` would instead tell
-  readers they are reading development documentation.
-- Update the "refreshed against/from `vX.Y.Z`" sentences in
+- Restore the snapshot's hand-written release-notes preamble
+  ("RELEASE_VERSION at a glance", ``follows the published `vRELEASE_VERSION`
+  Git tag``, and the link to Next release notes). A copy of
+  `website/docs/release-notes.md` would instead tell readers they are reading
+  development documentation.
+- Update the "refreshed against/from `vRELEASE_VERSION`" sentences in
   `website/docs/contributing/docs-authoring.md` and `website/README.md`.
 - Run `npm run test:content`. It checks the snapshot's install page, Trail
   download link, descriptions, diagnostic catalogue and legacy anchors.

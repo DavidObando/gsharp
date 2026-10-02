@@ -196,6 +196,11 @@ class ReleaseVersionRefsTests(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertIn("needs a Git working tree", output.getvalue())
 
+    def test_docs_version_must_be_major_minor(self) -> None:
+        release = dict(RELEASE, docsVersion="../0.4")
+        self.assertReported(self.problems_with({refs.RELEASE_JSON: json.dumps(release)}),
+                            refs.RELEASE_JSON, "major.minor")
+
     def test_release_json_tag_must_match_version(self) -> None:
         problems = self.problems_with(self.replaced(refs.RELEASE_JSON, f"v{VERSION}", f"v{OTHER}"))
         self.assertReported(problems, refs.RELEASE_JSON, "tag")

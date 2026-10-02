@@ -238,7 +238,7 @@ def _read(root: Path, path: str) -> str | None:
     if b"\0" in data[:8192]:
         return None
     # Normalise CRLF so `$`-anchored patterns behave the same on a Windows checkout.
-    return data.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    return data.decode("utf-8", errors="surrogateescape").replace("\r\n", "\n")
 
 
 def line_of(text: str, offset: int) -> int:
@@ -251,7 +251,13 @@ def major_minor(version: str) -> tuple[int, int]:
 
 
 def check(tree: Tree) -> list[str]:
+    """Return one line per finding.
+
+    Raises OSError or CalledProcessError when the files cannot be listed (not
+    a Git working tree, or no git); main() turns that into exit status 2.
+    """
     problems: list[str] = []
+    paths = tree.paths()
 
     release_text = tree.read(RELEASE_JSON)
     if release_text is None:
@@ -266,6 +272,8 @@ def check(tree: Tree) -> list[str]:
     docs_version = str(release.get("docsVersion", ""))
     if not re.fullmatch(VER, version):
         return [f"{RELEASE_JSON}: version {version!r} is not a NuGet version"]
+    if not re.fullmatch(r"\d+\.\d+", docs_version):
+        return [f"{RELEASE_JSON}: docsVersion {docs_version!r} is not a major.minor snapshot name"]
 
     # 1. structure
     if release.get("tag") != f"v{version}":
@@ -320,7 +328,6 @@ def check(tree: Tree) -> list[str]:
 
     # 3. sweep for package-qualified pins
     used: set[Allowed] = set()
-    paths = tree.paths()
     for path in paths:
         if path.endswith(SKIPPED_SUFFIXES):
             continue
@@ -362,12 +369,11 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     tree = Tree(args.root.resolve())
     try:
-        tree.paths()
+        problems = check(tree)
     except (OSError, subprocess.CalledProcessError) as error:
         print(f"Cannot list the files to check under {tree.root}: this check needs a Git "
               f"working tree and the git executable ({error}).")
         return 2
-    problems = check(tree)
     if problems:
         print(f"Release version references disagree with {RELEASE_JSON}:")
         for problem in problems:
