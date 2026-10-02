@@ -4,7 +4,9 @@
 
 using System;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
+using GSharp.Core.CodeAnalysis.Diagnostics;
 using GSharp.LanguageServer.Protocol;
 using GSharp.LanguageServer.Server;
 using Nerdbank.Streams;
@@ -28,6 +30,68 @@ namespace GSharp.LanguageServer.Tests;
 /// </summary>
 public class LspServerInitializedDispatchTests
 {
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"rootPath\":null,\"rootUri\":null}")]
+    [InlineData("{\"rootPath\":\"\",\"rootUri\":null}")]
+    [InlineData("{\"rootUri\":\"\"}")]
+    public async Task NoRootInitialize_OverRpc_CompletesDiscoveryWithoutErrors(string initializeJson)
+    {
+        var logPath = Path.Combine(Path.GetTempPath(), "gs-no-root-" + Guid.NewGuid().ToString("N") + ".log");
+        try
+        {
+            using var logger = new FileLogger(logPath);
+            var workspace = new WorkspaceState();
+            var documents = new DocumentContentService();
+            var server = new LspServer(documents, workspace, logger);
+            var discovered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            server.TestAfterWorkspaceDiscovery = () => discovered.TrySetResult(true);
+            var (clientStream, serverStream) = FullDuplexStream.CreatePair();
+
+            using var serverRpc = new JsonRpc(new HeaderDelimitedMessageHandler(
+                serverStream,
+                serverStream,
+                new SystemTextJsonFormatter { JsonSerializerOptions = LspJson.Options }));
+            serverRpc.AddLocalRpcTarget(server, new JsonRpcTargetOptions { DisposeOnDisconnect = false });
+            server.Attach(serverRpc);
+            serverRpc.StartListening();
+
+            using var clientRpc = new JsonRpc(new HeaderDelimitedMessageHandler(
+                clientStream,
+                clientStream,
+                new SystemTextJsonFormatter { JsonSerializerOptions = LspJson.Options }));
+            clientRpc.StartListening();
+
+            using var initializeParams = JsonDocument.Parse(initializeJson);
+            var result = await clientRpc.InvokeWithParameterObjectAsync<InitializeResult>(
+                "initialize",
+                initializeParams.RootElement.Clone());
+            Assert.NotNull(result.Capabilities);
+            await clientRpc.NotifyWithParameterObjectAsync("initialized", new { });
+            await discovered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            Assert.Null(workspace.RootPath);
+            Assert.Empty(workspace.Projects);
+            Assert.DoesNotContain("\"Level\":\"Error\"", File.ReadAllText(logPath), StringComparison.Ordinal);
+
+            // Single-file editing must remain usable after the no-root handshake.
+            var uri = DocumentUri.FromFileSystemPath(Path.Combine(Path.GetTempPath(), "no-root.gs"));
+            await clientRpc.InvokeWithParameterObjectAsync(
+                "textDocument/didOpen",
+                new DidOpenTextDocumentParams
+                {
+                    TextDocument = new TextDocumentItem { Uri = uri, Text = string.Empty },
+                });
+            Assert.True(documents.TryGet(uri.ToString(), out var opened));
+            Assert.Equal(string.Empty, opened.SyntaxTree.Text.ToString());
+            await clientRpc.InvokeAsync<object>("shutdown");
+        }
+        finally
+        {
+            File.Delete(logPath);
+        }
+    }
+
     [Fact]
     public async Task InitializedNotification_OverRpc_TriggersBackgroundDiscovery()
     {
