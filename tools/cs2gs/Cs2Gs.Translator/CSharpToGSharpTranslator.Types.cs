@@ -1061,8 +1061,12 @@ public sealed partial class CSharpToGSharpTranslator
                 SymbolEqualityComparer.Default);
             var declarationByLocalFunction = new Dictionary<IMethodSymbol, LocalFunctionStatementSyntax>(
                 SymbolEqualityComparer.Default);
+            var orderedBySection = new Dictionary<SwitchSectionSyntax, IReadOnlyList<StatementSyntax>>();
             foreach (SwitchSectionSyntax section in node.Sections)
             {
+                orderedBySection.Add(
+                    section,
+                    this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span));
                 foreach (LocalFunctionStatementSyntax localFunction in section.Statements
                     .OfType<LocalFunctionStatementSyntax>())
                 {
@@ -1089,8 +1093,7 @@ public sealed partial class CSharpToGSharpTranslator
                 processOnlyForcedGroups: true);
             foreach (SwitchSectionSyntax section in node.Sections)
             {
-                IReadOnlyList<StatementSyntax> ordered =
-                    this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span);
+                IReadOnlyList<StatementSyntax> ordered = orderedBySection[section];
                 this.RegisterCapturingRecursiveLocalFunctions(ordered);
                 this.RegisterRecursiveLocalFunctionLifts(ordered);
             }
@@ -1138,7 +1141,7 @@ public sealed partial class CSharpToGSharpTranslator
                     var constantLabels = labels.Cast<CaseSwitchLabelSyntax>().ToList();
                     var mergedArm = new SwitchStatementCase(
                         new ConstantPattern(this.TranslateExpression(constantLabels[0].Value)),
-                        this.TranslateSwitchSectionBody(section))
+                        this.TranslateSwitchSectionBody(section, orderedBySection[section]))
                     {
                         AdditionalPatterns = constantLabels
                             .Skip(1)
@@ -1199,7 +1202,9 @@ public sealed partial class CSharpToGSharpTranslator
                                     guards,
                                     mutableBindings);
                                 this.UseMutableSwitchPatternLocals(mutableBindings);
-                                patternBody = this.TranslateSwitchSectionBody(section);
+                                patternBody = this.TranslateSwitchSectionBody(
+                                    section,
+                                    orderedBySection[section]);
                                 patternBody = this.MaterializeMutableSwitchPatternLocals(
                                     patternBody,
                                     mutableBindings,
@@ -1226,6 +1231,7 @@ public sealed partial class CSharpToGSharpTranslator
                                 new ConstantPattern(this.TranslateExpression(valueLabel.Value)),
                                 this.TranslateSwitchSectionBody(
                                     section,
+                                    orderedBySection[section],
                                     gotoTargets.Contains(valueLabel) ? this.GotoCaseOrDefaultLabelName(valueLabel) : null)));
                             break;
 
@@ -1234,6 +1240,7 @@ public sealed partial class CSharpToGSharpTranslator
                                 null,
                                 this.TranslateSwitchSectionBody(
                                     section,
+                                    orderedBySection[section],
                                     gotoTargets.Contains(defaultLabel) ? this.GotoCaseOrDefaultLabelName(defaultLabel) : null)));
                             break;
 
@@ -1343,16 +1350,16 @@ public sealed partial class CSharpToGSharpTranslator
                 && binary.IsKind(SyntaxKind.OrPattern)
                 && (IsTotalPattern(binary.Left) || IsTotalPattern(binary.Right)));
 
-        private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section, string injectLabel = null)
+        private BlockStatement TranslateSwitchSectionBody(
+            SwitchSectionSyntax section,
+            IReadOnlyList<StatementSyntax> ordered,
+            string injectLabel = null)
         {
             var statements = new List<GStatement>();
 
             // Recursive local-function state for every section is registered
             // once, up front, by TranslateSwitchStatement (the only caller), so
             // cross-section references see each section's lifts.
-            IReadOnlyList<StatementSyntax> ordered =
-                this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span);
-
             // Issue #4262 follow-up (item 2): mirrors TranslateBlock's own
             // per-statement guarded-field-local-capture loop — a direct
             // early-return guard in a switch-section body leaks to the

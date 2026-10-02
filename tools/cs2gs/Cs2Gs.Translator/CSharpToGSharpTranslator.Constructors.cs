@@ -2088,6 +2088,7 @@ public sealed partial class CSharpToGSharpTranslator
                     occupied.UnionWith(
                         declaration
                             .DescendantNodes()
+                            .Where(IsLiftedHelperOccupiedNameDeclaration)
                             .Select(this.context.GetDeclaredSymbol)
                             .Where(symbol =>
                                 symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
@@ -2113,6 +2114,19 @@ public sealed partial class CSharpToGSharpTranslator
                 }));
             return occupied;
         }
+
+        private static bool IsLiftedHelperOccupiedNameDeclaration(SyntaxNode node) =>
+            node is VariableDeclaratorSyntax
+                or VariableDesignationSyntax
+                or ParameterSyntax
+                or LocalFunctionStatementSyntax
+                or ForEachStatementSyntax
+                or CatchDeclarationSyntax
+                or FromClauseSyntax
+                or LetClauseSyntax
+                or JoinClauseSyntax
+                or JoinIntoClauseSyntax
+                or QueryContinuationSyntax;
 
         // Issue #4302 fail-safe: a readable lifted-helper name is rejected
         // when any identifier token in the compilation spelled the same way
@@ -2167,15 +2181,10 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (SyntaxTree tree in GetSyntaxTreesMentioningIdentifier(this.context.Compilation, name))
             {
-                var tokens = tree.GetRoot()
+                IEnumerable<SyntaxToken> tokens = tree.GetRoot()
                     .DescendantTokens()
                     .Where(token => token.IsKind(SyntaxKind.IdentifierToken)
-                        && string.Equals(token.ValueText, name, StringComparison.Ordinal))
-                    .ToList();
-                if (tokens.Count == 0)
-                {
-                    continue;
-                }
+                        && string.Equals(token.ValueText, name, StringComparison.Ordinal));
 
                 using IDisposable modelScope = this.context.UseSemanticModelFor(tree);
                 foreach (SyntaxToken token in tokens)
