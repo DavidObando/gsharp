@@ -59,8 +59,11 @@ VERSIONS_JSON = "website/versions.json"
 VERSION_JSON = "version.json"
 DOWNLOADS = "website/static/downloads/"
 
-# A NuGet-style version: three numeric parts and an optional prerelease suffix.
-VER = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?"
+# A whole NuGet version token: three or four numeric parts and an optional
+# prerelease suffix ending in an alphanumeric. Matching the whole token matters:
+# `0.4.591.1` must be read as itself, not accepted as its `0.4.591` prefix, and
+# a sentence-ending `0.4.591.` must still read as `0.4.591`.
+VER = r"\d+(?:\.\d+){2,3}(?:-[0-9A-Za-z](?:[0-9A-Za-z.-]*[0-9A-Za-z])?)?"
 
 # Package-qualified pins. Each alternative separates a published package id
 # from a version the way a project file, global.json, a template install, a
@@ -122,6 +125,8 @@ TRACKED: tuple[Tracked, ...] = (
             r"Gsharp\.NET\.Sdk/({V})", 1, "default snapshot project-file example"),
     Tracked("website/versioned_docs/version-{D}/tutorials/trail.md",
             r"/downloads/trail-({V})\.zip", 1, "default snapshot download link"),
+    Tracked("website/versioned_docs/version-{D}/tooling/sdk-projects.md",
+            r"\"Gsharp\.NET\.Sdk\":\s*\"({V})\"", 1, "default snapshot global.json pin example"),
     Tracked("website/versioned_docs/version-{D}/release-notes.md",
             r"follows the published `v({V})` Git tag", 1,
             "default snapshot names its source tag"),

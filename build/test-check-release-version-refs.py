@@ -89,9 +89,25 @@ class ReleaseVersionRefsTests(unittest.TestCase):
                 problems = self.problems_with({"docs/pin-probe.md": spelling + "\n"})
                 self.assertReported(problems, "docs/pin-probe.md", f"pins {OTHER}")
 
+    def test_longer_version_is_not_read_as_the_release(self) -> None:
+        for longer in (f"{VERSION}.1", f"{VERSION}-rc1", f"{VERSION}0"):
+            with self.subTest(longer=longer):
+                problems = self.problems_with({"docs/pin-probe.md": f'<Project Sdk="Gsharp.NET.Sdk/{longer}">\n'})
+                self.assertReported(problems, "docs/pin-probe.md", f"pins {longer}")
+                path = "samples/Trail/Trail.gsproj"
+                problems = self.problems_with(self.replaced(
+                    path, f"Gsharp.NET.Sdk/{VERSION}", f"Gsharp.NET.Sdk/{longer}"))
+                self.assertReported(problems, path, f"{longer} != release {VERSION}")
+
+    def test_sentence_ending_period_is_not_part_of_the_version(self) -> None:
+        problems = self.problems_with({"docs/pin-probe.md": f"Pin Gsharp.NET.Sdk/{VERSION}.\n"})
+        self.assertFalse([p for p in problems if "pin-probe" in p], problems)
+
     def test_allow_list_is_exact_about_versions(self) -> None:
         path = "src/vs-gsharp/templates/Project/Console/GSharpConsole.gsproj"
-        problems = self.problems_with(self.replaced(path, "Gsharp.NET.Sdk/0.3.159", f"Gsharp.NET.Sdk/{OTHER}"))
+        pinned = "0.3.159"  # kept apart from the package id so the sweep does not read this file as a pin
+        problems = self.problems_with(self.replaced(
+            path, f"Gsharp.NET.Sdk/{pinned}", f"Gsharp.NET.Sdk/{OTHER}"))
         self.assertReported(problems, path, f"pins {OTHER}")
 
     def test_unused_allow_list_entry_is_reported(self) -> None:
