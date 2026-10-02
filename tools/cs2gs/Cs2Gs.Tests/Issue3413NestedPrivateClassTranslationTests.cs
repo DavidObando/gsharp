@@ -64,11 +64,11 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     Console.WriteLine(35.AddCached());
                     Console.WriteLine(6.DelayIdentityAsync().GetAwaiter().GetResult());
                     7.DelayAsync().GetAwaiter().GetResult();
-                    "four".LengthAsync().GetAwaiter().GetResult();
+                    Console.WriteLine("four".LengthAsync().GetAwaiter().GetResult());
                     "later".DelayTextAsync().GetAwaiter().GetResult();
                     Console.WriteLine(9.ValueAsync().AsTask().GetAwaiter().GetResult());
                     10.ValueNoteAsync().AsTask().GetAwaiter().GetResult();
-                    "five".ValueLengthAsync().AsTask().GetAwaiter().GetResult();
+                    Console.WriteLine("five".ValueLengthAsync().AsTask().GetAwaiter().GetResult());
                     "later".ValueDelayAsync().AsTask().GetAwaiter().GetResult();
                     Console.WriteLine("async");
                 }
@@ -602,7 +602,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             """);
         File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), Source);
         string goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden");
-        File.WriteAllText(goldenPath, "42\n1\n42\n6\n9\nasync\n");
+        File.WriteAllText(goldenPath, "42\n1\n42\n6\n4\n9\n4\nasync\n");
 
         string outputRoot = NewDirectory("pipeline-tests");
         var app = new CorpusApp(
