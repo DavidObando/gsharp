@@ -86,11 +86,24 @@ public sealed partial class TestParityStage
         }
 
         summary.CSharpCases = oracle.Tests.Count;
-        string trxPath = SdkCompileRunner.MirroredTestResultsPath(context.ArtifactDir);
-        IReadOnlyList<TestCaseOutcome> actual;
+        string resultsDirectory = SdkCompileRunner.MirroredTestResultsDirectory(context.ArtifactDir);
+        var actual = new List<TestCaseOutcome>();
         try
         {
-            actual = TrxParser.ParseFile(trxPath);
+            // Every TRX the run wrote (one per target framework), each parsed
+            // strictly: a nameless result fails closed instead of vanishing.
+            string[] files = Directory.Exists(resultsDirectory)
+                ? Directory.GetFiles(resultsDirectory, "*.trx")
+                : Array.Empty<string>();
+            if (files.Length == 0)
+            {
+                throw new FileNotFoundException("the run wrote no TRX under " + resultsDirectory);
+            }
+
+            foreach (string file in files.OrderBy(path => path, StringComparer.Ordinal))
+            {
+                actual.AddRange(TrxParser.ParseFile(file, requireNames: true));
+            }
         }
         catch (Exception ex) when (IsReadFailure(ex))
         {

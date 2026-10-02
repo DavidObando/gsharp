@@ -578,6 +578,26 @@ public sealed class Issue4633TestNameParityTests
         Assert.Equal("TEST-RESULTS-UNREADABLE", Assert.Single(outcome.Artifacts).Diagnostic.Id);
     }
 
+    /// <summary>
+    /// Review finding: a multi-targeted run writes one TRX per framework; all
+    /// of them are compared, so the oracle's per-framework duplicates match.
+    /// </summary>
+    [Fact]
+    public void Stage_EveryTrxFileCounts()
+    {
+        StageExecutionContext context = Context(withOracle: true);
+        WriteTrx(context, "Own.Tests.A.Works", "Own.Tests.A.Adds(x: 1)");
+        string directory = SdkCompileRunner.MirroredTestResultsDirectory(context.ArtifactDir);
+        File.Move(Path.Combine(directory, "parity.trx"), Path.Combine(directory, "parity_net9.trx"));
+        WriteTrx(context, "Own.Tests.A.Adds(x: 2)", "Own.Tests.B.Works");
+
+        StageOutcome outcome = new TestParityStage().EvaluateMirroredTestRun(
+            context, new ProcessRunResult(0, GreenRunOutput, string.Empty, false));
+
+        Assert.Equal(StageStatus.Passed, outcome.Status);
+        Assert.Equal(4, context.TestNameParity.MigratedCases);
+    }
+
     /// <summary>Zero migrated results where the C# original has cases is a failure.</summary>
     [Fact]
     public void Stage_ZeroResults_Fails()
@@ -753,8 +773,9 @@ public sealed class Issue4633TestNameParityTests
         }
 
         trx.AppendLine("</Results></TestRun>");
-        string path = SdkCompileRunner.MirroredTestResultsPath(context.ArtifactDir);
-        Directory.CreateDirectory(Path.GetDirectoryName(path));
+        string directory = SdkCompileRunner.MirroredTestResultsDirectory(context.ArtifactDir);
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "parity.trx");
         File.WriteAllText(path, trx.ToString());
     }
 

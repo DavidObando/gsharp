@@ -1011,14 +1011,14 @@ public sealed class SdkCompileRunner
     }
 
     /// <summary>
-    /// Issue #4633: where a mirrored test run writes its TRX, derived from the
-    /// app's artifact directory alone so the parity stage reads exactly the
-    /// file this run wrote.
+    /// Issue #4633: the directory a mirrored test run writes its TRX files to,
+    /// derived from the app's artifact directory alone. A multi-targeted
+    /// project writes one TRX per framework; the parity stage reads them all.
     /// </summary>
     /// <param name="artifactDirectory">The app's artifact directory.</param>
-    /// <returns>The absolute TRX path.</returns>
-    internal static string MirroredTestResultsPath(string artifactDirectory) =>
-        Path.Combine(Path.GetFullPath(artifactDirectory), "test-results", "parity.trx");
+    /// <returns>The absolute results directory.</returns>
+    internal static string MirroredTestResultsDirectory(string artifactDirectory) =>
+        Path.Combine(Path.GetFullPath(artifactDirectory), "test-results");
 
     internal static ProcessRunResult TestMirroredProject(
         string generatedProjectPath,
@@ -1045,15 +1045,13 @@ public sealed class SdkCompileRunner
             temporaryBuildProps = PrepareTemporaryBuildProps(generatedProjectPaths.Values);
 
             // Issue #4633: a stale TRX from an earlier run in the same artifact
-            // directory must never stand in for this run's results.
-            string trxPath = MirroredTestResultsPath(artifactDirectory);
-            Directory.CreateDirectory(Path.GetDirectoryName(trxPath));
-
-            // A stale TRX that cannot be deleted throws here: reading it later
-            // would compare an old run's names.
-            if (File.Exists(trxPath))
+            // directory must never stand in for this run's results. One that
+            // cannot be deleted throws here (an app-scoped pipeline crash).
+            string resultsDirectory = MirroredTestResultsDirectory(artifactDirectory);
+            Directory.CreateDirectory(resultsDirectory);
+            foreach (string stale in Directory.EnumerateFiles(resultsDirectory, "*.trx"))
             {
-                File.Delete(trxPath);
+                File.Delete(stale);
             }
 
             return ProcessRunner.Run(
@@ -1070,10 +1068,12 @@ public sealed class SdkCompileRunner
                     // Issue #4633: per-case names and outcomes for the
                     // per-test-name parity check, with display names forced to
                     // the same fully qualified form the C# oracle was listed in.
+                    // LogFilePrefix (not LogFileName) gives each target
+                    // framework its own file instead of overwriting one.
                     "--logger",
-                    "trx;LogFileName=" + Path.GetFileName(trxPath),
+                    "trx;LogFilePrefix=parity",
                     "--results-directory",
-                    Path.GetDirectoryName(trxPath),
+                    resultsDirectory,
                     "--",
                     CSharpTestOracle.RunSettingsArgument,
                 },
