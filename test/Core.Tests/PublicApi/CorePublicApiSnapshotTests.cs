@@ -77,6 +77,9 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("  method public static Int32 Add(Int32 left, Int32 right)", baseline, StringComparison.Ordinal);
         Assert.Contains("  field public const Int32 Answer = 42", baseline, StringComparison.Ordinal);
         Assert.Contains("  property public String Name { get; protected set; }", baseline, StringComparison.Ordinal);
+        Assert.Contains("  property public Int32 Fixed { get; init; }", baseline, StringComparison.Ordinal);
+        Assert.Contains("  property protected internal Int32 Shared { get; set; }", baseline, StringComparison.Ordinal);
+        Assert.Contains("  field public const String Quoted = \"a\\\"b\\\\c\\nd\"", baseline, StringComparison.Ordinal);
         Assert.Contains("  method protected virtual Void OnChanged()", baseline, StringComparison.Ordinal);
         Assert.DoesNotContain("Hidden", baseline, StringComparison.Ordinal);
     }
@@ -270,8 +273,14 @@ public sealed class CorePublicApiSnapshotTests
             foreach (ParameterHandle parameterHandle in method.GetParameters())
             {
                 Parameter parameter = reader.GetParameter(parameterHandle);
+                if (parameter.SequenceNumber == 0)
+                {
+                    // The return-value row carries no name to pin.
+                    continue;
+                }
+
                 names[parameter.SequenceNumber] = (
-                    reader.GetString(parameter.Name),
+                    parameter.Name.IsNil ? "arg" + parameter.SequenceNumber : reader.GetString(parameter.Name),
                     (parameter.Attributes & ParameterAttributes.Optional) != 0,
                     (parameter.Attributes & ParameterAttributes.Out) != 0);
             }
@@ -311,7 +320,9 @@ public sealed class CorePublicApiSnapshotTests
                 continue;
             }
 
-            string widest = getter == "public" || setter == "public" ? "public" : "protected";
+            string widest = getter == "public" || setter == "public" ? "public"
+                : getter == "protected internal" || setter == "protected internal" ? "protected internal"
+                : "protected";
             MethodSignature<string> signature = property.DecodeSignature(provider, null);
             var line = new StringBuilder("  property ").Append(widest).Append(' ')
                 .Append(signature.ReturnType).Append(' ').Append(reader.GetString(property.Name));
@@ -328,7 +339,13 @@ public sealed class CorePublicApiSnapshotTests
 
             if (setter is not null)
             {
-                line.Append(setter == widest ? " set;" : " " + setter + " set;");
+                // An init-only setter carries modreq(IsExternalInit) on its
+                // return type; `set` and `init` are different contracts.
+                string keyword = reader.GetMethodDefinition(accessors.Setter).DecodeSignature(provider, null).ReturnType
+                    .Contains("modreq(System.Runtime.CompilerServices.IsExternalInit)", StringComparison.Ordinal)
+                    ? "init;"
+                    : "set;";
+                line.Append(setter == widest ? " " + keyword : " " + setter + " " + keyword);
             }
 
             members.Add(line.Append(" }").ToString());
@@ -355,11 +372,13 @@ public sealed class CorePublicApiSnapshotTests
             ? null
             : Access(reader.GetMethodDefinition(accessor).Attributes & MethodAttributes.MemberAccessMask);
 
+    // FamORAssem (`protected internal`) is kept distinct from Family: narrowing
+    // one to the other changes what derived types in other assemblies can reach.
     private static string Access(FieldAttributes access) => access switch
     {
         FieldAttributes.Public => "public",
         FieldAttributes.Family => "protected",
-        FieldAttributes.FamORAssem => "protected",
+        FieldAttributes.FamORAssem => "protected internal",
         _ => null,
     };
 
@@ -367,7 +386,7 @@ public sealed class CorePublicApiSnapshotTests
     {
         MethodAttributes.Public => "public",
         MethodAttributes.Family => "protected",
-        MethodAttributes.FamORAssem => "protected",
+        MethodAttributes.FamORAssem => "protected internal",
         _ => null,
     };
 
@@ -409,10 +428,54 @@ public sealed class CorePublicApiSnapshotTests
             ConstantTypeCode.UInt64 => blob.ReadUInt64().ToString(System.Globalization.CultureInfo.InvariantCulture),
             ConstantTypeCode.Single => blob.ReadSingle().ToString("R", System.Globalization.CultureInfo.InvariantCulture),
             ConstantTypeCode.Double => blob.ReadDouble().ToString("R", System.Globalization.CultureInfo.InvariantCulture),
-            ConstantTypeCode.String => "\"" + blob.ReadUTF16(blob.Length) + "\"",
+            ConstantTypeCode.String => Quote(blob.ReadUTF16(blob.Length)),
             ConstantTypeCode.NullReference => "null",
             _ => constant.TypeCode.ToString(),
         };
+    }
+
+    /// <summary>
+    /// Quotes a string constant on ONE line: backslash, quote and every control
+    /// character are escaped, so a constant can never split or blur the
+    /// snapshot's line format.
+    /// </summary>
+    private static string Quote(string value)
+    {
+        var quoted = new StringBuilder("\"");
+        foreach (char character in value)
+        {
+            switch (character)
+            {
+                case '\\':
+                    quoted.Append("\\\\");
+                    break;
+                case '"':
+                    quoted.Append("\\\"");
+                    break;
+                case '\n':
+                    quoted.Append("\\n");
+                    break;
+                case '\r':
+                    quoted.Append("\\r");
+                    break;
+                case '\t':
+                    quoted.Append("\\t");
+                    break;
+                default:
+                    if (char.IsControl(character))
+                    {
+                        quoted.Append("\\u").Append(((int)character).ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        quoted.Append(character);
+                    }
+
+                    break;
+            }
+        }
+
+        return quoted.Append('"').ToString();
     }
 
     private static string LocateRepoRoot()
@@ -516,10 +579,19 @@ public class SnapshotFixture
     /// <summary>A public constant.</summary>
     public const int Answer = 42;
 
+    /// <summary>A constant that needs escaping to stay on one line.</summary>
+    public const string Quoted = "a\"b\\c\nd";
+
     private int hidden;
 
     /// <summary>Gets or sets a name with a protected setter.</summary>
     public string Name { get; protected set; }
+
+    /// <summary>Gets an init-only value.</summary>
+    public int Fixed { get; init; }
+
+    /// <summary>Gets or sets a protected internal value.</summary>
+    protected internal int Shared { get; set; }
 
     /// <summary>Adds two numbers.</summary>
     /// <param name="left">The left operand.</param>
