@@ -327,6 +327,7 @@ internal sealed class ClosureEmitter
                     ImmutableArray<VariableSymbol>.Empty,
                     literal.Function.Parameters,
                     literal.Function.Type,
+                    literal.Function.ReturnRefKind,
                     literal.Body,
                     hostPackage,
                     invokeName: "Invoke",
@@ -365,6 +366,7 @@ internal sealed class ClosureEmitter
                     literal.CapturedVariables,
                     literal.Function.Parameters,
                     literal.Function.Type,
+                    literal.Function.ReturnRefKind,
                     literal.Body,
                     hostPackage,
                     invokeName: "Invoke",
@@ -397,6 +399,7 @@ internal sealed class ClosureEmitter
                 literal.CapturedVariables,
                 literal.Function.Parameters,
                 literal.Function.Type,
+                literal.Function.ReturnRefKind,
                 literal.Body,
                 hostPackage,
                 invokeName: "Invoke",
@@ -490,6 +493,7 @@ internal sealed class ClosureEmitter
                 captured,
                 ImmutableArray<ParameterSymbol>.Empty,
                 returnType,
+                RefKind.None,
                 body,
                 hostPackage,
                 invokeName: "InvokeAction",
@@ -516,6 +520,7 @@ internal sealed class ClosureEmitter
         ImmutableArray<VariableSymbol> capturedVariables,
         ImmutableArray<ParameterSymbol> parameters,
         TypeSymbol returnType,
+        RefKind returnRefKind,
         BoundBlockStatement body,
         PackageSymbol hostPackage,
         string invokeName,
@@ -549,7 +554,17 @@ internal sealed class ClosureEmitter
             declaration: null,
             package: hostPackage,
             accessibility: Accessibility.Public,
-            receiverType: (TypeSymbol)closureClass);
+            receiverType: (TypeSymbol)closureClass)
+        {
+            // Issue #4580: the synthesized Invoke method IS the literal's
+            // emitted body, so it must carry the literal's by-ref return.
+            // Call sites already dereference by `call.Function.ReturnRefKind`
+            // (the literal's own symbol); a by-value Invoke signature under a
+            // body that ends in `ldelema`/`ldflda; ret` made every caller
+            // store a managed pointer through an `int32` slot, which crashed
+            // the process with an AccessViolationException at run time.
+            ReturnRefKind = returnRefKind,
+        };
 
         closureClass.SetMethods(ImmutableArray.Create(invokeMethod));
 

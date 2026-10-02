@@ -979,7 +979,19 @@ internal sealed partial class StatementBinder
                 // (IsRootedAtReceiver requires a `this` root, and a struct
                 // `this` is never a read-only reference), but the existing
                 // ordering is what the current tests pin.
-                if (IsRootedAtReceiver(expression))
+                if (IsRootedAtCapturedReceiver(expression, function))
+                {
+                    // Issue #4580: a function literal's `this` is the enclosing
+                    // struct member's receiver CAPTURED BY VALUE into the
+                    // closure, so a reference into it aliases the closure's
+                    // private copy, never the caller's storage — even when the
+                    // enclosing member is `@UnscopedRef` (HasFunctionLocalRefScope
+                    // makes that call). Marking anything `@UnscopedRef` cannot
+                    // make that copy the caller's storage, so GS0589's remedy
+                    // would mislead; report the generic escaping-storage error.
+                    Diagnostics.ReportRefReturnEscapesLocalScope(location);
+                }
+                else if (IsRootedAtReceiver(expression))
                 {
                     Diagnostics.ReportUnscopedRefRequiredForInstanceState(location);
                 }
@@ -1053,16 +1065,36 @@ internal sealed partial class StatementBinder
     /// <param name="expr">The bound <c>return ref</c> operand.</param>
     /// <returns><see langword="true"/> when the reference is rooted at the receiver.</returns>
     private static bool IsRootedAtReceiver(BoundExpression expr)
+        => IsRootedAtReceiverWhere(expr, capturedOnly: false, ownReceiver: null);
+
+    /// <summary>
+    /// Issue #4580: true when <paramref name="expr"/> is rooted (per
+    /// <see cref="IsRootedAtReceiver"/>'s walk) at a VALUE-TYPE receiver that
+    /// is not <paramref name="function"/>'s own — i.e. a function literal's
+    /// reference into the enclosing struct member's <c>this</c>, which the
+    /// closure holds as a by-value copy. Such a reference can never alias the
+    /// caller's storage, whatever the enclosing member's <c>@UnscopedRef</c>
+    /// opt-out says about its own receiver.
+    /// </summary>
+    /// <param name="expr">The bound <c>return ref</c> operand.</param>
+    /// <param name="function">The function whose <c>return ref</c> is being bound.</param>
+    /// <returns><see langword="true"/> when the reference is rooted at a captured receiver.</returns>
+    private static bool IsRootedAtCapturedReceiver(BoundExpression expr, FunctionSymbol? function)
+        => IsRootedAtReceiverWhere(expr, capturedOnly: true, ownReceiver: function?.ThisParameter);
+
+    private static bool IsRootedAtReceiverWhere(BoundExpression expr, bool capturedOnly, ParameterSymbol? ownReceiver)
         => expr switch
         {
-            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } } => true,
+            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } receiver } =>
+                !capturedOnly || !ReferenceEquals(receiver, ownReceiver),
             BoundFieldAccessExpression { Receiver: { } fieldReceiver } =>
-                !Binder.IsReferenceTypeForConstraint(fieldReceiver.Type) && IsRootedAtReceiver(fieldReceiver),
+                !Binder.IsReferenceTypeForConstraint(fieldReceiver.Type) && IsRootedAtReceiverWhere(fieldReceiver, capturedOnly, ownReceiver),
             BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo, Receiver: { } clrReceiver } =>
-                !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) && IsRootedAtReceiver(clrReceiver),
-            BoundBlockExpression block => IsRootedAtReceiver(block.Expression),
+                !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) && IsRootedAtReceiverWhere(clrReceiver, capturedOnly, ownReceiver),
+            BoundBlockExpression block => IsRootedAtReceiverWhere(block.Expression, capturedOnly, ownReceiver),
             BoundConditionalAddressExpression conditional =>
-                IsRootedAtReceiver(conditional.WhenTrueOperand) || IsRootedAtReceiver(conditional.WhenFalseOperand),
+                IsRootedAtReceiverWhere(conditional.WhenTrueOperand, capturedOnly, ownReceiver)
+                    || IsRootedAtReceiverWhere(conditional.WhenFalseOperand, capturedOnly, ownReceiver),
             _ => false,
         };
 
@@ -1147,7 +1179,7 @@ internal sealed partial class StatementBinder
     /// expression rooted in those is rejected. Returning a parameter (non-<c>scoped</c>) or
     /// a field/element of one is permitted (the caller's slot outlives the callee).
     /// </summary>
-    private static bool HasFunctionLocalRefScope(BoundExpression expr)
+    private bool HasFunctionLocalRefScope(BoundExpression expr)
     {
         switch (expr)
         {
@@ -1165,8 +1197,19 @@ internal sealed partial class StatementBinder
                     // is NOT a function-local by-value slot — the CLR passes a
                     // struct's `this` as `ref S`, so its ref-safe-context is the
                     // caller's once the member opts out of the implicit `scoped`.
+                    //
+                    // Issue #4580: that holds only for the CURRENT function's own
+                    // receiver. Inside a function literal, the enclosing struct
+                    // member's `this` is CAPTURED BY VALUE into the closure, so
+                    // its storage is the closure's private copy, never the
+                    // caller's, whatever the member's opt-out says. Deciding it
+                    // here (rather than at each return shape) makes every walk
+                    // that reaches the receiver agree: a direct `this.n`, a
+                    // forwarding call `this.Slot()` / `Forward(ref this.n)`, and
+                    // a ref local initialised from one.
                     return p.GetEffectiveRefScope() == ParameterRefScope.FunctionLocal
-                        || (p.RefKind == RefKind.None && !p.IsUnscopedRefReceiver);
+                        || (p.RefKind == RefKind.None
+                            && !(p.IsUnscopedRefReceiver && ReferenceEquals(p, function?.ThisParameter)));
                 }
 
                 if (v.Variable is GlobalVariableSymbol)
@@ -1370,7 +1413,7 @@ internal sealed partial class StatementBinder
     /// encapsulated reference was constructed (e.g. <c>stackalloc</c> vs.
     /// wrapping a heap array) with C#'s full precision.
     /// </summary>
-    private static bool HasFunctionLocalReferentScope(BoundExpression expr)
+    private bool HasFunctionLocalReferentScope(BoundExpression expr)
     {
         // This is the by-ref-like value's encapsulated referent scope, not
         // the parameter reference's effective ref scope.
