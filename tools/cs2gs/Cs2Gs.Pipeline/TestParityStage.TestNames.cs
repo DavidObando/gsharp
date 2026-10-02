@@ -111,6 +111,7 @@ public sealed partial class TestParityStage
         TestNameParityResult result = TestNameParity.Compare(oracle.Tests, actual);
         TestNameParityVerdict verdict = (context.Options.TestNameParityBaseline ?? TestNameParityBaseline.Empty)
             .Evaluate(context.App.Id, result);
+        summary.MigratedCases = result.ActualCount;
         summary.Matched = result.Matched;
         summary.TheoryRows = result.TheoryRows;
         summary.Missing = result.Missing.Count;

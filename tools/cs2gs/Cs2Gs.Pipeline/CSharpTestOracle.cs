@@ -47,8 +47,6 @@ public sealed class CSharpTestOracle
     /// <summary>The suffix of one app's oracle file in the oracle directory.</summary>
     public const string FileSuffix = ".csharp-tests.json";
 
-    private const string ListIndent = "    ";
-
     /// <summary>Gets or sets the corpus app id this oracle describes.</summary>
     [JsonPropertyName("appId")]
     [JsonPropertyOrder(0)]
@@ -116,13 +114,15 @@ public sealed class CSharpTestOracle
                 continue;
             }
 
-            if (!line.StartsWith(ListIndent, StringComparison.Ordinal))
+            // Names are the indented lines (VSTest uses four spaces; any
+            // leading whitespace is accepted); an unindented line ends the block.
+            if (!char.IsWhiteSpace(line[0]))
             {
                 inBlock = false;
                 continue;
             }
 
-            string name = line.Substring(ListIndent.Length).TrimEnd();
+            string name = line.Trim();
             if (name.Length > 0)
             {
                 names.Add(name);
