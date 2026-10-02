@@ -320,7 +320,14 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                         Type = type;
                     }
 
+                    public MarkerAttribute(object value)
+                    {
+                        Value = value;
+                    }
+
                     public Type Type { get; }
+
+                    public object Value { get; }
                 }
 
                 public static class Owner
@@ -330,8 +337,19 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                         public int N;
                     }
 
+                    private enum Mode
+                    {
+                        Fast,
+                    }
+
                     [Marker(typeof(Box))]
                     private static int Tagged(this string value) => 1;
+
+                    [Marker(Mode.Fast)]
+                    private static int Moded(this string value) => 2;
+
+                    [Marker(new object[] { new[] { Mode.Fast } })]
+                    private static int Nested(this string value) => 3;
 
                     private static Box Make(this string value, Box seed) => seed;
 
@@ -342,7 +360,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     public static string Echo(this string value) => value;
 
                     public static int Run(string value) =>
-                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged();
+                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested();
                 }
             }
             """;
@@ -354,7 +372,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             .Single(type => type.Name == "Owner");
         IReadOnlyList<GMember> shared = Assert.Single(owner.Members.OfType<SharedBlock>()).Members;
 
-        foreach (string name in new[] { "Make", "Count", "Sum", "Tagged" })
+        foreach (string name in new[] { "Make", "Count", "Sum", "Tagged", "Moded", "Nested" })
         {
             Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == name);
             Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == name);

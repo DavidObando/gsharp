@@ -1085,6 +1085,14 @@ public sealed partial class CSharpToGSharpTranslator
 
     private static bool ConstantNamesPrivateNestedType(TypedConstant constant, INamedTypeSymbol owner)
     {
+        // Every constant carries its own type (an enum constant's is the enum, which the
+        // translated argument names), whatever its kind; then recurse into the two kinds
+        // that hold more types: `typeof(T)` (the value) and arrays (the elements).
+        if (constant.Type != null && NamesPrivateNestedType(constant.Type, owner))
+        {
+            return true;
+        }
+
         switch (constant.Kind)
         {
             case TypedConstantKind.Type:
