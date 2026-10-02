@@ -36,13 +36,16 @@ public static class AnalyzerProjectDetector
             return false;
         }
 
+        // Issue #4612: a declaration without a symbol is skipped here rather
+        // than projected to null and filtered by OfType afterwards. The
+        // migrated G# asserts a lambda result stored into a type-parameter
+        // slot, so a null result would throw there.
         return compilation.SyntaxTrees
             .Select(tree => compilation.GetSemanticModel(tree))
-            .SelectMany(model => model.SyntaxTree.GetRoot().DescendantNodes()
+            .Any(model => model.SyntaxTree.GetRoot().DescendantNodes()
                 .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
-                .Select(declaration => model.GetDeclaredSymbol(declaration)))
-            .OfType<INamedTypeSymbol>()
-            .Any(type => DerivesFrom(type, analyzerBase));
+                .Any(declaration => model.GetDeclaredSymbol(declaration) is INamedTypeSymbol type
+                    && DerivesFrom(type, analyzerBase)));
     }
 
     /// <summary>
