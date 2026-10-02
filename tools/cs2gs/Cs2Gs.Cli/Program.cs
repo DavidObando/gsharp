@@ -698,7 +698,7 @@ internal static class Program
                             Console.Error.WriteLine($"cs2gs: --sdk-pin expects 'project' or 'global-json', not '{pin}'.");
                             return null;
                         }
-                        options.SdkPinLocation = location;
+
                         options.SdkPinLocation = location;
                         break;
                     default:
