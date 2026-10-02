@@ -108,8 +108,8 @@ Order matters: publish first, then point the website at the published package.
       `sdk-projects.md`, `docs-authoring.md`, `website/README.md`, both sample
       `.gsproj` files, `samples/ConcurrencyPatterns/README.md` and
       `docs/sdk-usage.md`.
-   3. Refresh the default docs snapshot from the tag. See "Refreshing a docs
-      snapshot" below.
+   3. Refresh the default docs snapshot from this branch, after step 2.2.
+      See "Refreshing a docs snapshot" below.
    4. Regenerate the downloads: `python3 website/scripts/prepare-showcase.py`
       writes `trail-M.zip` and `concurrency-patterns-M.zip`. Then
       `git rm website/static/downloads/*-N.zip`.
@@ -133,10 +133,13 @@ Everything in the patch procedure, plus:
 
 1. **Before** the first release of the new line: set `version.json` `version`
    to the new base (for example `"0.5"`) on `main`. The height restarts, and
-   assembly versions change to `0.N+1.0.0`. Do it in its own PR so the first
-   build's printed version can be checked.
-2. After publishing: cut a new docs snapshot instead of refreshing the old
-   one: `cd website && npm run docusaurus docs:version 0.N+1`. Docusaurus
+   assembly versions change to `0.N+1.0.0`. For 0.5 this belongs in the
+   cut-over PR. After the final 0.4.x tag, `main` must not produce more
+   `0.4.*` versions, because they would collide with security-fix releases
+   from the C# branch. Check the first build's printed version.
+2. After publishing, and after `website/docs` names the new release (patch
+   step 2.2): cut a new docs snapshot instead of refreshing the old one:
+   `cd website && npm run docusaurus docs:version 0.N+1`. Docusaurus
    copies `website/docs` to `website/versioned_docs/version-0.N+1`, writes
    `website/versioned_sidebars/version-0.N+1-sidebars.json` and prepends the
    version to `website/versions.json`.
@@ -155,26 +158,35 @@ Everything in the patch procedure, plus:
 
 `npm run docusaurus docs:version X` refuses a version that `versions.json`
 already lists ("this version already exists"). It also copies into an existing
-directory without deleting files that are already there. To refresh the
-existing default snapshot `X` from a tag:
+directory without deleting files that are already there.
+
+Cut the snapshot from the post-publish branch, **after** step 2.2 has moved
+`website/docs` to the new release. Don't cut it from the tag. The tag's docs
+still name the previous release, because the website can only follow a
+release after it is on nuget.org. `content.test.mjs` and this check require
+the default snapshot's install and Trail pages to name `release.json`'s
+version.
+
+Under a merge freeze, the post-publish branch's `website/docs` is the tag's
+content plus those version pointers. Check that before cutting:
 
 ```sh
-git switch --detach vX.Y.Z           # docs as they were at the tag
+git diff vX.Y.Z -- website/docs      # only the step 2.2 version edits
 cd website && npm ci
 # Remove the old snapshot first; the copy does not delete stale files.
 rm -rf versioned_docs/version-X versioned_sidebars/version-X-sidebars.json
 # Drop "X" from versions.json, keeping the older entries.
 node -e 'const f="versions.json",v=require("./"+f).filter(x=>x!=="X");require("fs").writeFileSync(f,JSON.stringify(v,null,2)+"\n")'
-npm run docusaurus docs:version X    # prepends "X" again
+npm run docusaurus docs:version X    # copies website/docs, prepends "X" again
 ```
 
-Carry the regenerated `versioned_docs/version-X`,
-`versioned_sidebars/version-X-sidebars.json` and `versions.json` over to the
-post-publish branch, then:
+Then:
 
-- restore the snapshot's hand-written release-notes preamble ("X.Y.Z at a
+- Restore the snapshot's hand-written release-notes preamble ("X.Y.Z at a
   glance", ``follows the published `vX.Y.Z` Git tag``, and the link to Next
   release notes). A copy of `website/docs/release-notes.md` would instead tell
-  readers they are reading development documentation;
-- run `npm run test:content`. It checks the snapshot's install page, Trail
+  readers they are reading development documentation.
+- Update the "refreshed against/from `vX.Y.Z`" sentences in
+  `website/docs/contributing/docs-authoring.md` and `website/README.md`.
+- Run `npm run test:content`. It checks the snapshot's install page, Trail
   download link, descriptions, diagnostic catalogue and legacy anchors.
