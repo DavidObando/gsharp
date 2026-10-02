@@ -577,8 +577,7 @@ public sealed class CSharpTypeMapper
             && named.DelegateInvokeMethod != null
             && (named.ContainingNamespace?.ToDisplayString() != "System"
                 || (named.Name != "Func"
-                    && named.Name != "Action"
-                    && named.Name != "Predicate")))
+                    && named.Name != "Action")))
         {
             GTypeReference mapped = this.MapEventType(type, context, location);
             return type.NullableAnnotation == NullableAnnotation.Annotated
@@ -1764,8 +1763,12 @@ public sealed class CSharpTypeMapper
             // `Action[string]`) makes the translated program fail at runtime the
             // moment a value crosses between the two spellings. This is the same
             // reasoning `MapEventType` already applies to an event's own handler
-            // type, now extended to every type position. Imported/BCL delegates
-            // keep the arrow form.
+            // type, now extended to every type position.
+            //
+            // Issue #4679: imported delegates other than System.Func/Action
+            // also have distinct CLR identities. Predicate<T> is NOT Func<T,
+            // bool>. Preserve those names here so inferred types, casts,
+            // patterns and nested arguments agree with explicit type positions.
             //
             // Issue #3841: ALSO except an imported delegate whose identity is
             // load-bearing in this compilation — one that discriminates an
@@ -1776,7 +1779,10 @@ public sealed class CSharpTypeMapper
             // IsIdentityCriticalDelegate.
             if (named.TypeKind == TypeKind.Delegate && named.DelegateInvokeMethod != null)
             {
-                if (IsSourceDeclaredDelegate(named) || this.IsIdentityCriticalDelegate(named, context))
+                if (IsSourceDeclaredDelegate(named)
+                    || named.ContainingNamespace?.ToDisplayString() != "System"
+                    || (named.Name != "Func" && named.Name != "Action")
+                    || this.IsIdentityCriticalDelegate(named, context))
                 {
                     return named.IsGenericType
                         ? new NamedTypeReference(
