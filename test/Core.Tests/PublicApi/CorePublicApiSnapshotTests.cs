@@ -86,6 +86,9 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("  field public const Int32 Answer = 42", baseline, StringComparison.Ordinal);
         Assert.Contains("  method public static Int32 Take(Int32 count = 3)", baseline, StringComparison.Ordinal);
         Assert.Contains("  method public static Int32 Peek(in Int32 value)", baseline, StringComparison.Ordinal);
+        Assert.Contains(
+            "type protected internal sealed class GSharp.Core.Tests.PublicApi.SnapshotFixture+Nested : System.Object",
+            RenderPublicApi(typeof(SnapshotFixture).Assembly.Location));
         Assert.Contains("  property public String Name { get; protected set; }", baseline, StringComparison.Ordinal);
         Assert.Contains("  property public Int32 Fixed { get; init; }", baseline, StringComparison.Ordinal);
 
@@ -185,7 +188,15 @@ public sealed class CorePublicApiSnapshotTests
             kind = isAbstract && isSealed ? "static class" : isAbstract ? "abstract class" : isSealed ? "sealed class" : "class";
         }
 
-        var header = new StringBuilder("type ").Append(kind).Append(' ').Append(SignatureNames.FullName(reader, handle));
+        // A nested type's own accessibility is part of who can see it; a
+        // top-level visible type is always public.
+        TypeAttributes visibility = type.Attributes & TypeAttributes.VisibilityMask;
+        string nestedAccess = visibility == TypeAttributes.NestedPublic ? "public "
+            : visibility == TypeAttributes.NestedFamily ? "protected "
+            : visibility == TypeAttributes.NestedFamORAssem ? "protected internal "
+            : string.Empty;
+        var header = new StringBuilder("type ").Append(nestedAccess).Append(kind).Append(' ')
+            .Append(SignatureNames.FullName(reader, handle));
         header.Append(RenderGenericParameters(reader, type.GetGenericParameters(), provider));
         var supertypes = new List<string>();
         if (baseType is not null && kind is "class" or "abstract class" or "sealed class" or "static class")
@@ -722,4 +733,9 @@ public class SnapshotFixture
     public override string ToString() => "fixture";
 
     private void HiddenHelper() => this.hidden--;
+
+    /// <summary>A nested type visible only to derived types.</summary>
+    protected internal sealed class Nested
+    {
+    }
 }

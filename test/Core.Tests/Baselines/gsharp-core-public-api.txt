@@ -1167,6 +1167,250 @@ type interface GSharp.Core.CodeAnalysis.Diagnostics.ILogger
   method public abstract Void LogError(String message, System.Exception exception = null)
   method public abstract Void LogInfo(String message, System.Exception exception = null)
   method public abstract Void LogWarning(String message, System.Exception exception = null)
+type public sealed class GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock : System.Object
+  method public Boolean get_IsEnd()
+  method public Boolean get_IsStart()
+  method public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.BoundStatement> get_Statements()
+  method public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch> get_Incoming()
+  method public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch> get_Outgoing()
+  method public Void .ctor()
+  method public Void .ctor(Boolean isStart)
+  method public virtual override String ToString()
+  property public Boolean IsEnd { get; }
+  property public Boolean IsStart { get; }
+  property public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.BoundStatement> Statements { get; }
+  property public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch> Incoming { get; }
+  property public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch> Outgoing { get; }
+type public sealed class GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch : System.Object
+  method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Condition()
+  method public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock get_From()
+  method public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock get_To()
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock from, GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock to, GSharp.Core.CodeAnalysis.Binding.BoundExpression condition)
+  method public virtual override String ToString()
+  property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Condition { get; }
+  property public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock From { get; }
+  property public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock To { get; }
+type public sealed class GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBuilder : System.Object
+  method public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock> Build(GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement block)
+  method public Void .ctor()
+type public sealed class GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+GraphBuilder : System.Object
+  method public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph Build(System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock> blocks)
+  method public Void .ctor()
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Code : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Code>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public String get_Value()
+  method public Void .ctor(String Value)
+  method public Void Deconstruct(out String Value)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Value(String value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+Code other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Code left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Code right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Code left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Code right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+Code <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public String Value { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public String get_Language()
+  method public String get_Value()
+  method public Void .ctor(String Language, String Value)
+  method public Void Deconstruct(out String Language, out String Value)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Language(String value)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Value(String value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock left, GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock left, GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public String Language { get; init; }
+  property public String Value { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public String get_Cref()
+  method public Void .ctor(String Cref)
+  method public Void Deconstruct(out String Cref)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Cref(String value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc left, GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc left, GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public String Cref { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Link : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Link>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public String get_Href()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> get_Inner()
+  method public Void .ctor(String Href, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner)
+  method public Void Deconstruct(out String Href, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Href(String value)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Inner(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+Link other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Link left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Link right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Link left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Link right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+Link <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public String Href { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+List : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+List>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public String get_ListType()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> get_Items()
+  method public Void .ctor(String ListType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> Items)
+  method public Void Deconstruct(out String ListType, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> Items)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Items(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> value)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_ListType(String value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+List other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+List left, GSharp.Core.CodeAnalysis.Documentation.DocInline+List right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+List left, GSharp.Core.CodeAnalysis.Documentation.DocInline+List right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+List <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public String ListType { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> Items { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Para : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Para>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> get_Content()
+  method public Void .ctor(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content)
+  method public Void Deconstruct(out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Content(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+Para other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Para left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Para right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Para left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Para right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+Para <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public String get_Name()
+  method public Void .ctor(String Name)
+  method public Void Deconstruct(out String Name)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Name(String value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef left, GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef left, GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public String Name { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public String get_DocId()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> get_Inner()
+  method public Void .ctor(String DocId, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner)
+  method public Void Deconstruct(out String DocId, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_DocId(String value)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Inner(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef left, GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef left, GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public String DocId { get; init; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Text : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Text>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public String get_Value()
+  method public Void .ctor(String Value)
+  method public Void Deconstruct(out String Value)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Value(String value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+Text other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Text left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Text right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Text left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Text right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+Text <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public String Value { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement>
+  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
+  method protected virtual override System.Type get_EqualityContract()
+  method public String get_RawXml()
+  method public Void .ctor(String RawXml)
+  method public Void Deconstruct(out String RawXml)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_RawXml(String value)
+  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement other)
+  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
+  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement left, GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement right)
+  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement left, GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement right)
+  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement <Clone>$()
+  method public virtual override Boolean Equals(Object obj)
+  method public virtual override Int32 GetHashCode()
+  method public virtual override String ToString()
+  property protected System.Type EqualityContract { get; }
+  property public String RawXml { get; init; }
+type public sealed class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncCaptureWalker+HoistResult : System.Object
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> get_Locals()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> get_SpillLocals()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> get_Parameters()
+  method public Void .ctor(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> locals, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> spillLocals)
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> Locals { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> SpillLocals { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> Parameters { get; }
+type public sealed class GSharp.Core.CodeAnalysis.Lowering.Async.MoveNextBodyRewriter+MoveNextBody : System.Object
+  method public GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement get_Body()
+  method public GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol get_ThisParameter()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> get_Locals()
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement body, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> locals, GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol thisParameter)
+  property public GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement Body { get; }
+  property public GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol ThisParameter { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> Locals { get; }
+type public sealed class GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorRewriter+AwaitStateCollector : GSharp.Core.CodeAnalysis.Binding.BoundTreeWalker
+  method protected virtual override Void VisitAwaitExpression(GSharp.Core.CodeAnalysis.Binding.BoundAwaitExpression node)
+  method public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Binding.BoundAwaitExpression, Int32> get_States()
+  method public Void .ctor()
+  property public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Binding.BoundAwaitExpression, Int32> States { get; }
+type public sealed class GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorRewriter+YieldStateCollector : GSharp.Core.CodeAnalysis.Binding.BoundTreeWalker
+  method protected virtual override Void VisitYieldStatement(GSharp.Core.CodeAnalysis.Binding.BoundYieldStatement node)
+  method public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Binding.BoundYieldStatement, Int32> get_States()
+  method public Void .ctor()
+  property public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Binding.BoundYieldStatement, Int32> States { get; }
+type public sealed class GSharp.Core.CodeAnalysis.StructValue+FieldCollection : System.Object, System.Collections.Generic.IEnumerable`1<System.Collections.Generic.KeyValuePair`2<String, Object>>, System.Collections.IEnumerable
+  method public Boolean ContainsKey(String key)
+  method public Boolean TryGetValue(String key, out Object value)
+  method public Object get_Item(String key)
+  method public Void set_Item(String key, Object value)
+  method public sealed System.Collections.Generic.IEnumerator`1<System.Collections.Generic.KeyValuePair`2<String, Object>> GetEnumerator()
+  property public Object Item[String] { get; set; }
 type sealed class GSharp.Core.CodeAnalysis.Analyzers.AnalyzerOptions : System.Object
   method public System.Nullable`1<Int32> get_TimeBudgetMilliseconds()
   method public Void .ctor()
@@ -2895,35 +3139,6 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph : System.Obj
   property public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock Start { get; }
   property public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock> Blocks { get; }
   property public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch> Branches { get; }
-type sealed class GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock : System.Object
-  method public Boolean get_IsEnd()
-  method public Boolean get_IsStart()
-  method public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.BoundStatement> get_Statements()
-  method public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch> get_Incoming()
-  method public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch> get_Outgoing()
-  method public Void .ctor()
-  method public Void .ctor(Boolean isStart)
-  method public virtual override String ToString()
-  property public Boolean IsEnd { get; }
-  property public Boolean IsStart { get; }
-  property public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.BoundStatement> Statements { get; }
-  property public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch> Incoming { get; }
-  property public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch> Outgoing { get; }
-type sealed class GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBranch : System.Object
-  method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Condition()
-  method public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock get_From()
-  method public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock get_To()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock from, GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock to, GSharp.Core.CodeAnalysis.Binding.BoundExpression condition)
-  method public virtual override String ToString()
-  property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Condition { get; }
-  property public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock From { get; }
-  property public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock To { get; }
-type sealed class GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlockBuilder : System.Object
-  method public System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock> Build(GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement block)
-  method public Void .ctor()
-type sealed class GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+GraphBuilder : System.Object
-  method public GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph Build(System.Collections.Generic.List`1<GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph+BasicBlock> blocks)
-  method public Void .ctor()
 type sealed class GSharp.Core.CodeAnalysis.Binding.Conversion : System.Object
   field public static readonly GSharp.Core.CodeAnalysis.Binding.Conversion Explicit
   field public static readonly GSharp.Core.CodeAnalysis.Binding.Conversion Identity
@@ -3597,188 +3812,6 @@ type sealed class GSharp.Core.CodeAnalysis.Documentation.DocException : System.O
   method public virtual override String ToString()
   property public String Cref { get; init; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Code : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Code>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public String get_Value()
-  method public Void .ctor(String Value)
-  method public Void Deconstruct(out String Value)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Value(String value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+Code other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Code left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Code right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Code left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Code right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+Code <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public String Value { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public String get_Language()
-  method public String get_Value()
-  method public Void .ctor(String Language, String Value)
-  method public Void Deconstruct(out String Language, out String Value)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Language(String value)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Value(String value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock left, GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock left, GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+CodeBlock <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public String Language { get; init; }
-  property public String Value { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public String get_Cref()
-  method public Void .ctor(String Cref)
-  method public Void Deconstruct(out String Cref)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Cref(String value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc left, GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc left, GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+InheritDoc <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public String Cref { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Link : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Link>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public String get_Href()
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> get_Inner()
-  method public Void .ctor(String Href, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner)
-  method public Void Deconstruct(out String Href, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Href(String value)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Inner(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+Link other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Link left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Link right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Link left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Link right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+Link <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public String Href { get; init; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+List : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+List>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public String get_ListType()
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> get_Items()
-  method public Void .ctor(String ListType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> Items)
-  method public Void Deconstruct(out String ListType, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> Items)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Items(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> value)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_ListType(String value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+List other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+List left, GSharp.Core.CodeAnalysis.Documentation.DocInline+List right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+List left, GSharp.Core.CodeAnalysis.Documentation.DocInline+List right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+List <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public String ListType { get; init; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem> Items { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Para : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Para>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> get_Content()
-  method public Void .ctor(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content)
-  method public Void Deconstruct(out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Content(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+Para other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Para left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Para right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Para left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Para right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+Para <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Content { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public String get_Name()
-  method public Void .ctor(String Name)
-  method public Void Deconstruct(out String Name)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Name(String value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef left, GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef left, GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+ParamRef <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public String Name { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public String get_DocId()
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> get_Inner()
-  method public Void .ctor(String DocId, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner)
-  method public Void Deconstruct(out String DocId, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_DocId(String value)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Inner(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef left, GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef left, GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+SymbolRef <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public String DocId { get; init; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> Inner { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+Text : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+Text>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public String get_Value()
-  method public Void .ctor(String Value)
-  method public Void Deconstruct(out String Value)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Value(String value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+Text other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Text left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Text right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+Text left, GSharp.Core.CodeAnalysis.Documentation.DocInline+Text right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+Text <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public String Value { get; init; }
-type sealed class GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement : GSharp.Core.CodeAnalysis.Documentation.DocInline, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement>
-  method protected virtual override Boolean PrintMembers(System.Text.StringBuilder builder)
-  method protected virtual override System.Type get_EqualityContract()
-  method public String get_RawXml()
-  method public Void .ctor(String RawXml)
-  method public Void Deconstruct(out String RawXml)
-  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_RawXml(String value)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement other)
-  method public sealed override Boolean Equals(GSharp.Core.CodeAnalysis.Documentation.DocInline other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement left, GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement left, GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement right)
-  method public virtual GSharp.Core.CodeAnalysis.Documentation.DocInline+UnknownXmlElement <Clone>$()
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property protected System.Type EqualityContract { get; }
-  property public String RawXml { get; init; }
 type sealed class GSharp.Core.CodeAnalysis.Documentation.DocListItem : System.Object, System.IEquatable`1<GSharp.Core.CodeAnalysis.Documentation.DocListItem>
   method public GSharp.Core.CodeAnalysis.Documentation.DocListItem <Clone>$()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Documentation.DocInline> get_Description()
@@ -3904,14 +3937,6 @@ type sealed class GSharp.Core.CodeAnalysis.Execution.SubmissionRunResult : Syste
   property public Object ReturnValue { get; }
   property public System.Exception UnhandledException { get; }
   property public System.Reflection.Assembly Assembly { get; }
-type sealed class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncCaptureWalker+HoistResult : System.Object
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> get_Locals()
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> get_SpillLocals()
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> get_Parameters()
-  method public Void .ctor(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> locals, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> spillLocals)
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> Locals { get; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> SpillLocals { get; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> Parameters { get; }
 type sealed class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderInfo : System.Object
   method public Boolean get_IsValid()
   method public GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind get_Kind()
@@ -4068,14 +4093,6 @@ type sealed class GSharp.Core.CodeAnalysis.Lowering.Async.MoveNextBodyPlan : Sys
   property public GSharp.Core.CodeAnalysis.Binding.BoundLabel ExitLabel { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundLabel ExpressionReturnLabel { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Lowering.Async.AwaitResumePoint> AwaitResumePoints { get; }
-type sealed class GSharp.Core.CodeAnalysis.Lowering.Async.MoveNextBodyRewriter+MoveNextBody : System.Object
-  method public GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement get_Body()
-  method public GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol get_ThisParameter()
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> get_Locals()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement body, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> locals, GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol thisParameter)
-  property public GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement Body { get; }
-  property public GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol ThisParameter { get; }
-  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.LocalVariableSymbol> Locals { get; }
 type sealed class GSharp.Core.CodeAnalysis.Lowering.Async.ResumableStateAllocator : System.Object
   method public Int32 AllocateAwaitState()
   method public Int32 AllocateYieldState()
@@ -4134,16 +4151,6 @@ type sealed class GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorRewri
   method public Void .ctor(GSharp.Core.CodeAnalysis.Binding.BoundProgram program, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorPlan> plans)
   property public GSharp.Core.CodeAnalysis.Binding.BoundProgram Program { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorPlan> Plans { get; }
-type sealed class GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorRewriter+AwaitStateCollector : GSharp.Core.CodeAnalysis.Binding.BoundTreeWalker
-  method protected virtual override Void VisitAwaitExpression(GSharp.Core.CodeAnalysis.Binding.BoundAwaitExpression node)
-  method public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Binding.BoundAwaitExpression, Int32> get_States()
-  method public Void .ctor()
-  property public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Binding.BoundAwaitExpression, Int32> States { get; }
-type sealed class GSharp.Core.CodeAnalysis.Lowering.Iterators.AsyncIteratorRewriter+YieldStateCollector : GSharp.Core.CodeAnalysis.Binding.BoundTreeWalker
-  method protected virtual override Void VisitYieldStatement(GSharp.Core.CodeAnalysis.Binding.BoundYieldStatement node)
-  method public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Binding.BoundYieldStatement, Int32> get_States()
-  method public Void .ctor()
-  property public System.Collections.Immutable.ImmutableDictionary`2<GSharp.Core.CodeAnalysis.Binding.BoundYieldStatement, Int32> States { get; }
 type sealed class GSharp.Core.CodeAnalysis.Lowering.Iterators.IteratorMoveNextBody : System.Object
   method public GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement get_Body()
   method public GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol get_ThisParameter()
@@ -4204,13 +4211,6 @@ type sealed class GSharp.Core.CodeAnalysis.StructValue : System.Object
   method public virtual override String ToString()
   property public GSharp.Core.CodeAnalysis.StructValue+FieldCollection Fields { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.StructSymbol StructType { get; }
-type sealed class GSharp.Core.CodeAnalysis.StructValue+FieldCollection : System.Object, System.Collections.Generic.IEnumerable`1<System.Collections.Generic.KeyValuePair`2<String, Object>>, System.Collections.IEnumerable
-  method public Boolean ContainsKey(String key)
-  method public Boolean TryGetValue(String key, out Object value)
-  method public Object get_Item(String key)
-  method public Void set_Item(String key, Object value)
-  method public sealed System.Collections.Generic.IEnumerator`1<System.Collections.Generic.KeyValuePair`2<String, Object>> GetEnumerator()
-  property public Object Item[String] { get; set; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.ArrayTypeSymbol : GSharp.Core.CodeAnalysis.Symbols.TypeSymbol
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ElementType()
   method public Int32 get_Length()
