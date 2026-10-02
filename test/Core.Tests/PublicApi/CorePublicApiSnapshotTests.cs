@@ -1,0 +1,538 @@
+// <copyright file="CorePublicApiSnapshotTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
+using System.Text;
+using GSharp.Tests;
+using Xunit;
+
+namespace GSharp.Core.Tests.PublicApi;
+
+/// <summary>
+/// Issue #4651: the public API of <c>GSharp.Core</c> is the ABI every G#
+/// analyzer binds to (analyzers reference Core by assembly identity, and
+/// <c>GS9303</c> only warns on an AssemblyVersion mismatch). It had no
+/// snapshot, so a change to it, including one introduced by rebuilding Core
+/// from its G# translation, was invisible until an analyzer failed to load.
+/// <para>
+/// The snapshot is rendered from METADATA (System.Reflection.Metadata), not
+/// runtime reflection: it needs no dependency resolution, and it describes the
+/// built assembly exactly, so the same test reads a C#-built and a G#-built
+/// <c>GSharp.Core.dll</c> the same way. It records every public or protected
+/// type and member with the shape that binds callers: kind, base type,
+/// interfaces, generic parameters and constraints, member signatures with
+/// parameter names, and constant values (enum members included, since
+/// <c>SyntaxKind</c> values are compiled into analyzers). It deliberately omits
+/// what differs between compilers without changing the contract: attributes,
+/// <c>beforefieldinit</c>, layout flags and assembly scopes of referenced types.
+/// </para>
+/// </summary>
+public sealed class CorePublicApiSnapshotTests
+{
+    private const string SnapshotFileName = "gsharp-core-public-api.txt";
+
+    /// <summary>
+    /// The public surface of the built <c>GSharp.Core.dll</c> matches the
+    /// committed snapshot. An intentional API change regenerates it with
+    /// <c>GSHARP_UPDATE_GOLDENS=1</c>.
+    /// </summary>
+    [Fact]
+    public void GSharpCore_PublicApi_MatchesSnapshot()
+    {
+        string assemblyPath = typeof(GSharp.Core.CodeAnalysis.Compilation.Compilation).Assembly.Location;
+        IReadOnlyList<string> lines = RenderPublicApi(assemblyPath);
+
+        // A snapshot of nothing would pass against an empty golden: require a
+        // surface the size of the real one before comparing.
+        Assert.True(lines.Count(line => line.StartsWith("type ", StringComparison.Ordinal)) > 300, "too few public types rendered");
+        Assert.Contains(lines, line => line.StartsWith("type class GSharp.Core.CodeAnalysis.Compilation.Compilation", StringComparison.Ordinal));
+
+        GoldenFile.AssertMatches(
+            Path.Combine(LocateRepoRoot(), "test", "Core.Tests", "Baselines", SnapshotFileName),
+            string.Join("\n", lines) + "\n",
+            "The public API of GSharp.Core changed. Analyzers bind to it by assembly identity; if the change "
+            + "is intended, regenerate with GSHARP_UPDATE_GOLDENS=1 and review the diff as an ABI change.");
+    }
+
+    /// <summary>
+    /// The renderer sees a change to a public signature and ignores a private
+    /// one, checked on a small assembly so the witness does not depend on Core.
+    /// </summary>
+    [Fact]
+    public void Renderer_TracksPublicShape_AndIgnoresPrivateMembers()
+    {
+        string baseline = string.Join("\n", RenderPublicApi(typeof(SnapshotFixture).Assembly.Location)
+            .SkipWhile(line => !line.StartsWith("type class GSharp.Core.Tests.PublicApi.SnapshotFixture", StringComparison.Ordinal))
+            .TakeWhile((line, index) => index == 0 || !line.StartsWith("type ", StringComparison.Ordinal)));
+
+        Assert.Contains("type class GSharp.Core.Tests.PublicApi.SnapshotFixture : System.Object", baseline, StringComparison.Ordinal);
+        Assert.Contains("  method public static Int32 Add(Int32 left, Int32 right)", baseline, StringComparison.Ordinal);
+        Assert.Contains("  field public const Int32 Answer = 42", baseline, StringComparison.Ordinal);
+        Assert.Contains("  property public String Name { get; protected set; }", baseline, StringComparison.Ordinal);
+        Assert.Contains("  method protected virtual Void OnChanged()", baseline, StringComparison.Ordinal);
+        Assert.DoesNotContain("Hidden", baseline, StringComparison.Ordinal);
+    }
+
+    internal static IReadOnlyList<string> RenderPublicApi(string assemblyPath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var pe = new PEReader(stream);
+        MetadataReader reader = pe.GetMetadataReader();
+        var provider = new SignatureNames(reader);
+        var types = new List<(string Header, List<string> Members)>();
+
+        foreach (TypeDefinitionHandle handle in reader.TypeDefinitions)
+        {
+            TypeDefinition type = reader.GetTypeDefinition(handle);
+            if (!IsVisible(reader, type))
+            {
+                continue;
+            }
+
+            var members = new List<string>();
+            RenderFields(reader, type, provider, members);
+            RenderMethods(reader, type, provider, members);
+            RenderProperties(reader, type, provider, members);
+            RenderEvents(reader, type, provider, members);
+            members.Sort(StringComparer.Ordinal);
+            types.Add((RenderTypeHeader(reader, handle, type, provider), members));
+        }
+
+        var lines = new List<string>();
+        foreach ((string header, List<string> members) in types.OrderBy(t => t.Header, StringComparer.Ordinal))
+        {
+            lines.Add(header);
+            lines.AddRange(members);
+        }
+
+        return lines;
+    }
+
+    private static bool IsVisible(MetadataReader reader, TypeDefinition type)
+    {
+        TypeAttributes visibility = type.Attributes & TypeAttributes.VisibilityMask;
+        if (visibility == TypeAttributes.Public)
+        {
+            return true;
+        }
+
+        bool nestedVisible = visibility == TypeAttributes.NestedPublic
+            || visibility == TypeAttributes.NestedFamily
+            || visibility == TypeAttributes.NestedFamORAssem;
+        return nestedVisible && IsVisible(reader, reader.GetTypeDefinition(type.GetDeclaringType()));
+    }
+
+    private static string RenderTypeHeader(
+        MetadataReader reader, TypeDefinitionHandle handle, TypeDefinition type, SignatureNames provider)
+    {
+        string baseType = type.BaseType.IsNil ? null : provider.Describe(type.BaseType);
+        string kind;
+        if ((type.Attributes & TypeAttributes.Interface) != 0)
+        {
+            kind = "interface";
+        }
+        else if (baseType == "System.Enum")
+        {
+            kind = "enum";
+        }
+        else if (baseType == "System.ValueType")
+        {
+            kind = "struct";
+        }
+        else if (baseType == "System.MulticastDelegate")
+        {
+            kind = "delegate";
+        }
+        else
+        {
+            bool isAbstract = (type.Attributes & TypeAttributes.Abstract) != 0;
+            bool isSealed = (type.Attributes & TypeAttributes.Sealed) != 0;
+            kind = isAbstract && isSealed ? "static class" : isAbstract ? "abstract class" : isSealed ? "sealed class" : "class";
+        }
+
+        var header = new StringBuilder("type ").Append(kind).Append(' ').Append(SignatureNames.FullName(reader, handle));
+        header.Append(RenderGenericParameters(reader, type.GetGenericParameters(), provider));
+        var supertypes = new List<string>();
+        if (baseType is not null && kind is "class" or "abstract class" or "sealed class" or "static class")
+        {
+            supertypes.Add(baseType);
+        }
+
+        supertypes.AddRange(type.GetInterfaceImplementations()
+            .Select(i => provider.Describe(reader.GetInterfaceImplementation(i).Interface))
+            .OrderBy(name => name, StringComparer.Ordinal));
+        if (supertypes.Count > 0)
+        {
+            header.Append(" : ").Append(string.Join(", ", supertypes));
+        }
+
+        return header.ToString();
+    }
+
+    private static string RenderGenericParameters(
+        MetadataReader reader, GenericParameterHandleCollection parameters, SignatureNames provider)
+    {
+        if (parameters.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var rendered = new List<string>();
+        foreach (GenericParameterHandle handle in parameters)
+        {
+            GenericParameter parameter = reader.GetGenericParameter(handle);
+            var constraints = new List<string>();
+            GenericParameterAttributes flags = parameter.Attributes;
+            if ((flags & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
+            {
+                constraints.Add("class");
+            }
+
+            if ((flags & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0)
+            {
+                constraints.Add("struct");
+            }
+
+            if ((flags & GenericParameterAttributes.DefaultConstructorConstraint) != 0)
+            {
+                constraints.Add("new()");
+            }
+
+            constraints.AddRange(parameter.GetConstraints()
+                .Select(c => provider.Describe(reader.GetGenericParameterConstraint(c).Type))
+                .OrderBy(name => name, StringComparer.Ordinal));
+            string variance = (flags & GenericParameterAttributes.Covariant) != 0 ? "out "
+                : (flags & GenericParameterAttributes.Contravariant) != 0 ? "in " : string.Empty;
+            string name = variance + reader.GetString(parameter.Name);
+            rendered.Add(constraints.Count == 0 ? name : name + " : " + string.Join(" & ", constraints));
+        }
+
+        return "<" + string.Join(", ", rendered) + ">";
+    }
+
+    private static void RenderFields(MetadataReader reader, TypeDefinition type, SignatureNames provider, List<string> members)
+    {
+        foreach (FieldDefinitionHandle handle in type.GetFields())
+        {
+            FieldDefinition field = reader.GetFieldDefinition(handle);
+            string access = Access(field.Attributes & FieldAttributes.FieldAccessMask);
+            if (access is null || (field.Attributes & FieldAttributes.SpecialName) != 0)
+            {
+                continue;
+            }
+
+            var line = new StringBuilder("  field ").Append(access);
+            if ((field.Attributes & FieldAttributes.Literal) != 0)
+            {
+                line.Append(" const");
+            }
+            else
+            {
+                line.Append((field.Attributes & FieldAttributes.Static) != 0 ? " static" : string.Empty)
+                    .Append((field.Attributes & FieldAttributes.InitOnly) != 0 ? " readonly" : string.Empty);
+            }
+
+            line.Append(' ').Append(field.DecodeSignature(provider, null)).Append(' ').Append(reader.GetString(field.Name));
+            ConstantHandle constant = field.GetDefaultValue();
+            if (!constant.IsNil)
+            {
+                line.Append(" = ").Append(ConstantValue(reader, constant));
+            }
+
+            members.Add(line.ToString());
+        }
+    }
+
+    private static void RenderMethods(MetadataReader reader, TypeDefinition type, SignatureNames provider, List<string> members)
+    {
+        foreach (MethodDefinitionHandle handle in type.GetMethods())
+        {
+            MethodDefinition method = reader.GetMethodDefinition(handle);
+            string access = Access(method.Attributes & MethodAttributes.MemberAccessMask);
+            if (access is null)
+            {
+                continue;
+            }
+
+            MethodSignature<string> signature = method.DecodeSignature(provider, null);
+            var line = new StringBuilder("  method ").Append(access).Append(MethodModifiers(method.Attributes))
+                .Append(' ').Append(signature.ReturnType).Append(' ').Append(reader.GetString(method.Name))
+                .Append(RenderGenericParameters(reader, method.GetGenericParameters(), provider));
+            var names = new Dictionary<int, (string Name, bool Optional, bool Out)>();
+            foreach (ParameterHandle parameterHandle in method.GetParameters())
+            {
+                Parameter parameter = reader.GetParameter(parameterHandle);
+                names[parameter.SequenceNumber] = (
+                    reader.GetString(parameter.Name),
+                    (parameter.Attributes & ParameterAttributes.Optional) != 0,
+                    (parameter.Attributes & ParameterAttributes.Out) != 0);
+            }
+
+            var parameters = new List<string>();
+            for (int index = 0; index < signature.ParameterTypes.Length; index++)
+            {
+                string rendered = signature.ParameterTypes[index];
+                if (names.TryGetValue(index + 1, out (string Name, bool Optional, bool Out) parameter))
+                {
+                    if (parameter.Out && rendered.StartsWith("ref ", StringComparison.Ordinal))
+                    {
+                        rendered = "out " + rendered.Substring("ref ".Length);
+                    }
+
+                    rendered += " " + parameter.Name + (parameter.Optional ? " = ?" : string.Empty);
+                }
+
+                parameters.Add(rendered);
+            }
+
+            line.Append('(').Append(string.Join(", ", parameters)).Append(')');
+            members.Add(line.ToString());
+        }
+    }
+
+    private static void RenderProperties(MetadataReader reader, TypeDefinition type, SignatureNames provider, List<string> members)
+    {
+        foreach (PropertyDefinitionHandle handle in type.GetProperties())
+        {
+            PropertyDefinition property = reader.GetPropertyDefinition(handle);
+            PropertyAccessors accessors = property.GetAccessors();
+            string getter = AccessorAccess(reader, accessors.Getter);
+            string setter = AccessorAccess(reader, accessors.Setter);
+            if (getter is null && setter is null)
+            {
+                continue;
+            }
+
+            string widest = getter == "public" || setter == "public" ? "public" : "protected";
+            MethodSignature<string> signature = property.DecodeSignature(provider, null);
+            var line = new StringBuilder("  property ").Append(widest).Append(' ')
+                .Append(signature.ReturnType).Append(' ').Append(reader.GetString(property.Name));
+            if (signature.ParameterTypes.Length > 0)
+            {
+                line.Append('[').Append(string.Join(", ", signature.ParameterTypes)).Append(']');
+            }
+
+            line.Append(" {");
+            if (getter is not null)
+            {
+                line.Append(getter == widest ? " get;" : " " + getter + " get;");
+            }
+
+            if (setter is not null)
+            {
+                line.Append(setter == widest ? " set;" : " " + setter + " set;");
+            }
+
+            members.Add(line.Append(" }").ToString());
+        }
+    }
+
+    private static void RenderEvents(MetadataReader reader, TypeDefinition type, SignatureNames provider, List<string> members)
+    {
+        foreach (EventDefinitionHandle handle in type.GetEvents())
+        {
+            EventDefinition definition = reader.GetEventDefinition(handle);
+            string adder = AccessorAccess(reader, definition.GetAccessors().Adder);
+            if (adder is null)
+            {
+                continue;
+            }
+
+            members.Add("  event " + adder + " " + provider.Describe(definition.Type) + " " + reader.GetString(definition.Name));
+        }
+    }
+
+    private static string AccessorAccess(MetadataReader reader, MethodDefinitionHandle accessor) =>
+        accessor.IsNil
+            ? null
+            : Access(reader.GetMethodDefinition(accessor).Attributes & MethodAttributes.MemberAccessMask);
+
+    private static string Access(FieldAttributes access) => access switch
+    {
+        FieldAttributes.Public => "public",
+        FieldAttributes.Family => "protected",
+        FieldAttributes.FamORAssem => "protected",
+        _ => null,
+    };
+
+    private static string Access(MethodAttributes access) => access switch
+    {
+        MethodAttributes.Public => "public",
+        MethodAttributes.Family => "protected",
+        MethodAttributes.FamORAssem => "protected",
+        _ => null,
+    };
+
+    private static string MethodModifiers(MethodAttributes attributes)
+    {
+        var modifiers = new StringBuilder();
+        if ((attributes & MethodAttributes.Static) != 0)
+        {
+            modifiers.Append(" static");
+        }
+
+        if ((attributes & MethodAttributes.Abstract) != 0)
+        {
+            modifiers.Append(" abstract");
+        }
+        else if ((attributes & MethodAttributes.Virtual) != 0)
+        {
+            modifiers.Append((attributes & MethodAttributes.Final) != 0 ? " sealed" : " virtual");
+        }
+
+        return modifiers.ToString();
+    }
+
+    private static string ConstantValue(MetadataReader reader, ConstantHandle handle)
+    {
+        Constant constant = reader.GetConstant(handle);
+        BlobReader blob = reader.GetBlobReader(constant.Value);
+        return constant.TypeCode switch
+        {
+            ConstantTypeCode.Boolean => blob.ReadBoolean() ? "true" : "false",
+            ConstantTypeCode.Char => ((int)blob.ReadChar()).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.SByte => blob.ReadSByte().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.Byte => blob.ReadByte().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.Int16 => blob.ReadInt16().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.UInt16 => blob.ReadUInt16().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.Int32 => blob.ReadInt32().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.UInt32 => blob.ReadUInt32().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.Int64 => blob.ReadInt64().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.UInt64 => blob.ReadUInt64().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.Single => blob.ReadSingle().ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.Double => blob.ReadDouble().ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+            ConstantTypeCode.String => "\"" + blob.ReadUTF16(blob.Length) + "\"",
+            ConstantTypeCode.NullReference => "null",
+            _ => constant.TypeCode.ToString(),
+        };
+    }
+
+    private static string LocateRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if (Directory.Exists(Path.Combine(dir.FullName, "test", "Core.Tests", "Baselines")))
+            {
+                return dir.FullName;
+            }
+
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("repository root not found from " + AppContext.BaseDirectory);
+    }
+
+    /// <summary>Renders metadata type signatures as namespace-qualified names.</summary>
+    private sealed class SignatureNames : ISignatureTypeProvider<string, object>
+    {
+        private readonly MetadataReader reader;
+
+        public SignatureNames(MetadataReader reader)
+        {
+            this.reader = reader;
+        }
+
+        public static string FullName(MetadataReader reader, TypeDefinitionHandle handle)
+        {
+            TypeDefinition definition = reader.GetTypeDefinition(handle);
+            string name = reader.GetString(definition.Name);
+            TypeDefinitionHandle declaring = definition.GetDeclaringType();
+            if (!declaring.IsNil)
+            {
+                return FullName(reader, declaring) + "+" + name;
+            }
+
+            string ns = reader.GetString(definition.Namespace);
+            return ns.Length == 0 ? name : ns + "." + name;
+        }
+
+        public string Describe(EntityHandle handle) => handle.Kind switch
+        {
+            HandleKind.TypeDefinition => FullName(this.reader, (TypeDefinitionHandle)handle),
+            HandleKind.TypeReference => this.GetTypeFromReference(this.reader, (TypeReferenceHandle)handle, 0),
+            HandleKind.TypeSpecification => this.GetTypeFromSpecification(this.reader, null, (TypeSpecificationHandle)handle, 0),
+            _ => handle.Kind.ToString(),
+        };
+
+        public string GetPrimitiveType(PrimitiveTypeCode typeCode) => typeCode.ToString();
+
+        public string GetGenericTypeParameter(object genericContext, int index) => "!" + index;
+
+        public string GetGenericMethodParameter(object genericContext, int index) => "!!" + index;
+
+        public string GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) =>
+            FullName(reader, handle);
+
+        public string GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind)
+        {
+            TypeReference reference = reader.GetTypeReference(handle);
+            string name = reader.GetString(reference.Name);
+            if (reference.ResolutionScope.Kind == HandleKind.TypeReference)
+            {
+                return this.GetTypeFromReference(reader, (TypeReferenceHandle)reference.ResolutionScope, rawTypeKind) + "+" + name;
+            }
+
+            string ns = reader.GetString(reference.Namespace);
+            return ns.Length == 0 ? name : ns + "." + name;
+        }
+
+        public string GetTypeFromSpecification(MetadataReader reader, object genericContext, TypeSpecificationHandle handle, byte rawTypeKind) =>
+            reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
+
+        public string GetGenericInstantiation(string genericType, ImmutableArray<string> typeArguments) =>
+            genericType + "<" + string.Join(", ", typeArguments) + ">";
+
+        public string GetArrayType(string elementType, ArrayShape shape) =>
+            elementType + "[" + new string(',', shape.Rank - 1) + "]";
+
+        public string GetByReferenceType(string elementType) => "ref " + elementType;
+
+        public string GetPointerType(string elementType) => elementType + "*";
+
+        public string GetSZArrayType(string elementType) => elementType + "[]";
+
+        public string GetFunctionPointerType(MethodSignature<string> signature) =>
+            "delegate*<" + string.Join(", ", signature.ParameterTypes.Append(signature.ReturnType)) + ">";
+
+        public string GetModifiedType(string modifier, string unmodifiedType, bool isRequired) =>
+            isRequired ? unmodifiedType + " modreq(" + modifier + ")" : unmodifiedType;
+
+        public string GetPinnedType(string elementType) => elementType;
+    }
+}
+
+/// <summary>A tiny public type whose rendering the renderer test pins.</summary>
+public class SnapshotFixture
+{
+    /// <summary>A public constant.</summary>
+    public const int Answer = 42;
+
+    private int hidden;
+
+    /// <summary>Gets or sets a name with a protected setter.</summary>
+    public string Name { get; protected set; }
+
+    /// <summary>Adds two numbers.</summary>
+    /// <param name="left">The left operand.</param>
+    /// <param name="right">The right operand.</param>
+    /// <returns>The sum.</returns>
+    public static int Add(int left, int right) => left + right;
+
+    /// <summary>A protected virtual hook.</summary>
+    protected virtual void OnChanged()
+    {
+        this.hidden++;
+        this.HiddenHelper();
+    }
+
+    private void HiddenHelper() => this.hidden--;
+}
