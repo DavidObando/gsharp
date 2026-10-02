@@ -1007,6 +1007,93 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void ForgivenWrappedIteratorValues_ReportTheirDestinationSlots()
+    {
+        string source = """
+            #nullable enable
+            using System.Collections.Generic;
+
+            public static class C
+            {
+                public static IEnumerable<string?> Scalar(object? x) { yield return x! as string; }
+                public static IEnumerable<(string?, bool)> Tuple(object? y) { yield return (y! as string, true); }
+                public static IEnumerable<object?> Cast(string? z) { yield return (object?)z!; }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("x!!", printed, StringComparison.Ordinal);
+        Assert.Contains("y!!", printed, StringComparison.Ordinal);
+        Assert.Contains("z!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "x!") + " kind=forgiven,iterator-element | target=C.Scalar(object?) | slot-type=string?",
+                Expected(source, "y!") + " kind=forgiven,iterator-element | target=C.Tuple(object?) | slot-type=string?",
+                Expected(source, "z!") + " kind=forgiven,iterator-element | target=C.Cast(string?) | slot-type=object?",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
+    }
+
+    [Fact]
+    public void CollectionInitializerDirectParamsCarrier_IsNotReportedAsAnElement()
+    {
+        string source = """
+            #nullable enable
+            using System.Collections;
+
+            public class Bag<T> : IEnumerable
+            {
+                public void Add(int key, params T[] values) { }
+                public IEnumerator GetEnumerator() => throw new System.NotImplementedException();
+            }
+
+            public static class C
+            {
+                public static Bag<string> Make() => new Bag<string> { { 1, MaybeArray() } };
+                private static string[]? MaybeArray() => null;
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("MaybeArray()!!", printed, StringComparison.Ordinal);
+        Assert.Empty(sites);
+    }
+
+    [Fact]
+    public void ParameterClassification_DependencyWalkIncludesPointersAndFunctionPointers()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", """
+            public static unsafe class C
+            {
+                public static T* Pointer<T>(T value) where T : unmanaged => null;
+                public static delegate*<T, void> Parameter<T>(T value) => null;
+                public static delegate*<int, T> Return<T>(T value) => null;
+                public static delegate*<int, int> Independent<T>(T value) => null;
+            }
+            """) });
+        CSharpCompilation compilation = project.Compilation.WithOptions(project.Compilation.Options.WithAllowUnsafe(true));
+        Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        SyntaxTree tree = Assert.Single(compilation.SyntaxTrees);
+        SemanticModel model = compilation.GetSemanticModel(tree);
+        var dependencies = new List<bool>();
+        foreach (MethodDeclarationSyntax methodSyntax in tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>())
+        {
+            var method = (IMethodSymbol)model.GetDeclaredSymbol(methodSyntax);
+            string kind = CSharpToGSharpTranslator.ClassifyParameterSlotForTests(
+                method.Parameters[0],
+                SyntaxFactory.IdentifierName("value"),
+                expandedParams: false,
+                out _,
+                out bool resultDependsOnSlot);
+            Assert.Equal("inferred-method-type-parameter", kind);
+            dependencies.Add(resultDependsOnSlot);
+        }
+
+        Assert.Equal(new[] { true, true, true, false }, dependencies);
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
