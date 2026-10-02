@@ -399,7 +399,17 @@ public class Issue950ProtectedModifierEmitTests
     private static string CompileToDll(string source)
     {
         var (exit, output, outPath) = RunCompiler(source);
-        Assert.True(exit == 0, $"compile failed ({exit}): {output}");
+        try
+        {
+            Assert.True(exit == 0, $"compile failed ({exit}): {output}");
+        }
+        catch
+        {
+            // The caller owns the temporary directory only once this returns.
+            TryDeleteDir(Path.GetDirectoryName(outPath));
+            throw;
+        }
+
         return outPath;
     }
 
