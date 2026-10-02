@@ -31,6 +31,8 @@ public class Issue4681ChannelsNullPassThroughTests
     // The element values the runtime moves, by every name it moves them under:
     // locals and fields (value, taken, sendValue, received, pending), a
     // ReceiveResult's Value, and the zero value of T / TResult.
+    private static readonly Regex BlockComment = new(@"/\*.*?\*/", RegexOptions.Compiled | RegexOptions.Singleline);
+
     private static readonly Regex ElementValueAssertion = new(
         @"(?:(?<![\w])(?:this\.)?(?:value|taken|sendValue|received|pending|item)|\.Value|(?<![\w])default\(T\w*\))!!",
         RegexOptions.Compiled);
@@ -62,6 +64,7 @@ public class Issue4681ChannelsNullPassThroughTests
             string name = Path.GetFileName(document.FilePath);
             sawChanCore |= name == "Chan{T}.cs";
 
+            printed = BlockComment.Replace(printed, string.Empty);
             foreach (string raw in printed.Split('\n'))
             {
                 string line = raw.Trim();

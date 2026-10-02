@@ -33,19 +33,23 @@ public readonly struct ReceiveResult<T>
     public static ReceiveResult<T> Closed => new(default, false);
 
     /// <summary>Gets the delivered value, or the element type's zero value when <see cref="Ok"/> is false.</summary>
-    /// <remarks>
-    /// Issue #4681: declared as a plain <c>T</c> over an <c>[AllowNull]</c>
-    /// field rather than <c>[MaybeNull] T</c>. Every consumer forwards the value
-    /// to a <c>T</c> slot (a <see cref="System.Threading.Tasks.ValueTask{TResult}"/>,
-    /// a tuple, a buffer element), and each used to need a <c>!</c>, which cs2gs
-    /// carries into the migrated runtime as a fail-fast <c>!!</c> that throws on
-    /// a <c>nil</c> element. The zero value of an unconstrained <c>T</c> is
-    /// legitimately <c>null</c>, exactly as in <c>List&lt;T&gt;</c>'s indexer.
-    /// </remarks>
+    [MaybeNull]
     public T Value => value;
 
     /// <summary>Gets a value indicating whether a value was delivered (false means closed and drained).</summary>
     public bool Ok { get; }
+
+    /// <summary>
+    /// Gets the element as a plain <typeparamref name="T"/> for the runtime's own forwarding into <c>T</c> slots
+    /// (a <see cref="System.Threading.Tasks.ValueTask{TResult}"/>, a tuple, a buffer element).
+    /// </summary>
+    /// <remarks>
+    /// Issue #4681: forwarding the public <see cref="Value"/> needed a <c>!</c>, which cs2gs carries into the
+    /// migrated runtime as a fail-fast <c>!!</c> that throws on a <c>nil</c> element. The zero value of an
+    /// unconstrained <c>T</c> is legitimately <c>null</c>, as in <c>List&lt;T&gt;</c>'s indexer, so this internal
+    /// view drops the <c>MaybeNull</c> promise while the public property keeps it.
+    /// </remarks>
+    internal T Element => value;
 
     /// <summary>Deconstructs into the Go-shaped <c>v, ok</c> pair.</summary>
     /// <param name="value">The delivered value.</param>
@@ -56,7 +60,7 @@ public readonly struct ReceiveResult<T>
         ok = Ok;
     }
 
-    /// <summary>Returns the zero value of <typeparamref name="T"/> as a plain <typeparamref name="T"/>, with no null-forgiving operator.</summary>
+    /// <summary>Returns the zero value of <typeparamref name="T"/> as a plain <typeparamref name="T"/>, with no null-forgiving operator (a bare <c>default</c> would warn for an unconstrained <typeparamref name="T"/>).</summary>
     /// <returns>The zero value, which is <c>null</c> for a reference type.</returns>
-    internal static T ZeroValue() => default(ReceiveResult<T>).Value;
+    internal static T ZeroValue() => default(ReceiveResult<T>).Element;
 }

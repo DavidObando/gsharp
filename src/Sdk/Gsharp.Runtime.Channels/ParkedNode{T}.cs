@@ -214,7 +214,7 @@ internal sealed class OpReceiveNode<T>
     // by design (ADR-0174 D3), so there is no null to guard.
 
     /// <inheritdoc/>
-    T IValueTaskSource<T>.GetResult(short token) => TakeResult(token).Value;
+    T IValueTaskSource<T>.GetResult(short token) => TakeResult(token).Element;
 
     /// <inheritdoc/>
     ValueTaskSourceStatus IValueTaskSource<T>.GetStatus(short token) => core.GetStatus(token);
@@ -229,7 +229,7 @@ internal sealed class OpReceiveNode<T>
     (T Value, bool Ok) IValueTaskSource<(T Value, bool Ok)>.GetResult(short token)
     {
         var taken = TakeResult(token);
-        return (taken.Value, taken.Ok);
+        return (taken.Element, taken.Ok);
     }
 
     /// <inheritdoc/>
