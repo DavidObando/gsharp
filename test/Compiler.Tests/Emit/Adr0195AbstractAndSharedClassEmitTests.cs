@@ -53,6 +53,12 @@ public class Adr0195AbstractAndSharedClassEmitTests
         open class Leaf : Forwarding {
         }
 
+        abstract class EmptyPrimary() {
+        }
+
+        abstract class ForwardingPrimary() : Seed(2) {
+        }
+
         abstract data class Shape(Sides int32) {
         }
 
@@ -99,6 +105,15 @@ public class Adr0195AbstractAndSharedClassEmitTests
             Assert.Equal(
                 MethodAttributes.Family,
                 GetMethodAttributes(dll, "Forwarding", ".ctor") & MethodAttributes.MemberAccessMask);
+
+            // A declared primary constructor, even an empty one, keeps its public constructor:
+            // the family constructor is for an implicit one only.
+            foreach (var name in new[] { "EmptyPrimary", "ForwardingPrimary" })
+            {
+                Assert.Equal(
+                    MethodAttributes.Public,
+                    GetMethodAttributes(dll, name, ".ctor") & MethodAttributes.MemberAccessMask);
+            }
 
             // A concrete subclass is neither.
             var counting = GetTypeAttributes(dll, "Counting");

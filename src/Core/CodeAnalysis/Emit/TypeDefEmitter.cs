@@ -1475,6 +1475,16 @@ internal sealed class TypeDefEmitter
     // Constructor emission
 
     /// <summary>
+    /// Whether the class head declares an EMPTY primary constructor (<c>class C()</c>).
+    /// <see cref="StructSymbol.HasPrimaryConstructor"/> follows the parameter array, so it
+    /// is false for <c>()</c>, and the parameterless constructor gsc emits for such a
+    /// class IS the declared primary constructor, which stays public. ADR-0195's family
+    /// constructor is for the implicit one.
+    /// </summary>
+    private static bool HasEmptyPrimaryConstructor(StructSymbol classSym) =>
+        !classSym.HasPrimaryConstructor && (classSym.Declaration?.HasPrimaryConstructor ?? false);
+
+    /// <summary>
     /// Emits a parameter-less <c>.ctor</c> for a user-defined <c>class</c>
     /// (Phase 3.B.3). The body chains to the base class's <c>.ctor()</c>
     /// (either an inherited user class or <c>System.Object</c>) and returns.
@@ -1515,7 +1525,7 @@ internal sealed class TypeDefEmitter
         // `family`, as in C#, since only derived classes may chain to it.
         var visibility = classSym.IsSharedClass
             ? MethodAttributes.Private
-            : classSym.IsDeclaredAbstract
+            : classSym.IsDeclaredAbstract && !HasEmptyPrimaryConstructor(classSym)
                 ? MethodAttributes.Family
                 : classSym.HasPrimaryConstructor && !classSym.IsData
                     ? MethodAttributes.Assembly
@@ -1741,7 +1751,9 @@ internal sealed class TypeDefEmitter
         // explicit base initializer (`abstract class D : Base(1) { }`) is `family`, like
         // the plain implicit constructor of a declared-abstract class (see
         // EmitClassDefaultConstructor); a primary constructor stays public.
-        var forwardingVisibility = classSym.IsDeclaredAbstract && !classSym.HasPrimaryConstructor
+        var forwardingVisibility = classSym.IsDeclaredAbstract
+            && !classSym.HasPrimaryConstructor
+            && !HasEmptyPrimaryConstructor(classSym)
             ? MethodAttributes.Family
             : MethodAttributes.Public;
         var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(

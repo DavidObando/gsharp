@@ -70,7 +70,9 @@ abstract data class DocInline { … }
 - The implicit default constructor of a declared-abstract class is `family`
   (C#'s default for an abstract class), not `public`; so is the implicit
   parameterless constructor that chains to a base initializer
-  (`abstract class D : Base(1) { }`). A primary constructor stays public.
+  (`abstract class D : Base(1) { }`). A declared primary constructor stays public,
+  including the empty one (`abstract class C()`), whose parameterless constructor
+  is the primary constructor.
 - With `partial`, one part stating `abstract` makes the whole type abstract, as
   in C#.
 
@@ -108,8 +110,10 @@ static members, ADR-0053).
   parameterless `.ctor` row, which it emits `private`, so it is not part of the
   type's API and the planned rows stay consistent.
 - A shared class holds no instance state, so it cannot declare an `init(…)`
-  constructor, a primary constructor, a `deinit` or a `shared { }` block of its
-  own (`GS0617`), and it cannot have a base class or interface (`GS0619`).
+  constructor, a primary constructor, a `deinit`, a `shared { }` block of its
+  own, or an `open` or `override` method, property or event (`GS0617`: a shared
+  member is static and never virtual, so the modifier would be silently dropped),
+  and it cannot have a base class or interface (`GS0619`).
   It cannot be combined with `open`, `sealed`, `abstract` or `data` (`GS0618`,
   reported on the conflicting modifier, also when the other modifier is on a
   different part of a partial type). `protected` is not allowed on its
@@ -142,9 +146,9 @@ part of a partial static class, and a C# static constructor as a flat `init { }`
 A static class the author wrote empty (`public static class Marker { }`) is kept,
 since it is a declared type of the API; only an extension holder whose members
 were all lifted away is still elided (ADR-0115 §B.19).
-A non-static class keeps its trailing `shared { }` block. The two Info
-diagnostics that recorded the dropped abstractness and the lost static no
-longer fire.
+A non-static class keeps its trailing `shared { }` block. The Info diagnostic
+that recorded the dropped abstractness no longer fires; the Info diagnostic that
+records the static-class mapping decision stays (its text now says `shared class`).
 
 ### API surface
 
