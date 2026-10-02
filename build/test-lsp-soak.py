@@ -51,6 +51,7 @@ import json, os, sys, time
 mode = os.environ.get("STUB_MODE", "clean")
 at = int(os.environ.get("STUB_AT", "3"))
 log = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--log=")), None)
+restarted = os.path.exists(os.environ["STUB_FLAG"])
 stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
 diagnostics = 0
 doc_lines = 0
@@ -83,6 +84,9 @@ while True:
     log_line("Debug", "[IN] " + json.dumps(msg)[:300] + ' "Level":"Error","Message":')
     if method == "exit":
         sys.exit(0)
+    if method == "initialized" and restarted and os.environ.get("STUB_STARTUP_ERROR"):
+        log_line("Error", "Background workspace load failed: System.NullReferenceException: startup",
+                 "System.NullReferenceException", "System.NullReferenceException: startup")
     if method == "textDocument/didOpen":
         doc_lines = msg["params"]["textDocument"]["text"].count("\n")
     if method == "textDocument/didChange":
@@ -177,6 +181,20 @@ class LspSoakTests(unittest.TestCase):
         self.assertEqual({third: ["process-exit"]}, self.crash_steps(result))
         self.assertEqual(1, result["restarts"])
         self.assertEqual(len(self.planned_ids()), len(result["steps"]))
+
+    def test_errors_logged_by_a_restarted_server_are_tagged(self) -> None:
+        out = SCRATCH / "run-exit-startup"
+        code = soak.main(["run", "--plan", str(self.plan), "--label", "exit-startup", "--out", str(out),
+                          "--server", f"{sys.executable} {self.stub}",
+                          "--server-env", "STUB_MODE=exit", "--server-env", "STUB_AT=3",
+                          "--server-env", "STUB_STARTUP_ERROR=1", "--server-env", f"STUB_FLAG={out}.fired"])
+        self.assertEqual(1, code)
+        result = json.loads((out / "00-Widget.steps.json").read_text(encoding="utf-8"))
+        third = result["steps"][2]
+        self.assertTrue(third["restarted"])
+        kinds = {c["kind"]: c for c in third["crashes"]}
+        self.assertEqual({"process-exit", "logged-exception"}, set(kinds))
+        self.assertTrue(kinds["logged-exception"]["afterRestart"])
 
     def test_rpc_error_is_recorded(self) -> None:
         code, result = self.run_stub("rpc-error", at=2)
@@ -293,10 +311,12 @@ class LspSoakTests(unittest.TestCase):
     def test_malformed_key_value_options_are_harness_errors(self) -> None:
         out = SCRATCH / "run-bad"
         for option in ("--server-env", "--meta"):
-            code = soak.main(["run", "--plan", str(self.plan), "--label", "bad", "--out", str(out),
-                              "--server", f"{sys.executable} {self.stub}", option, "NOEQUALS"])
-            self.assertEqual(2, code)
-            self.assertFalse(out.exists())
+            for values in (["NOEQUALS"], ["K=1", "K=2"]):
+                args = [arg for value in values for arg in (option, value)]
+                code = soak.main(["run", "--plan", str(self.plan), "--label", "bad", "--out", str(out),
+                                  "--server", f"{sys.executable} {self.stub}"] + args)
+                self.assertEqual(2, code)
+                self.assertFalse(out.exists())
 
     def test_first_step_times_open_and_later_steps_time_change(self) -> None:
         _, result = self.run_stub("clean")

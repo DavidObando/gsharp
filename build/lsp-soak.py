@@ -93,6 +93,7 @@ The harness's own crash classification is covered by build/test-lsp-soak.py
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -325,6 +326,8 @@ def parse_pairs(option: str, items: list[str]) -> dict[str, str]:
         key, sep, value = item.partition("=")
         if not sep or not key:
             raise HarnessError(f"{option} must be KEY=VALUE (got: {item!r})")
+        if key in pairs:
+            raise HarnessError(f"{option} sets {key!r} twice")
         pairs[key] = value
     return pairs
 
@@ -433,7 +436,7 @@ class LspClient:
         # from the reader thread; one writer at a time keeps the framing intact.
         self.send_lock = threading.Lock()
         self.notifications: list[dict[str, Any]] = []
-        self.stderr_tail: list[str] = []
+        self.stderr_tail: collections.deque[str] = collections.deque(maxlen=200)
         self.closed = threading.Event()
         threading.Thread(target=self._read_stdout, daemon=True).start()
         threading.Thread(target=self._read_stderr, daemon=True).start()
@@ -488,7 +491,6 @@ class LspClient:
             raise HarnessError("server output is not a pipe")
         for raw in stream:
             self.stderr_tail.append(raw.decode("utf-8", "replace").rstrip())
-            del self.stderr_tail[:-200]
 
     def _dispatch(self, message: dict[str, Any]) -> None:
         if "id" in message and "method" in message:
@@ -512,7 +514,7 @@ class LspClient:
         except subprocess.TimeoutExpired:
             code = None
         time.sleep(0.2)
-        return ServerExited(code, "\n".join(self.stderr_tail[-40:]))
+        return ServerExited(code, "\n".join(list(self.stderr_tail)[-40:]))
 
     # -- API -----------------------------------------------------------------
 
@@ -727,13 +729,33 @@ class FileRun:
                               (started, timing_key) if method == "textDocument/diagnostic" else None)
         except ServerExited as exc:
             record["crashes"].append({"kind": "process-exit", "code": exc.code, "stderr": exc.stderr})
-            self.restart(text)
+            self._restart_within(record, text)
         except RequestTimeout as exc:
             record["timeouts"].append(str(exc))
-            self.restart(text)
+            self._restart_within(record, text)
         record["elapsedMs"] = round((time.perf_counter() - started) * 1000, 1)
-        self._collect_background(record)
+        self._collect_background(record, after_restart=record.get("restarted", False))
         return record
+
+    def _restart_within(self, record: dict[str, Any], text: str) -> None:
+        # What the failed process logged belongs to this step; anything logged from here on
+        # comes from the replacement server's startup and is tagged so it isn't read as a
+        # failure of this step's requests.
+        self._collect_background(record)
+        self.restart(text)
+        record["restarted"] = True
+        # One round trip so the new server has handled initialize/initialized/didOpen before
+        # its log is read; its startup errors then land on this step, tagged.
+        try:
+            if self.client is not None:
+                self.client.request("textDocument/documentSymbol", {"textDocument": {"uri": self.uri}},
+                                    self.args.request_timeout)
+        except ServerExited as exc:
+            record["crashes"].append({"kind": "process-exit", "code": exc.code, "stderr": exc.stderr,
+                                      "afterRestart": True})
+        except RequestTimeout as exc:
+            record["timeouts"].append(f"after restart: {exc}")
+        self._collect_background(record, after_restart=True)
 
     def _requests(self, step: dict[str, Any], index: LineIndex, doc: dict[str, str]):
         caret = index.position(step["focus"])
@@ -787,7 +809,7 @@ class FileRun:
                 record["crashes"].append({"kind": "ice", "method": method, "message": item.get("message"),
                                           "range": item.get("range")})
 
-    def _collect_background(self, record: dict[str, Any]) -> None:
+    def _collect_background(self, record: dict[str, Any], after_restart: bool = False) -> None:
         if self.client is not None:
             for note in self.client.drain_notifications():
                 for item in _ice_items(note.get("params", {}).get("diagnostics")):
@@ -801,6 +823,7 @@ class FileRun:
                 "exceptionType": entry.get("ExceptionType"),
                 "frames": _exception_frames(entry.get("Exception")),
                 "background": "SchedulePushDiagnosticsBind" in message or "Background" in message,
+                "afterRestart": after_restart,
             })
         for crash in record["crashes"]:
             crash["signature"] = _signature(crash)
@@ -1002,7 +1025,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         lc, rc = lf["stepCrashes"], rf["stepCrashes"]
         only_r = sorted(s for s in rc if set(rc[s]) - set(lc.get(s, [])))
         only_l = sorted(s for s in lc if set(lc[s]) - set(rc.get(s, [])))
-        divergent += len(only_r) + len(only_l)
+        divergent += len(set(only_r) | set(only_l))
         ls, rs = lf["summary"]["changeToDiagnosticsMs"], rf["summary"]["changeToDiagnosticsMs"]
         rows.append(f"| {lf['name']} | {lf['summary']['steps']} | {len(lc)} | {len(rc)} | {len(only_r)} | "
                     f"{len(only_l)} | {ls['p50']} / {ls['p95']} | {rs['p50']} / {rs['p95']} |")
