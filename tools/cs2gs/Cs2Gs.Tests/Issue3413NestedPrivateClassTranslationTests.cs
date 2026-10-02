@@ -294,6 +294,66 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
     }
 
     [Fact]
+    public void PrivateExtensionWhoseSignatureNamesAPrivateNestedType_StaysAnInOwnerHelper()
+    {
+        // gsc binds a function's receiver, parameter and return types before it resolves
+        // `@ExtensionOwner`, so a lifted function could not name the private `Box`; the
+        // in-owner helper can. (A public method cannot expose a private type, so such a
+        // method is never API.) A method whose signature names no private nested type is
+        // still lifted and hosted on its owner.
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+
+            namespace Issue3413
+            {
+                public static class Program
+                {
+                    public static void Main() => Console.WriteLine(Owner.Run("ok"));
+                }
+
+                public static class Owner
+                {
+                    private sealed class Box
+                    {
+                        public int N;
+                    }
+
+                    private static Box Make(this string value, Box seed) => seed;
+
+                    private static int Count(this string value, List<Box> boxes) => boxes.Count;
+
+                    private static int Sum(this string value, Box[] boxes) => boxes.Length;
+
+                    public static string Echo(this string value) => value;
+
+                    public static int Run(string value) =>
+                        value.Make(new Box()).N + value.Count(new List<Box>()) + value.Sum(new Box[0]);
+                }
+            }
+            """;
+
+        (CompilationUnit unit, _) = Translate(source);
+        string rendered = GSharpPrinter.Print(unit);
+        TypeDeclaration owner = unit.Members
+            .OfType<TypeDeclaration>()
+            .Single(type => type.Name == "Owner");
+        IReadOnlyList<GMember> shared = Assert.Single(owner.Members.OfType<SharedBlock>()).Members;
+
+        foreach (string name in new[] { "Make", "Count", "Sum" })
+        {
+            Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == name);
+            Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == name);
+        }
+
+        MethodDeclaration echo = Assert.Single(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "Echo");
+        Assert.Contains(echo.Attributes, attribute => attribute.Name == "ExtensionOwner");
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
     public void PrivateExtensionOnExternalReceiver_IsLiftedAndHostedOnItsOwner()
     {
         const string source = """

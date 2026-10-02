@@ -1002,9 +1002,77 @@ public sealed partial class CSharpToGSharpTranslator
         // replaces kept the body as an in-owner helper and published a forwarding
         // companion on the package's public `<Program>`: an extra public type, and
         // the owner's own method without its extension marker.
+        //
+        // The same scheme also stays for an extension whose SIGNATURE names one of the owner's
+        // private nested types: gsc binds a function's receiver, parameter and return types
+        // before it resolves `@ExtensionOwner`, so a lifted top-level function cannot name
+        // (or access) the private type, while the in-owner helper can. Such a method cannot be
+        // public API (a public method may not expose a private type), so nothing is lost.
         return original?.IsExtensionMethod == true &&
             HasPrivateNestedAggregate(original.ContainingType) &&
-            TryGetOwnedExtensionReceiver(original, out _);
+            (TryGetOwnedExtensionReceiver(original, out _) || SignatureNamesPrivateNestedType(original));
+    }
+
+    private static bool SignatureNamesPrivateNestedType(IMethodSymbol method)
+    {
+        INamedTypeSymbol owner = method.ContainingType;
+        if (NamesPrivateNestedType(method.ReturnType, owner))
+        {
+            return true;
+        }
+
+        foreach (IParameterSymbol parameter in method.Parameters)
+        {
+            if (NamesPrivateNestedType(parameter.Type, owner))
+            {
+                return true;
+            }
+        }
+
+        foreach (ITypeParameterSymbol typeParameter in method.TypeParameters)
+        {
+            foreach (ITypeSymbol constraint in typeParameter.ConstraintTypes)
+            {
+                if (NamesPrivateNestedType(constraint, owner))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool NamesPrivateNestedType(ITypeSymbol type, INamedTypeSymbol owner)
+    {
+        switch (type)
+        {
+            case IArrayTypeSymbol array:
+                return NamesPrivateNestedType(array.ElementType, owner);
+            case IPointerTypeSymbol pointer:
+                return NamesPrivateNestedType(pointer.PointedAtType, owner);
+            case INamedTypeSymbol named:
+                for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(current.ContainingType, owner)
+                        && current.DeclaredAccessibility == Accessibility.Private)
+                    {
+                        return true;
+                    }
+                }
+
+                foreach (ITypeSymbol argument in named.TypeArguments)
+                {
+                    if (NamesPrivateNestedType(argument, owner))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            default:
+                return false;
+        }
     }
 
     private static bool IsOwnerScopedCompanionShapeEligible(IMethodSymbol method)
