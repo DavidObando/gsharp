@@ -96,6 +96,8 @@ public sealed partial class CSharpToGSharpTranslator
                     TranslationSeverity.Warning)
                 {
                     DiagnosticId = ConditionalCompilationDiagnosticId,
+                    Classification = UnsupportedClassification.ByDesign,
+                    Rationale = Coverage.UnsupportedRationale.Preprocessor,
                 });
             }
             else

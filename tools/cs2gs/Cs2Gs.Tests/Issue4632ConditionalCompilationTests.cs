@@ -95,7 +95,12 @@ public class Issue4632ConditionalCompilationTests
             .Where(d => d.DiagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId)
             .ToList();
         Assert.Equal(4, reported.Count);
-        Assert.All(reported, d => Assert.Equal(TranslationSeverity.Warning, d.Severity));
+        Assert.All(reported, d =>
+        {
+            Assert.Equal(TranslationSeverity.Warning, d.Severity);
+            Assert.Equal(UnsupportedClassification.ByDesign, d.Classification);
+            Assert.Equal(UnsupportedRationale.Preprocessor, d.Rationale);
+        });
         Assert.Equal("IfDirectiveTrivia@7:1 '#if DEBUG'", Describe(reported[0]));
     }
 
