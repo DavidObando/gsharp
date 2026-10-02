@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare a migrated test run against its C# original by failing-test set.
+"""Compare a migrated test run against its C# original by failing-test multiset.
 
 Issue #4631 (C7). The migrated (G#-source) suite must not fail anything the
 C# suite passes on the same machine. Platform failures the C# suite already
@@ -14,45 +14,55 @@ Exit: 0 no regression, 1 regression or truncated run, 2 unreadable input.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import NamedTuple
 
 NS = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
 
 
-def results(trx: Path) -> dict[str, str]:
-    """Maps TRX testName (prefixed with className unless already present) to outcome."""
+class TestRun(NamedTuple):
+    rows: list[tuple[str, str]]
+    outcome: str
+
+
+def results(trx: Path) -> TestRun:
+    """Reads every TRX row, prefixing testName with className unless already present."""
     root = ET.parse(trx).getroot()
     classes = {}
     for test in root.iterfind("t:TestDefinitions/t:UnitTest", NS):
         method = test.find("t:TestMethod", NS)
         classes[test.get("id")] = method.get("className", "") if method is not None else ""
-    outcomes = {}
+    outcomes = []
     for result in root.iterfind("t:Results/t:UnitTestResult", NS):
         name = result.get("testName", "")
         owner = classes.get(result.get("testId"), "")
         key = name if name.startswith(owner + ".") or not owner else owner + "." + name
-        outcomes[key] = result.get("outcome", "Unknown")
-    return outcomes
+        outcomes.append((key, result.get("outcome", "Unknown")))
+    summary = root.find("t:ResultSummary", NS)
+    return TestRun(outcomes, summary.get("outcome", "Unknown") if summary is not None else "Unknown")
 
 
-def compare(baseline: dict[str, str], migrated: dict[str, str], min_ratio: float) -> dict:
-    failed = lambda run: {name for name, outcome in run.items() if outcome not in ("Passed", "NotExecuted")}
-    executed = lambda run: sum(1 for outcome in run.values() if outcome != "NotExecuted")
+def compare(baseline: TestRun, migrated: TestRun, min_ratio: float) -> dict:
+    failed = lambda run: Counter(name for name, outcome in run.rows if outcome not in ("Passed", "NotExecuted"))
+    executed = lambda run: sum(1 for _, outcome in run.rows if outcome != "NotExecuted")
     baseline_failed, migrated_failed = failed(baseline), failed(migrated)
-    regressions = sorted(migrated_failed - baseline_failed)
+    regressions = sorted((migrated_failed - baseline_failed).elements())
     report = {
         "baselineExecuted": executed(baseline), "migratedExecuted": executed(migrated),
-        "baselineFailed": len(baseline_failed), "migratedFailed": len(migrated_failed),
+        "baselineFailed": baseline_failed.total(), "migratedFailed": migrated_failed.total(),
         "regressions": regressions,
-        "sharedFailures": sorted(migrated_failed & baseline_failed),
-        "fixedInMigrated": sorted(baseline_failed - migrated_failed),
+        "sharedFailures": sorted((migrated_failed & baseline_failed).elements()),
+        "fixedInMigrated": sorted((baseline_failed - migrated_failed).elements()),
+        "invalidRuns": {name: run.outcome for name, run in (("baseline", baseline), ("migrated", migrated))
+                        if run.outcome not in ("Completed", "Passed", "Failed")},
     }
     truncated = report["migratedExecuted"] < min_ratio * report["baselineExecuted"]
     report["truncated"] = truncated
-    report["ok"] = (not regressions and not truncated
+    report["ok"] = (not regressions and not truncated and not report["invalidRuns"]
                     and report["baselineExecuted"] > 0 and report["migratedExecuted"] > 0)
     return report
 
@@ -81,6 +91,8 @@ def main(argv: list[str]) -> int:
         print("  TRUNCATED: the migrated run executed too few tests (crashed test host?)")
     if report["baselineExecuted"] == 0:
         print("  NO BASELINE: the C# run executed no tests")
+    for name, outcome in report["invalidRuns"].items():
+        print(f"  INVALID RUN: {name} summary outcome {outcome}")
     print("migrated suite: " + ("OK" if report["ok"] else "REGRESSED"))
     return 0 if report["ok"] else 1
 

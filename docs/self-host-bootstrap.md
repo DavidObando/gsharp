@@ -55,8 +55,11 @@ a 1 MB stack (Linux: 8 MB), and the frame sizes of G#-compiled code have never b
 - It pins the tree to the commit's own C#-built SDK (`selfhost-pack-stage1.py --prepare-only`).
 - It runs the C# and the migrated Core.Tests on the same `windows-latest` runner.
 
-`build/selfhost-compare-trx.py` compares the two runs by failing-test set. The job fails if the migrated suite fails a test
+`build/selfhost-compare-trx.py` compares the two runs by failing-test multiset. Duplicate display names remain separate
+executions, and additional failing rows cannot be hidden by a passing row with the same name. The job fails if the migrated suite fails a test
 that the C# suite passes, or executes fewer than 95% of the tests the C# suite does (a crashed test host, such as a stack overflow).
 Failures the C# suite already has on Windows (tracked by `windows-nightly`) are reported, not counted.
 An empty C# baseline also fails: it cannot establish migration parity. The existing Windows test failures are tracked in
 [#4635](https://github.com/DavidObando/gsharp/issues/4635); this lane does not skip or weaken those tests.
+Both TRX files must describe completed runs (`Completed`, `Passed` or `Failed`): an aborted, errored or missing run summary
+fails independently of the execution ratio. Completed runs with shared assertion failures remain valid for comparison.
