@@ -658,7 +658,7 @@ The `protected` access modifier (CIL `family`) makes a member
 accessible within its declaring type and the bodies of derived types only.
 Because protection is only meaningful where a derived type can exist,
 `protected` is restricted to members of an inheritable `open class`. A
-`protected override` method or property is exempt, because the base member
+`protected override` method, property or event is exempt, because the base member
 dictates its accessibility: a non-`open` (CLR-sealed) class may declare one.
 
 | Code | Severity | Message |

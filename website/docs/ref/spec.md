@@ -673,7 +673,7 @@ ImportDecl      = "import" ( identifier "=" )? identifier { "." identifier } .
 
 ### Top-level declarations
 
-Top-level members are functions, type declarations, variable declarations, or top-level statements. Mixing explicit `Main` and top-level statements is diagnosed. Accessibility modifiers are `public`, `internal`, `protected`, and `private`; defaults depend on declaration context. The `protected` modifier is only valid on members of an inheritable `open class` (see *Protected accessibility* below); applying it to a top-level declaration, a non-`open` (sealed) class, or a struct member is rejected with GS0380, except on a `protected override` of a non-`open` class (the base member dictates its accessibility).
+Top-level members are functions, type declarations, variable declarations, or top-level statements. Mixing explicit `Main` and top-level statements is diagnosed. Accessibility modifiers are `public`, `internal`, `protected`, and `private`; defaults depend on declaration context. The `protected` modifier is only valid on members of an inheritable `open class` (see *Protected accessibility* below); applying it to a top-level declaration, a non-`open` (sealed) class, or a struct member is rejected with GS0380, except on a `protected override` method, property or event of a non-`open` class (the base member dictates its accessibility).
 
 ```ebnf
 Member        = Annotation* Accessibility? ( Async? FunctionDecl | TypeDecl | VariableDecl | GlobalStatement ) .
@@ -863,7 +863,7 @@ inaccessible from unrelated external code. It mirrors C# `protected`:
   nested type whose container is not an `open class`, or a top-level
   declaration is rejected with **GS0380**
   (`'protected' is only valid on members of an inheritable 'open' class`).
-  The one exception is a `protected override` method or property: it takes its
+  The one exception is a `protected override` method, property or event: it takes its
   accessibility from the base member it overrides, so a non-`open` (CLR-sealed)
   class may declare one (issue #4674).
 - `protected` composes with `open`/`override`: a `protected open func` may be
