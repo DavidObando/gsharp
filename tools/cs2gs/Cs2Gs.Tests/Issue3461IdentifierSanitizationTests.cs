@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
@@ -102,6 +103,39 @@ public sealed class Issue3461IdentifierSanitizationTests
             .GetMethod("Read");
         Assert.NotNull(read);
         Assert.Equal("scope", Assert.Single(read.GetParameters()).Name);
+    }
+
+    [Fact]
+    public void KeywordTypeParameters_PreserveTheirEmittedMetadataNames()
+    {
+        string rendered = Render(
+            """
+            public class GenericNames<@in>
+            {
+                public @in Identity(@in value) => value;
+
+                public U Echo<@scope, U>(@scope first, U value) => value;
+            }
+            """);
+
+        Assert.Contains("class GenericNames[$in]", rendered, StringComparison.Ordinal);
+        Assert.Contains("Identity(value $in) $in -> value", rendered, StringComparison.Ordinal);
+        Assert.True(
+            rendered.Contains("Echo[$scope, U](first $scope, value U) U -> value", StringComparison.Ordinal),
+            rendered);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        EmittedOracleResult emitted = EmittedOracle.Evaluate(rendered + Environment.NewLine + "1");
+        Assert.Empty(emitted.Diagnostics);
+        Assert.NotNull(emitted.Assembly);
+        Type genericType = emitted.Assembly.GetTypes()
+            .Single(type => type.Name == "GenericNames`1");
+        Assert.Equal("in", Assert.Single(genericType.GetGenericArguments()).Name);
+        MethodInfo echo = genericType.GetMethod("Echo");
+        Assert.NotNull(echo);
+        Assert.Equal(
+            new[] { "scope", "U" },
+            echo.GetGenericArguments().Select(parameter => parameter.Name));
     }
 
     [Fact]
@@ -298,7 +332,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             """);
 
         Assert.Contains("class $event", rendered, StringComparison.Ordinal);
-        Assert.Contains("class Holder[in_, out_]", rendered, StringComparison.Ordinal);
+        Assert.Contains("class Holder[$in, $out]", rendered, StringComparison.Ordinal);
         Assert.Contains(
             "Run($params int32, $scoped int32, $ref int32, $out int32, $in int32)",
             rendered,
@@ -567,7 +601,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             """);
 
         Assert.Contains("class C[defer_]", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo[defer__](outer defer_, inner defer__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[$defer](outer defer_, inner $defer)", rendered, StringComparison.Ordinal);
         Assert.Contains("Echo[string](1, \"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
@@ -597,7 +631,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             """);
 
         Assert.Contains("class defer_", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo[defer__](outer defer_, inner defer__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[$defer](outer defer_, inner $defer)", rendered, StringComparison.Ordinal);
         Assert.Contains("Echo[string](C.defer_(), \"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
@@ -629,7 +663,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             """);
 
         Assert.Contains("class defer_", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo[defer__](outer defer_, inner defer__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[$defer](outer defer_, inner $defer)", rendered, StringComparison.Ordinal);
         Assert.Contains("Echo[string](defer_(), \"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
@@ -658,7 +692,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("Echo[defer__](outer string, inner defer__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[$defer](outer string, inner $defer)", rendered, StringComparison.Ordinal);
         Assert.Contains("Echo[string](\"outer\", \"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
@@ -692,7 +726,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             """,
             references);
 
-        Assert.Contains("Echo[defer__](outer defer_, inner defer__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[$defer](outer defer_, inner $defer)", rendered, StringComparison.Ordinal);
         Assert.Contains("Echo[string](defer_(), \"ok\")", rendered, StringComparison.Ordinal);
 
         using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });

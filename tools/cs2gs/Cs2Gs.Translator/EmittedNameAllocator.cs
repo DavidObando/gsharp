@@ -133,9 +133,9 @@ internal sealed class EmittedNameAllocator
     }
 
     // ADR-0170: symbols whose emitted names ARE their CLR metadata names —
-    // namespaces, named types, type members, and parameters. Parameter names
-    // are emitted even when their containing member is private. Locals, type
-    // parameters, range variables, local/anonymous functions, and synthesized
+    // namespaces, named types, type members, parameters, and type parameters.
+    // Parameter names are emitted even when their containing member is private.
+    // Locals, range variables, local/anonymous functions, and synthesized
     // shapes (anonymous-type members, aliases, discards) stay on the rename path.
     private static bool IsMetadataVisible(ISymbol symbol) =>
         symbol switch
@@ -143,6 +143,7 @@ internal sealed class EmittedNameAllocator
             INamespaceSymbol => true,
             INamedTypeSymbol { IsAnonymousType: false } => true,
             IParameterSymbol => true,
+            ITypeParameterSymbol => true,
             IMethodSymbol method when method.MethodKind == MethodKind.LocalFunction
                 || method.MethodKind == MethodKind.AnonymousFunction => false,
             IMethodSymbol method => method.ContainingType?.IsAnonymousType == false,

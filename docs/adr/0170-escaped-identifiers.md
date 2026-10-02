@@ -120,9 +120,10 @@ lowering, emit) read names via `ValueText`; syntactic consumers
 ### cs2gs policy (#3501)
 
 The printer emits the escape for names with a CLR metadata slot—including
-parameter names, regardless of the containing member's visibility—when
-they are G# keywords. Locals, range variables, and other body-scoped
-names without metadata keep the #3461 rename where readability wins.
+value and generic parameter names, regardless of the containing member's
+visibility—when they are G# keywords. Locals, range variables, and other
+body-scoped names without metadata keep the #3461 rename where readability
+wins.
 The reserved-metadata fixtures re-enter the corpus once the translator
 side lands.
 
