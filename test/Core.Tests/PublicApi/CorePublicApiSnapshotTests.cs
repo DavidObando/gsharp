@@ -674,7 +674,7 @@ public sealed class CorePublicApiSnapshotTests
             "delegate*<" + string.Join(", ", signature.ParameterTypes.Append(signature.ReturnType)) + ">";
 
         public string GetModifiedType(string modifier, string unmodifiedType, bool isRequired) =>
-            isRequired ? unmodifiedType + " modreq(" + modifier + ")" : unmodifiedType;
+            unmodifiedType + (isRequired ? " modreq(" : " modopt(") + modifier + ")";
 
         public string GetPinnedType(string elementType) => elementType;
     }
