@@ -230,7 +230,9 @@ def stage_feed(tree: Path, nupkgs: list[Path]) -> list[dict]:
     for nupkg in nupkgs:
         target = feed / nupkg.name
         replaced = target.exists()
-        shutil.copy2(nupkg, target)
+        # A bootstrap already in the tree's feed (a natural input) is the target itself.
+        if not (replaced and target.samefile(nupkg)):
+            shutil.copy2(nupkg, target)
         staged.append({"package": nupkg.name, "replacedExisting": replaced})
     return staged
 

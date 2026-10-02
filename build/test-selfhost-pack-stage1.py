@@ -160,6 +160,17 @@ class PrepareTreeTests(unittest.TestCase):
             self.assertEqual([], again["rewrittenPins"])
             self.assertEqual([True, True], [s["replacedExisting"] for s in again["stagedPackages"]])
 
+    def test_a_bootstrap_already_in_the_trees_feed_is_not_copied_onto_itself(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            bootstrap = nupkg(tree / ".nugs/Gsharp.NET.Sdk.0.4.1129-g6c4824cbc0.nupkg", {"x": b""})
+
+            report = packer.prepare_tree(tree, bootstrap)
+
+            self.assertEqual([True], [s["replacedExisting"] for s in report["stagedPackages"]])
+            self.assertTrue(bootstrap.exists())
+
 
 class VersionTests(unittest.TestCase):
     def test_versions(self) -> None:
