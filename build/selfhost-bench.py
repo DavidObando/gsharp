@@ -24,6 +24,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -49,13 +50,24 @@ def redirect_outputs(rsp_text: str, directory: Path) -> str:
             lines.append(line)
             continue
         name = Path(stripped[len(option):].strip('"')).name
-        target = directory / ("ref-" + name if option == "/refout:" else name)
-        lines.append(f"{option}{target}")
+        target = str(directory / ("ref-" + name if option == "/refout:" else name))
+        # Quote a path with whitespace so the response-file parser keeps it whole.
+        lines.append(f'{option}"{target}"' if any(c.isspace() for c in target) else f"{option}{target}")
     return "\n".join(lines) + "\n"
 
 
 def command_for(compiler: str) -> list[str]:
     return ["dotnet", compiler] if compiler.endswith(".dll") else [compiler]
+
+
+def gnu_time() -> str:
+    """The GNU time executable; BenchError when there is none (it measures max RSS)."""
+    for candidate in ("/usr/bin/time", shutil.which("gtime"), shutil.which("time")):
+        if candidate and os.access(candidate, os.X_OK):
+            probe = subprocess.run([candidate, "-f", "%M", "true"], capture_output=True, text=True)
+            if probe.returncode == 0 and probe.stderr.strip().isdigit():
+                return candidate
+    raise BenchError("GNU time (with -f %M) is required; install the 'time' package")
 
 
 def parse_time(stderr: str) -> dict:
@@ -76,14 +88,17 @@ def run_once(compiler: str, rsp_text: str, work: Path, label: str, index: int, c
     run_dir.mkdir(parents=True, exist_ok=True)
     rsp = run_dir / "bench.rsp"
     rsp.write_text(redirect_outputs(rsp_text, run_dir), encoding="utf-8")
-    command = ["/usr/bin/time", "-f", "BENCH %e %U %S %M", *command_for(compiler), f"@{rsp}"]
+    measurement = run_dir / "time.txt"
+    command = [gnu_time(), "-o", str(measurement), "-f", "BENCH %e %U %S %M",
+               *command_for(compiler), f"@{rsp}"]
     env = dict(os.environ)
     env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
-    result = subprocess.run(command, capture_output=True, text=True, env=env, cwd=cwd)
-    (run_dir / "compile.log").write_text(result.stdout + result.stderr, encoding="utf-8")
+    # The compiler's output streams to the log; nothing is buffered here.
+    with (run_dir / "compile.log").open("w", encoding="utf-8") as log:
+        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env, cwd=cwd)
     if result.returncode != 0:
         raise BenchError(f"{label} run {index} failed (exit {result.returncode}); see {run_dir / 'compile.log'}")
-    return parse_time(result.stderr)
+    return parse_time(measurement.read_text(encoding="utf-8") if measurement.exists() else "")
 
 
 def summarize(runs: list[dict]) -> dict:
@@ -125,6 +140,8 @@ def main(argv: list[str]) -> int:
 
     if args.runs < 1:
         parser.error("--runs must be at least 1")
+    if args.warmup < 0:
+        parser.error("--warmup must not be negative")
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     rsp_text = args.rsp.read_text(encoding="utf-8-sig")

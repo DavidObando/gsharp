@@ -59,6 +59,10 @@ class RedirectTests(unittest.TestCase):
         self.assertIn("/tree/src/Core/Binder.gs", redirected)
         self.assertNotIn("/tree/out/", redirected)
 
+    def test_a_path_with_spaces_is_quoted(self) -> None:
+        redirected = bench.redirect_outputs("/out:/tree/a.dll\n", Path("/work dir/run"))
+        self.assertIn('/out:"/work dir/run/a.dll"', redirected)
+
 
 class VerdictTests(unittest.TestCase):
     def summary(self, wall: float, cpu: float, rss: float) -> dict:
@@ -112,6 +116,11 @@ class GateTests(unittest.TestCase):
                                  fake_compiler(self.root, "migrated", 0.1, megabytes=200))
         self.assertEqual(1, code, report)
         self.assertIn("maxRssMb", report["verdict"]["overBudget"])
+
+    def test_a_negative_warmup_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            run(["--rsp", str(self.rsp), "--native", "x", "--migrated", "y", "--warmup", "-1",
+                 "--work", str(self.root / "work")])
 
     def test_a_failing_compile_is_a_tool_error(self) -> None:
         code, report = self.gate(fake_compiler(self.root, "native", 0.0),
