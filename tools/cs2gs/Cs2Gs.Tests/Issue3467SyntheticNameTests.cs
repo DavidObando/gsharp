@@ -396,6 +396,42 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_GenericMethodGroupValueUsesLiftedName()
+        {
+            // Issue #4302: a generic method-group VALUE (`First<int>` passed as
+            // a delegate) must resolve to its own lifted helper. Two same-named
+            // groups in one type lift as `First` and `First_2`; the second
+            // group's method group must not silently bind the first helper.
+            string printed = Translate("""
+                using System;
+
+                public class C
+                {
+                    public int A(int value)
+                    {
+                        return First<int>(value, 0);
+                        static int First<T>(int n, T tag) => n == 0 ? 1 : Second(n - 1);
+                        static int Second(int n) => First<int>(n, 0);
+                    }
+
+                    public int B(int value)
+                    {
+                        Func<int, int, int> f = First<int>;
+                        return f(value, 0);
+                        static int First<T>(int n, T tag) => n == 0 ? 2 : Second(n - 1);
+                        static int Second(int n) => First<int>(n, 0);
+                    }
+                }
+                """);
+
+            Assert.Contains("func First_2[", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().A(2) * 10 + C().B(2))",
+                "12");
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReusesNameAcrossUnrelatedTypes()
         {
             string printed = Translate("""
