@@ -144,9 +144,16 @@ internal static class CaptureTestOracleCommand
         // A failed capture must leave NO oracle for the app, never an earlier
         // run's: validation then fails closed with TEST-ORACLE-MISSING.
         string previous = Path.Combine(outDir, CSharpTestOracle.FileNameFor(app.Id));
-        if (File.Exists(previous))
+        try
         {
-            File.Delete(previous);
+            if (File.Exists(previous))
+            {
+                File.Delete(previous);
+            }
+        }
+        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+        {
+            return "could not remove the previous oracle " + previous + ": " + ex.Message;
         }
 
         var environment = new Dictionary<string, string>

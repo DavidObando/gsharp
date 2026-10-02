@@ -250,7 +250,7 @@ public sealed class TestNameParityBaseline
 
             // The same normalization the matcher applies, so two entries that
             // would match the same name are caught as duplicates here.
-            if (!seen.Add(NormalizeAppId(app) + "\n" + kind + "\n" + TestParityComparison.NormalizeTestName(test)))
+            if (!seen.Add(NormalizeAppId(app).ToUpperInvariant() + "\n" + kind + "\n" + TestParityComparison.NormalizeTestName(test)))
             {
                 errors.Add(where + " ('" + test + "'): duplicate entry.");
             }

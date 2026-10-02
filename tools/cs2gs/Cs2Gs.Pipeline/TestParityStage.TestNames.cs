@@ -153,9 +153,7 @@ public sealed partial class TestParityStage
 
         // A compact, stable key: a hash of the sorted differences (the full
         // lists are in the report file).
-        string differences = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-            Encoding.UTF8.GetBytes("missing:\n" + string.Join("\n", verdict.UnexplainedMissing) +
-                "\nextra:\n" + string.Join("\n", verdict.UnexplainedExtra))));
+        string differences = HashDifferences(verdict);
         return this.NameParityFailure(context, "TEST-NAME-PARITY", message.ToString(), differences);
     }
 
@@ -169,6 +167,27 @@ public sealed partial class TestParityStage
         || ex is IOException
         || ex is UnauthorizedAccessException
         || ex is System.Security.SecurityException;
+
+    // Streams the sorted differences into SHA-256 one name at a time, so a
+    // run that lost thousands of cases does not build one giant string.
+    private static string HashDifferences(TestNameParityVerdict verdict)
+    {
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
+        hash.AppendData(Encoding.UTF8.GetBytes("missing:\n"));
+        foreach (string name in verdict.UnexplainedMissing)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(name + "\n"));
+        }
+
+        hash.AppendData(Encoding.UTF8.GetBytes("extra:\n"));
+        foreach (string name in verdict.UnexplainedExtra)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(name + "\n"));
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
 
     private static void AppendDifferences(StringBuilder message, string label, IReadOnlyList<string> names)
     {
