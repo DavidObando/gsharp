@@ -37,6 +37,8 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
     /// <summary>The shared instance.</summary>
     public static readonly SymbolSourceOrderComparer Instance = new SymbolSourceOrderComparer();
 
+    private const int MaxContainmentDepth = 100_000;
+
     private SymbolSourceOrderComparer()
     {
     }
@@ -149,8 +151,15 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
 
         var builder = new StringBuilder(containing.ContainingNamespace ?? string.Empty);
         var chain = new List<string>();
-        for (var type = containing; type is not null && chain.Count < 64; type = type.ContainingType)
+        for (var type = containing; type is not null; type = type.ContainingType)
         {
+            // Containment is acyclic by construction. Truncating the chain would
+            // make distinct deep paths tie, so a cycle fails loudly instead.
+            if (chain.Count >= MaxContainmentDepth)
+            {
+                throw new InvalidOperationException("Symbol containment chain exceeds " + MaxContainmentDepth + " levels; is it cyclic?");
+            }
+
             chain.Add(type.Name);
         }
 
