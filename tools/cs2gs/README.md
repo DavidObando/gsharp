@@ -103,9 +103,11 @@ attribute silently override a `global.json` `msbuild-sdks` pin, so the two
 modes never mix: under `--sdk-pin global-json` every mirrored project, including
 an excluded project rebound onto the SDK, gets the bare name, and a source
 `global.json` that already pins `Gsharp.NET.Sdk` is an error in `project` mode.
-`validate` takes the mode from the migrated tree: a tree whose `global.json`
-pins the SDK is validated with that pin, and a disagreeing
-`validate --sdk-version` is an error rather than a tie-break.
+`validate` takes the pin from the migrated tree: the `global.json` pin, or
+else the one version the generated projects record. A tree that pins in both
+places, or a disagreeing `validate --sdk-version`, is an error rather than a
+tie-break. An excluded project that already builds with `Gsharp.NET.Sdk` is
+rebound to the run's pin too.
 
 Repository mode preserves relative directories, copies non-C# files, translates
 checked-in `.cs` files to `.gs`, and transforms `.csproj` files to `.gsproj`.

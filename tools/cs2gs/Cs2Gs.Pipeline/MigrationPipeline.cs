@@ -480,7 +480,6 @@ public sealed class MigrationPipeline
         }
 
         this.options.OutputLayout = MigrationOutputLayout.Repository;
-        this.ResolveValidationSdkPin(migratedRoot);
 
         string gscPath = GscInvoker.Resolve(
             this.options.GscPath,
@@ -519,6 +518,7 @@ public sealed class MigrationPipeline
             migratedRoot,
             runDir,
             repositoryLayout: true);
+        this.ResolveValidationSdkPin(migratedRoot);
         IReadOnlyDictionary<string, IReadOnlyList<string>> evaluatedProjectReferences =
             await this.LoadEvaluatedProjectReferencesAsync(
                 allApps,
@@ -704,26 +704,36 @@ public sealed class MigrationPipeline
     /// with. The tree is the source of truth: when its <c>global.json</c> pins
     /// <c>Gsharp.NET.Sdk</c>, every project is re-transformed with the bare
     /// <c>Sdk</c> attribute and that version is staged, because a versioned
-    /// attribute would silently override the tree's pin. An explicit
+    /// attribute would silently override the tree's pin; otherwise the
+    /// version its generated projects record is kept. An explicit
     /// <see cref="PipelineOptions.SdkVersion"/> that disagrees with the tree is
-    /// an error, never a tie-break. Without a pinned <c>global.json</c> the
-    /// per-project moniker is resolved as <c>migrate</c> resolves it.
+    /// an error, never a tie-break. Only a tree that records no pin at all
+    /// falls back to resolving one as <c>migrate</c> does.
     /// </summary>
     /// <param name="migratedRoot">The migrated tree.</param>
     private void ResolveValidationSdkPin(string migratedRoot)
     {
         string treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
-        if (treePin is not null
-            && this.options.SdkVersion is not null
-            && !string.Equals(treePin, this.options.SdkVersion, StringComparison.Ordinal))
+        string projectPin = SdkPin.ReadProjectPin(this.options.GeneratedProjectPaths.Values);
+        if (treePin is not null && projectPin is not null)
         {
             throw new InvalidOperationException(
-                "--sdk-version " + this.options.SdkVersion + " disagrees with the migrated tree's global.json pin (" +
-                treePin + ").");
+                "The migrated tree pins Gsharp.NET.Sdk both in global.json (" + treePin +
+                ") and in its projects (" + projectPin + "); a versioned Sdk attribute overrides global.json.");
+        }
+
+        string recordedPin = treePin ?? projectPin;
+        if (recordedPin is not null
+            && this.options.SdkVersion is not null
+            && !string.Equals(recordedPin, this.options.SdkVersion, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "--sdk-version " + this.options.SdkVersion + " disagrees with the migrated tree's pin (" +
+                recordedPin + ").");
         }
 
         SdkPinLocation location = treePin is null ? SdkPinLocation.ProjectFile : SdkPinLocation.GlobalJson;
-        string requestedVersion = treePin ?? this.options.SdkVersion;
+        string requestedVersion = recordedPin ?? this.options.SdkVersion;
         string sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, requestedVersion);
 
         // A null version is not thrown here: each app's compile reports the

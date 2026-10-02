@@ -8,6 +8,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace Cs2Gs.Pipeline;
 
@@ -50,8 +51,9 @@ internal static class SdkPin
     // A NuGet-style version: three numeric components and an optional
     // prerelease tag. Deliberately strict: the value is written verbatim into
     // project XML and global.json.
+    // Every dot-separated prerelease identifier must be non-empty.
     private static readonly Regex VersionPattern = new Regex(
-        "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$",
+        "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$",
         RegexOptions.CultureInvariant);
 
     /// <summary>Returns whether <paramref name="version"/> is an acceptable SDK version.</summary>
@@ -75,6 +77,52 @@ internal static class SdkPin
         }
 
         return PackageId + "/" + version;
+    }
+
+    /// <summary>
+    /// Returns whether a project <c>Sdk</c> attribute value names
+    /// <c>Gsharp.NET.Sdk</c>, bare or versioned.
+    /// </summary>
+    /// <param name="sdkAttribute">The attribute value.</param>
+    /// <returns><see langword="true"/> for <c>Gsharp.NET.Sdk</c> and <c>Gsharp.NET.Sdk/&lt;version&gt;</c>.</returns>
+    internal static bool IsGsharpSdkAttribute(string sdkAttribute) =>
+        string.Equals(sdkAttribute, PackageId, StringComparison.OrdinalIgnoreCase)
+        || (sdkAttribute is not null
+            && sdkAttribute.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Reads the per-project pin a migrated tree recorded: the one version
+    /// carried by every versioned <c>Sdk="Gsharp.NET.Sdk/&lt;version&gt;"</c>
+    /// attribute among <paramref name="projectPaths"/>.
+    /// </summary>
+    /// <param name="projectPaths">The generated project files (missing files are skipped).</param>
+    /// <returns>The recorded version, or <see langword="null"/> when no project carries one.</returns>
+    /// <exception cref="InvalidOperationException">The projects record more than one version.</exception>
+    internal static string ReadProjectPin(IEnumerable<string> projectPaths)
+    {
+        var versions = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (string path in projectPaths)
+        {
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            string sdk = XDocument.Load(path).Root?.Attribute("Sdk")?.Value;
+            if (sdk is not null && sdk.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                versions.Add(sdk.Substring(PackageId.Length + 1));
+            }
+        }
+
+        if (versions.Count > 1)
+        {
+            throw new InvalidOperationException(
+                "The migrated projects pin more than one " + PackageId + " version: " +
+                string.Join(", ", versions) + ".");
+        }
+
+        return versions.Count == 1 ? versions.Min : null;
     }
 
     /// <summary>
@@ -149,19 +197,18 @@ internal static class SdkPin
             document[MsbuildSdksProperty] = sdks;
         }
 
-        // Keys are matched case-insensitively by the SDK resolver; drop any
+        // Keys are matched case-insensitively by the SDK resolver; drop every
         // differently-cased spelling so the file holds exactly one pin.
-        string existingKey = null;
+        var existingKeys = new List<string>();
         foreach (KeyValuePair<string, JsonNode> entry in sdks)
         {
             if (string.Equals(entry.Key, PackageId, StringComparison.OrdinalIgnoreCase))
             {
-                existingKey = entry.Key;
-                break;
+                existingKeys.Add(entry.Key);
             }
         }
 
-        if (existingKey is not null)
+        foreach (string existingKey in existingKeys)
         {
             sdks.Remove(existingKey);
         }

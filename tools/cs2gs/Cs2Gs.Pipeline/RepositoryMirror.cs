@@ -406,8 +406,18 @@ internal static class RepositoryMirror
             return;
         }
 
-        if (project.Root.Attribute("Sdk") is not null)
+        string existingSdk = project.Root.Attribute("Sdk")?.Value;
+        if (existingSdk is not null)
         {
+            // A project already built with Gsharp.NET.Sdk keeps its shape but
+            // takes the run's pin: an older versioned attribute would
+            // otherwise override it (silently, under a global.json pin). Any
+            // other SDK is not ours to rebind.
+            if (SdkPin.IsGsharpSdkAttribute(existingSdk))
+            {
+                project.Root.SetAttributeValue("Sdk", sdkMoniker);
+            }
+
             return;
         }
 

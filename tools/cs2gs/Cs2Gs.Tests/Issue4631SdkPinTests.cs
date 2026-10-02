@@ -73,7 +73,7 @@ public sealed class Issue4631SdkPinTests : IDisposable
             """
             {
               "sdk": { "version": "10.0.300", "rollForward": "latestFeature" },
-              "msbuild-sdks": { "gsharp.net.sdk": "0.0.0", "Other.Sdk": "1.2.3" },
+              "msbuild-sdks": { "gsharp.net.sdk": "0.0.0", "Other.Sdk": "1.2.3", "GSHARP.NET.SDK": "0.0.9" },
             }
             """);
 
@@ -130,6 +130,10 @@ public sealed class Issue4631SdkPinTests : IDisposable
     [Theory]
     [InlineData("0.4.1200", true)]
     [InlineData("0.4.1129-g6c4824cbc0", true)]
+    [InlineData("1.2.3-alpha.1", true)]
+    [InlineData("1.2.3-alpha..1", false)]
+    [InlineData("1.2.3-alpha.", false)]
+    [InlineData("1.2.3-", false)]
     [InlineData("0.4", false)]
     [InlineData("0.4.1200/x", false)]
     [InlineData("0.4.1200\"", false)]
@@ -178,6 +182,8 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.True(run.Succeeded);
         Assert.Equal("Gsharp.NET.Sdk/" + PinnedVersion, SdkAttribute(fixture.MirroredWidget));
         Assert.Equal("Gsharp.NET.Sdk/" + PinnedVersion, SdkAttribute(fixture.MirroredExtensions));
+        Assert.Equal("Gsharp.NET.Sdk/" + PinnedVersion, SdkAttribute(fixture.MirroredLegacy));
+        Assert.Equal("Microsoft.Build.NoTargets/3.7.0", SdkAttribute(fixture.MirroredDocs));
         Assert.False(File.Exists(Path.Combine(fixture.Destination, "global.json")));
     }
 
@@ -208,6 +214,8 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.True(run.Succeeded);
         Assert.Equal("Gsharp.NET.Sdk", SdkAttribute(fixture.MirroredWidget));
         Assert.Equal("Gsharp.NET.Sdk", SdkAttribute(fixture.MirroredExtensions));
+        Assert.Equal("Gsharp.NET.Sdk", SdkAttribute(fixture.MirroredLegacy));
+        Assert.Equal("Microsoft.Build.NoTargets/3.7.0", SdkAttribute(fixture.MirroredDocs));
         Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(fixture.Destination));
         using JsonDocument globalJson = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(fixture.Destination, "global.json")));
@@ -331,6 +339,45 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Contains("0.0.3-other", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Per-project mode across the migrate/validate split: validate keeps the
+    /// version the migrated projects record instead of re-resolving the
+    /// newest local package, which would rewrite every project.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Validate_KeepsThePerProjectPinTheMigratedTreeRecords()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        PipelineOptions migrate = this.RepositoryOptions(compiler, fixture);
+        migrate.SdkVersion = PinnedVersion;
+        RunResult migrated = await new MigrationPipeline(migrate, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+        Assert.True(migrated.Succeeded);
+
+        var probe = new PinProbeStage();
+        RunResult validated = await new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { probe })
+            .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId));
+
+        Assert.True(validated.Succeeded);
+        PinObservation observation = Assert.Single(probe.Observations);
+        Assert.Equal("Gsharp.NET.Sdk/" + PinnedVersion, observation.SdkMoniker);
+        Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
+
+        PipelineOptions disagreeing = this.ValidateOptions(compiler, fixture);
+        disagreeing.SdkVersion = "0.0.3-other";
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(disagreeing, new IMigrationStage[] { new PinProbeStage() })
+                .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId)));
+        Assert.Contains(PinnedVersion, error.Message, StringComparison.Ordinal);
+    }
+
     private static string SdkAttribute(string projectPath) =>
         XDocument.Load(projectPath).Root?.Attribute("Sdk")?.Value;
 
@@ -365,7 +412,7 @@ public sealed class Issue4631SdkPinTests : IDisposable
             OutputLayout = MigrationOutputLayout.Repository,
             Config = "Release",
         };
-        options.ExcludedProjectPaths.Add(fixture.SourceExtensions);
+        options.ExcludedProjectPaths.AddRange(fixture.ExcludedProjects);
         return options;
     }
 
@@ -379,7 +426,7 @@ public sealed class Issue4631SdkPinTests : IDisposable
             ArtifactRoot = Path.Combine(this.root, "validate-runs"),
             Config = "Release",
         };
-        options.ExcludedProjectPaths.Add(fixture.SourceExtensions);
+        options.ExcludedProjectPaths.AddRange(fixture.ExcludedProjects);
         return options;
     }
 
@@ -416,6 +463,24 @@ public sealed class Issue4631SdkPinTests : IDisposable
             Path.Combine(extensionsDirectory, "Extensions.gs"),
             "namespace Extensions\n\npublic func Two() int {\n    return 2\n}\n");
 
+        // An excluded, already-G# project that pins an older SDK version
+        // itself, and an excluded project on another SDK entirely.
+        string legacyDirectory = Path.Combine(source, "src", "Legacy");
+        Directory.CreateDirectory(legacyDirectory);
+        string legacy = Path.Combine(legacyDirectory, "Legacy.csproj");
+        File.WriteAllText(
+            legacy,
+            "<Project Sdk=\"Gsharp.NET.Sdk/0.3.1\"><PropertyGroup>" +
+            "<TargetFramework>net10.0</TargetFramework>" +
+            "</PropertyGroup></Project>");
+        File.WriteAllText(
+            Path.Combine(legacyDirectory, "Legacy.gs"),
+            "namespace Legacy\n\npublic func Three() int {\n    return 3\n}\n");
+        string docsDirectory = Path.Combine(source, "src", "Docs");
+        Directory.CreateDirectory(docsDirectory);
+        string docs = Path.Combine(docsDirectory, "Docs.csproj");
+        File.WriteAllText(docs, "<Project Sdk=\"Microsoft.Build.NoTargets/3.7.0\" />");
+
         if (sourceGlobalJson is not null)
         {
             File.WriteAllText(Path.Combine(source, "global.json"), sourceGlobalJson);
@@ -425,9 +490,11 @@ public sealed class Issue4631SdkPinTests : IDisposable
         return new Fixture(
             source,
             destination,
-            extensions,
+            new[] { extensions, legacy, docs },
             Path.Combine(destination, "src", "Widget", "Widget.gsproj"),
             Path.Combine(destination, "src", "Extensions", "Extensions.csproj"),
+            Path.Combine(destination, "src", "Legacy", "Legacy.csproj"),
+            Path.Combine(destination, "src", "Docs", "Docs.csproj"),
             new[]
             {
                 new CorpusApp(
@@ -441,9 +508,11 @@ public sealed class Issue4631SdkPinTests : IDisposable
     private sealed record Fixture(
         string Source,
         string Destination,
-        string SourceExtensions,
+        IReadOnlyList<string> ExcludedProjects,
         string MirroredWidget,
         string MirroredExtensions,
+        string MirroredLegacy,
+        string MirroredDocs,
         IReadOnlyList<CorpusApp> Apps);
 
     private readonly record struct PinObservation(string SdkMoniker, string AnalyzerVerifierPackageVersion);
