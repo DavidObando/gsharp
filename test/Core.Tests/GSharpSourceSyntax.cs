@@ -86,7 +86,7 @@ internal static class GSharpSourceSyntax
     /// <returns>The name, or an empty string.</returns>
     internal static string SimpleName(SyntaxNode? expression) => expression switch
     {
-        CallExpressionSyntax call when call.Callee is null => call.Identifier.Text,
+        CallExpressionSyntax call when call.Callee is null && call.ConversionTypeClause is null => call.Identifier.Text,
         AccessorExpressionSyntax access => SimpleName(access.RightPart),
         NameExpressionSyntax name => name.IdentifierToken.Text,
         _ => string.Empty,

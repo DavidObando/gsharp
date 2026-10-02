@@ -200,7 +200,7 @@ internal static class TestSource
     internal static string CSharpFixtureSource(string root, string fileName)
     {
         if (string.IsNullOrEmpty(fileName) || fileName != Path.GetFileName(fileName)
-            || !fileName.EndsWith(CSharpExtension, StringComparison.Ordinal))
+            || !fileName.EndsWith(CSharpExtension, StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException($"'{fileName}' must be a bare C# fixture file name.", nameof(fileName));
         }
