@@ -3202,6 +3202,14 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression,
             IMethodSymbol method)
         {
+            if (expression is SimpleNameSyntax simpleName
+                && this.TryTranslateLiftedLocalFunctionReference(
+                    simpleName,
+                    out GExpression liftedReference))
+            {
+                return liftedReference;
+            }
+
             if (method.IsStatic
                 && method.MethodKind != MethodKind.LocalFunction
                 && method.ContainingType is { IsImplicitlyDeclared: false } owner

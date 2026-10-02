@@ -80,6 +80,18 @@ public sealed partial class CSharpToGSharpTranslator
 
                     if (this.TryTranslateLiftedLocalFunctionReference(generic, out GExpression liftedGeneric))
                     {
+                        IMethodSymbol invoke = GetDelegateInvokeMethod(
+                            this.context.GetTypeInfo(generic).ConvertedType);
+                        if (invoke != null
+                            && this.context.GetSymbolInfo(generic).Symbol is IMethodSymbol localFunction)
+                        {
+                            return this.typeMapper.WithMetadataImportCollisionQualification(
+                                () => this.TranslateExactMethodGroupArgument(
+                                    generic,
+                                    localFunction,
+                                    invoke));
+                        }
+
                         return liftedGeneric;
                     }
 
