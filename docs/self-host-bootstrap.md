@@ -9,8 +9,8 @@ Bootstrapping it takes three compilers:
 | 1 | stage-1 `Gsharp.NET.Sdk` | the cs2gs-migrated G# tree | stage 0 |
 | 2 | the migrated tree rebuilt | the same G# tree | stage 1 |
 
-The cut-over requires stage 2 to reproduce stage 1: `GSharp.Core.dll` and `gsc.dll` must have identical IL and
-metadata (MVID zeroed), and the test suites must pass under stage 2.
+The cut-over requires stage 2 to reproduce stage 1: `GSharp.Core.dll` and `gsc.dll` must have identical method
+bodies, CLR execution flags/entry point and metadata (MVID zeroed), and the test suites must pass under stage 2.
 
 ## Packing stage 1
 
@@ -43,3 +43,31 @@ Measured on the nightly 36930275716 tree (main `6c4824cbc`):
 - Package payload: 150 entries.
 - Extras over stage 0: G#-built executables also ship `Gsharp.Extensions`, `Gsharp.Runtime.Channels` and `Gsharp.Runtime.Values`.
 - Missing docs: the XML documentation of the three executables.
+
+## Stage 2: the equivalence check
+
+```sh
+python3 build/selfhost-stage2.py \
+  --tree <tree prepared by selfhost-pack-stage1.py> \
+  --bootstrap <stage-0 nupkg> --stage1 <stage-1 nupkg> --work <dir> \
+  [--project src/Core/Core.gsproj ...] [--assembly out/bin/Release/Core/GSharp.Core.dll ...] \
+  [--test 'test/Core.Tests/Core.Tests.gsproj::FullyQualifiedName~RefactoringBaselineTests' ...] \
+  [--config Release]
+```
+
+The PE helpers use .NET 10 file-based apps (`dotnet run <helper.cs> -- ...`), supported by the SDK
+selected by this repository's `global.json`. They run from `build/selfhost`, which has no project file
+and isolates them from the repository's build props and targets.
+
+How it works:
+- Before building, it verifies the stage-1 package's payload and G# compiler/Core PDB provenance using the stage-1 packer's verifier. Its SDK version must differ from the bootstrap version; supplying stage 0 twice cannot certify self-hosting.
+- It builds the projects twice in the **same tree path**: first pinned to stage 0 (which yields the stage-1 assemblies), then pinned to stage 1 (which yields the stage-2 assemblies). Each stage gets its own isolated package cache, cleared before that stage's build even when `--work` is reused. The stage-2 cache is retained for tests. Assembly snapshots have independent stage-local filenames even for parent-relative or absolute output paths. `--work` must be outside the migrated tree's `out` directory, which each build deletes.
+- For each assembly pair it compares the full-file SHA-256 and the IL+metadata hash with the MVID zeroed. `build/selfhost/PeContentHash.cs` includes **complete method bodies** (headers, IL and exception regions) and the **CLR execution flags and entry point**, unlike the existing IL-only RefactoringBaselineTests body hash, which is unchanged. Timestamps, checksums and debug-wrapper data remain excluded.
+- Test projects run while pinned to stage 1, so everything they compile against is a stage-2 assembly. Every requested run must exit zero and produce fresh TRX evidence of a positive number of executed, passing tests. Missing, malformed, stale or zero-test evidence fails the gate. Each request has a separate results directory under `--work`; multiple target-framework TRX files are all checked.
+- Default assembly outputs follow `--config` (Release by default); explicit `--assembly` paths are used unchanged.
+- The verdict is "equivalent" only when every IL+metadata hash matches. A full-file difference with matching IL+metadata is reported, not hidden.
+- `build/selfhost/PeDiff.cs` explains a difference: it compares table row counts, heap sizes and per-method IL keyed by type, name and signature.
+
+Results:
+- **First run (2026-10-01, main `6c4824cbc`): not equivalent.** Stage-1 and stage-2 `GSharp.Core.dll` had identical tables and heaps but different numbering on 1,093 capture-box classes. The cause was a gsc determinism bug: lowering passes numbered synthesized types in identity-hash order ([#4663](https://github.com/DavidObando/gsharp/issues/4663)). The C#-built compiler had the same bug: adding an unrelated file renumbered its boxes. RefactoringBaselineTests passed under stage 2. All 162 `samples/` compiled to identical IL+metadata with either compiler.
+- **With the #4663 fix:** `GSharp.Core.dll`, `GSharp.Cs2Gs.Translator.dll` and `GSharp.Cs2Gs.CodeModel.dll` are **byte-identical** between stage 1 and stage 2.

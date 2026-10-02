@@ -223,6 +223,11 @@ jobs:
       - name: Verify every test is run exactly once
         run: python3 build/verify-ci-test-partition.py | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Issue #4631 (C3): the stage-2 equivalence comparison hashes real
+      # assemblies, so it runs after the Release build above.
+      - name: Verify the self-host stage-2 comparison
+        run: python3 build/test-selfhost-stage2.py
+
       # ADR-0174 D11: the nightly benchmark is worthless if a PR can silently
       # break its registry, its G# program or its runner. Seconds here beat a
       # red nightly nobody is watching.
