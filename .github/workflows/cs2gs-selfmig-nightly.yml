@@ -134,6 +134,10 @@ jobs:
             /tmp/gsharp-cs2gs-selfmig/migrate.log
             /tmp/gsharp-cs2gs-selfmig/metrics.json
             /tmp/gsharp-cs2gs-selfmig/migrate-run-dir.txt
+            # Issue #4633: the C# test-case lists every shard's per-test-name
+            # parity check compares against, and how they were captured.
+            /tmp/gsharp-cs2gs-selfmig/csharp-tests/**
+            /tmp/gsharp-cs2gs-selfmig/capture-test-oracle.log
 
   validate:
     name: validate (${{ matrix.name }})
@@ -197,6 +201,10 @@ jobs:
             # Issue #3723: what the redundant-`!!` polish loop did per app
             # (rounds, assertions stripped, whether it hit its round cap).
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/polish.log
+            # Issue #4633: each mirrored test project's stage log (it carries
+            # the per-test-name parity counts and notes). The full name
+            # comparison, test-name-parity.json, rides on the *.json glob above.
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/test-parity.log
 
   gate:
     runs-on: ubuntu-latest

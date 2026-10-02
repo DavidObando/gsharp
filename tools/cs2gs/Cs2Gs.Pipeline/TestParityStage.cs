@@ -278,6 +278,14 @@ public sealed partial class TestParityStage : IMigrationStage
                     $"(>= {minimumExpected} expected from the C# original's [Fact] methods).";
                 this.Note(context, ranNote);
 
+                // Issue #4633: the count is a floor, not parity. Every case the
+                // C# original discovers must have run, and nothing else.
+                TriageArtifact namesDiffer = this.CheckTestNames(context);
+                if (namesDiffer is not null)
+                {
+                    return StageOutcome.Failed(new[] { namesDiffer });
+                }
+
                 // Issue #3885: an app whose tests ALL pass still has to answer
                 // for its allow-list entries. Without this, the only run in
                 // which a stale entry could surface is one that is failing for
@@ -332,15 +340,27 @@ public sealed partial class TestParityStage : IMigrationStage
             });
         }
 
+        // Issue #4633: a completed run with failures is still compared name for
+        // name. An allow-list excuses a failing case, never a missing one, and a
+        // red app's name differences are reported alongside its failures.
+        TriageArtifact nameMismatch = this.CheckTestNames(context);
         if (this.AllowListAbsolves(context, allowList, output))
         {
-            return StageOutcome.Passed();
+            return nameMismatch is null
+                ? StageOutcome.Passed()
+                : StageOutcome.Failed(new[] { nameMismatch });
         }
 
-        return StageOutcome.Failed(new[]
+        var failures = new List<TriageArtifact>
         {
             context.Triage.TestParityLibraryTestFailure(output, EmittedGsRelative(context)),
-        });
+        };
+        if (nameMismatch is not null)
+        {
+            failures.Add(nameMismatch);
+        }
+
+        return StageOutcome.Failed(failures);
     }
 
     /// <summary>

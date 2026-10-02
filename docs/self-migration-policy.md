@@ -115,5 +115,9 @@ assertions to satisfy an incorrectly non-null contract changes the oracle.
 - `tools/cs2gs/selfmig-test-allowlist.json` — the policy register for tests
   whose premise stops holding after migration. An empty list is its healthiest
   state.
+- `tools/cs2gs/selfmig-test-name-baseline.json` — the justified per-test-name
+  differences (issue #4633). A mirrored test project must run exactly the cases
+  its C# original discovers; each entry here explains one difference and cites
+  its issue. See the cs2gs README, "Per-test-name parity".
 - ADR-0115 §B — the canonical G# output contract cs2gs must satisfy.
 - ADR-0179 — `gsfmt`, which takes over layout decisions from the printer.

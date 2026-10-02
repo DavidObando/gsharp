@@ -135,6 +135,22 @@ public sealed class PipelineOptions
     public TestParityAllowList? TestParityAllowList { get; set; }
 
     /// <summary>
+    /// Gets or sets the directory holding one <see cref="CSharpTestOracle"/>
+    /// per mirrored test project (issue #4633). When set, a mirrored test
+    /// project must match its C# original NAME FOR NAME, and a missing oracle
+    /// file fails the app. When <see langword="null"/>, the stage keeps the
+    /// count-only check and records <c>count-only</c> in the run record;
+    /// <c>cs2gs validate</c> refuses to run that way unless explicitly told to.
+    /// </summary>
+    public string? CSharpTestOracleDirectory { get; set; }
+
+    /// <summary>
+    /// Gets or sets the justified per-test-name differences (issue #4633).
+    /// <see langword="null"/> is treated as <see cref="TestNameParityBaseline.Empty"/>.
+    /// </summary>
+    public TestNameParityBaseline? TestNameParityBaseline { get; set; }
+
+    /// <summary>
     /// Gets or sets the canonical source-project to generated-project mapping
     /// established before migration starts.
     /// </summary>

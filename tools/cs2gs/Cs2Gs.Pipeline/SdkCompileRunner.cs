@@ -58,9 +58,13 @@ public sealed class SdkCompileRunner
     /// Issue #3501: the hard ceiling on a mirrored test budget, whatever the
     /// suite's size says it wants.
     /// <para>
-    /// This is the value issue #4045 already granted <c>Compiler.Tests</c> by
-    /// hand, kept deliberately: the sizing formula below REPLACES that hand-set
-    /// exception without raising the worst case anywhere in the corpus. The
+    /// It started as the 90 minutes issue #4045 granted <c>Compiler.Tests</c>
+    /// by hand. Issue #4633 raised it to 120: nightly 36906270739 measured the
+    /// migrated <c>Compiler.Tests</c> run at 4,941 s, 91% of 90 minutes, so
+    /// ordinary runner variance was enough to turn a healthy suite into a
+    /// <c>LIBRARY-TESTS-TIMED-OUT</c> with no parity verdict at all. 120
+    /// minutes plus that app's ~25 minutes of compile and ILVerify still fits
+    /// the 240-minute validation job with room for its shard-mates. The
     /// ceiling matters because a validation shard runs all of its apps under a
     /// single <c>cs2gs validate</c> process that writes <c>shard-run.json</c>
     /// only at the end (see <c>build/run-cs2gs-selfmig-validate.sh</c>), so a
@@ -70,7 +74,7 @@ public sealed class SdkCompileRunner
     /// app's missing parity count for a whole shard's.
     /// </para>
     /// </summary>
-    internal static readonly TimeSpan MirroredTestRunTimeoutCeiling = TimeSpan.FromMinutes(90);
+    internal static readonly TimeSpan MirroredTestRunTimeoutCeiling = TimeSpan.FromMinutes(120);
 
     /// <summary>
     /// Issue #3501: seconds of budget granted per <c>[Fact]</c> method declared
@@ -1006,6 +1010,16 @@ public sealed class SdkCompileRunner
         return scaled > MirroredTestRunTimeoutCeiling ? MirroredTestRunTimeoutCeiling : scaled;
     }
 
+    /// <summary>
+    /// Issue #4633: where a mirrored test run writes its TRX, derived from the
+    /// app's artifact directory alone so the parity stage reads exactly the
+    /// file this run wrote.
+    /// </summary>
+    /// <param name="artifactDirectory">The app's artifact directory.</param>
+    /// <returns>The absolute TRX path.</returns>
+    internal static string MirroredTestResultsPath(string artifactDirectory) =>
+        Path.Combine(Path.GetFullPath(artifactDirectory), "test-results", "parity.trx");
+
     internal static ProcessRunResult TestMirroredProject(
         string generatedProjectPath,
         string artifactDirectory,
@@ -1029,6 +1043,15 @@ public sealed class SdkCompileRunner
         try
         {
             temporaryBuildProps = PrepareTemporaryBuildProps(generatedProjectPaths.Values);
+
+            // Issue #4633: a stale TRX from an earlier run in the same artifact
+            // directory must never stand in for this run's results.
+            string trxPath = MirroredTestResultsPath(artifactDirectory);
+            if (File.Exists(trxPath))
+            {
+                File.Delete(trxPath);
+            }
+
             return ProcessRunner.Run(
                 "dotnet",
                 new[]
@@ -1039,6 +1062,16 @@ public sealed class SdkCompileRunner
                     "-c",
                     config ?? "Release",
                     "-p:Cs2GsArtifactRoot=" + artifactDirectory,
+
+                    // Issue #4633: per-case names and outcomes for the
+                    // per-test-name parity check, with display names forced to
+                    // the same fully qualified form the C# oracle was listed in.
+                    "--logger",
+                    "trx;LogFileName=" + Path.GetFileName(trxPath),
+                    "--results-directory",
+                    Path.GetDirectoryName(trxPath),
+                    "--",
+                    CSharpTestOracle.RunSettingsArgument,
                 },
                 projectDirectory,
                 timeout,

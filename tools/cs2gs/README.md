@@ -137,11 +137,19 @@ the same work split across runners.
 cs2gs migrate --corpus "$repo" --out /tmp/migrated --artifacts /tmp/runs \
   --config Release --translate-only --exclude ...
 
+# List every C# test project's cases once (issue #4633).
+cs2gs capture-test-oracle --corpus "$repo" --out /tmp/csharp-tests --exclude ...
+
 # N independent shards over the SAME migrated tree.
 cs2gs validate --corpus "$repo" --migrated /tmp/migrated \
   --artifacts /tmp/shard1 --manifests /tmp/runs/<runId> \
+  --csharp-test-oracle /tmp/csharp-tests \
   --config Release --exclude ... --shard 1/6
 ```
+
+`validate` refuses to run without `--csharp-test-oracle`, unless
+`--count-only-test-parity` says explicitly that per-test-name parity is being
+skipped (see below).
 
 Two invariants make this safe, and both are load-bearing:
 
@@ -289,6 +297,40 @@ It is deliberately a separate file from `selfmig-baseline.json`: that one is a
 ratchet (`greenFloor`, `greenApps`, the ceilings) edited when a run banks a win;
 this is a policy register edited when a test's premise stops holding. Real
 defects under investigation do **not** belong here.
+
+#### Per-test-name parity (`selfmig-test-name-baseline.json`, #4633)
+
+A mirrored test project passes only when it runs the same test cases as its C#
+original, name for name. A count was not enough: the old check asked for exit 0
+and at least as many cases as the original had `[Fact]` methods, so `[Theory]`
+rows were never counted and `test/Core.Tests` could lose 2,371 of its 10,920
+cases and stay green.
+
+* **The oracle** is the C# original's xUnit *discovery*, not a second run:
+  `cs2gs capture-test-oracle` builds each test project (Release) and records
+  `dotnet test --list-tests` as `<app>.csharp-tests.json`. The nightly does
+  this once, after translation, and ships the files to every shard.
+* **The comparison** reads the migrated run's TRX. Both sides pass
+  `-- xUnit.MethodDisplay=ClassAndMethod`, which overrides the repository's
+  `methodDisplay: method`, so every name is fully qualified
+  (`Ns.Class.Method(args)`). Names are a multiset, and the #2833 record
+  `ToString` normalization applies. A theory xUnit does not pre-enumerate
+  (non-serializable data) is one bare name in discovery and a result per row in
+  execution; its rows satisfy the bare name, and that is the only case whose
+  row count is not checked.
+* **Fails closed.** A configured oracle directory without a file for the app
+  (`TEST-ORACLE-MISSING`), an unreadable oracle or TRX, and zero migrated
+  results all fail the app. The failure allow-list excuses a failing case, never
+  a missing one.
+* **The baseline** names each understood difference: `missing` (one C# name),
+  `extra` (one migrated name), or `rows` (one theory method whose rows render
+  differently but are equally many). `reason` and `issue` are mandatory, and an
+  entry that stops matching is reported as stale. A difference caused by a
+  cs2gs or gsc defect is a P0 self-migration bug, and its entry cites that issue.
+* **Auditable.** Every completed mirrored run records `testNameParity` (mode,
+  C# and migrated case counts, matched, missing, extra, explained) in
+  `run.json` and the merged run, PASS or FAIL. The full lists are in the app's
+  `test-name-parity.json`.
 
 A fifth category cuts across all four: a stage that throws an unhandled
 exception is a defect in `cs2gs` itself, not a property of the code being

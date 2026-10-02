@@ -92,7 +92,11 @@ public sealed class Issue3931KilledTestRunClassificationTests
         // validation measured ~81 minutes in gate run 34232380469.
         TimeSpan compilerTests = SdkCompileRunner.MirroredTestRunTimeoutFor(4103);
 
-        Assert.Equal(TimeSpan.FromMinutes(90), compilerTests);
+        // Issue #4633 raised the ceiling past 90 minutes, so the size formula
+        // now decides; it must never fall below what #4045 granted by hand.
+        Assert.True(
+            compilerTests >= TimeSpan.FromMinutes(90),
+            $"Compiler.Tests' budget {compilerTests} is below the 90 minutes #4045 granted.");
         Assert.True(compilerTests <= SdkCompileRunner.MirroredTestRunTimeoutCeiling);
 
         // And a suite of ordinary size keeps the tight budget, so a hang there

@@ -94,6 +94,18 @@ Before moving an application to a different compiler version, pin the intended S
 
 ### Added
 
+- **`cs2gs capture-test-oracle` and per-test-name test parity** (issue
+  [#4633](https://github.com/DavidObando/gsharp/issues/4633)). A migrated test
+  project used to pass parity on its exit code and a count of `[Fact]` methods,
+  so `[Theory]` rows and renamed or dropped cases went unnoticed.
+  - The new verb lists each C# test project's cases.
+  - `cs2gs validate --csharp-test-oracle <dir>` and
+    `cs2gs migrate --csharp-test-oracle <dir>` compare the migrated run's TRX
+    with that list, name for name.
+  - Justified differences go in `tools/cs2gs/selfmig-test-name-baseline.json`.
+  - `cs2gs validate` now requires the oracle, or an explicit
+    `--count-only-test-parity`.
+  - The mirrored test budget ceiling is now 120 minutes (was 90).
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values
