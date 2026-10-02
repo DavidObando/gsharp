@@ -219,7 +219,8 @@ internal sealed class FunctionEmitter
         FunctionSymbol function,
         BoundBlockStatement body,
         bool isEntryPoint,
-        bool isSynthesizedEntryPointStub = false)
+        bool isSynthesizedEntryPointStub = false,
+        bool isInterfaceImplementation = false)
     {
         // ADR-0086 / issue #727 + ADR-0092 / issue #758: P/Invoke functions
         // skip body emission. Classic @DllImport functions route through the
@@ -240,7 +241,7 @@ internal sealed class FunctionEmitter
         var bodyEmission = this.EmitFunctionBody(function, bodySelection.Body, bodySelection.AsyncPlan, isEntryPoint);
         var signature = this.EncodeFunctionSignature(function, bodySelection.AsyncPlan, isEntryPoint);
         var methodName = GetMethodMetadataName(function, isEntryPoint, isSynthesizedEntryPointStub);
-        var methodAttributes = GetMethodAttributes(function, isEntryPoint, isSynthesizedEntryPointStub);
+        var methodAttributes = GetMethodAttributes(function, isEntryPoint, isSynthesizedEntryPointStub, isInterfaceImplementation);
         var parameterMetadata = this.EmitParameterMetadata(function, bodySelection.AsyncPlan, isEntryPoint);
         var handle = this.EmitMethodDefinition(
             function,
@@ -511,7 +512,8 @@ internal sealed class FunctionEmitter
     private static MethodAttributes GetMethodAttributes(
         FunctionSymbol function,
         bool isEntryPoint,
-        bool isSynthesizedEntryPointStub = false)
+        bool isSynthesizedEntryPointStub = false,
+        bool isInterfaceImplementation = false)
     {
         // The synthesized entry point must remain Public so the runtime can find it.
         // ADR-0149: an explicit-interface qualifier clause member is ALWAYS
@@ -598,6 +600,7 @@ internal sealed class FunctionEmitter
             else if (isDataToStringOverride
                 || function.IsOpen
                 || function.IsOverride
+                || isInterfaceImplementation
                 || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
                 methodAttrs |= MethodAttributes.Virtual;

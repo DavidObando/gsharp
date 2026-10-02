@@ -178,7 +178,8 @@ internal static class MethodInfoHelpers
                     {
                         foreach (var openMethod in inherited.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
                         {
-                            if (openMethod.IsSpecialName || openMethod.Name != method.Name)
+                            if (openMethod.Name != method.Name
+                                || (openMethod.IsSpecialName && !method.IsSpecialName))
                             {
                                 continue;
                             }

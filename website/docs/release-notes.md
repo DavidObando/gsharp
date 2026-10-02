@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Ordinary class methods now emit non-virtual CLR metadata as specified by ADR-0017** (issue [#4677](https://github.com/DavidObando/gsharp/issues/4677)). `open` methods, overrides, and interface implementations retain their virtual slots, including synthesized sync/async iterators and symbolic generic event accessors.
+
 ### Reader's overview
 
 For changes after the published snapshot, pay particular attention to stricter generic-constraint and nullable-argument diagnostics. Code previously accepted with an invalid CLR contract may now be rejected at compile time; the detailed entries below identify the diagnostic and remedy.
