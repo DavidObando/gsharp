@@ -2613,12 +2613,11 @@ public sealed partial class CSharpToGSharpTranslator
                     token.IsKind(SyntaxKind.IdentifierToken)
                     && this.nameAllocator.GetName(token.ValueText) == candidate);
 
-            string designator = stem;
-            for (int suffix = 2; Occupied(designator); suffix++)
-            {
-                designator = $"{stem}_{suffix}";
-            }
-
+            INamedTypeSymbol owner = this.state.CurrentEmittedAggregate
+                ?? this.context.SemanticModel.GetEnclosingSymbol(recursive.SpanStart)?.ContainingType;
+            string designator = LiftedLocalFunctionNameAllocator
+                .For(this.context.Compilation)
+                .ClaimDesignator(owner, stem, Occupied);
             usedDesignators.Add(designator);
             return designator;
         }

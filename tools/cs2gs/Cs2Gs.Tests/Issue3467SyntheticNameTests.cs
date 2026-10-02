@@ -596,6 +596,43 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_PatternDesignatorReservesAgainstLaterNestedHelper()
+        {
+            // Issue #4302: the group inside the case body is lifted after the
+            // pattern is translated. With `C.callback` occupied, the helper
+            // takes `callback_2`, which must not also be the designator
+            // synthesized from `Callback_2`.
+            string printed = Translate("""
+                public delegate int Callback_2(int value);
+
+                public class C
+                {
+                    private static int callback() => -1;
+
+                    public int Run(Callback_2 value)
+                    {
+                        switch (value)
+                        {
+                            case Callback_2 { }:
+                            {
+                                return callback(0);
+                                static int callback(int n) => n == 0 ? 2 : Other<int>(n - 1);
+                                static int Other<T>(int n) => callback(n);
+                            }
+                            default:
+                                return -1;
+                        }
+                    }
+                }
+                """);
+
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run((value int32) -> 1))",
+                "2");
+        }
+
+        [Fact]
         public void ReadableLiftFallback_ReservesNameAgainstLaterTypeAlias()
         {
             string printed = Translate("""

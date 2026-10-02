@@ -27,8 +27,43 @@ internal sealed class LiftedLocalFunctionNameAllocator
     private readonly HashSet<string> helperNames = new(StringComparer.Ordinal);
     private readonly HashSet<string> aliasNames = new(StringComparer.Ordinal);
 
+    // Issue #4302: synthesized pattern designators print beside bare helper
+    // references in the same emitted type, so the two reserve against each
+    // other whichever is allocated first.
+    private readonly Dictionary<ISymbol, HashSet<string>> designatorsByType =
+        new(SymbolEqualityComparer.Default);
+
     public static LiftedLocalFunctionNameAllocator For(Compilation compilation) =>
         ByCompilation.GetValue(compilation, static _ => new LiftedLocalFunctionNameAllocator());
+
+    public string ClaimDesignator(INamedTypeSymbol emittedOwner, string stem, Func<string, bool> reserved)
+    {
+        lock (this.gate)
+        {
+            ISymbol owner = emittedOwner?.OriginalDefinition;
+            HashSet<string> helpers = owner != null && this.usedByType.TryGetValue(owner, out HashSet<string> used)
+                ? used
+                : null;
+            string designator = stem;
+            for (int suffix = 2; reserved(designator) || helpers?.Contains(designator) == true; suffix++)
+            {
+                designator = $"{stem}_{suffix}";
+            }
+
+            if (owner != null)
+            {
+                if (!this.designatorsByType.TryGetValue(owner, out HashSet<string> designators))
+                {
+                    designators = new HashSet<string>(StringComparer.Ordinal);
+                    this.designatorsByType.Add(owner, designators);
+                }
+
+                designators.Add(designator);
+            }
+
+            return designator;
+        }
+    }
 
     public string ClaimAlias(string baseAlias, Func<string, bool> reserved)
     {
@@ -69,11 +104,13 @@ internal sealed class LiftedLocalFunctionNameAllocator
                 this.usedByType.Add(owner, used);
             }
 
+            this.designatorsByType.TryGetValue(owner, out HashSet<string> designators);
             string candidate = localName;
             for (int suffix = 2;
                 occupied.Contains(candidate)
                     || used.Contains(candidate)
                     || this.aliasNames.Contains(candidate)
+                    || designators?.Contains(candidate) == true
                     || unavailable(candidate);
                 suffix++)
             {
