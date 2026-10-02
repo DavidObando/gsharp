@@ -460,6 +460,12 @@ public class BoundNodeKindExhaustivenessTests
         var sigIndex = source.IndexOf(methodSignature, StringComparison.Ordinal);
         Assert.True(sigIndex >= 0, $"Method signature not found: {methodSignature}");
 
+        // The marker must name ONE method: an overload or helper sharing the
+        // prefix would otherwise slice the wrong body without failing.
+        Assert.True(
+            source.IndexOf(methodSignature, sigIndex + 1, StringComparison.Ordinal) < 0,
+            $"Method signature is ambiguous (occurs more than once): {methodSignature}");
+
         // Find the opening brace of the method.
         var bodyStart = source.IndexOf('{', sigIndex);
         Assert.True(bodyStart >= 0, "Opening brace not found after method signature.");

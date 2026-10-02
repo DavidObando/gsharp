@@ -132,7 +132,11 @@ public class TestSourceTests
         }
     }
 
-    /// <summary>The committed fixture snapshots match their live C# fixtures.</summary>
+    /// <summary>
+    /// Every committed fixture snapshot is usable: while its live C# fixture
+    /// exists it must match it exactly (drift fails); once the fixture is G#,
+    /// the snapshot itself must hold the expected C# fixture namespace.
+    /// </summary>
     [Fact]
     public void CSharpFixtureSnapshots_AreCurrent()
     {

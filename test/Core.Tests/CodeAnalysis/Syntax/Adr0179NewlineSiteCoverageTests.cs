@@ -27,7 +27,7 @@ public sealed class Adr0179NewlineSiteCoverageTests
         string[] actual = TestSource.SourceFilesMatching("Parser*", SearchOption.TopDirectoryOnly, "src/Core/CodeAnalysis/Syntax")
             .Where(path => Path.GetFileNameWithoutExtension(path) != "Parser")
             .SelectMany(path => File.ReadLines(path)
-                .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Select(StripLineComment)
                 .SelectMany(line => NewlineSensitiveCall.Matches(line).Select(match => match.Value))
                 .Select(call => Path.GetFileNameWithoutExtension(path) + ": " + call))
             .OrderBy(site => site, StringComparer.Ordinal)
@@ -54,5 +54,31 @@ public sealed class Adr0179NewlineSiteCoverageTests
         };
 
         Assert.Equal(expected.OrderBy(site => site, StringComparer.Ordinal), actual);
+    }
+
+    /// <summary>
+    /// The line without its <c>//</c> comment, so a call named in a trailing
+    /// comment is not inventoried. A <c>//</c> inside a string literal is kept.
+    /// </summary>
+    private static string StripLineComment(string line)
+    {
+        var inString = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (line[i] == '\\' && inString)
+            {
+                i++;
+            }
+            else if (line[i] == '"')
+            {
+                inString = !inString;
+            }
+            else if (!inString && line[i] == '/' && i + 1 < line.Length && line[i + 1] == '/')
+            {
+                return line.Substring(0, i);
+            }
+        }
+
+        return line;
     }
 }
