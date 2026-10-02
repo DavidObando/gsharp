@@ -80,7 +80,7 @@ public class ReferenceMetadataIndexTests
         // exists and stays non-public; a rename would make it pass vacuously.
         var invariant = typeof(ReferenceResolver).Assembly.GetType("GSharp.Core.CodeAnalysis.Invariant");
         Assert.NotNull(invariant);
-        Assert.False(invariant.IsPublic);
+        Assert.False(invariant.IsVisible);
 
         for (var i = 0; i < 100; i++)
         {
