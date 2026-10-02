@@ -77,8 +77,15 @@ internal static class CommittedCompilerSource
         return files.OrderBy(path => path, StringComparer.Ordinal).ToList();
     }
 
-    // Judged on the path BELOW the root: the root itself may sit under a bin/.
-    private static bool IsBuildOutput(string root, string path) =>
+    /// <summary>
+    /// Whether <paramref name="path"/> lies in build output (an <c>obj</c> or
+    /// <c>bin</c> segment) BELOW <paramref name="root"/>; the root itself may
+    /// sit under a bin/ directory.
+    /// </summary>
+    /// <param name="root">The scanned root.</param>
+    /// <param name="path">A file under it.</param>
+    /// <returns><see langword="true"/> for build output.</returns>
+    internal static bool IsBuildOutput(string root, string path) =>
         Path.GetRelativePath(root, path)
             .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             .Any(segment => string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase)

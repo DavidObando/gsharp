@@ -56,9 +56,22 @@ public sealed class Issue4656CommittedCompilerSourceTests
 
     private static void Delete(params string[] roots)
     {
+        // Best-effort cleanup: a failure here must never mask the test's own result.
         foreach (string root in roots)
         {
-            Directory.Delete(root, recursive: true);
+            try
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
     }
 

@@ -132,10 +132,7 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
             {
                 // Build output (obj/**/GeneratedAssemblyInfo.cs, ...) is not a
                 // committed source and must not satisfy the non-empty check.
-                if (Path.GetRelativePath(projectDirectory, sourcePath)
-                    .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                    .Any(segment => string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase)))
+                if (CommittedCompilerSource.IsBuildOutput(projectDirectory, sourcePath))
                 {
                     continue;
                 }
