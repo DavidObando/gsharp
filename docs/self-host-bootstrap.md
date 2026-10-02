@@ -43,3 +43,16 @@ Measured on the nightly 36930275716 tree (main `6c4824cbc`):
 - Package payload: 150 entries.
 - Extras over stage 0: G#-built executables also ship `Gsharp.Extensions`, `Gsharp.Runtime.Channels` and `Gsharp.Runtime.Values`.
 - Missing docs: the XML documentation of the three executables.
+
+## Windows: the migrated Core.Tests on a 1 MB stack
+
+The compiler recurses deeply: the binder, lowering and emit all walk syntax and bound trees. Windows gives the main thread
+a 1 MB stack (Linux: 8 MB), and the frame sizes of G#-compiled code have never been measured. The workflow
+`.github/workflows/selfhost-windows.yml` (manual dispatch; it also runs on pull requests that change it) does the following:
+- It takes the migrated tree from a `cs2gs-selfmig-nightly` run (default: the latest successful one) and replays that run's polish deltas.
+- It pins the tree to the commit's own C#-built SDK (`selfhost-pack-stage1.py --prepare-only`).
+- It runs the C# and the migrated Core.Tests on the same `windows-latest` runner.
+
+`build/selfhost-compare-trx.py` compares the two runs by failing-test set. The job fails if the migrated suite fails a test
+that the C# suite passes, or executes fewer than 95% of the tests the C# suite does (a crashed test host, such as a stack overflow).
+Failures the C# suite already has on Windows (tracked by `windows-nightly`) are reported, not counted.
