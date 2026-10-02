@@ -2329,10 +2329,6 @@ public sealed partial class CSharpToGSharpTranslator
             // `List<int>`), and sanitized like every other declared/synthesized
             // name so a keyword-colliding designator agrees with its references
             // (issue #1734).
-            string designator = recursive.Designation is SingleVariableDesignationSyntax named
-                ? this.EmittedName(named, named.Identifier)
-                : SanitizeIdentifier(LowerCamel(GetRightmostTypeName(recursive.Type)));
-
             // Issue #1839 (N3): two typed recursive subpatterns within the SAME
             // arm/scope (e.g. `Ns.Circle or Other.Circle`) can synthesize the
             // identical designator from their distinct rightmost simple names,
@@ -2340,7 +2336,9 @@ public sealed partial class CSharpToGSharpTranslator
             // Uniquify on collision within this arm's shared `usedDesignators`
             // scope (threaded alongside `bindings`) rather than emitting a
             // colliding declaration.
-            designator = Uniquify(designator, usedDesignators);
+            string designator = recursive.Designation is SingleVariableDesignationSyntax named
+                ? Uniquify(this.EmittedName(named, named.Identifier), usedDesignators)
+                : this.SynthesizePatternDesignator(recursive, usedDesignators);
 
             if (recursive.PropertyPatternClause != null)
             {
@@ -2591,6 +2589,38 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return char.ToLowerInvariant(name[0]) + name.Substring(1);
+        }
+
+        // A designator synthesized from the pattern type (`circle` for
+        // `Circle { }`) is a readable local, so it must not capture a name the
+        // arm already refers to: a source identifier in the arm, or a lifted
+        // local-function helper (issue #4302), whose references print bare.
+        private string SynthesizePatternDesignator(
+            RecursivePatternSyntax recursive,
+            HashSet<string> usedDesignators)
+        {
+            string stem = SanitizeIdentifier(LowerCamel(GetRightmostTypeName(recursive.Type)));
+            SyntaxNode arm = recursive.Ancestors()
+                .FirstOrDefault(node => node is SwitchSectionSyntax
+                    or SwitchExpressionArmSyntax
+                    or StatementSyntax)
+                ?? recursive;
+            bool Occupied(string candidate) =>
+                usedDesignators.Contains(candidate)
+                || this.state.LiftedStaticLocalFunctions.ContainsValue(candidate)
+                || this.state.LiftedRecursiveLocalFunctions.Values.Any(lift => lift.Name == candidate)
+                || arm.DescendantTokens().Any(token =>
+                    token.IsKind(SyntaxKind.IdentifierToken)
+                    && this.nameAllocator.GetName(token.ValueText) == candidate);
+
+            string designator = stem;
+            for (int suffix = 2; Occupied(designator); suffix++)
+            {
+                designator = $"{stem}_{suffix}";
+            }
+
+            usedDesignators.Add(designator);
+            return designator;
         }
 
         // Issue #1839 (N3): appends a numeric suffix (`circle_2`, `circle_3`, …)

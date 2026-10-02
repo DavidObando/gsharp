@@ -83,9 +83,9 @@ public sealed partial class CSharpToGSharpTranslator
     // cheap and only resolves symbols for those nodes.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<INamedTypeSymbol, HashSet<string>>> TypeOfReferencedTypesCache = new();
 
-    // Lifted helpers from separate partial-type documents share one CLR type.
-    // Keep their readable names unique across the whole compilation.
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, LiftedLocalFunctionNameAllocator> LiftedLocalFunctionNames = new();
+    // Lifted helpers from separate partial-type documents share one CLR type;
+    // LiftedLocalFunctionNameAllocator.For keeps their readable names unique
+    // across the whole compilation.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<string, List<SyntaxTree>>> IdentifierTreeIndexes = new();
 
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, HashSet<INamedTypeSymbol>> AllStaticUsingTargetsCache = new();

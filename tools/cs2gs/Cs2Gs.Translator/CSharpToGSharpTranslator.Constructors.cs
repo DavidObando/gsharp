@@ -1995,10 +1995,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             INamedTypeSymbol aggregate = this.state.CurrentEmittedAggregate ?? localFunction.ContainingType;
             HashSet<string> occupied = this.CollectLiftedHelperOccupiedNames(aggregate, localFunction);
-            string allocated = LiftedLocalFunctionNames
-                .GetValue(
-                    this.context.Compilation,
-                    static _ => new LiftedLocalFunctionNameAllocator())
+            string allocated = LiftedLocalFunctionNameAllocator
+                .For(this.context.Compilation)
                 .Allocate(
                     localFunction,
                     aggregate,
@@ -2272,7 +2270,12 @@ public sealed partial class CSharpToGSharpTranslator
 
                 qualified = simpleName.Parent switch
                 {
-                    MemberAccessExpressionSyntax access => access.Name == simpleName,
+                    // A receiver spelled like an owning type (`D C`, then
+                    // `C.Helper()`) binds the type's static member in gsc,
+                    // so such an access can observe the helper.
+                    MemberAccessExpressionSyntax access => access.Name == simpleName
+                        && !(access.Expression is SimpleNameSyntax receiver
+                            && owners.Any(owner => owner.Name == receiver.Identifier.ValueText)),
                     MemberBindingExpressionSyntax => true,
                     QualifiedNameSyntax qualifiedName => qualifiedName.Right == simpleName,
                     _ => false,

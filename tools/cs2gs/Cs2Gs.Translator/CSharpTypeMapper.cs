@@ -1224,15 +1224,12 @@ public sealed class CSharpTypeMapper
         reserved.UnionWith(this.reservedSiblingStaticMemberNames);
 
         string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
-        string baseAlias = $"{namespaceQualifier}{simpleName}";
-        string alias = baseAlias;
-        for (var suffix = 2;
-            reserved.Contains(alias)
-                || HasVisibleCallableName(alias, context, location, names);
-            suffix++)
-        {
-            alias = $"{baseAlias}_{suffix}";
-        }
+        string alias = LiftedLocalFunctionNameAllocator
+            .For(context.Compilation)
+            .ClaimAlias(
+                $"{namespaceQualifier}{simpleName}",
+                candidate => reserved.Contains(candidate)
+                    || HasVisibleCallableName(candidate, context, location, names));
 
         this.synthesizedTypeAliases.Add(alias, target);
         return alias;

@@ -432,6 +432,134 @@ namespace Cs2Gs.Tests
                 "12");
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ReadableLiftFallback_AndPartialDocumentAliasNeverShareAName(bool helperDocumentFirst)
+        {
+            // Issue #4302: a file-scope alias synthesized in one partial
+            // document and a helper lifted in another land in the same type,
+            // and gsc binds an invocation to the member before the alias.
+            // Whichever document is translated first, the other must avoid it.
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                new[]
+                {
+                    ("C.Builder.cs", """
+                        namespace Demo;
+
+                        public class StringBuilder
+                        {
+                        }
+
+                        public partial class C
+                        {
+                            public string Make() => new System.Text.StringBuilder().Append("x").ToString();
+                        }
+                        """),
+                    ("C.Lift.cs", """
+                        namespace Demo;
+
+                        public partial class C
+                        {
+                            public int Run(int value)
+                            {
+                                return TextStringBuilder(value);
+                                static int TextStringBuilder(int n) =>
+                                    n == 0 ? 7 : Other<int>(n - 1);
+                                static int Other<T>(int n) => TextStringBuilder(n);
+                            }
+                        }
+                        """),
+                });
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+            IEnumerable<LoadedDocument> documents = helperDocumentFirst
+                ? project.Documents.Reverse()
+                : project.Documents;
+            var printed = new List<string>();
+            var translator = new CSharpToGSharpTranslator();
+            foreach (LoadedDocument document in documents)
+            {
+                var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+                printed.Add(GSharpPrinter.Print(translator.TranslateDocument(document, context)));
+            }
+
+            string combined = string.Join(Environment.NewLine, printed);
+            string helper = helperDocumentFirst ? "TextStringBuilder" : "TextStringBuilder_2";
+            string alias = helperDocumentFirst ? "TextStringBuilder_2" : "TextStringBuilder";
+            Assert.Contains($"func {helper}(", combined, StringComparison.Ordinal);
+            Assert.Contains($"import {alias} = System.Text.StringBuilder", combined, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed.ToArray());
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_LocalNamedLikeOwnerCannotCaptureHelperValue()
+        {
+            // Issue #4302: `C.First` would bind through the local `C` to
+            // `D.First`; the same-aggregate helper reference stays bare.
+            string printed = Translate("""
+                using System;
+
+                public class D
+                {
+                    public int First(int n) => 100;
+                }
+
+                public class C
+                {
+                    public int Run()
+                    {
+                        D C = new D();
+                        Func<int, int> f = First;
+                        return f(1) + C.First(0);
+                        static int First(int n) => n == 0 ? 7 : Second<int>(n - 1);
+                        static int Second<T>(int n) => First(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("func First_2(", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("= C.First", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run())",
+                "107");
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_PatternDesignatorCannotShadowStaticHelper()
+        {
+            // Issue #4302: `case Callback { }` synthesizes a readable designator
+            // from the type name. It must not take the bare static helper's
+            // name, or `callback(0)` would invoke the matched delegate.
+            string printed = Translate("""
+                public delegate int Callback(int value);
+
+                public class C
+                {
+                    public int Run(Callback value)
+                    {
+                        switch (value)
+                        {
+                            case Callback { }:
+                                return callback(0);
+                            default:
+                                return -1;
+                        }
+
+                        static int callback(int n) => n == 0 ? 2 : Other<int>(n - 1);
+                        static int Other<T>(int n) => callback(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("return callback(0)", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run((value int32) -> 1))",
+                "2");
+        }
+
         [Fact]
         public void ReadableLiftFallback_ReservesNameAgainstLaterTypeAlias()
         {
@@ -564,7 +692,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
-            Assert.Contains("return C.Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
+            Assert.Contains("return Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
@@ -616,10 +744,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
-            Assert.Contains(
-                "return C.Helper_3(value) + Helper_2(value)",
-                printed,
-                StringComparison.Ordinal);
+            Assert.Contains("return Helper_3(value) + Helper_2(value)", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 
@@ -641,7 +766,7 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
-            Assert.Contains("return C.Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
+            Assert.Contains("return Helper_3(value) + Helper_2", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 

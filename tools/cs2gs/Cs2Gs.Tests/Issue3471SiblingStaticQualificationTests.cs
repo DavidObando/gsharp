@@ -137,10 +137,11 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
-        public void LiftedStaticLocalFunction_SameTypeCall_UsesExplicitReceiver()
+        public void LiftedStaticLocalFunction_SameTypeCall_EmitsBare()
         {
-            // Issue #4302: an explicit receiver prevents synthesized locals
-            // (such as recursive-pattern carriers) from shadowing the helper.
+            // Issue #4302: a mixed generic/non-generic recursion group keeps
+            // the readable member-lift fallback, and same-type calls remain
+            // bare rather than acquiring a redundant owner qualification.
             string printed = Translate("""
                 public class Labels
                 {
@@ -162,7 +163,8 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
-            Assert.Contains("return Labels.NewLabel(value)", printed, StringComparison.Ordinal);
+            Assert.Contains("return NewLabel(value)", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Labels.NewLabel(value)", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 
@@ -188,26 +190,34 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
-        public void GenericOwner_LiftedHelper_UsesConstructedOwner()
+        public void GenericOwner_LiftedHelper_KeepsEnclosingInstantiation()
         {
+            // Issue #4302: inside `Second<T>` the spelling `Box[T]` names the
+            // method's `T`, so a qualified helper call would read
+            // `Box<string>.Marker` from `Box<int>`. Bare sibling calls keep
+            // the enclosing instantiation.
             string printed = Translate("""
                 public class Box<T>
                 {
+                    public static int Marker;
+
                     public static int Run(int value)
                     {
-                        return Helper(value);
+                        return Second<string>(value);
 
-                        static int Helper(int i) =>
-                            i == 0 ? 0 : Other<int>(i - 1);
+                        static int First(int i) =>
+                            i == 0 ? Marker : Second<int>(i - 1);
 
-                        static int Other<U>(int i) => Helper(i);
+                        static int Second<T>(int i) => First(i);
                     }
                 }
                 """);
 
-            Assert.Contains("return Box[T].Helper(value)", printed, StringComparison.Ordinal);
-            Assert.Contains("Box[T].Other[int32](", printed, StringComparison.Ordinal);
-            TranslationTestValidation.AssertBinds(printed);
+            Assert.DoesNotContain("Box[T].First", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Box[int32].Marker = 1\nBox[string].Marker = 2\nConsole.WriteLine(Box[int32].Run(1))",
+                "1");
         }
 
         [Fact]

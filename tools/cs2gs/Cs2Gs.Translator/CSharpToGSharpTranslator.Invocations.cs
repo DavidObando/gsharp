@@ -225,7 +225,7 @@ public sealed partial class CSharpToGSharpTranslator
                     recursiveOwner,
                     recursiveLift.Name,
                     recursiveLift.IsStatic,
-                    invocation.GetLocation());
+                    invocation);
                 IReadOnlyList<GTypeReference> recursiveTypeArguments =
                     invocation.Expression is GenericNameSyntax recursiveGeneric
                         ? this.MapTypeArguments(recursiveGeneric)
@@ -402,7 +402,7 @@ public sealed partial class CSharpToGSharpTranslator
                     emittedOwner,
                     liftedName,
                     isStatic: true,
-                    invocation.GetLocation());
+                    invocation);
                 if (invocation.Expression is GenericNameSyntax liftedGeneric)
                 {
                     typeArguments = this.MapTypeArguments(liftedGeneric);

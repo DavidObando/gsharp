@@ -65,7 +65,7 @@ public sealed partial class CSharpToGSharpTranslator
                     recursiveOwner,
                     recursiveLift.Name,
                     recursiveLift.IsStatic,
-                    name.GetLocation());
+                    name);
                 return true;
             }
 
@@ -80,7 +80,7 @@ public sealed partial class CSharpToGSharpTranslator
                     emittedOwner,
                     liftedName,
                     isStatic: true,
-                    name.GetLocation());
+                    name);
                 return true;
             }
 
@@ -88,22 +88,30 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        // Issue #4302: every reference to a lifted helper sits inside the local
+        // function's enclosing member, so a same-aggregate static reference
+        // stays bare. A type qualifier there could itself be captured (by a
+        // local named like the owner, or by a method type parameter shadowing
+        // the owner's `T`). Bare is safe because the allocator rejects every
+        // source name visible in that member, and synthesized locals and
+        // aliases reserve helper names (SynthesizePatternDesignator,
+        // LiftedLocalFunctionNameAllocator.ClaimAlias).
         private GExpression LiftedLocalFunctionReference(
             INamedTypeSymbol owner,
             string name,
             bool isStatic,
-            Location location)
+            SyntaxNode site)
         {
-            if (isStatic && owner != null)
+            if (!isStatic)
             {
-                return new MemberAccessExpression(
-                    this.StaticQualifierReceiver(owner, location),
-                    name);
+                return new MemberAccessExpression(new ThisExpression(), name);
             }
 
-            return isStatic
+            return owner == null || this.IsBareSiblingStaticScope(owner, name, site)
                 ? new IdentifierExpression(name)
-                : new MemberAccessExpression(new ThisExpression(), name);
+                : new MemberAccessExpression(
+                    this.StaticQualifierReceiver(owner, site.GetLocation()),
+                    name);
         }
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)

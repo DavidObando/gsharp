@@ -1831,6 +1831,29 @@ public sealed partial class CSharpToGSharpTranslator
                 };
             }
 
+            // Issue #4302: a lifted helper keeps `ref` on its own signature, but
+            // a delegate or function value built from it is a value-returning
+            // wrapper that drops the aliasing contract. Decide this before any
+            // lift path returns, so every lowering of a ref-returning local
+            // used as a value stays a loud gap.
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol refValueLocal
+                && (refValueLocal.ReturnsByRef || refValueLocal.ReturnsByRefReadonly)
+                && (this.IsLocalFunctionReferencedAsValue(
+                        refValueLocal,
+                        GetLocalFunctionSiblingStatements(localFunction))
+                    || this.IsLocalFunctionReferencedAsValueFromAnotherSwitchSection(
+                        refValueLocal,
+                        localFunction)))
+            {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    $"ref-returning local function '{localFunction.Identifier.Text}' cannot be used as a delegate or function value in G#.");
+                return new GStatement[]
+                {
+                    new RawStatement($"// unsupported: ref-returning local function '{localFunction.Identifier.Text}'"),
+                };
+            }
+
             if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol recursiveLocal
                 && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
                     recursiveLocal,

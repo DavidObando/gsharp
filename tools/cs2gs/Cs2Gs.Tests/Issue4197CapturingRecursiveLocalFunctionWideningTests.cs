@@ -327,6 +327,35 @@ namespace Demo
     }
 
     [Fact]
+    public void RecursiveGenericRefReturningLocalUsedAsDelegate_RemainsALoudGap()
+    {
+        // Issue #4302: member lifting must not turn a ref-returning local into
+        // a value-returning delegate wrapper.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public delegate ref int RefGetter(int[] values);
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        RefGetter getter = At<int>;
+                        getter(data) = 5;
+                        return data[0];
+                        static ref int At<T>(int[] values) =>
+                            ref values.Length > 100 ? ref Other(values) : ref values[0];
+                        static ref int Other(int[] values) => ref At<int>(values);
+                    }
+                }
+            }
+            """, "G# does not convert ref-returning function literals to delegate values");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("func At[", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RefReturningSwitchSectionLocalUsedAsDelegate_RemainsALoudGap()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
