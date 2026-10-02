@@ -47,6 +47,9 @@ public sealed class CorePublicApiSnapshotTests
 {
     private const string SnapshotFileName = "gsharp-core-public-api.txt";
 
+    // GSharp.Core exports over 500 types; far fewer means the renderer broke.
+    private const int MinimumRenderedTypeCount = 300;
+
     // The modifier an init-only setter carries on its return type.
     private const string InitOnlyModifier = "modreq(System.Runtime.CompilerServices.IsExternalInit)";
 
@@ -63,8 +66,14 @@ public sealed class CorePublicApiSnapshotTests
 
         // A snapshot of nothing would pass against an empty golden: require a
         // surface the size of the real one before comparing.
-        Assert.True(lines.Count(line => line.StartsWith("type ", StringComparison.Ordinal)) > 300, "too few public types rendered");
-        Assert.Contains(lines, line => line.StartsWith("type class GSharp.Core.CodeAnalysis.Compilation.Compilation", StringComparison.Ordinal));
+        int typeCount = lines.Count(line => line.StartsWith("type ", StringComparison.Ordinal));
+        Assert.True(typeCount > MinimumRenderedTypeCount, $"only {typeCount} public types rendered");
+
+        // Presence only: the type's modifiers are the golden's business, so a
+        // changed `class`/`sealed class` still reaches the comparison (and
+        // update mode) instead of stopping here.
+        Assert.Contains(lines, line => line.StartsWith("type ", StringComparison.Ordinal)
+            && line.Contains(" GSharp.Core.CodeAnalysis.Compilation.Compilation ", StringComparison.Ordinal));
 
         GoldenFile.AssertMatches(
             Path.Combine(LocateRepoRoot(), "test", "Core.Tests", "Baselines", SnapshotFileName),
@@ -91,6 +100,7 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("  method public static Int32 Take(Int32 count = 3)", baseline, StringComparison.Ordinal);
         Assert.Contains("  method public static Int32 Peek(in Int32 value)", baseline, StringComparison.Ordinal);
         Assert.Contains("  method public static System.Decimal Price(System.Decimal amount = 1.5m)", baseline, StringComparison.Ordinal);
+        Assert.Contains("  method public static System.DateTime At(System.DateTime when = DateTime(42))", baseline, StringComparison.Ordinal);
         Assert.Contains(
             "type protected internal sealed class GSharp.Core.Tests.PublicApi.SnapshotFixture+Nested : System.Object",
             rendered);
@@ -411,9 +421,7 @@ public sealed class CorePublicApiSnapshotTests
                 continue;
             }
 
-            string widest = getter == "public" || setter == "public" ? "public"
-                : getter == "protected internal" || setter == "protected internal" ? "protected internal"
-                : "protected";
+            string widest = WidestAccess(getter, setter);
             MethodSignature<string> signature = property.DecodeSignature(provider, null);
             var line = new StringBuilder("  property ").Append(widest).Append(' ')
                 .Append(signature.ReturnType).Append(' ').Append(reader.GetString(property.Name));
@@ -451,16 +459,10 @@ public sealed class CorePublicApiSnapshotTests
             EventAccessors accessors = definition.GetAccessors();
 
             // The event is as visible as its widest accessor (add, remove or raise).
-            string[] access =
-            {
+            string widest = WidestAccess(
                 AccessorAccess(reader, accessors.Adder),
                 AccessorAccess(reader, accessors.Remover),
-                AccessorAccess(reader, accessors.Raiser),
-            };
-            string widest = access.Contains("public") ? "public"
-                : access.Contains("protected internal") ? "protected internal"
-                : access.Contains("protected") ? "protected"
-                : null;
+                AccessorAccess(reader, accessors.Raiser));
             if (widest is null)
             {
                 continue;
@@ -469,6 +471,13 @@ public sealed class CorePublicApiSnapshotTests
             members.Add("  event " + widest + " " + provider.Describe(definition.Type) + " " + reader.GetString(definition.Name));
         }
     }
+
+    // The widest visible accessibility among accessors (null when none is).
+    private static string WidestAccess(params string[] access) =>
+        access.Contains("public") ? "public"
+            : access.Contains("protected internal") ? "protected internal"
+            : access.Contains("protected") ? "protected"
+            : null;
 
     private static string AccessorAccess(MetadataReader reader, MethodDefinitionHandle accessor) =>
         accessor.IsNil
@@ -800,6 +809,11 @@ public class SnapshotFixture
     /// <param name="amount">The amount.</param>
     /// <returns>The amount.</returns>
     public static decimal Price(decimal amount = 1.5m) => amount;
+
+    /// <summary>Has a DateTime default, which csc encodes as an attribute.</summary>
+    /// <param name="when">The time.</param>
+    /// <returns>The time.</returns>
+    public static System.DateTime At([System.Runtime.InteropServices.Optional, System.Runtime.CompilerServices.DateTimeConstant(42L)] System.DateTime when) => when;
 
     /// <summary>A protected virtual hook.</summary>
     protected virtual void OnChanged()
