@@ -27,7 +27,7 @@ Cross-cutting facts:
 **Option B**. A `.gsproj` may contain multiple `package` declarations across its `.gs` files; each becomes a CLR namespace in the produced assembly.
 
 - `BoundProgram` indexes its functions (and, post Phase 3, its types) by `PackageSymbol`, not by a single string.
-- The emitter produces one `<Program>` static container per distinct package, each in its declaring `package X.Y` namespace.
+- The emitter produces one `<Program>` static container per distinct package, each in its declaring `package X.Y` namespace. *(Issue #4676: the container is `public` only when it hosts a public function or global, or the compilation has an entry point; for a library package that exposes nothing it is emitted non-public, so it is not part of the assembly's API.)*
 - Assembly + module name come from `.gsproj` `<AssemblyName>` (falling back to `<RootNamespace>`, falling back to the project file name) — never from any one file's `package`.
 - The "exactly one file with top-level statements" rule becomes "exactly one **package** with top-level statements"; that package's `<Program>` carries the synthesized entry point and the assembly's `EntryPoint` token points at it.
 - Forward-compatible with Phase 3: user-defined `struct` / `class` / `interface` emit as ordinary `namespace.TypeName` CLR types in the declaring package's namespace, not as nested types on `<Program>`.
