@@ -496,7 +496,7 @@ public class DiagnosticIdUniquenessTests
             RecordShape(
                 id,
                 GSharpSourceSyntax.NearestMemberName(call),
-                $"{Path.GetRelativePath(repoRoot, file)}:{line}",
+                $"{Path.GetRelativePath(repoRoot, file).Replace('\\', '/')}:{line}",
                 idToShapes);
         }
     }

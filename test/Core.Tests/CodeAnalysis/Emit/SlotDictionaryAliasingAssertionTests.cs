@@ -94,10 +94,14 @@ Console.WriteLine(p.X + p.Y + z.X + z.Y + v + miss)
         // guard at the allocation site — aliased receivers across spill
         // positions share a slot by design. Make sure that explicit guard
         // is still present so that aliasing remains safe.
-        // Issue #4656: `if (x)` in C#, `if x {` in G#.
-        Assert.Matches(@"\bif\s*\(?\s*receiverSpillSlots\.ContainsKey\(receiver\)", combinedText);
-        Assert.Matches(@"\bif\s*\(?\s*receiverSpillSlots\.ContainsKey\(assn\)", combinedText);
+        // Issue #4656: `if (x)` in C#, `if x {` in G#. The guard must be the
+        // WHOLE condition: closed by `)` in C# or followed by the arm's `{`.
+        Assert.Matches(IfGuard("receiver"), combinedText);
+        Assert.Matches(IfGuard("assn"), combinedText);
     }
+
+    private static string IfGuard(string key) =>
+        $@"\bif\s*(?:\(\s*receiverSpillSlots\.ContainsKey\({key}\)\s*\)|receiverSpillSlots\.ContainsKey\({key}\)\s*\{{)";
 
     // Issue #4656: the tree's own language, and an empty scan throws.
     private static IReadOnlyList<string> LocateEmitterSources() =>

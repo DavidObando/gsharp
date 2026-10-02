@@ -34,16 +34,22 @@ internal static class TestSource
     private static readonly string ParserWithoutExtension =
         Path.Combine("src", "Core", "CodeAnalysis", "Syntax", "Parser");
 
-    internal static string Root => FindRoot(
+    // Resolved once per test run: the environment and the tree do not change
+    // under a running suite, and every guard asks.
+    private static readonly Lazy<string> CachedRoot = new(() => FindRoot(
         Environment.GetEnvironmentVariable(SourceRootEnvironmentVariable),
-        AppContext.BaseDirectory);
+        AppContext.BaseDirectory));
+
+    private static readonly Lazy<string> CachedExtension = new(() => SourceExtensionOf(CachedRoot.Value));
+
+    internal static string Root => CachedRoot.Value;
 
     /// <summary>
     /// Gets the extension of the compiler's sources under <see cref="Root"/>:
     /// <see cref="CSharpExtension"/> before the G# cut-over,
     /// <see cref="GSharpExtension"/> after it.
     /// </summary>
-    internal static string SourceExtension => SourceExtensionOf(Root);
+    internal static string SourceExtension => CachedExtension.Value;
 
     /// <summary>Gets a value indicating whether <see cref="Root"/> holds G# sources.</summary>
     internal static bool IsGSharp => SourceExtension == GSharpExtension;
@@ -131,7 +137,7 @@ internal static class TestSource
         string stemPattern, SearchOption option, params string[] relativeDirectories)
     {
         string root = Root;
-        string extension = SourceExtensionOf(root);
+        string extension = SourceExtension;
         var files = new List<string>();
         foreach (string relative in relativeDirectories)
         {
@@ -175,7 +181,9 @@ internal static class TestSource
     /// that a test compiles with Roslyn as a C#-authored reference. The
     /// migration translates those fixtures to G# with the rest of the project,
     /// so each one used this way is also kept verbatim as
-    /// <c>test/Core.Tests/TestData/CSharpFixtureSources/&lt;name&gt;.txt</c>.
+    /// <c>test/Core.Tests/TestData/CSharpFixtureSources/&lt;fixture file name&gt;.txt</c>,
+    /// the full file name including <c>.cs</c> plus <c>.txt</c> (for example
+    /// <c>InterpolatedStringHandlerFixtures.cs.txt</c>).
     /// While the live C# file exists it is returned and must equal the
     /// snapshot (no drift); after the cut-over the snapshot is returned.
     /// </summary>
