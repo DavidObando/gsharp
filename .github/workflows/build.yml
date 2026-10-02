@@ -11,15 +11,24 @@ on:
       - main
 
 # Cancel superseded PR runs: every push to a PR starts a new run, and without
-# this the older runs of the same PR keep consuming runners (and starve other
-# PRs and Copilot review) until they finish. The group is keyed on the PR
-# number for pull_request events, so only runs of the same PR share it.
-# Pushes to main and `v*` tags (which run the publish job) get a group unique
-# to the run (github.run_id), so they never cancel or queue behind each other,
-# and cancel-in-progress is false for them regardless.
-# The group name is `build-...`, distinct from the job-level
-# `hot-core-translation-guard-<PR>` group below, which is kept so the guard
-# job's own cancellation semantics stay unchanged.
+# this the older runs of the same PR keep consuming runners (starving other PRs
+# and Copilot review) until they finish.
+#
+# Group expression: `github.event.pull_request.number` exists only for
+# pull_request events, so runs of one PR share `build-<PR>` and a newer push
+# cancels the older run. For push (main, `v*` tags) the number is empty and the
+# expression falls through to `github.run_id`, which is unique per run, so
+# those runs never share a group: a main push or a release tag (which runs the
+# publish job) can neither cancel nor be cancelled by another run.
+# `cancel-in-progress` is additionally false for non-PR events as a second guard.
+#
+# The group is named `build-...`, distinct from the job-level
+# `hot-core-translation-guard-<PR>` group below, whose own semantics are unchanged.
+#
+# Deliberately not changed elsewhere: pages.yml already has its own
+# `pages-<ref>` group and deploys from main; concurrency-bench.yml triggers on
+# `labeled`, so an unrelated label added mid-run would cancel a running
+# benchmark in a shared group.
 concurrency:
   group: build-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
