@@ -3352,9 +3352,9 @@ internal sealed class ReflectionMetadataEmitter
 
     /// <summary>
     /// Issue #4676: the accessibility of a package's synthesized <c>&lt;Program&gt;</c>
-    /// host type. The host is how a package exposes its top-level functions and
-    /// globals to other assemblies, so it stays <c>public</c> whenever it carries
-    /// a member another assembly can reach, and in an executable (every package of
+    /// host type. The host is how a package exposes its top-level functions to
+    /// other assemblies, so it stays <c>public</c> whenever it carries a function
+    /// another assembly can reach, and in an executable (every package of
     /// an executable keeps its host public, to leave application behaviour alone).
     /// A LIBRARY package that hosts no such member (every GSharp.Core
     /// namespace whose code is all types, say) is a compiler-generated detail,
@@ -3367,14 +3367,14 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="pkg">The package whose host is being emitted.</param>
     /// <param name="hasEntryPoint">Whether the compilation has an entry point (an executable).</param>
     /// <param name="packageMethods">The planned per-package functions.</param>
-    /// <param name="globals">The global variables hosted on THIS package's <c>&lt;Program&gt;</c> (default when it hosts none).</param>
     /// <returns>The type visibility flag for the host's TypeDef.</returns>
     private static TypeAttributes ProgramHostAccessibility(
         PackageSymbol pkg,
         bool hasEntryPoint,
-        PackageMethodPlan packageMethods,
-        ImmutableArray<GlobalVariableSymbol> globals)
+        PackageMethodPlan packageMethods)
     {
+        // A library has no globals (a top-level variable is a top-level statement, GS0285),
+        // so only an executable can host one, and an executable keeps every host public.
         if (hasEntryPoint)
         {
             return TypeAttributes.Public;
@@ -3393,14 +3393,6 @@ internal sealed class ReflectionMetadataEmitter
                 && !function.IsLocalFunction
                 && function.LocalDeclaration is null
                 && IsReachableFromOtherAssemblies(function.Accessibility)))
-        {
-            return TypeAttributes.Public;
-        }
-
-        // Globals live on ONE host (the caller passes them only for that
-        // package); a reachable one keeps the host public, so a REPL submission
-        // or library that publishes a variable keeps its host.
-        if (!globals.IsDefaultOrEmpty && globals.Any(global => IsReachableFromOtherAssemblies(global.Accessibility)))
         {
             return TypeAttributes.Public;
         }
@@ -3447,7 +3439,7 @@ internal sealed class ReflectionMetadataEmitter
             this.functions.EmitGlobalFieldDefs(globals);
 
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
-                attributes: TypeAttributes.Class | ProgramHostAccessibility(globalsHostPkg, this.emitCtx.Program.EntryPoint is not null, packageMethods, globals)
+                attributes: TypeAttributes.Class | ProgramHostAccessibility(globalsHostPkg, this.emitCtx.Program.EntryPoint is not null, packageMethods)
                     | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                     | TypeAttributes.Sealed | TypeAttributes.Abstract,
@@ -3472,7 +3464,7 @@ internal sealed class ReflectionMetadataEmitter
             // range so the monotone <Program> fieldList constraint holds.
             var fieldListRow = programFirstFieldRow + globals.Length;
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
-                attributes: TypeAttributes.Class | ProgramHostAccessibility(pkg, this.emitCtx.Program.EntryPoint is not null, packageMethods, default)
+                attributes: TypeAttributes.Class | ProgramHostAccessibility(pkg, this.emitCtx.Program.EntryPoint is not null, packageMethods)
                     | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                     | TypeAttributes.Sealed | TypeAttributes.Abstract,
