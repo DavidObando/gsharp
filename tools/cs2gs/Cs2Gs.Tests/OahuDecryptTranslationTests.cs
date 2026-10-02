@@ -778,13 +778,16 @@ namespace Demo
         Assert.Contains("cache = [8]int32", printed);
         Assert.Contains("buffer = [InputBufferSize]TInput", printed);
 
-        // The field itself carries no (invalid) initializer.
+        // The field itself carries no (invalid) hoisted initializer. Issue #4684: the
+        // only initializer it may carry is the allocation-free `Array.Empty` one that
+        // replaces gsc's synthesized zero-value array.
         Assert.Contains("var buffer []TInput", printed);
-        Assert.DoesNotContain("var buffer []TInput = ", printed);
+        Assert.DoesNotContain("var buffer []TInput = [", printed);
+        Assert.DoesNotContain("var buffer []TInput = InputBufferSize", printed);
 
         // The static-RHS sibling remains in the same explicit constructor.
         Assert.Contains("let cache []int32", printed);
-        Assert.DoesNotContain("let cache []int32 = ", printed);
+        Assert.DoesNotContain("let cache []int32 = [", printed);
     }
 
     /// <summary>
