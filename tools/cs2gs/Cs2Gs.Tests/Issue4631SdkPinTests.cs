@@ -447,6 +447,19 @@ public sealed class Issue4631SdkPinTests : IDisposable
             .RunAsync(fixture.Apps);
         Assert.True(migrated.Succeeded);
 
+        foreach (string projectPath in Directory.EnumerateFiles(
+            fixture.Destination,
+            "*.csproj",
+            SearchOption.AllDirectories))
+        {
+            XDocument project = XDocument.Load(projectPath);
+            if (SdkPin.IsGsharpSdkAttribute(project.Root?.Attribute("Sdk")?.Value))
+            {
+                project.Root.SetAttributeValue("Sdk", "Microsoft.NET.Sdk");
+                project.Save(projectPath);
+            }
+        }
+
         var probe = new PinProbeStage();
         RunResult validated = await new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { probe })
             .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId));

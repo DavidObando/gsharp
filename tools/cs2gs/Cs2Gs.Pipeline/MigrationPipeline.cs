@@ -718,9 +718,11 @@ public sealed class MigrationPipeline
     {
         string? treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
         string? projectPin = SdkPin.ReadProjectPin(
-            Directory.EnumerateFiles(migratedRoot, "*.csproj", SearchOption.AllDirectories)
-                .Where(path => !RepositoryFileInventory.HasExcludedDirectory(
-                    Path.GetRelativePath(migratedRoot, path))));
+            this.options.GeneratedProjectPaths.Values.Concat(
+                Directory.EnumerateFiles(migratedRoot, "*.csproj", SearchOption.AllDirectories)
+                    .Where(path =>
+                        !RepositoryFileInventory.HasExcludedDirectory(
+                            Path.GetRelativePath(migratedRoot, path)))));
         if (treePin is not null && projectPin is not null)
         {
             throw new InvalidOperationException(
