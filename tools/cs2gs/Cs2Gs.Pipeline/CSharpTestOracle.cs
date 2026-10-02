@@ -96,29 +96,30 @@ public sealed class CSharpTestOracle
     public static IReadOnlyList<string> ParseListTestsOutput(string output)
     {
         string[] lines = (output ?? string.Empty).Replace("\r\n", "\n").Split('\n');
-        int header = Array.FindIndex(
-            lines, line => string.Equals(line.Trim(), ListHeader, StringComparison.Ordinal));
-        if (header < 0)
-        {
-            throw new InvalidOperationException(
-                "`dotnet test --list-tests` printed no '" + ListHeader + "' line, so the C# " +
-                "test oracle cannot be read. Output tail:\n" + Tail(output));
-        }
-
         var names = new List<string>();
-        for (int index = header + 1; index < lines.Length; index++)
+        bool sawHeader = false;
+        bool inBlock = false;
+
+        // Every listing block counts: a multi-targeted project prints one
+        // header and one indented block per target framework.
+        foreach (string line in lines)
         {
-            string line = lines[index];
+            if (string.Equals(line.Trim(), ListHeader, StringComparison.Ordinal))
+            {
+                sawHeader = true;
+                inBlock = true;
+                continue;
+            }
+
+            if (!inBlock || line.Length == 0)
+            {
+                continue;
+            }
+
             if (!line.StartsWith(ListIndent, StringComparison.Ordinal))
             {
-                // The listing is one contiguous indented block; anything after
-                // it (an empty line, a later assembly's banner) ends it.
-                if (line.Length == 0)
-                {
-                    continue;
-                }
-
-                break;
+                inBlock = false;
+                continue;
             }
 
             string name = line.Substring(ListIndent.Length).TrimEnd();
@@ -126,6 +127,13 @@ public sealed class CSharpTestOracle
             {
                 names.Add(name);
             }
+        }
+
+        if (!sawHeader)
+        {
+            throw new InvalidOperationException(
+                "`dotnet test --list-tests` printed no '" + ListHeader + "' line, so the C# " +
+                "test oracle cannot be read. Output tail:\n" + Tail(output));
         }
 
         if (names.Count == 0)

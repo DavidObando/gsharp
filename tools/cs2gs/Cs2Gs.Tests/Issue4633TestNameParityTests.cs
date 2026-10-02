@@ -165,6 +165,22 @@ public sealed class Issue4633TestNameParityTests
         Assert.Equal(new[] { "Own.Tests.A.Works", "Own.Tests.A.Adds(x: 1)" }, names);
     }
 
+    /// <summary>Review finding: a multi-targeted project's listing has one block per framework; all count.</summary>
+    [Fact]
+    public void Oracle_ParsesEveryListingBlock()
+    {
+        const string output = """
+            Test run for /repo/out/bin/Release/net9.0/Own.Tests.dll (.NETCoreApp,Version=v9.0)
+            The following Tests are available:
+                Own.Tests.A.Works
+            Test run for /repo/out/bin/Release/net10.0/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+            The following Tests are available:
+                Own.Tests.A.Works
+            """;
+
+        Assert.Equal(new[] { "Own.Tests.A.Works", "Own.Tests.A.Works" }, CSharpTestOracle.ParseListTestsOutput(output));
+    }
+
     /// <summary>
     /// A listing that failed, or listed nothing, must never become an empty
     /// oracle: an empty oracle would make the per-name check a check of nothing.

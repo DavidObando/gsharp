@@ -149,8 +149,12 @@ public sealed partial class TestParityStage
 
         message.Append("A difference that is understood belongs in ")
             .Append(TestNameParityBaseline.DefaultRelativePath).Append(" with a reason and an issue.");
-        string differences = "missing:\n" + string.Join("\n", verdict.UnexplainedMissing) +
-            "\nextra:\n" + string.Join("\n", verdict.UnexplainedExtra);
+
+        // A compact, stable key: a hash of the sorted differences (the full
+        // lists are in the report file).
+        string differences = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes("missing:\n" + string.Join("\n", verdict.UnexplainedMissing) +
+                "\nextra:\n" + string.Join("\n", verdict.UnexplainedExtra))));
         return this.NameParityFailure(context, "TEST-NAME-PARITY", message.ToString(), differences);
     }
 
