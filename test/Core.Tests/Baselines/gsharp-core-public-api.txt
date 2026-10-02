@@ -588,11 +588,11 @@ type class GSharp.Core.CodeAnalysis.Syntax.UnaryExpressionSyntax : GSharp.Core.C
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Operand { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken OperatorToken { get; }
-type enum GSharp.Core.CodeAnalysis.Analyzers.GeneratedCodeAnalysisFlags
+type enum GSharp.Core.CodeAnalysis.Analyzers.GeneratedCodeAnalysisFlags : Int32
   field public const GSharp.Core.CodeAnalysis.Analyzers.GeneratedCodeAnalysisFlags Analyze = 1
   field public const GSharp.Core.CodeAnalysis.Analyzers.GeneratedCodeAnalysisFlags None = 0
   field public const GSharp.Core.CodeAnalysis.Analyzers.GeneratedCodeAnalysisFlags ReportDiagnostics = 2
-type enum GSharp.Core.CodeAnalysis.Binding.AttributeTargetKind
+type enum GSharp.Core.CodeAnalysis.Binding.AttributeTargetKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.AttributeTargetKind Assembly = 8
   field public const GSharp.Core.CodeAnalysis.Binding.AttributeTargetKind Event = 6
   field public const GSharp.Core.CodeAnalysis.Binding.AttributeTargetKind Field = 0
@@ -603,7 +603,7 @@ type enum GSharp.Core.CodeAnalysis.Binding.AttributeTargetKind
   field public const GSharp.Core.CodeAnalysis.Binding.AttributeTargetKind Property = 5
   field public const GSharp.Core.CodeAnalysis.Binding.AttributeTargetKind Return = 2
   field public const GSharp.Core.CodeAnalysis.Binding.AttributeTargetKind Type = 3
-type enum GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind
+type enum GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind BitClear = 7
   field public const GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind BitwiseAnd = 6
   field public const GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind BitwiseOr = 10
@@ -626,7 +626,7 @@ type enum GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind
   field public const GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind Sum = 8
   field public const GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind Undefined = 21
   field public const GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperatorKind UnsignedShiftRight = 5
-type enum GSharp.Core.CodeAnalysis.Binding.BoundNodeKind
+type enum GSharp.Core.CodeAnalysis.Binding.BoundNodeKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind AddressOfExpression = 63
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind ArrayCreationExpression = 28
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind AsExpression = 98
@@ -730,7 +730,7 @@ type enum GSharp.Core.CodeAnalysis.Binding.BoundNodeKind
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind VariableDeclaration = 1
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind VariableExpression = 19
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind YieldStatement = 93
-type enum GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperatorKind
+type enum GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperatorKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperatorKind DereferenceOf = 4
   field public const GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperatorKind Identity = 0
   field public const GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperatorKind LogicalNegation = 2
@@ -738,44 +738,44 @@ type enum GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperatorKind
   field public const GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperatorKind NullAssertion = 6
   field public const GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperatorKind OnesComplement = 3
   field public const GSharp.Core.CodeAnalysis.Binding.BoundUnaryOperatorKind ReferenceOf = 5
-type enum GSharp.Core.CodeAnalysis.Binding.FixedPinKind
+type enum GSharp.Core.CodeAnalysis.Binding.FixedPinKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.FixedPinKind Array = 0
   field public const GSharp.Core.CodeAnalysis.Binding.FixedPinKind FixedBuffer = 3
   field public const GSharp.Core.CodeAnalysis.Binding.FixedPinKind PinnableReference = 2
   field public const GSharp.Core.CodeAnalysis.Binding.FixedPinKind String = 1
-type enum GSharp.Core.CodeAnalysis.Binding.ForRangeKind
+type enum GSharp.Core.CodeAnalysis.Binding.ForRangeKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.ForRangeKind Dictionary = 1
   field public const GSharp.Core.CodeAnalysis.Binding.ForRangeKind Enumerable = 2
   field public const GSharp.Core.CodeAnalysis.Binding.ForRangeKind Indexed = 0
   field public const GSharp.Core.CodeAnalysis.Binding.ForRangeKind PatternEnumerator = 3
-type enum GSharp.Core.CodeAnalysis.Binding.RefKind
+type enum GSharp.Core.CodeAnalysis.Binding.RefKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.RefKind In = 3
   field public const GSharp.Core.CodeAnalysis.Binding.RefKind None = 0
   field public const GSharp.Core.CodeAnalysis.Binding.RefKind Out = 2
   field public const GSharp.Core.CodeAnalysis.Binding.RefKind Ref = 1
   field public const GSharp.Core.CodeAnalysis.Binding.RefKind RefReadOnly = 4
-type enum GSharp.Core.CodeAnalysis.DiagnosticSeverity
+type enum GSharp.Core.CodeAnalysis.DiagnosticSeverity : Int32
   field public const GSharp.Core.CodeAnalysis.DiagnosticSeverity Error = 3
   field public const GSharp.Core.CodeAnalysis.DiagnosticSeverity Hidden = 0
   field public const GSharp.Core.CodeAnalysis.DiagnosticSeverity Info = 1
   field public const GSharp.Core.CodeAnalysis.DiagnosticSeverity Warning = 2
-type enum GSharp.Core.CodeAnalysis.Diagnostics.LogLevel
+type enum GSharp.Core.CodeAnalysis.Diagnostics.LogLevel : Int32
   field public const GSharp.Core.CodeAnalysis.Diagnostics.LogLevel Debug = 0
   field public const GSharp.Core.CodeAnalysis.Diagnostics.LogLevel Error = 3
   field public const GSharp.Core.CodeAnalysis.Diagnostics.LogLevel Info = 1
   field public const GSharp.Core.CodeAnalysis.Diagnostics.LogLevel Warning = 2
-type enum GSharp.Core.CodeAnalysis.Emit.DebugInformationFormat
+type enum GSharp.Core.CodeAnalysis.Emit.DebugInformationFormat : Int32
   field public const GSharp.Core.CodeAnalysis.Emit.DebugInformationFormat Embedded = 2
   field public const GSharp.Core.CodeAnalysis.Emit.DebugInformationFormat None = 0
   field public const GSharp.Core.CodeAnalysis.Emit.DebugInformationFormat Portable = 1
-type enum GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind
+type enum GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind : Int32
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind AsyncIterator = 4
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind Custom = 5
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind GenericTask = 3
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind Task = 2
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind Unknown = 0
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind Void = 1
-type enum GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind
+type enum GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind : Int32
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind CopyParameter = 3
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind CopyThis = 2
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind DeclareStateMachineLocal = 0
@@ -784,19 +784,19 @@ type enum GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind ReturnBuilderTask = 6
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind ReturnVoid = 7
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.KickoffOperationKind StartStateMachine = 5
-type enum GSharp.Core.CodeAnalysis.Lowering.Async.StateMachineContainerKind
+type enum GSharp.Core.CodeAnalysis.Lowering.Async.StateMachineContainerKind : Int32
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.StateMachineContainerKind Class = 1
   field public const GSharp.Core.CodeAnalysis.Lowering.Async.StateMachineContainerKind Struct = 0
-type enum GSharp.Core.CodeAnalysis.Symbols.Accessibility
+type enum GSharp.Core.CodeAnalysis.Symbols.Accessibility : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.Accessibility Internal = 1
   field public const GSharp.Core.CodeAnalysis.Symbols.Accessibility Private = 2
   field public const GSharp.Core.CodeAnalysis.Symbols.Accessibility Protected = 3
   field public const GSharp.Core.CodeAnalysis.Symbols.Accessibility Public = 0
-type enum GSharp.Core.CodeAnalysis.Symbols.ChannelDirection
+type enum GSharp.Core.CodeAnalysis.Symbols.ChannelDirection : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.ChannelDirection Both = 0
   field public const GSharp.Core.CodeAnalysis.Symbols.ChannelDirection In = 1
   field public const GSharp.Core.CodeAnalysis.Symbols.ChannelDirection Out = 2
-type enum GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind
+type enum GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind AliasName = 11
   field public const GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind Descriptor = 13
   field public const GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind EnumMemberName = 9
@@ -812,10 +812,10 @@ type enum GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind
   field public const GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind Space = 2
   field public const GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind Text = 14
   field public const GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPartKind TypeName = 4
-type enum GSharp.Core.CodeAnalysis.Symbols.DisplayFormat
+type enum GSharp.Core.CodeAnalysis.Symbols.DisplayFormat : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.DisplayFormat FullyQualified = 1
   field public const GSharp.Core.CodeAnalysis.Symbols.DisplayFormat Minimal = 0
-type enum GSharp.Core.CodeAnalysis.Symbols.MemberKinds
+type enum GSharp.Core.CodeAnalysis.Symbols.MemberKinds : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.MemberKinds All = 15
   field public const GSharp.Core.CodeAnalysis.Symbols.MemberKinds Event = 4
   field public const GSharp.Core.CodeAnalysis.Symbols.MemberKinds Field = 1
@@ -823,23 +823,23 @@ type enum GSharp.Core.CodeAnalysis.Symbols.MemberKinds
   field public const GSharp.Core.CodeAnalysis.Symbols.MemberKinds NestedType = 16
   field public const GSharp.Core.CodeAnalysis.Symbols.MemberKinds None = 0
   field public const GSharp.Core.CodeAnalysis.Symbols.MemberKinds Property = 2
-type enum GSharp.Core.CodeAnalysis.Symbols.MethodKind
+type enum GSharp.Core.CodeAnalysis.Symbols.MethodKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind AnonymousFunction = 1
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind LocalFunction = 2
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind Ordinary = 0
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind PropertyGet = 3
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind PropertySet = 4
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind StaticConstructor = 5
-type enum GSharp.Core.CodeAnalysis.Symbols.NullabilityMode
+type enum GSharp.Core.CodeAnalysis.Symbols.NullabilityMode : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode Enabled = 0
   field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode Oblivious = 2
   field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode PlatformTypes = 1
-type enum GSharp.Core.CodeAnalysis.Symbols.SuspendingKind
+type enum GSharp.Core.CodeAnalysis.Symbols.SuspendingKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.SuspendingKind Declared = 2
   field public const GSharp.Core.CodeAnalysis.Symbols.SuspendingKind Inferred = 1
   field public const GSharp.Core.CodeAnalysis.Symbols.SuspendingKind None = 0
   field public const GSharp.Core.CodeAnalysis.Symbols.SuspendingKind Slot = 3
-type enum GSharp.Core.CodeAnalysis.Symbols.SymbolKind
+type enum GSharp.Core.CodeAnalysis.Symbols.SymbolKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind EnumMember = 10
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Event = 12
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Field = 9
@@ -853,14 +853,14 @@ type enum GSharp.Core.CodeAnalysis.Symbols.SymbolKind
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Parameter = 3
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Property = 11
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Type = 4
-type enum GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint
+type enum GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint Any = 0
   field public const GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint Comparable = 1
-type enum GSharp.Core.CodeAnalysis.Symbols.TypeParameterVariance
+type enum GSharp.Core.CodeAnalysis.Symbols.TypeParameterVariance : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.TypeParameterVariance In = 1
   field public const GSharp.Core.CodeAnalysis.Symbols.TypeParameterVariance None = 0
   field public const GSharp.Core.CodeAnalysis.Symbols.TypeParameterVariance Out = 2
-type enum GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext
+type enum GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext General = 0
   field public const GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext Index = 64
   field public const GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext Invocation = 8
@@ -869,7 +869,7 @@ type enum GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext
   field public const GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext Pattern = 16
   field public const GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext Type = 32
   field public const GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext TypeParameter = 4
-type enum GSharp.Core.CodeAnalysis.Syntax.SelectCaseKind
+type enum GSharp.Core.CodeAnalysis.Syntax.SelectCaseKind : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.SelectCaseKind AwaitBind = 4
   field public const GSharp.Core.CodeAnalysis.Syntax.SelectCaseKind AwaitDiscard = 5
   field public const GSharp.Core.CodeAnalysis.Syntax.SelectCaseKind Cancelled = 6
@@ -877,7 +877,7 @@ type enum GSharp.Core.CodeAnalysis.Syntax.SelectCaseKind
   field public const GSharp.Core.CodeAnalysis.Syntax.SelectCaseKind ReceiveBind = 1
   field public const GSharp.Core.CodeAnalysis.Syntax.SelectCaseKind ReceiveDiscard = 0
   field public const GSharp.Core.CodeAnalysis.Syntax.SelectCaseKind Send = 2
-type enum GSharp.Core.CodeAnalysis.Syntax.SyntaxKind
+type enum GSharp.Core.CodeAnalysis.Syntax.SyntaxKind : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind AccessorExpression = 137
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind AmpersandAmpersandToken = 34
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind AmpersandEqualsToken = 35
