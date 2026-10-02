@@ -84,6 +84,11 @@ public static class TestNameParity
                 continue;
             }
 
+            // Each outstanding bare occurrence needs at least one row of its
+            // own (a multi-targeted listing repeats the bare name); only the
+            // rows beyond that are the theory's non-enumerated surplus.
+            int available = rows.Sum(row => row.Remaining);
+            int satisfied = Math.Min(bare.Remaining, available);
             foreach (NameTally row in rows)
             {
                 theoryRows += row.Remaining;
@@ -91,8 +96,8 @@ public static class TestNameParity
             }
 
             unmatchedRowsByMethod.Remove(bare.Key);
-            matched += bare.Remaining;
-            bare.Remaining = 0;
+            matched += satisfied;
+            bare.Remaining -= satisfied;
         }
 
         return new TestNameParityResult(

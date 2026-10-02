@@ -141,6 +141,14 @@ internal static class CaptureTestOracleCommand
 
     private static string Capture(CorpusApp app, string root, string outDir, string config, bool build)
     {
+        // A failed capture must leave NO oracle for the app, never an earlier
+        // run's: validation then fails closed with TEST-ORACLE-MISSING.
+        string previous = Path.Combine(outDir, CSharpTestOracle.FileNameFor(app.Id));
+        if (File.Exists(previous))
+        {
+            File.Delete(previous);
+        }
+
         var environment = new Dictionary<string, string>
         {
             // The listing header is parsed literally; pin the CLI language.

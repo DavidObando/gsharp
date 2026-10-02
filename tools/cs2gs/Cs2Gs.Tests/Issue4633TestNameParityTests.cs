@@ -108,6 +108,31 @@ public sealed class Issue4633TestNameParityTests
         Assert.Equal(2, result.TheoryRows);
     }
 
+    /// <summary>
+    /// Review finding: a bare name listed twice (two target frameworks) needs a
+    /// row per occurrence; one row cannot satisfy both.
+    /// </summary>
+    [Fact]
+    public void Compare_DuplicateBareNames_EachNeedARow()
+    {
+        TestNameParityResult result = TestNameParity.Compare(
+            new[] { "Own.Tests.A.Cells", "Own.Tests.A.Cells" },
+            Passed("Own.Tests.A.Cells(cell: Cell(X=1))"));
+
+        Assert.Equal(new[] { "Own.Tests.A.Cells" }, result.Missing);
+        Assert.Equal(1, result.Matched);
+    }
+
+    /// <summary>Review finding: an oracle holding an empty name is rejected, not silently shrunk.</summary>
+    [Fact]
+    public void Oracle_EmptyName_IsRejected()
+    {
+        string dir = NewDirectory();
+        CSharpTestOracle.Create(AppId, new[] { "Own.Tests.A.Works", string.Empty }).Write(dir);
+
+        Assert.Throws<InvalidOperationException>(() => CSharpTestOracle.LoadOrNull(dir, AppId));
+    }
+
     /// <summary>A bare C# case with neither an exact result nor any row is missing.</summary>
     [Fact]
     public void Compare_BareCaseWithNoResultOrRows_IsMissing()

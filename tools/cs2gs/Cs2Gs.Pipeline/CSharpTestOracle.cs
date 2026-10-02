@@ -210,6 +210,11 @@ public sealed class CSharpTestOracle
             throw new InvalidOperationException(path + ": the C# test oracle lists no tests.");
         }
 
+        if (oracle.Tests.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException(path + ": the C# test oracle contains an empty test name.");
+        }
+
         if (oracle.TestCount != oracle.Tests.Count)
         {
             throw new InvalidOperationException(
