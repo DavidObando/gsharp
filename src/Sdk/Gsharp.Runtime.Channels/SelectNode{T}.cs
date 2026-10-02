@@ -24,9 +24,11 @@ internal sealed class SelectNode<T> : WaiterNode<T>, IArmValue<T>, ISelectArm
     private readonly int arm;
     private readonly ISelectableCore<T> selectable;
     private readonly bool isSend;
-    private T? sendValue;
+    [AllowNull]
+    private T sendValue;
     private bool won;
-    private T? received;
+    [AllowNull]
+    private T received;
 
     /// <summary>Initializes a new instance of the <see cref="SelectNode{T}"/> class.</summary>
     /// <param name="waiter">The shared waiter.</param>
@@ -59,7 +61,7 @@ internal sealed class SelectNode<T> : WaiterNode<T>, IArmValue<T>, ISelectArm
 
         // Only the winning arm takes the value, and the winner deposited it
         // first; a closed arm deposits the zero value on purpose (D3).
-        return taken!;
+        return taken;
     }
 
     /// <inheritdoc/>
@@ -89,7 +91,7 @@ internal sealed class SelectNode<T> : WaiterNode<T>, IArmValue<T>, ISelectArm
 
         // Only reached once the arm has claimed the waiter, and a send arm is
         // constructed with its value, so the slot is populated here.
-        value = sendValue!;
+        value = sendValue;
         sendValue = default;
         won = true;
         return true;

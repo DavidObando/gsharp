@@ -214,7 +214,7 @@ internal sealed class OpReceiveNode<T>
     // by design (ADR-0174 D3), so there is no null to guard.
 
     /// <inheritdoc/>
-    T IValueTaskSource<T>.GetResult(short token) => TakeResult(token).Value!;
+    T IValueTaskSource<T>.GetResult(short token) => TakeResult(token).Element;
 
     /// <inheritdoc/>
     ValueTaskSourceStatus IValueTaskSource<T>.GetStatus(short token) => core.GetStatus(token);
@@ -229,7 +229,7 @@ internal sealed class OpReceiveNode<T>
     (T Value, bool Ok) IValueTaskSource<(T Value, bool Ok)>.GetResult(short token)
     {
         var taken = TakeResult(token);
-        return (taken.Value!, taken.Ok);
+        return (taken.Element, taken.Ok);
     }
 
     /// <inheritdoc/>
@@ -316,7 +316,8 @@ internal sealed class OpReceiveNode<T>
 internal sealed class OpSendNode<T> : ParkedNode<T>, IValueTaskSource
 {
     private ManualResetValueTaskSourceCore<bool> core;
-    private T? value;
+    [AllowNull]
+    private T value;
 
     /// <summary>Initializes a new instance of the <see cref="OpSendNode{T}"/> class.</summary>
     /// <param name="owner">The channel this node parks on.</param>
@@ -374,7 +375,7 @@ internal sealed class OpSendNode<T> : ParkedNode<T>, IValueTaskSource
 
         // Past TryTransition(Committed), so a sender parked here has a value:
         // SetValue runs before the node is enqueued.
-        value = this.value!;
+        value = this.value;
         this.value = default;
         return true;
     }
