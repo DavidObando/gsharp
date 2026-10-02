@@ -113,7 +113,9 @@ PLAN_VERSION = 1
 BENIGN_RPC_ERRORS = {-32800, -32801}
 METHOD_NOT_FOUND = -32601
 ICE_CODE = "GS9998"
-LOG_ERROR_PREFIX = '"Level":"Error","Message":'
+# FileLogger writes {"Timestamp":"...","Level":"...","Message":...} per line, and System.Text.Json
+# escapes every quote inside the message, so this anchored match only sees the Level field.
+LOG_ERROR_LINE = re.compile(rb'^\{"Timestamp":"[^"]*","Level":"Error",')
 
 GARBAGE = [
     '"unterminated',
@@ -261,7 +263,10 @@ def _signature_edit_steps(rng: random.Random, text: str) -> tuple[list[dict[str,
 def plan_file(path: Path, seed: int, truncations: int, line_deletions: int, brace_deletions: int,
               garbage: int, probes: int) -> dict[str, Any]:
     raw = path.read_bytes()
-    text = raw.decode("utf-8-sig")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HarnessError(f"{path} is not UTF-8: {exc}") from exc
     rng = random.Random(f"{seed}:{hashlib.sha256(raw).hexdigest()}")
     steps: list[dict[str, Any]] = [{"kind": "open-full", "edits": [], "focus": 0, "keystroke": False}]
 
@@ -577,7 +582,7 @@ class LogScanner:
         lines = data.split(b"\n")
         self.partial = lines.pop()
         for line in lines:
-            if LOG_ERROR_PREFIX.encode() not in line[:120]:
+            if not LOG_ERROR_LINE.match(line):
                 continue
             try:
                 entry = json.loads(line.decode("utf-8", "replace"))
@@ -925,6 +930,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "server": args.server,
         "plan": str(Path(args.plan).expanduser().resolve()),
         "seed": plan["seed"],
+        "planSha256": hashlib.sha256(Path(args.plan).expanduser().read_bytes()).hexdigest(),
         "meta": {**plan.get("meta", {}), **parse_pairs("--meta", args.meta)},
         "workspaceRoot": args.workspace_root,
         "noLog": args.no_log,
@@ -946,8 +952,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_compare(args: argparse.Namespace) -> int:
     left = json.loads(Path(args.left).expanduser().read_text(encoding="utf-8"))
     right = json.loads(Path(args.right).expanduser().read_text(encoding="utf-8"))
-    if left["seed"] != right["seed"]:
-        raise HarnessError("the two runs used different plans (seeds differ)")
+    if left.get("planSha256", left["seed"]) != right.get("planSha256", right["seed"]):
+        raise HarnessError("the two runs used different plans")
     rows = [f"# LSP soak comparison: {left['label']} vs {right['label']}", "",
             f"| file | steps | {left['label']} crash steps | {right['label']} crash steps | "
             f"only {right['label']} | only {left['label']} | {left['label']} p50/p95 ms | {right['label']} p50/p95 ms |",
@@ -955,6 +961,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
     details = []
     divergent = 0
     by_id = {file_id(f): f for f in right["files"]}
+    left_ids = {file_id(f) for f in left["files"]}
+    for missing in sorted(left_ids ^ set(by_id)):
+        side = right["label"] if missing in left_ids else left["label"]
+        details.append(f"- {missing}: not run by {side}; not compared")
+        divergent += 1
     for lf in left["files"]:
         rf = by_id.get(file_id(lf))
         if rf is None:
@@ -983,7 +994,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "LSP error-recovery soak").split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("plan", help="generate the deterministic step plan")

@@ -20,7 +20,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SCRATCH = REPO / "out" / "test-lsp-soak"
 SPEC = importlib.util.spec_from_file_location("lsp_soak", REPO / "build" / "lsp-soak.py")
-assert SPEC and SPEC.loader
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load build/lsp-soak.py")
 soak = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(soak)
 
@@ -182,6 +183,16 @@ class LspSoakTests(unittest.TestCase):
         self.assertEqual("logged-exception:HoverAsync:System.NullReferenceException", crash["signature"])
         self.assertIn("at GSharp.Core.Binder.Bind()", crash["frames"])
 
+    def test_only_the_level_field_marks_a_log_line_as_an_error(self) -> None:
+        log = SCRATCH / "server.log"
+        log.write_text(
+            '{"Timestamp":"t","Level":"Debug","Message":"[IN] \\"Level\\":\\"Error\\",\\"Message\\":","Exception":null}\n'
+            '{"Timestamp":"t","Level":"Debug","Message":"x","Level":"Error","Exception":null}\n'
+            '{"Timestamp":"t","Level":"Error","Message":"HoverAsync failed: boom","Exception":null}\n',
+            encoding="utf-8")
+        errors = soak.LogScanner(log).new_errors()
+        self.assertEqual(["HoverAsync failed: boom"], [e["Message"] for e in errors])
+
     def test_internal_compiler_error_diagnostic_is_recorded(self) -> None:
         code, result = self.run_stub("ice", at=5)
         self.assertEqual(1, code)
@@ -230,6 +241,14 @@ class LspSoakTests(unittest.TestCase):
         self.assertEqual(1, code)
         text = out.read_text(encoding="utf-8")
         self.assertIn(f"{self.planned_ids()[3]}: log-error only", text)
+        # A file run on one side only is reported, not silently skipped.
+        partial = SCRATCH / "partial.json"
+        summary = json.loads((SCRATCH / "run-clean" / "summary.json").read_text(encoding="utf-8"))
+        summary["files"] = []
+        partial.write_text(json.dumps(summary), encoding="utf-8")
+        self.assertEqual(1, soak.main(["compare", str(SCRATCH / "run-clean" / "summary.json"), str(partial),
+                                       "--out", str(out)]))
+        self.assertIn("00-Widget: not run by clean", out.read_text(encoding="utf-8"))
         # A crash only on the left side is a divergence too.
         reverse = soak.main(["compare", str(SCRATCH / "run-log-error" / "summary.json"),
                              str(SCRATCH / "run-clean" / "summary.json")])
