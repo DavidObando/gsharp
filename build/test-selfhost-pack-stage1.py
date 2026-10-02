@@ -153,6 +153,7 @@ class PrepareTreeTests(unittest.TestCase):
             self.assertEqual("0.4.1129-g6c4824cbc0", document["msbuild-sdks"]["Gsharp.NET.Sdk"])
             self.assertEqual("latestFeature", document["sdk"]["rollForward"])
             self.assertTrue(report["globalJsonUpdated"])
+            self.assertEqual([], report["missingSiblings"])
             self.assertEqual([False, False], [s["replacedExisting"] for s in report["stagedPackages"]])
             # Idempotent: a second run changes nothing and says so.
             self.assertFalse(again["globalJsonUpdated"])
@@ -169,6 +170,14 @@ class VersionTests(unittest.TestCase):
             packer.package_version(Path("Gsharp.Gsfmt.0.4.1129.nupkg"))
         with self.assertRaises(packer.SelfHostError):
             packer.package_version(Path("Gsharp.NET.Sdk.0.4.1129-alpha..1.nupkg"))
+
+    def test_a_missing_sibling_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            report = packer.prepare_tree(tree, bootstrap)
+            self.assertEqual(["GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg"], report["missingSiblings"])
 
     def test_stage1_version_equal_to_bootstrap_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -195,6 +204,12 @@ class ReversionTests(unittest.TestCase):
                 "tools/compiler/gsc.dll": b"MZ"})
             nupkg(root / "Gsharp.NET.Sdk.0.4.0-g.snupkg", {
                 "Gsharp.NET.Sdk.nuspec": b"<package><metadata><version>0.4.0-g</version></metadata></package>"})
+            same = nupkg(root / "same" / "Gsharp.NET.Sdk.2.0.0.nupkg", {
+                "Gsharp.NET.Sdk.nuspec": b"<package><metadata><version>0.0.0-g</version></metadata></package>"})
+            packer.reversion(same, "2.0.0")
+            with zipfile.ZipFile(same) as archive:
+                self.assertIn(b"<version>2.0.0</version>", archive.read("Gsharp.NET.Sdk.nuspec"),
+                              "a matching file name must still be stamped")
             versionless = nupkg(root / "other" / "Gsharp.NET.Sdk.1.0.0-g.nupkg", {"Gsharp.NET.Sdk.nuspec": b"<package/>"})
             with self.assertRaises(packer.SelfHostError):
                 packer.stamp_package(versionless, root / "other" / "x.nupkg", "1.0.0", required=True)

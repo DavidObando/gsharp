@@ -244,6 +244,15 @@ def sibling_nupkgs(bootstrap: Path, version: str) -> list[Path]:
     return found
 
 
+def missing_siblings(bootstrap: Path, version: str) -> list[str]:
+    """The sibling packages expected beside the bootstrap that are absent.
+
+    Optional: a tree without an analyzer test project never restores them.
+    """
+    return [f"{package_id}.{version}.nupkg" for package_id in SIBLING_PACKAGES
+            if not bootstrap.with_name(f"{package_id}.{version}.nupkg").exists()]
+
+
 def prepare_tree(tree: Path, bootstrap: Path) -> dict:
     version = package_version(bootstrap)
     if not (tree / SDK_PROJECT).is_file():
@@ -258,6 +267,7 @@ def prepare_tree(tree: Path, bootstrap: Path) -> dict:
         "globalJsonUpdated": global_json_updated,
         "feed": str(tree / ".nugs"),
         "stagedPackages": staged,
+        "missingSiblings": missing_siblings(bootstrap, version),
     }
 
 
@@ -325,11 +335,15 @@ def pack(tree: Path, version: str, out: Path, work: Path, config: str) -> Path:
     env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
     log = work / "pack.log"
     log.write_text("", encoding="utf-8")
-    before = set(out.glob(SDK_ID + ".*.nupkg"))
+    # Pack into a fresh directory so the produced package is unambiguous
+    # even when --out already holds packages from an earlier run.
+    pack_out = work / "pack-out"
+    shutil.rmtree(pack_out, ignore_errors=True)
+    pack_out.mkdir(parents=True)
     commands = [["dotnet", "restore", str(tree / project), "-nodeReuse:false"]
                 for project in NESTED_PROJECTS if (tree / project).is_file()]
     commands.append(["dotnet", "pack", str(tree / SDK_PROJECT), "-c", config,
-                     f"-p:PackageVersion={version}", "-o", str(out), "-nodeReuse:false"])
+                     f"-p:PackageVersion={version}", "-o", str(pack_out), "-nodeReuse:false"])
     for command in commands:
         with log.open("a", encoding="utf-8") as handle:
             handle.write("$ " + " ".join(command) + "\n")
@@ -339,13 +353,13 @@ def pack(tree: Path, version: str, out: Path, work: Path, config: str) -> Path:
             tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
             raise SelfHostError(f"{' '.join(command[:2])} failed (exit {result.returncode}); see {log}\n"
                                 + "\n".join(tail))
-    produced = sorted(set(out.glob(SDK_ID + ".*.nupkg")) - before)
+    produced = sorted(pack_out.glob(SDK_ID + ".*.nupkg"))
     if len(produced) != 1:
-        raise SelfHostError(f"dotnet pack succeeded but produced {len(produced)} {SDK_ID} packages in {out}")
-    return reversion(produced[0], version)
+        raise SelfHostError(f"dotnet pack succeeded but produced {len(produced)} {SDK_ID} packages in {pack_out}")
+    return reversion(produced[0], version, out)
 
 
-def reversion(nupkg: Path, version: str) -> Path:
+def reversion(nupkg: Path, version: str, out: Path | None = None) -> Path:
     """Rewrites a package's nuspec version and file name to `version`.
 
     Nerdbank.GitVersioning computes the package version itself (and a tree
@@ -354,9 +368,9 @@ def reversion(nupkg: Path, version: str) -> Path:
     stage-0 build (package caches are keyed by id+version), so the version
     is stamped after packing. Assembly versions inside are untouched.
     """
-    target = nupkg.with_name(f"{SDK_ID}.{version}.nupkg")
-    if nupkg == target:
-        return target
+    target = (out or nupkg.parent) / f"{SDK_ID}.{version}.nupkg"
+    # Always stamp, even when the file name already matches: the name alone
+    # says nothing about the nuspec inside.
     stamp_package(nupkg, target, version, required=True)
     symbols = nupkg.with_suffix(".snupkg")
     if symbols.exists():
@@ -381,7 +395,8 @@ def stamp_package(nupkg: Path, target: Path, version: str, required: bool) -> No
         temporary.unlink()
         raise SelfHostError(f"{nupkg.name} has no nuspec <version> to stamp")
     temporary.replace(target)
-    nupkg.unlink()
+    if nupkg.resolve() != target.resolve():
+        nupkg.unlink()
 
 
 def main(argv: list[str]) -> int:
