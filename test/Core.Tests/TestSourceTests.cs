@@ -114,7 +114,7 @@ public class TestSourceTests
             var snapshots = Path.Combine(directory, "test", "Core.Tests", "TestData", "CSharpFixtureSources");
             Directory.CreateDirectory(fixtures);
             Directory.CreateDirectory(snapshots);
-            const string source = "namespace GSharp.Core.Tests.Fixtures;\npublic class F { }\n";
+            const string source = "// <copyright file=\"F.cs\" company=\"GSharp\">\nnamespace GSharp.Core.Tests.Fixtures;\npublic class F { }\n";
             File.WriteAllText(Path.Combine(snapshots, "F.cs.txt"), source);
 
             File.WriteAllText(Path.Combine(fixtures, "F.cs"), source);

@@ -7,29 +7,31 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 
 public sealed class Adr0179NewlineSiteCoverageTests
 {
-    // Issue #4656: one newline-sensitive call, with its arguments and any
-    // leading negation. Matching the CALL rather than the trimmed line makes the
-    // inventory the same in C# (`&& !IsTokenOnNewLineAfter(a, b))`) and in G#
-    // (`!IsTokenOnNewLineAfter(a, b) &&`): only the surrounding syntax differs.
-    private static readonly Regex NewlineSensitiveCall = new(
-        @"!?\b(?:IsCurrentOnNewLineAfter|IsTokenOnNewLineAfter|GetLineIndex)\((?:[^()]|\([^()]*\))*\)",
-        RegexOptions.Compiled);
+    // Issue #4656: the inventoried sites are CALLS, found by a syntax walk in
+    // the tree's own language (Roslyn for C#, the compiler's parser for G#),
+    // keyed by the called name, the argument texts and a leading `!`. Comments
+    // and string literals never match, whatever their nesting or quoting.
+    private static readonly HashSet<string> NewlineSensitiveNames = new(StringComparer.Ordinal)
+    {
+        "IsCurrentOnNewLineAfter",
+        "IsTokenOnNewLineAfter",
+        "GetLineIndex",
+    };
 
     [Fact]
     public void ParserNewlineSensitiveSites_AreExplicitlyInventoried()
     {
         string[] actual = TestSource.SourceFilesMatching("Parser*", SearchOption.TopDirectoryOnly, "src/Core/CodeAnalysis/Syntax")
             .Where(path => Path.GetFileNameWithoutExtension(path) != "Parser")
-            .SelectMany(path => File.ReadLines(path)
-                .Select(StripLineComment)
-                .SelectMany(line => NewlineSensitiveCall.Matches(line).Select(match => match.Value))
-                .Select(call => Path.GetFileNameWithoutExtension(path) + ": " + call))
+            .SelectMany(path => (TestSource.IsGSharp ? GSharpSites(path) : CSharpSites(path))
+                .Select(site => Path.GetFileNameWithoutExtension(path) + ": " + site))
             .OrderBy(site => site, StringComparer.Ordinal)
             .ToArray();
 
@@ -56,29 +58,52 @@ public sealed class Adr0179NewlineSiteCoverageTests
         Assert.Equal(expected.OrderBy(site => site, StringComparer.Ordinal), actual);
     }
 
-    /// <summary>
-    /// The line without its <c>//</c> comment, so a call named in a trailing
-    /// comment is not inventoried. A <c>//</c> inside a string literal is kept.
-    /// </summary>
-    private static string StripLineComment(string line)
+    private static IEnumerable<string> CSharpSites(string path)
     {
-        var inString = false;
-        for (var i = 0; i < line.Length; i++)
+        var root = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(File.ReadAllText(path)).GetRoot();
+        foreach (var invocation in root.DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>())
         {
-            if (line[i] == '\\' && inString)
+            string name = invocation.Expression switch
             {
-                i++;
-            }
-            else if (line[i] == '"')
+                Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+                _ => string.Empty,
+            };
+            if (!NewlineSensitiveNames.Contains(name))
             {
-                inString = !inString;
+                continue;
             }
-            else if (!inString && line[i] == '/' && i + 1 < line.Length && line[i + 1] == '/')
-            {
-                return line.Substring(0, i);
-            }
-        }
 
-        return line;
+            bool negated = invocation.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax prefix
+                && prefix.OperatorToken.ValueText == "!";
+            string arguments = string.Join(", ", invocation.ArgumentList.Arguments.Select(argument => Collapse(argument.ToString())));
+            yield return (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
+        }
     }
+
+    private static IEnumerable<string> GSharpSites(string path)
+    {
+        var tree = GSharpSourceSyntax.Parse(path);
+        foreach (var call in tree.Root.DescendantNodes().OfType<CallExpressionSyntax>())
+        {
+            string name = GSharpSourceSyntax.SimpleName(call);
+            if (!NewlineSensitiveNames.Contains(name))
+            {
+                continue;
+            }
+
+            // `!a.b.F()` negates the whole member access whose right part is the call.
+            SyntaxNode outer = call;
+            while (outer.Parent is AccessorExpressionSyntax access && access.RightPart == outer)
+            {
+                outer = access;
+            }
+
+            bool negated = outer.Parent is UnaryExpressionSyntax unary && unary.OperatorToken.Text == "!";
+            string arguments = string.Join(", ", call.Arguments.Select(argument => Collapse(tree.Text.ToString(argument.Span))));
+            yield return (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
+        }
+    }
+
+    private static string Collapse(string text) => Regex.Replace(text.Trim(), @"\s+", " ");
 }

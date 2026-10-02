@@ -150,7 +150,7 @@ internal static class TestSource
                     "directory must be updated, not allowed to scan nothing.");
             }
 
-            files.UnionWith(Directory.EnumerateFiles(directory, stemPattern + extension, option)
+            files.UnionWith(EnumerateSkippingBuildOutput(directory, stemPattern + extension, option)
                 .Select(Path.GetFullPath)
                 .Where(path => !IsBuildOutput(root, path)));
         }
@@ -219,9 +219,12 @@ internal static class TestSource
             return live;
         }
 
-        if (!snapshot.Contains("namespace GSharp.Core.Tests.Fixtures", StringComparison.Ordinal))
+        // The snapshot must be THIS fixture: its header names the file, and it
+        // declares the fixtures namespace.
+        if (!snapshot.Contains($"file=\"{fileName}\"", StringComparison.Ordinal)
+            || !snapshot.Contains("namespace GSharp.Core.Tests.Fixtures", StringComparison.Ordinal))
         {
-            throw new InvalidOperationException($"{snapshotPath} does not hold the expected C# fixture.");
+            throw new InvalidOperationException($"{snapshotPath} does not hold the C# fixture {fileName}.");
         }
 
         return snapshot;
@@ -229,6 +232,36 @@ internal static class TestSource
 
     // Judged on the path BELOW the root: the root itself may sit under a bin/
     // (a test's temporary tree inside its output directory, for one).
+    // Walks the tree without descending into obj/ or bin/, which can be far
+    // larger than the sources they sit beside.
+    private static IEnumerable<string> EnumerateSkippingBuildOutput(string directory, string pattern, SearchOption option)
+    {
+        foreach (string file in Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly))
+        {
+            yield return file;
+        }
+
+        if (option != SearchOption.AllDirectories)
+        {
+            yield break;
+        }
+
+        foreach (string child in Directory.EnumerateDirectories(directory))
+        {
+            string name = Path.GetFileName(child);
+            if (string.Equals(name, "obj", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "bin", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (string file in EnumerateSkippingBuildOutput(child, pattern, option))
+            {
+                yield return file;
+            }
+        }
+    }
+
     private static bool IsBuildOutput(string root, string path) =>
         Path.GetRelativePath(root, path)
             .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)

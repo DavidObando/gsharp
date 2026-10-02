@@ -150,6 +150,9 @@ internal static class GSharpSourceSyntax
         _ => null,
     };
 
+    // G#'s syntax has no ClassDeclarationSyntax: the parser represents both
+    // `class` and `struct` declarations as StructDeclarationSyntax (see its
+    // `structKeyword` parameter), so this covers every class in the tree.
     private static string? TypeName(SyntaxNode node) => node switch
     {
         StructDeclarationSyntax type => type.Identifier.Text,
