@@ -1094,6 +1094,60 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void ForgivenNullableSpanAndBuilderElements_AreReportedBeforeTheFastPath()
+    {
+        string source = """
+            #nullable enable
+            using System;
+            using System.Collections.Immutable;
+
+            public static class C
+            {
+                public static int Count(object? x, object? y, object? z, object? unasserted)
+                {
+                    ReadOnlySpan<string?> readOnly = [x! as string];
+                    Span<string?> writable = [y! as string];
+                    ImmutableArray<string?> built = [z! as string];
+                    ReadOnlySpan<string?> safe = [unasserted as string];
+                    return readOnly.Length + writable.Length + built.Length + safe.Length;
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("x!!", printed, StringComparison.Ordinal);
+        Assert.Contains("y!!", printed, StringComparison.Ordinal);
+        Assert.Contains("z!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("unasserted!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "x!") + " kind=forgiven,collection-expression-element | target=ReadOnlySpan<string?> | slot-type=string?",
+                Expected(source, "y!") + " kind=forgiven,collection-expression-element | target=Span<string?> | slot-type=string?",
+                Expected(source, "z!") + " kind=forgiven,collection-expression-element | target=ImmutableArray<string?> | slot-type=string?",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
+    }
+
+    [Fact]
+    public void ForgivenNullConditionalReceiver_ResolvesTheNullableElementStore()
+    {
+        string source = """
+            #nullable enable
+            public static class C
+            {
+                public static object?[] Values(string? value) => new object?[] { value!?.Length };
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("value!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "value!"), Position(site));
+        Assert.StartsWith("kind=forgiven,array-element | target=object?[] | slot-type=object?", site.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });

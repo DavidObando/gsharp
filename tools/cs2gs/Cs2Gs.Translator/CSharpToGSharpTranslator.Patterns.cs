@@ -4066,6 +4066,14 @@ public sealed partial class CSharpToGSharpTranslator
                 else
                 {
                     var expressionElement = (ExpressionElementSyntax)element;
+
+                    // Nullable elements still need their bound slot recorded
+                    // before translating any explicit C# `!` inside them.
+                    if (elementTypeSymbol != null)
+                    {
+                        this.state.CollectionElementSlots[expressionElement.Expression] = elementTypeSymbol;
+                    }
+
                     elements.Add(sliceAcceptsNil
                         ? this.TranslateExpression(expressionElement.Expression)
                         : this.CoerceCollectionElement(

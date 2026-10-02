@@ -495,6 +495,7 @@ public sealed partial class CSharpToGSharpTranslator
                     case ParenthesizedExpressionSyntax:
                     case CastExpressionSyntax:
                     case CheckedExpressionSyntax:
+                    case ConditionalAccessExpressionSyntax:
                     case PostfixUnaryExpressionSyntax forgiving
                         when forgiving.IsKind(SyntaxKind.SuppressNullableWarningExpression):
                         node = parent;
