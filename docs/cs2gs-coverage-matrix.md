@@ -293,8 +293,8 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | CrefParameterList | CrefParameterListSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | DefineDirectiveTrivia | DefineDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | ElifDirectiveTrivia | ElifDirectiveTriviaSyntax |  | Preprocessor |  |  | Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently. |
-| ElseDirectiveTrivia | ElseDirectiveTriviaSyntax |  | Preprocessor |  |  | Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently. |
-| EndIfDirectiveTrivia | EndIfDirectiveTriviaSyntax |  | Preprocessor |  |  | Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently. |
+| ElseDirectiveTrivia | ElseDirectiveTriviaSyntax |  | Preprocessor |  |  | Never reported on its own: it only occurs with an #if, whose CS2GS-CONDITIONAL-COMPILATION error (#4632) covers the whole conditional block. |
+| EndIfDirectiveTrivia | EndIfDirectiveTriviaSyntax |  | Preprocessor |  |  | Never reported on its own: it only occurs with an #if, whose CS2GS-CONDITIONAL-COMPILATION error (#4632) covers the whole conditional block. |
 | EndRegionDirectiveTrivia | EndRegionDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | ErrorDirectiveTrivia | ErrorDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | ExtensionMemberCref | ExtensionMemberCrefSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |

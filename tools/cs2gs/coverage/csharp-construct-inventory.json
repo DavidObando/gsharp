@@ -700,7 +700,7 @@
     "nodeType": "ElseDirectiveTriviaSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "Preprocessor",
-    "notes": "Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently."
+    "notes": "Never reported on its own: it only occurs with an #if, whose CS2GS-CONDITIONAL-COMPILATION error (#4632) covers the whole conditional block."
   },
   {
     "kind": "EmptyStatement",
@@ -715,7 +715,7 @@
     "nodeType": "EndIfDirectiveTriviaSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "Preprocessor",
-    "notes": "Rejected: every #if and #elif reports CS2GS-CONDITIONAL-COMPILATION (#4632). G# has no conditional compilation, and translating the active arm would drop the others silently."
+    "notes": "Never reported on its own: it only occurs with an #if, whose CS2GS-CONDITIONAL-COMPILATION error (#4632) covers the whole conditional block."
   },
   {
     "kind": "EndRegionDirectiveTrivia",
