@@ -367,10 +367,10 @@ public sealed class StructSymbol : TypeSymbol
                 return effectiveProperties.Values.Any(property => property.IsAbstract);
             }
 
-            // ADR-0195 / issue #4674: an explicitly `abstract` or `static` class is
+            // ADR-0195 / issue #4674: an explicitly `abstract` or `shared` class is
             // abstract whatever its members are.
             return IsDeclaredAbstract
-                || IsStaticClass
+                || IsSharedClass
                 || (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
                 || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
                 || HasUnimplementedAbstractProperties()
@@ -690,11 +690,11 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>
     /// Gets a value indicating whether the class was declared with the
-    /// <c>static</c> modifier (ADR-0195 / issue #4674): emitted CLR
-    /// <c>abstract sealed</c> with no instance constructor, holding only
-    /// <c>shared</c> members, the shape of a C# <c>static class</c>.
+    /// <c>shared</c> modifier (ADR-0195 / issue #4674): emitted CLR
+    /// <c>abstract sealed</c> with no instance constructor, every member shared,
+    /// the shape of a C# <c>static class</c>.
     /// </summary>
-    internal bool IsStaticClass => IsClass && (Declaration?.IsStatic ?? false);
+    internal bool IsSharedClass => IsClass && (Declaration?.IsShared ?? false);
 
     /// <summary>
     /// Gets a value indicating whether non-public value-struct field initializers require an

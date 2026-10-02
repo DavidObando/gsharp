@@ -192,72 +192,6 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
-    /// ADR-0195 / issue #4674: a <c>static</c> class is emitted CLR
-    /// <c>abstract sealed</c> with no instance constructor, so it may declare
-    /// only <c>shared</c> members and nested types: an instance field, method,
-    /// property, event, constructor, deinitializer or primary constructor is
-    /// GS0617, and a base class or interface is GS0619. (A modifier conflict is
-    /// GS0618, reported by the parser.)
-    /// </summary>
-    private void ValidateStaticClassShape(StructDeclarationSyntax syntax)
-    {
-        if (!syntax.IsClass || !syntax.IsStatic)
-        {
-            return;
-        }
-
-        var className = syntax.Identifier.Text;
-
-        if (syntax.HasBaseType)
-        {
-            Diagnostics.ReportStaticClassCannotHaveBaseTypes(
-                syntax.BaseColonToken?.Location ?? syntax.Identifier.Location,
-                className);
-        }
-
-        if (syntax.PrimaryConstructorOpenParenthesisToken != null)
-        {
-            Diagnostics.ReportStaticClassCannotDeclareInstanceMember(
-                syntax.PrimaryConstructorOpenParenthesisToken.Location,
-                className,
-                "primary constructor");
-        }
-
-        foreach (var field in syntax.Fields)
-        {
-            Diagnostics.ReportStaticClassCannotDeclareInstanceMember(field.Identifier.Location, className, field.Identifier.Text);
-        }
-
-        foreach (var method in syntax.Methods)
-        {
-            Diagnostics.ReportStaticClassCannotDeclareInstanceMember(method.Identifier.Location, className, method.Identifier.Text);
-        }
-
-        foreach (var property in syntax.Properties)
-        {
-            Diagnostics.ReportStaticClassCannotDeclareInstanceMember(property.Identifier.Location, className, property.Identifier.Text);
-        }
-
-        foreach (var evt in syntax.Events)
-        {
-            Diagnostics.ReportStaticClassCannotDeclareInstanceMember(evt.Identifier.Location, className, evt.Identifier.Text);
-        }
-
-        if (!syntax.Constructors.IsDefaultOrEmpty)
-        {
-            foreach (var ctor in syntax.Constructors)
-            {
-                Diagnostics.ReportStaticClassCannotDeclareInstanceMember(ctor.InitKeyword.Location, className, "init");
-            }
-        }
-
-        if (syntax.Deinitializer != null)
-        {
-            Diagnostics.ReportStaticClassCannotDeclareInstanceMember(syntax.Identifier.Location, className, "deinit");
-        }
-    }
-
-    /// <summary>
     /// Issue #950: reports GS0380 when <paramref name="modifier"/> is the
     /// <c>protected</c> keyword. Used by callers that have already determined
     /// the surrounding context does not permit <c>protected</c>.
@@ -324,9 +258,6 @@ internal sealed partial class DeclarationBinder
         // a struct (value types are not inheritable), or a sealed type before
         // binding the members so the user sees one clean GS0380 diagnostic.
         ValidateProtectedMemberPlacement(syntax);
-
-        // ADR-0195 / issue #4674: a `static` class holds only `shared` members.
-        ValidateStaticClassShape(syntax);
 
         var fieldBinding = BindStructFieldsAndPrimaryConstructor(syntax, package, structSymbol);
         var baseBinding = BindStructBaseAndInterfaces(syntax, structSymbol, fieldBinding);

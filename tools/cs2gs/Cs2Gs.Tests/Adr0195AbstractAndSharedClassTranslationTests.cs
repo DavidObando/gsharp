@@ -1,4 +1,4 @@
-// <copyright file="Adr0195AbstractAndStaticClassTranslationTests.cs" company="GSharp">
+// <copyright file="Adr0195AbstractAndSharedClassTranslationTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -14,14 +14,15 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// ADR-0195 / issue #4674: a C# <c>abstract class</c> and a C# <c>static class</c>
-/// keep their CLR shape through migration. The shapes below are the ones the
+/// keep their CLR shape through migration (<c>abstract class</c> and <c>shared class</c>). The shapes below are the ones the
 /// migrated <c>GSharp.Core</c> API diff named: <c>BoundTreeWalker</c> and
 /// <c>DocInline</c> (abstract with no abstract member) and
 /// <c>IteratorMoveNextBodyBuilder</c> (a static class). Before, abstractness
 /// was dropped (an Info diagnostic) and every static class became an
-/// ordinary instantiable <c>class</c>.
+/// ordinary instantiable <c>class</c> whose members sat in a <c>shared { }</c>
+/// block; a static class is now a <c>shared class</c> with its members flat.
 /// </summary>
-public class Adr0195AbstractAndStaticClassTranslationTests
+public class Adr0195AbstractAndSharedClassTranslationTests
 {
     private const string Source = @"
 namespace Corpus.Adr0195
@@ -59,6 +60,34 @@ namespace Corpus.Adr0195
     public class Concrete : BoundTreeWalker
     {
     }
+
+    public class WithStatics
+    {
+        public static int Count;
+
+        public int Instance;
+    }
+
+    public static class Config
+    {
+        public static int Value;
+
+        static Config()
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                Value += i;
+            }
+        }
+    }
+
+    public class Outer
+    {
+        public static class Inner
+        {
+            public static int One() => 1;
+        }
+    }
 }
 ";
 
@@ -69,7 +98,7 @@ namespace Corpus.Adr0195
 
         Assert.True(walker.IsAbstract);
         Assert.False(walker.IsOpen);
-        Assert.False(walker.IsStatic);
+        Assert.False(walker.IsShared);
         Assert.Contains("abstract class BoundTreeWalker", GSharpPrinter.Print(Translate()), StringComparison.Ordinal);
         Assert.DoesNotContain("open abstract", GSharpPrinter.Print(Translate()), StringComparison.Ordinal);
     }
@@ -98,20 +127,56 @@ namespace Corpus.Adr0195
         TypeDeclaration concrete = Declaration("Concrete");
 
         Assert.False(concrete.IsAbstract);
-        Assert.False(concrete.IsStatic);
+        Assert.False(concrete.IsShared);
     }
 
     [Fact]
-    public void StaticClass_IsDeclaredStatic_WithItsMembersInASharedBlock()
+    public void StaticClass_IsASharedClass_WithItsMembersFlatInTheBody()
     {
         TypeDeclaration builder = Declaration("IteratorMoveNextBodyBuilder");
         string rendered = GSharpPrinter.Print(Translate());
 
-        Assert.True(builder.IsStatic);
+        Assert.True(builder.IsShared);
         Assert.False(builder.IsOpen);
         Assert.False(builder.IsAbstract);
-        Assert.Contains("static class IteratorMoveNextBodyBuilder", rendered, StringComparison.Ordinal);
-        Assert.Contains("shared {", rendered, StringComparison.Ordinal);
+        Assert.Contains("shared class IteratorMoveNextBodyBuilder", rendered, StringComparison.Ordinal);
+
+        // The class IS the shared member list: no `shared { }` block inside it, and its
+        // const, field and method are direct members.
+        Assert.DoesNotContain(builder.Members, member => member is SharedBlock);
+        Assert.Contains(builder.Members.OfType<MethodDeclaration>(), method => method.Name == "Build");
+        Assert.Contains(builder.Members.OfType<FieldDeclaration>(), field => field.Name == "calls");
+    }
+
+    [Fact]
+    public void NonStaticClass_KeepsItsTrailingSharedBlock()
+    {
+        TypeDeclaration concrete = Declaration("WithStatics");
+
+        Assert.False(concrete.IsShared);
+        Assert.Single(concrete.Members.OfType<SharedBlock>());
+        Assert.Contains("shared {", GSharpPrinter.Print(Translate()), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StaticConstructor_BecomesAFlatStaticInitializerInTheSharedClass()
+    {
+        TypeDeclaration config = Declaration("Config");
+
+        Assert.True(config.IsShared);
+        Assert.Contains(config.Members.OfType<StaticInitializerBlock>(), _ => true);
+        Assert.DoesNotContain(config.Members, member => member is SharedBlock);
+        Assert.Contains("init {", GSharpPrinter.Print(Translate()), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NestedStaticClass_IsASharedClassToo()
+    {
+        TypeDeclaration outer = Declaration("Outer");
+        TypeDeclaration inner = outer.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Inner");
+
+        Assert.True(inner.IsShared);
+        Assert.False(outer.IsShared);
     }
 
     [Fact]

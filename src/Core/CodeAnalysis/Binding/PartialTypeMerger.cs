@@ -82,6 +82,9 @@ internal static class PartialTypeMerger
         for (var i = 0; i < result.Count; i++)
         {
             result[i] = PartialMethodMerger.Normalize(result[i], diagnostics);
+
+            // ADR-0195: then put every `shared class` in the shape the binder reads.
+            result[i] = SharedClassNormalizer.Normalize(result[i], diagnostics);
         }
 
         return result;
@@ -249,13 +252,14 @@ internal static class PartialTypeMerger
         RequireOnEveryPart(parts, hasInline, "inline", name, diagnostics);
         RequireOnEveryPart(parts, hasRef, "ref", name, diagnostics);
 
-        // ADR-0195 / issue #4674: `abstract` and `static`, unlike `data`/`inline`/
-        // `ref`, need appear on only ONE part, as in C# (a modifier on any part
-        // applies to the whole type). Parts a source generator contributes (the
-        // gsgen output for a `[GeneratedRegex]` partial class, ADR-0145) are
-        // written without knowing the other parts' modifiers, so requiring them
-        // on every part would reject a migrated `static partial class`.
-        // The merged node below takes the first part that states each one.
+        // ADR-0195 / issue #4674: `abstract`, unlike `data`/`inline`/`ref`, needs to
+        // appear on only ONE part, as in C# (a modifier on any part applies to the
+        // whole type). `shared` is different: it decides what each part's own body
+        // MEANS (a `func` in a shared class is a shared member, in any other class
+        // an instance member), so every part must say it. GS0479 otherwise.
+        System.Func<StructDeclarationSyntax, bool> hasShared =
+            part => part.SharedModifier != null;
+        RequireOnEveryPart(parts, hasShared, "shared", name, diagnostics);
 
         // GS0480: identical type-parameter lists (names + arity + constraints).
         var primaryTypeParams = NormalizeNodeText(primary.TypeParameterList);
@@ -342,7 +346,8 @@ internal static class PartialTypeMerger
             TypeParameterList = primary.TypeParameterList,
             RefModifier = parts.Select(p => p.RefModifier).FirstOrDefault(t => t != null),
             AbstractModifier = parts.Select(p => p.AbstractModifier).FirstOrDefault(t => t != null),
-            StaticModifier = parts.Select(p => p.StaticModifier).FirstOrDefault(t => t != null),
+            SharedModifier = parts.Select(p => p.SharedModifier).FirstOrDefault(t => t != null),
+            SharedInitializers = parts.SelectMany(p => p.SharedInitializers).ToImmutableArray(),
             UnsafeModifier = parts.Select(p => p.UnsafeModifier).FirstOrDefault(t => t != null),
             PartialModifier = parts.Select(p => p.PartialModifier).FirstOrDefault(t => t != null),
             SealedKeyword = sealedKeyword,

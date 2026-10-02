@@ -529,7 +529,7 @@ internal sealed class TypeDefEmitter
             // not overridden) is itself abstract — emit TypeAttributes.Abstract
             // so the runtime forbids `newobj` on it. Such a class is always
             // `open`, so it is never also Sealed. The one exception is ADR-0195's
-            // `static` class (IsAbstract, not open): CLR `abstract sealed`, which
+            // `shared` class (IsAbstract, not open): CLR `abstract sealed`, which
             // is how a static class is spelled in metadata.
             if (structSym.IsAbstract)
             {
@@ -1509,11 +1509,11 @@ internal sealed class TypeDefEmitter
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        // ADR-0195 / issue #4674: a `static` class is not constructible, so its
+        // ADR-0195 / issue #4674: a `shared` class is not constructible, so its
         // placeholder `.ctor` is private (C# emits none; a private member is not
         // part of the API); an explicitly `abstract` class's implicit `.ctor` is
         // `family`, as in C#, since only derived classes may chain to it.
-        var visibility = classSym.IsStaticClass
+        var visibility = classSym.IsSharedClass
             ? MethodAttributes.Private
             : classSym.IsDeclaredAbstract
                 ? MethodAttributes.Family

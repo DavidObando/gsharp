@@ -1,4 +1,4 @@
-// <copyright file="Adr0195AbstractAndStaticClassEmitTests.cs" company="GSharp">
+// <copyright file="Adr0195AbstractAndSharedClassEmitTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -14,12 +14,12 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// ADR-0195 / issue #4674 — the CLR shape of the <c>abstract</c> and
-/// <c>static</c> class modifiers, read back from the emitted metadata, plus an
+/// <c>shared</c> class modifiers, read back from the emitted metadata, plus an
 /// ILVerify + run of the program. The migrated GSharp.Core API depends on
 /// these flags being exactly what the C# compiler emits for an abstract class
 /// and for a static class.
 /// </summary>
-public class Adr0195AbstractAndStaticClassEmitTests
+public class Adr0195AbstractAndSharedClassEmitTests
 {
     private const string Source =
         """
@@ -50,14 +50,12 @@ public class Adr0195AbstractAndStaticClassEmitTests
         data class Square(Side int32) : Shape(4) {
         }
 
-        static class Helpers {
-            shared {
-                const Factor int32 = 3
-                var calls int32
-                func Triple(x int32) int32 {
-                    calls = calls + 1
-                    return x * Factor
-                }
+        shared class Helpers {
+            const Factor int32 = 3
+            var calls int32
+            func Triple(x int32) int32 {
+                calls = calls + 1
+                return x * Factor
             }
         }
 
@@ -98,7 +96,7 @@ public class Adr0195AbstractAndStaticClassEmitTests
     }
 
     [Fact]
-    public void StaticClass_IsAbstractAndSealed_WithNoReachableConstructor()
+    public void SharedClass_IsAbstractAndSealed_WithNoReachableConstructor()
     {
         var dll = CompileToDll(Source);
         try
@@ -119,7 +117,7 @@ public class Adr0195AbstractAndStaticClassEmitTests
     }
 
     [Fact]
-    public void AbstractAndStaticClasses_VerifyAndRun()
+    public void AbstractAndSharedClasses_VerifyAndRun()
     {
         var dll = CompileToDll(Source);
         try

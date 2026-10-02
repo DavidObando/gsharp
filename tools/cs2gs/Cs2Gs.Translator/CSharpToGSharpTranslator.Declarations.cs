@@ -1458,7 +1458,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 this.context.Report(new TranslationDiagnostic(
                     nameof(SyntaxKind.ClassDeclaration),
-                    $"C# 'static class {node.Identifier.Text}' is mapped to a G# 'static class' whose members are all wrapped in a 'shared {{ }}' block (ADR-0195 / ADR-0115 §B.11 / ADR-0053).",
+                    $"C# 'static class {node.Identifier.Text}' is mapped to a G# 'shared class' whose members sit directly in its body, with no 'shared {{ }}' block (ADR-0195 / ADR-0115 §B.11).",
                     node.GetLocation(),
                     TranslationSeverity.Info));
             }
@@ -1834,7 +1834,17 @@ public sealed partial class CSharpToGSharpTranslator
             var members = new List<GMember>(instanceMembers);
             if (sharedMembers.Count > 0)
             {
-                members.Add(new SharedBlock(sharedMembers));
+                if (isStaticClass)
+                {
+                    // ADR-0195 / issue #4674: a C# static class is a G# `shared class`,
+                    // whose body IS its shared member list; a `shared { }` block
+                    // inside it is an error.
+                    members.AddRange(sharedMembers);
+                }
+                else
+                {
+                    members.Add(new SharedBlock(sharedMembers));
+                }
             }
 
             // Issue #1729 (mode 4): remove only the entries this invocation added
@@ -1963,7 +1973,7 @@ public sealed partial class CSharpToGSharpTranslator
                 isUnsafe: isUnsafe,
                 isPartial: isPartial,
                 isRefLike: isRefLike,
-                isStatic: isStaticClass);
+                isShared: isStaticClass);
         }
 
         private bool ShouldAttachOwnedExtensions(

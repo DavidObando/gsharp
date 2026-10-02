@@ -112,17 +112,18 @@ public sealed class Issue3869ModifierSweepTests
     /// <summary>
     /// <c>static class</c> — preserved (ADR-0195 / issue #4674). It used to be emitted
     /// as an ordinary instantiable class, so the type stopped being CLR
-    /// <c>abstract sealed</c>; G# now has a <c>static class</c> modifier, with the
-    /// members still in the <c>shared { }</c> block.
+    /// <c>abstract sealed</c>; G# now has a <c>shared class</c> modifier, with the
+    /// members directly in the class body (no <c>shared { }</c> block).
     /// </summary>
     [Fact]
-    public void StaticClass_IsPreserved()
+    public void StaticClass_IsPreservedAsASharedClass()
     {
         string printed = Translate(
             "namespace R { public static class Helpers { public static int X() { return 1; } } }");
 
-        Assert.Contains("static class Helpers", printed, StringComparison.Ordinal);
-        Assert.Contains("shared {", printed, StringComparison.Ordinal);
+        Assert.Contains("shared class Helpers", printed, StringComparison.Ordinal);
+        Assert.Contains("func X() int32", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("shared {", printed, StringComparison.Ordinal);
     }
 
     /// <summary>

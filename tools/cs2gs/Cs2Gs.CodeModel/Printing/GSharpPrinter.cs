@@ -2112,9 +2112,9 @@ public static class GSharpPrinter
             sb.Append("abstract ");
         }
 
-        if (declaration.IsStatic)
+        if (declaration.IsShared)
         {
-            sb.Append("static ");
+            sb.Append("shared ");
         }
 
         if (declaration.IsPartial)

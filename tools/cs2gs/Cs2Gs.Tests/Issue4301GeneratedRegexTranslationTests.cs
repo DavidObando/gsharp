@@ -47,6 +47,18 @@ partial class P {
 }
 ";
 
+    // The same, for a C# static class: its G# form is a `shared class` (ADR-0195), every
+    // part of which says `shared` (a part is the body of the type, and `shared` decides
+    // what that body means), with the members flat.
+    private const string SharedDigitsImplementingPart = @"package App
+
+import System.Text.RegularExpressions
+
+shared partial class P {
+    private partial func Digits() Regex -> Regex(""\\d+"")
+}
+";
+
     [Fact]
     public void StaticMethod_TranslatesToASharedDeclaringPart_WithoutACacheField()
     {
@@ -509,9 +521,10 @@ partial class P
             ("P.g.cs", generated));
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("partial class P {", printed, StringComparison.Ordinal);
+        Assert.Contains("shared partial class P {", printed, StringComparison.Ordinal);
         Assert.Contains("private partial func Digits() Regex;", printed, StringComparison.Ordinal);
-        TranslationTestValidation.AssertBinds(printed, DigitsImplementingPart);
+        Assert.DoesNotContain("shared {", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed, SharedDigitsImplementingPart);
     }
 
     [Fact]
@@ -556,10 +569,8 @@ partial class Program
 }";
         const string implementingPart = @"import System.Text.RegularExpressions
 
-partial class Program {
-    shared {
-        internal partial func Digits() Regex -> Regex(""\\d+"")
-    }
+shared partial class Program {
+    internal partial func Digits() Regex -> Regex(""\\d+"")
 }
 ";
 
@@ -570,11 +581,11 @@ partial class Program {
             ("Program.g.cs", generated));
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("partial class Program {", printed, StringComparison.Ordinal);
+        Assert.Contains("shared partial class Program {", printed, StringComparison.Ordinal);
         Assert.Contains("internal partial func Digits() Regex;", printed, StringComparison.Ordinal);
         Assert.Contains("internal func Describe(s string) string", printed, StringComparison.Ordinal);
         Assert.Contains("internal func Echo(s string) string", printed, StringComparison.Ordinal);
-        Assert.Contains("internal static class Box", printed, StringComparison.Ordinal);
+        Assert.Contains("internal shared class Box", printed, StringComparison.Ordinal);
         Assert.Contains("func Secret() string", printed, StringComparison.Ordinal);
         Assert.Contains("Program.Digits()", printed, StringComparison.Ordinal);
         Assert.Contains("private func Hidden() string", printed, StringComparison.Ordinal);

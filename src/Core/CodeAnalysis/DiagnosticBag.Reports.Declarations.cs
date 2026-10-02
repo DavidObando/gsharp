@@ -1053,36 +1053,37 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.AbstractMemberNotImplemented, className, declaringTypeName, memberName);
 
     /// <summary>
-    /// ADR-0195 / issue #4674: GS0617 — a <c>static</c> class declares an instance
-    /// member (field, method, property, event, constructor or primary
-    /// constructor). A static class is emitted <c>abstract sealed</c>, so only
-    /// <c>shared</c> members and nested types belong in it.
+    /// ADR-0195 / issue #4674: GS0617 — a <c>shared</c> class declares something it
+    /// cannot hold. Every member of a shared class is shared and the class is
+    /// emitted <c>abstract sealed</c>, so an <c>init(…)</c> constructor, a
+    /// primary constructor, a <c>deinit</c> and a nested <c>shared { }</c> block
+    /// are rejected.
     /// </summary>
-    /// <param name="location">The source location of the offending member.</param>
-    /// <param name="className">The static class name.</param>
-    /// <param name="memberName">The offending instance member's name.</param>
-    public void ReportStaticClassCannotDeclareInstanceMember(TextLocation location, string className, string memberName)
-    => Report(location, DiagnosticDescriptors.StaticClassCannotDeclareInstanceMember, className, memberName);
+    /// <param name="location">The source location of the offending declaration.</param>
+    /// <param name="className">The shared class name.</param>
+    /// <param name="what">What the class declared (for example "a primary constructor").</param>
+    public void ReportSharedClassCannotDeclare(TextLocation location, string className, string what)
+    => Report(location, DiagnosticDescriptors.SharedClassCannotDeclare, className, what);
 
     /// <summary>
-    /// ADR-0195 / issue #4674: GS0618 — <c>static</c> is combined with another
+    /// ADR-0195 / issue #4674: GS0618 — <c>shared</c> is combined with another
     /// class modifier (<c>open</c>, <c>sealed</c>, <c>abstract</c> or
     /// <c>data</c>) that contradicts a class which is neither inheritable nor
     /// instantiable.
     /// </summary>
     /// <param name="location">The source location of the conflicting modifier.</param>
     /// <param name="modifier">The conflicting modifier's text.</param>
-    public void ReportStaticClassModifierConflict(TextLocation location, string modifier)
-    => Report(location, DiagnosticDescriptors.StaticClassModifierConflict, modifier);
+    public void ReportSharedClassModifierConflict(TextLocation location, string modifier)
+    => Report(location, DiagnosticDescriptors.SharedClassModifierConflict, modifier);
 
     /// <summary>
-    /// ADR-0195 / issue #4674: GS0619 — a <c>static</c> class lists a base class
+    /// ADR-0195 / issue #4674: GS0619 — a <c>shared</c> class lists a base class
     /// or an interface.
     /// </summary>
     /// <param name="location">The source location of the base-type clause.</param>
-    /// <param name="className">The static class name.</param>
-    public void ReportStaticClassCannotHaveBaseTypes(TextLocation location, string className)
-    => Report(location, DiagnosticDescriptors.StaticClassCannotHaveBaseTypes, className);
+    /// <param name="className">The shared class name.</param>
+    public void ReportSharedClassCannotHaveBaseTypes(TextLocation location, string className)
+    => Report(location, DiagnosticDescriptors.SharedClassCannotHaveBaseTypes, className);
 
     /// <summary>
     /// Issue #987: GS0388 — a no-body method (an abstract member) appears where
