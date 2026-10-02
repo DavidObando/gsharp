@@ -76,6 +76,12 @@ public class ReferenceMetadataIndexTests
         var coldIndex = Assert.IsType<Lazy<Dictionary<string, Type>>>(field.GetValue(warm));
         Assert.False(coldIndex.IsValueCreated);
 
+        // The hidden-type probe below means something only while the type
+        // exists and stays non-public; a rename would make it pass vacuously.
+        var invariant = typeof(ReferenceResolver).Assembly.GetType("GSharp.Core.CodeAnalysis.Invariant");
+        Assert.NotNull(invariant);
+        Assert.False(invariant.IsVisible);
+
         for (var i = 0; i < 100; i++)
         {
             Assert.True(warm.HasTypeNameAtAnyArity("System.Collections.Generic.List"));

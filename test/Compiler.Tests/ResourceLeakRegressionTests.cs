@@ -143,13 +143,20 @@ public class ResourceLeakRegressionTests
             binder: null,
             new[] { typeof(Type), typeof(string) },
             modifiers: null);
-        return method?.Invoke(null, new object[] { type, "ToString" });
+
+        // A renamed or re-signatured member must fail here, not skip priming
+        // the cache this leak test exists to cover (it would pass vacuously).
+        Assert.NotNull(method);
+        return method.Invoke(null, new object[] { type, "ToString" });
     }
 
     private static object InvokeClrInterfacesCache(Type type)
     {
         var method = typeof(ClrTypeUtilities).GetMethod("SafeGetInterfaces", BindingFlags.NonPublic | BindingFlags.Static);
-        return method?.Invoke(null, new object[] { type });
+
+        // As above: a missing member must fail, not silently skip the cache.
+        Assert.NotNull(method);
+        return method.Invoke(null, new object[] { type });
     }
 
     private static void AssertCollected(WeakReference weakReference, string name)
