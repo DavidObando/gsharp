@@ -3025,7 +3025,11 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
                 }
 
-                return candidate.Syntax.DescendantNodes()
+                // `nameof(T)` translates to a string literal, so its operand is
+                // not a type-parameter dependency.
+                return candidate.Syntax.DescendantNodes(node =>
+                        !(node is InvocationExpressionSyntax
+                            && this.context.SemanticModel.GetOperation(node) is INameOfOperation))
                     .Select(node => this.context.GetSymbolInfo(node).Symbol)
                     .Any(symbol =>
                         (symbol is ITypeParameterSymbol typeParameter

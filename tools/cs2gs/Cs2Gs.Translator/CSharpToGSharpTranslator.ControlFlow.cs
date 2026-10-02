@@ -2162,7 +2162,7 @@ public sealed partial class CSharpToGSharpTranslator
                         break;
 
                     default:
-                        if (this.BindsTo(argument.Expression, symbol))
+                        if (this.WritesStorageOf(argument.Expression, symbol))
                         {
                             return true;
                         }
@@ -2175,44 +2175,90 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // Shared by declaration mutability and smart-cast invalidation so tuple,
-        // ref/out, address-of, and ref-alias writes cannot drift apart.
+        // ref/out, address-of, and ref-alias writes cannot drift apart. A write
+        // through value-type storage (`x.N = 1`, `ref x.N`, or a mutating struct
+        // call `x.Mutate()`) writes `x` itself (issue #4302).
         private bool SyntaxNodeWritesSymbol(SyntaxNode node, ISymbol symbol) =>
             node switch
             {
                 AssignmentExpressionSyntax assignment
-                    when this.BindsTo(assignment.Left, symbol) => true,
+                    when this.WritesStorageOf(assignment.Left, symbol) => true,
                 AssignmentExpressionSyntax { Left: TupleExpressionSyntax leftTuple }
                     when this.TupleAssignmentTargetsInclude(leftTuple, symbol) => true,
                 PostfixUnaryExpressionSyntax postfix
                     when (postfix.IsKind(SyntaxKind.PostIncrementExpression)
                             || postfix.IsKind(SyntaxKind.PostDecrementExpression))
-                        && this.BindsTo(postfix.Operand, symbol) => true,
+                        && this.WritesStorageOf(postfix.Operand, symbol) => true,
                 PrefixUnaryExpressionSyntax prefix
                     when (prefix.IsKind(SyntaxKind.PreIncrementExpression)
                             || prefix.IsKind(SyntaxKind.PreDecrementExpression)
                             || prefix.IsKind(SyntaxKind.AddressOfExpression))
-                        && this.BindsTo(prefix.Operand, symbol) => true,
+                        && this.WritesStorageOf(prefix.Operand, symbol) => true,
                 ArgumentSyntax argument
                     when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None)
-                        && this.BindsTo(argument.Expression, symbol) => true,
+                        && this.WritesStorageOf(argument.Expression, symbol) => true,
                 InvocationExpressionSyntax
                     { Expression: MemberAccessExpressionSyntax member } invocation
                     when this.ExtensionReceiverWritesSymbol(
                         invocation,
                         member.Expression,
-                        symbol) => true,
+                        symbol)
+                        || this.MutatingStructCallWritesSymbol(invocation, member, symbol) => true,
                 RefExpressionSyntax refOf
                     when refOf.Expression is IdentifierNameSyntax
                         && this.BindsTo(refOf.Expression, symbol) => true,
+                RefExpressionSyntax refOf
+                    when refOf.Expression is MemberAccessExpressionSyntax
+                        && this.WritesStorageOf(refOf.Expression, symbol) => true,
                 _ => false,
             };
+
+        // True when `target` is `symbol` itself or a member reached from it
+        // only through value-type receivers, so writing `target` writes the
+        // storage of `symbol`.
+        private bool WritesStorageOf(ExpressionSyntax target, ISymbol symbol)
+        {
+            while (target is MemberAccessExpressionSyntax member
+                && member.IsKind(SyntaxKind.SimpleMemberAccessExpression)
+                && this.context.GetTypeInfo(member.Expression).Type is { IsReferenceType: false })
+            {
+                target = member.Expression;
+            }
+
+            return this.BindsTo(target, symbol);
+        }
+
+        private bool MutatingStructCallWritesSymbol(
+            InvocationExpressionSyntax invocation,
+            MemberAccessExpressionSyntax member,
+            ISymbol symbol)
+        {
+            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
+                || method.IsStatic
+                || method.IsReadOnly
+                || method.IsExtensionMethod
+                || (method.ContainingType is { IsReferenceType: true } container
+                    && container.TypeKind != TypeKind.Interface))
+            {
+                return false;
+            }
+
+            ITypeSymbol receiverType = this.context.GetTypeInfo(member.Expression).Type;
+            bool mutableValueReceiver = receiverType switch
+            {
+                ITypeParameterSymbol typeParameter => !typeParameter.IsReferenceType,
+                INamedTypeSymbol { TypeKind: TypeKind.Struct } named => !named.IsReadOnly,
+                _ => false,
+            };
+            return mutableValueReceiver && this.WritesStorageOf(member.Expression, symbol);
+        }
 
         private bool ExtensionReceiverWritesSymbol(
             InvocationExpressionSyntax invocation,
             ExpressionSyntax receiver,
             ISymbol symbol)
         {
-            if (!this.BindsTo(receiver, symbol)
+            if (!this.WritesStorageOf(receiver, symbol)
                 || this.context.SemanticModel.GetOperation(invocation)
                     is not IInvocationOperation operation
                 || !operation.TargetMethod.IsExtensionMethod)

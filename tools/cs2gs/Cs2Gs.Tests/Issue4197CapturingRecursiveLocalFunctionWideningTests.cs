@@ -475,6 +475,76 @@ namespace Demo
             "84");
     }
 
+    [Theory]
+    [InlineData("x.N = 42;")]
+    [InlineData("x.Set(42);")]
+    public void CrossSectionLift_LambdaWriteThroughStructStorage_KeepsSharedStorage(string write)
+    {
+        // Issue #4302: writing a field of, or calling a mutating method on, a
+        // captured struct writes the struct's storage, so the lifted helper
+        // must receive it by ref rather than a stale copy.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit($$"""
+            namespace Demo {
+                public struct S {
+                    public int N;
+                    public void Set(int value) { N = value; }
+                }
+
+                public class C {
+                    public int Run(int value) {
+                        S x = new S();
+                        x.N = 1;
+                        System.Action mutate = () => { {{write}} };
+                        switch (value) {
+                            case 0:
+                                int F(int n) {
+                                    if (n == 0) {
+                                        mutate();
+                                        return x.N;
+                                    }
+
+                                    return F(n - 1);
+                                }
+
+                                return F(0);
+                            default:
+                                return F(0);
+                        }
+                    }
+                }
+            }
+            """);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(0) + C().Run(1))",
+            "84");
+    }
+
+    [Fact]
+    public void MixedRecursionGroup_NameofEnclosingTypeParameter_IsNotADependency()
+    {
+        // Issue #4302: `nameof(T)` translates to the literal "T", so the
+        // member-helper fallback does not need the enclosing `T`.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public static string Run<T>() {
+                        return First(2);
+                        static string First(int n) => n == 0 ? nameof(T) : Second<int>(n - 1);
+                        static string Second<U>(int n) => First(n);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("unsupported", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C.Run[int32]())",
+            "T");
+    }
+
     [Fact]
     public void RefReturningLocalFunctionNameofFromAnotherSwitchSection_IsHarmless()
     {
