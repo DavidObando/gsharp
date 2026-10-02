@@ -86,4 +86,33 @@ public class Issue4681ChannelsNullPassThroughTests
             "A fail-fast `!!` on a channel element value throws on `nil` in the migrated runtime:"
                 + Environment.NewLine + string.Join(Environment.NewLine, offending));
     }
+
+    /// <summary>
+    /// Issue #4702: the nil-element runtime tests themselves must migrate to
+    /// G# that gsc accepts. Reading a named element off an awaited tuple
+    /// (<c>tuple.Value</c>) and comparing a <c>(nil, true)</c> literal against a
+    /// <c>(string?, bool)</c> tuple both failed to compile (GS0158, GS0155), and deconstructing the
+    /// imported tuple failed too (GS0164), so the tests read <c>Item1</c>/<c>Item2</c>. The migration compile of
+    /// <c>test/Runtime.Channels.Tests</c> is the full gate; this pins the shapes.
+    /// </summary>
+    [Fact]
+    public async Task NilElementTests_MigrateWithoutTupleMemberReadsOrNilTupleLiterals()
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
+            Path.Combine(repoRoot, "test", "Runtime.Channels.Tests", "Runtime.Channels.Tests.csproj"));
+        LoadedDocument document = System.Linq.Enumerable.Single(
+            project.Documents,
+            candidate => Path.GetFileName(candidate.FilePath) == "Issue4681NilElementTests.cs");
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(document, context));
+
+        Assert.Contains("BufferedNil_RoundTripsThroughEveryReceiveShape", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("(nil, true)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("tuple.Value", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("tuple.Ok", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let (element, delivered)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let (received, receivedOk)", printed, StringComparison.Ordinal);
+    }
 }
