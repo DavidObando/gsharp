@@ -2605,19 +2605,19 @@ public sealed partial class CSharpToGSharpTranslator
                     or SwitchExpressionArmSyntax
                     or StatementSyntax)
                 ?? recursive;
-            bool Occupied(string candidate) =>
-                usedDesignators.Contains(candidate)
-                || this.state.LiftedStaticLocalFunctions.ContainsValue(candidate)
-                || this.state.LiftedRecursiveLocalFunctions.Values.Any(lift => lift.Name == candidate)
-                || arm.DescendantTokens().Any(token =>
-                    token.IsKind(SyntaxKind.IdentifierToken)
-                    && this.nameAllocator.GetName(token.ValueText) == candidate);
+            var occupied = new HashSet<string>(usedDesignators, StringComparer.Ordinal);
+            occupied.UnionWith(this.state.LiftedStaticLocalFunctions.Values);
+            occupied.UnionWith(this.state.LiftedRecursiveLocalFunctions.Values.Select(lift => lift.Name));
+            occupied.UnionWith(
+                arm.DescendantTokens()
+                    .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
+                    .Select(token => this.nameAllocator.GetName(token.ValueText)));
 
             INamedTypeSymbol owner = this.state.CurrentEmittedAggregate
                 ?? this.context.SemanticModel.GetEnclosingSymbol(recursive.SpanStart)?.ContainingType;
             string designator = LiftedLocalFunctionNameAllocator
                 .For(this.context.Compilation)
-                .ClaimDesignator(owner, stem, Occupied);
+                .ClaimDesignator(owner, stem, occupied.Contains);
             usedDesignators.Add(designator);
             return designator;
         }

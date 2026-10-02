@@ -396,6 +396,36 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_QualifiedUnrelatedExtensionDoesNotReserveName()
+        {
+            // Issue #4302: a qualified call to an extension method on an
+            // unrelated type cannot observe a helper emitted into C.
+            string printed = Translate("""
+                public static class Extensions
+                {
+                    public static int Helper(this string value, int n) => 100 + n;
+                }
+
+                public class C
+                {
+                    public int Run(int value)
+                    {
+                        int viaExtension = Extensions.Helper("", 1);
+                        return viaExtension + Helper(value);
+                        static int Helper(int n) => n == 0 ? 7 : Other<int>(n - 1);
+                        static int Other<T>(int n) => Helper(n);
+                    }
+                }
+                """);
+
+            Assert.DoesNotContain("func Helper_2(", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run(2))",
+                "108");
+        }
+
+        [Fact]
         public void ReadableLiftFallback_GenericMethodGroupValueUsesLiftedName()
         {
             // Issue #4302: a generic method-group VALUE (`First<int>` passed as

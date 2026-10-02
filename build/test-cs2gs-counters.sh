@@ -280,7 +280,7 @@ if output=$(TMPDIR="$scratch" selfmig_apply_baseline "$scratch/baseline.json" 0 
   echo "expected a retired lifted-helper occurrence to fail ceiling 0" >&2
   exit 1
 fi
-grep -Fq 'GATE: __local_ count 3 exceeded ceiling 0.' <<< "$output"
+grep -Fq '__local_ count 3 exceeded ceiling 0' <<< "$output"
 
 zero_lift_tree="$scratch/zero-lift-tree"
 mkdir -p "$zero_lift_tree"

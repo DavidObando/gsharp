@@ -2256,6 +2256,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             var symbols = new List<ISymbol>();
             bool qualified = false;
+            bool qualifiedThroughTypeOrNamespace = false;
             if (parent is SimpleNameSyntax simpleName)
             {
                 SymbolInfo info = this.context.GetSymbolInfo(simpleName);
@@ -2282,6 +2283,10 @@ public sealed partial class CSharpToGSharpTranslator
                     QualifiedNameSyntax qualifiedName => qualifiedName.Right == simpleName,
                     _ => false,
                 };
+                qualifiedThroughTypeOrNamespace =
+                    simpleName.Parent is MemberAccessExpressionSyntax qualifiedAccess
+                    && qualifiedAccess.Name == simpleName
+                    && this.context.GetSymbolInfo(qualifiedAccess.Expression).Symbol is INamespaceOrTypeSymbol;
             }
             else
             {
@@ -2323,11 +2328,13 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                bool unrelatedMember = (symbol is IFieldSymbol or IPropertySymbol or IEventSymbol
-                        || (symbol is IMethodSymbol method && !method.IsExtensionMethod))
+                bool unrelatedMember = symbol is IFieldSymbol or IPropertySymbol or IEventSymbol or IMethodSymbol
                     && symbol.ContainingType != null
                     && !IsTypeRelatedToLiftedHelperOwners(symbol.ContainingType, owners);
-                if (unrelatedMember && (qualified || !insideAggregate))
+                bool safelyQualified = qualified
+                    && (symbol is not IMethodSymbol { IsExtensionMethod: true }
+                        || qualifiedThroughTypeOrNamespace);
+                if (unrelatedMember && (safelyQualified || !insideAggregate))
                 {
                     continue;
                 }
