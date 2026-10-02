@@ -33,25 +33,25 @@ public class Issue4681NilElementTests
     {
         var ch = new Chan<string?>(8);
 
-        ch.TrySend(null);
+        Assert.True(ch.TrySend(null));
         Assert.Null(await ch.ReceiveValueAsync());
 
-        ch.TrySend(null);
+        Assert.True(ch.TrySend(null));
         var tuple = await ch.ReceiveTupleAsync();
         Assert.Null(tuple.Value);
         Assert.True(tuple.Ok);
 
-        ch.TrySend(null);
+        Assert.True(ch.TrySend(null));
         var result = await ch.ReceiveAsync();
         Assert.Null(result.Value);
         Assert.True(result.Ok);
 
-        ch.TrySend(null);
+        Assert.True(ch.TrySend(null));
         Assert.True(ch.TryReceive(out var value, out var ok));
         Assert.Null(value);
         Assert.True(ok);
 
-        ch.TrySend(null);
+        Assert.True(ch.TrySend(null));
         Assert.Equal((null, true), ChannelOps.Receive2(ch, CancellationToken.None));
     }
 
@@ -105,11 +105,11 @@ public class Issue4681NilElementTests
         var ch = new Chan<string?>(2);
         var reader = ch.Reader;
 
-        ch.TrySend(null);
+        Assert.True(ch.TrySend(null));
         Assert.True(reader.TryRead(out var item));
         Assert.Null(item);
 
-        ch.TrySend(null);
+        Assert.True(ch.TrySend(null));
         Assert.Null(await reader.ReadAsync().AsTask().WaitAsync(Timeout));
     }
 
@@ -145,7 +145,7 @@ public class Issue4681NilElementTests
     public async Task SelectReceive_OfNil_ProbesAndParks()
     {
         var buffered = new Chan<string?>(1);
-        buffered.TrySend(null);
+        Assert.True(buffered.TrySend(null));
         var probe = SelectWaiter.Rent(1, CancellationToken.None);
         probe.AddReceive(buffered, 0);
         Assert.Equal(0, probe.TryNow());

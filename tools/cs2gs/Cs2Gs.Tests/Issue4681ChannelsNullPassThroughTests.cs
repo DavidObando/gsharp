@@ -32,7 +32,7 @@ public class Issue4681ChannelsNullPassThroughTests
     // locals and fields (value, taken, sendValue, received, pending), a
     // ReceiveResult's Value, and the zero value of T / TResult.
     private static readonly Regex ElementValueAssertion = new(
-        @"(?<![\w])(?:this\.)?(?:value|taken|sendValue|received|pending|item|\w+\.Value|default\(T\w*\))!!",
+        @"(?:(?<![\w])(?:this\.)?(?:value|taken|sendValue|received|pending|item)|\.Value|(?<![\w])default\(T\w*\))!!",
         RegexOptions.Compiled);
 
     /// <summary>
