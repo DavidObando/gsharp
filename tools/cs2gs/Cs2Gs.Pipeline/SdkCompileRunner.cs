@@ -930,7 +930,7 @@ public sealed class SdkCompileRunner
     /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
     /// <param name="explicitVersion">The requested version, or <see langword="null"/>.</param>
     /// <returns>The version, or <see langword="null"/> when no local nupkg exists and none was requested.</returns>
-    internal static string ResolveSdkVersion(string config, string explicitVersion)
+    internal static string? ResolveSdkVersion(string config, string? explicitVersion)
         => ResolvePinnedPackageVersion(SdkPackageId, config, explicitVersion);
 
     /// <summary>
@@ -955,7 +955,7 @@ public sealed class SdkCompileRunner
     /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
     /// <param name="explicitVersion">The pinned SDK version, or <see langword="null"/>.</param>
     /// <returns>The package version, or <see langword="null"/> when none is available.</returns>
-    internal static string ResolveAnalyzerVerifierPackageVersion(string config, string explicitVersion)
+    internal static string? ResolveAnalyzerVerifierPackageVersion(string config, string? explicitVersion)
         => ResolvePinnedPackageVersion(AnalyzerTestingPackageId, config, explicitVersion);
 
     /// <summary>
@@ -1666,7 +1666,7 @@ public sealed class SdkCompileRunner
         return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".nuget", "packages");
     }
 
-    private static string ResolvePinnedPackageVersion(string packageId, string config, string explicitVersion)
+    private static string? ResolvePinnedPackageVersion(string packageId, string config, string? explicitVersion)
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
         if (explicitVersion is not null)

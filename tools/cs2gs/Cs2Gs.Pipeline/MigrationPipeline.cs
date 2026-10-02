@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -234,7 +236,7 @@ public sealed class MigrationPipeline
                     "Could not resolve a local Gsharp.NET.Sdk package for the mirrored projects.");
             }
 
-            string sourcePin = SdkPin.ReadGlobalJsonPin(destinationRoot);
+            string? sourcePin = SdkPin.ReadGlobalJsonPin(destinationRoot);
             if (this.options.SdkPinLocation == SdkPinLocation.GlobalJson)
             {
                 if (SdkPin.WriteGlobalJsonPin(destinationRoot, sdkVersion))
@@ -713,8 +715,8 @@ public sealed class MigrationPipeline
     /// <param name="migratedRoot">The migrated tree.</param>
     private void ResolveValidationSdkPin(string migratedRoot)
     {
-        string treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
-        string projectPin = SdkPin.ReadProjectPin(this.options.GeneratedProjectPaths.Values);
+        string? treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
+        string? projectPin = SdkPin.ReadProjectPin(this.options.GeneratedProjectPaths.Values);
         if (treePin is not null && projectPin is not null)
         {
             throw new InvalidOperationException(
@@ -722,7 +724,7 @@ public sealed class MigrationPipeline
                 ") and in its projects (" + projectPin + "); a versioned Sdk attribute overrides global.json.");
         }
 
-        string recordedPin = treePin ?? projectPin;
+        string? recordedPin = treePin ?? projectPin;
         if (recordedPin is not null
             && this.options.SdkVersion is not null
             && !string.Equals(recordedPin, this.options.SdkVersion, StringComparison.Ordinal))
