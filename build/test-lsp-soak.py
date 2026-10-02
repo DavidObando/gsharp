@@ -230,6 +230,10 @@ class LspSoakTests(unittest.TestCase):
         self.assertEqual(1, code)
         text = out.read_text(encoding="utf-8")
         self.assertIn(f"{self.planned_ids()[3]}: log-error only", text)
+        # A crash only on the left side is a divergence too.
+        reverse = soak.main(["compare", str(SCRATCH / "run-log-error" / "summary.json"),
+                             str(SCRATCH / "run-clean" / "summary.json")])
+        self.assertEqual(1, reverse)
 
     def test_files_sharing_a_basename_keep_separate_results(self) -> None:
         other_dir = SCRATCH / "other"
@@ -246,6 +250,22 @@ class LspSoakTests(unittest.TestCase):
         self.assertTrue((out / "01-Widget.steps.json").exists())
         summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
         self.assertEqual(["00-Widget", "01-Widget"], [f["id"] for f in summary["files"]])
+
+    def test_malformed_key_value_options_are_harness_errors(self) -> None:
+        out = SCRATCH / "run-bad"
+        for option in ("--server-env", "--meta"):
+            code = soak.main(["run", "--plan", str(self.plan), "--label", "bad", "--out", str(out),
+                              "--server", f"{sys.executable} {self.stub}", option, "NOEQUALS"])
+            self.assertEqual(2, code)
+            self.assertFalse(out.exists())
+
+    def test_first_step_times_open_and_later_steps_time_change(self) -> None:
+        _, result = self.run_stub("clean")
+        first, second = result["steps"][0], result["steps"][1]
+        self.assertIn("openToDiagnosticsMs", first)
+        self.assertNotIn("changeToDiagnosticsMs", first)
+        self.assertIn("changeToDiagnosticsMs", second)
+        self.assertIsNotNone(soak.summarize_file(result)["openToDiagnosticsMs"])
 
     def test_utf16_positions(self) -> None:
         index = soak.LineIndex("ab\n\U0001F600x\n")

@@ -313,6 +313,16 @@ def plan_file(path: Path, seed: int, truncations: int, line_deletions: int, brac
     }
 
 
+def parse_pairs(option: str, items: list[str]) -> dict[str, str]:
+    pairs = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise HarnessError(f"{option} must be KEY=VALUE (got: {item!r})")
+        pairs[key] = value
+    return pairs
+
+
 def file_id(entry: dict[str, Any]) -> str:
     return entry.get("id") or Path(entry["name"]).stem
 
@@ -348,7 +358,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
             files += find_largest(tree, args.largest)
     if not files:
         raise HarnessError("no input files: pass --tree and/or file paths")
-    meta = dict(item.split("=", 1) for item in args.meta)
+    meta = parse_pairs("--meta", args.meta)
     plan = {
         "version": PLAN_VERSION,
         "seed": args.seed,
@@ -413,16 +423,19 @@ class LspClient:
     def _send(self, message: dict[str, Any]) -> None:
         body = json.dumps(message, ensure_ascii=False).encode("utf-8")
         header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+        stdin = self.process.stdin
+        if stdin is None:
+            raise HarnessError("server stdin is not a pipe")
         try:
-            assert self.process.stdin is not None
-            self.process.stdin.write(header + body)
-            self.process.stdin.flush()
+            stdin.write(header + body)
+            stdin.flush()
         except (BrokenPipeError, OSError) as exc:
             raise self._exited() from exc
 
     def _read_stdout(self) -> None:
         stream = self.process.stdout
-        assert stream is not None
+        if stream is None:
+            raise HarnessError("server output is not a pipe")
         try:
             while True:
                 length = None
@@ -450,7 +463,8 @@ class LspClient:
 
     def _read_stderr(self) -> None:
         stream = self.process.stderr
-        assert stream is not None
+        if stream is None:
+            raise HarnessError("server output is not a pipe")
         for raw in stream:
             self.stderr_tail.append(raw.decode("utf-8", "replace").rstrip())
             del self.stderr_tail[:-200]
@@ -616,8 +630,9 @@ class FileRun:
         self.args = args
         self.entry = entry
         self.out_dir = out_dir
-        self.base = Path(entry["path"]).read_bytes().decode("utf-8-sig")
-        if hashlib.sha256(Path(entry["path"]).read_bytes()).hexdigest() != entry["sha256"]:
+        raw = Path(entry["path"]).read_bytes()
+        self.base = raw.decode("utf-8-sig")
+        if hashlib.sha256(raw).hexdigest() != entry["sha256"]:
             raise HarnessError(f"{entry['path']} changed since the plan was made")
         self.uri = Path(entry["path"]).resolve().as_uri()
         self.log_path = None if args.no_log else out_dir / (file_id(entry) + ".server.log")
@@ -633,7 +648,7 @@ class FileRun:
 
     def start(self, text: str) -> None:
         self.client = LspClient(shlex.split(self.args.server, posix=os.name != "nt"), self.log_path,
-                                self.out_dir, dict(item.split("=", 1) for item in self.args.server_env))
+                                self.out_dir, parse_pairs("--server-env", self.args.server_env))
         root = self.args.workspace_root
         init = {
             "processId": os.getpid(),
@@ -670,18 +685,22 @@ class FileRun:
         index = LineIndex(text)
         doc = {"uri": self.uri}
         started = time.perf_counter()
+        # The first step's document went out with didOpen (in start); later steps send a didChange.
+        timing_key = "openToDiagnosticsMs" if first else "changeToDiagnosticsMs"
         try:
-            assert self.client is not None
+            if self.client is None:
+                raise HarnessError("run_step called before the server was started")
             if not first:
                 self.version += 1
+                # Full sync: no range. The server adopts the last change's text as the document.
                 change = {"text": text}
-                assert "range" not in change  # full sync: the server adopts the last change's text
                 self.client.notify("textDocument/didChange", {
                     "textDocument": {"uri": self.uri, "version": self.version}, "contentChanges": [change]})
             for method, params in self._requests(step, index, doc):
                 if method in self.args.skip_method:
                     continue
-                self._request(record, method, params, started if method == "textDocument/diagnostic" else None)
+                self._request(record, method, params,
+                              (started, timing_key) if method == "textDocument/diagnostic" else None)
         except ServerExited as exc:
             record["crashes"].append({"kind": "process-exit", "code": exc.code, "stderr": exc.stderr})
             self.restart(text)
@@ -705,7 +724,7 @@ class FileRun:
         yield "textDocument/foldingRange", {"textDocument": doc}
         yield "textDocument/formatting", {"textDocument": doc, "options": {"tabSize": 4, "insertSpaces": True}}
         lo = max(0, caret["line"] - 50)
-        hi = min(index.line_count - 1, caret["line"] + 50)
+        hi = min(index.line_count, caret["line"] + 51)  # exclusive end: the next line's start
         yield "textDocument/inlayHint", {"textDocument": doc, "range": {
             "start": {"line": lo, "character": 0}, "end": {"line": hi, "character": 0}}}
         for offset in step["probes"]:
@@ -716,14 +735,16 @@ class FileRun:
             yield "textDocument/definition", {"textDocument": doc, "position": position}
             yield "textDocument/documentHighlight", {"textDocument": doc, "position": position}
 
-    def _request(self, record: dict[str, Any], method: str, params: Any, change_started: float | None) -> None:
-        assert self.client is not None
+    def _request(self, record: dict[str, Any], method: str, params: Any,
+                 since: tuple[float, str] | None) -> None:
+        if self.client is None:
+            raise HarnessError("request sent before the server was started")
         t0 = time.perf_counter()
         reply = self.client.request(method, params, self.args.request_timeout)
         ms = round((time.perf_counter() - t0) * 1000, 1)
         record["timings"].setdefault(method, []).append(ms)
-        if change_started is not None:
-            record["changeToDiagnosticsMs"] = round((time.perf_counter() - change_started) * 1000, 1)
+        if since is not None:
+            record[since[1]] = round((time.perf_counter() - since[0]) * 1000, 1)
         error = reply.get("error")
         if error is not None:
             code = error.get("code")
@@ -832,6 +853,8 @@ def summarize_file(result: dict[str, Any]) -> dict[str, Any]:
         "timeouts": sum(len(s["timeouts"]) for s in result["steps"]),
         "restarts": result["restarts"],
         "crashSignatures": signatures,
+        "openToDiagnosticsMs": next((s["openToDiagnosticsMs"] for s in result["steps"]
+                                     if "openToDiagnosticsMs" in s), None),
         "changeToDiagnosticsMs": {"p50": _percentile(change, 50), "p95": _percentile(change, 95),
                                   "max": max(change) if change else None},
         "keystrokeToDiagnosticsMs": {"p50": _percentile(keystroke, 50), "p95": _percentile(keystroke, 95)},
@@ -883,6 +906,8 @@ def write_markdown(summary: dict[str, Any], path: Path) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    parse_pairs("--server-env", args.server_env)  # fail fast, before any server starts
+    parse_pairs("--meta", args.meta)
     plan = json.loads(Path(args.plan).expanduser().read_text(encoding="utf-8"))
     if plan.get("version") != PLAN_VERSION:
         raise HarnessError(f"plan version {plan.get('version')} is not {PLAN_VERSION}")
@@ -894,13 +919,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         result = FileRun(args, entry, out).run()
         result["summary"] = summarize_file(result)
         results.append(result)
-        (out / (file_id(entry) + ".steps.json")).write_text(json.dumps(result, indent=1) + "\n")
+        (out / (file_id(entry) + ".steps.json")).write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
     summary = {
         "label": args.label,
         "server": args.server,
         "plan": str(Path(args.plan).expanduser().resolve()),
         "seed": plan["seed"],
-        "meta": {**plan.get("meta", {}), **dict(item.split("=", 1) for item in args.meta)},
+        "meta": {**plan.get("meta", {}), **parse_pairs("--meta", args.meta)},
         "workspaceRoot": args.workspace_root,
         "noLog": args.no_log,
         "skippedMethods": args.skip_method,
@@ -939,7 +964,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         lc, rc = lf["stepCrashes"], rf["stepCrashes"]
         only_r = sorted(s for s in rc if set(rc[s]) - set(lc.get(s, [])))
         only_l = sorted(s for s in lc if set(lc[s]) - set(rc.get(s, [])))
-        divergent += len(only_r)
+        divergent += len(only_r) + len(only_l)
         ls, rs = lf["summary"]["changeToDiagnosticsMs"], rf["summary"]["changeToDiagnosticsMs"]
         rows.append(f"| {lf['name']} | {lf['summary']['steps']} | {len(lc)} | {len(rc)} | {len(only_r)} | "
                     f"{len(only_l)} | {ls['p50']} / {ls['p95']} | {rs['p50']} / {rs['p95']} |")
