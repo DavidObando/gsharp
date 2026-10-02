@@ -966,7 +966,7 @@ internal sealed partial class StatementBinder
                 Diagnostics.ReportRefReturnRequiresLvalue(
                     Invariant.Required(syntax.Expression, "a ref return expression is present").Location);
             }
-            else if (HasFunctionLocalRefScope(expression))
+            else if (HasFunctionLocalRefScope(expression) || IsRootedAtCapturedReceiver(expression, function))
             {
                 // ADR-0184 (the CS8170 analogue): when the reference is rooted at
                 // the enclosing struct member's own receiver, generic GS0254
@@ -979,7 +979,20 @@ internal sealed partial class StatementBinder
                 // (IsRootedAtReceiver requires a `this` root, and a struct
                 // `this` is never a read-only reference), but the existing
                 // ordering is what the current tests pin.
-                if (IsRootedAtReceiver(expression))
+                if (IsRootedAtCapturedReceiver(expression, function))
+                {
+                    // Issue #4580: a function literal's `this` is the enclosing
+                    // struct member's receiver CAPTURED BY VALUE into the
+                    // closure, so a reference into it aliases the closure's
+                    // private copy, never the caller's storage — even when the
+                    // enclosing member is `@UnscopedRef` (whose receiver
+                    // HasFunctionLocalRefScope otherwise treats as caller-
+                    // scoped). Marking anything `@UnscopedRef` cannot make
+                    // that copy the caller's storage, so GS0589's remedy would
+                    // mislead; report the generic escaping-storage error.
+                    Diagnostics.ReportRefReturnEscapesLocalScope(location);
+                }
+                else if (IsRootedAtReceiver(expression))
                 {
                     Diagnostics.ReportUnscopedRefRequiredForInstanceState(location);
                 }
@@ -1053,16 +1066,34 @@ internal sealed partial class StatementBinder
     /// <param name="expr">The bound <c>return ref</c> operand.</param>
     /// <returns><see langword="true"/> when the reference is rooted at the receiver.</returns>
     private static bool IsRootedAtReceiver(BoundExpression expr)
+        => IsRootedAtReceiverWhere(expr, static _ => true);
+
+    /// <summary>
+    /// Issue #4580: true when <paramref name="expr"/> is rooted (per
+    /// <see cref="IsRootedAtReceiver"/>'s walk) at a VALUE-TYPE receiver that
+    /// is not <paramref name="function"/>'s own — i.e. a function literal's
+    /// reference into the enclosing struct member's <c>this</c>, which the
+    /// closure holds as a by-value copy. Such a reference can never alias the
+    /// caller's storage, whatever the enclosing member's <c>@UnscopedRef</c>
+    /// opt-out says about its own receiver.
+    /// </summary>
+    /// <param name="expr">The bound <c>return ref</c> operand.</param>
+    /// <param name="function">The function whose <c>return ref</c> is being bound.</param>
+    /// <returns><see langword="true"/> when the reference is rooted at a captured receiver.</returns>
+    private static bool IsRootedAtCapturedReceiver(BoundExpression expr, FunctionSymbol? function)
+        => IsRootedAtReceiverWhere(expr, receiver => !ReferenceEquals(receiver, function?.ThisParameter));
+
+    private static bool IsRootedAtReceiverWhere(BoundExpression expr, Func<ParameterSymbol, bool> isMatch)
         => expr switch
         {
-            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } } => true,
+            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } receiver } => isMatch(receiver),
             BoundFieldAccessExpression { Receiver: { } fieldReceiver } =>
-                !Binder.IsReferenceTypeForConstraint(fieldReceiver.Type) && IsRootedAtReceiver(fieldReceiver),
+                !Binder.IsReferenceTypeForConstraint(fieldReceiver.Type) && IsRootedAtReceiverWhere(fieldReceiver, isMatch),
             BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo, Receiver: { } clrReceiver } =>
-                !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) && IsRootedAtReceiver(clrReceiver),
-            BoundBlockExpression block => IsRootedAtReceiver(block.Expression),
+                !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) && IsRootedAtReceiverWhere(clrReceiver, isMatch),
+            BoundBlockExpression block => IsRootedAtReceiverWhere(block.Expression, isMatch),
             BoundConditionalAddressExpression conditional =>
-                IsRootedAtReceiver(conditional.WhenTrueOperand) || IsRootedAtReceiver(conditional.WhenFalseOperand),
+                IsRootedAtReceiverWhere(conditional.WhenTrueOperand, isMatch) || IsRootedAtReceiverWhere(conditional.WhenFalseOperand, isMatch),
             _ => false,
         };
 
