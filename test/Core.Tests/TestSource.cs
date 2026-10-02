@@ -138,7 +138,8 @@ internal static class TestSource
     {
         string root = Root;
         string extension = SourceExtension;
-        var files = new List<string>();
+        // A set: overlapping directories must not count a file twice.
+        var files = new HashSet<string>(StringComparer.Ordinal);
         foreach (string relative in relativeDirectories)
         {
             string directory = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
@@ -149,7 +150,8 @@ internal static class TestSource
                     "directory must be updated, not allowed to scan nothing.");
             }
 
-            files.AddRange(Directory.EnumerateFiles(directory, stemPattern + extension, option)
+            files.UnionWith(Directory.EnumerateFiles(directory, stemPattern + extension, option)
+                .Select(Path.GetFullPath)
                 .Where(path => !IsBuildOutput(root, path)));
         }
 
@@ -160,8 +162,7 @@ internal static class TestSource
                 "a guard that reads nothing proves nothing (#4656).");
         }
 
-        files.Sort(StringComparer.Ordinal);
-        return files;
+        return files.OrderBy(path => path, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>
@@ -231,7 +232,8 @@ internal static class TestSource
     private static bool IsBuildOutput(string root, string path) =>
         Path.GetRelativePath(root, path)
             .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Any(segment => segment is "obj" or "bin");
+            .Any(segment => string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase));
 
     private static bool HasSolution(string directory) =>
         File.Exists(Path.Combine(directory, "GSharp.sln")) || File.Exists(Path.Combine(directory, "GSharp.slnx"));
