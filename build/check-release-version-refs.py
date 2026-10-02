@@ -235,7 +235,8 @@ def _read(root: Path, path: str) -> str | None:
     data = file.read_bytes()
     if b"\0" in data[:8192]:
         return None
-    return data.decode("utf-8", errors="replace")
+    # Normalise CRLF so `$`-anchored patterns behave the same on a Windows checkout.
+    return data.decode("utf-8", errors="replace").replace("\r\n", "\n")
 
 
 def line_of(text: str, offset: int) -> int:
@@ -253,7 +254,12 @@ def check(tree: Tree) -> list[str]:
     release_text = tree.read(RELEASE_JSON)
     if release_text is None:
         return [f"{RELEASE_JSON}: missing; it is the source of truth for the release version"]
-    release = json.loads(release_text)
+    try:
+        release = json.loads(release_text)
+    except json.JSONDecodeError as error:
+        return [f"{RELEASE_JSON}: invalid JSON: {error}"]
+    if not isinstance(release, dict):
+        return [f"{RELEASE_JSON}: expected a JSON object"]
     version = str(release.get("version", ""))
     docs_version = str(release.get("docsVersion", ""))
     if not re.fullmatch(VER, version):
@@ -266,8 +272,14 @@ def check(tree: Tree) -> list[str]:
         problems.append(
             f"{RELEASE_JSON}: version {version} does not belong to docsVersion {docs_version!r}")
     versions_text = tree.read(VERSIONS_JSON)
-    versions = json.loads(versions_text) if versions_text else []
-    if not versions or versions[0] != docs_version:
+    try:
+        versions = json.loads(versions_text) if versions_text else []
+    except json.JSONDecodeError as error:
+        problems.append(f"{VERSIONS_JSON}: invalid JSON: {error}")
+        versions = None
+    if versions is None:
+        pass
+    elif not isinstance(versions, list) or not versions or versions[0] != docs_version:
         problems.append(
             f"{VERSIONS_JSON}: newest snapshot {versions[:1]} != release docsVersion {docs_version!r}")
     version_json = tree.read(VERSION_JSON)
@@ -344,7 +356,8 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     tree = Tree(args.root.resolve())
     problems = check(tree)
-    release = json.loads(tree.read(RELEASE_JSON) or "{}").get("version", "?")
+    found = re.search(r'"version"\s*:\s*"([^"]*)"', tree.read(RELEASE_JSON) or "")
+    release = found.group(1) if found else "?"
     if problems:
         print(f"Release version references disagree with {RELEASE_JSON} ({release}):")
         for problem in problems:

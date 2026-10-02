@@ -63,19 +63,21 @@ release fails unless it is allow-listed.
 
 ### Intentionally not the latest release (allow-listed)
 
-Each allow-list entry names a path, the exact version(s) and the reason. An
+Each allow-list entry names a path, the exact version(s) and the reason.
+Paths are `fnmatch` globs exactly as written in `ALLOWED`, where `*` also
+matches `/` (so `website/versioned_docs/*` covers every file below it). An
 entry that no longer matches anything fails the check, so the list cannot rot.
 
 | Path | Version | Why it stays |
 |---|---|---|
-| `website/versioned_docs/**` | any | Released snapshots keep their own release's commands. The default snapshot's release-facing references are checked separately (above). |
-| `src/vs-gsharp/templates/Project/**` | 0.3.159 | Placeholder. `BuildGSharpTemplates` in `src/vs-gsharp/src/VsGsharp/VsGsharp.csproj` overwrites the `Sdk` attribute with `Gsharp.NET.Sdk/$(NuGetPackageVersion)` when it builds the VSIX. |
-| `src/vs-gsharp/test/ProjectDebugFixtures/**` | 0.3.159 | Visual Studio debug fixtures pinned to a published SDK on purpose. |
-| `src/vs-gsharp/test/TestExplorerFixtures/**` | 0.3.159 | Test Explorer fixtures; `TestExplorerFixtureContractTests` asserts the pin. |
+| `website/versioned_docs/*` | any | Released snapshots keep their own release's commands. The default snapshot's release-facing references are checked separately (above). |
+| `src/vs-gsharp/templates/Project/*` | 0.3.159 | Placeholder. `BuildGSharpTemplates` in `src/vs-gsharp/src/VsGsharp/VsGsharp.csproj` overwrites the `Sdk` attribute with `Gsharp.NET.Sdk/$(NuGetPackageVersion)` when it builds the VSIX. |
+| `src/vs-gsharp/test/ProjectDebugFixtures/*` | 0.3.159 | Visual Studio debug fixtures pinned to a published SDK on purpose. |
+| `src/vs-gsharp/test/TestExplorerFixtures/*` | 0.3.159 | Test Explorer fixtures; `TestExplorerFixtureContractTests` asserts the pin. |
 | `src/vs-gsharp/test/VsGsharp.UnitTests/TestExplorerFixtureContractTests.cs` | 0.3.159 | The contract test itself. |
 | `src/vscode-gsharp/test/live/suite/index.js` | 0.3.159 | Live VS Code test project, pinned with the fixtures. |
 | `samples/HotReload/global.json` | 0.3.356 | Placeholder. `e2etests/hot-reload-e2e.sh` rewrites it to the locally built SDK and restores it on exit. |
-| `tools/cs2gs/Cs2Gs.Tests/**` | any | Synthetic versions in project-transformer test data. |
+| `tools/cs2gs/Cs2Gs.Tests/*` | any | Synthetic versions in project-transformer test data. |
 
 Not swept, and historical by nature: release-note sections for older releases,
 ADRs, and `docs/vs-gsharp-compatibility.md` (a dated compatibility record).
@@ -143,7 +145,7 @@ Everything in the patch procedure, plus:
    `website/versioned_sidebars/version-0.N+1-sidebars.json` and prepends the
    version to `website/versions.json`.
 3. `release.json` `docsVersion` becomes `0.N+1`. The previous snapshot's
-   references become historical and fall under the `website/versioned_docs/**`
+   references become historical and fall under the `website/versioned_docs/*`
    allow-list entry.
 4. Release notes: rename the "Unreleased" heading to the new release and
    start a new empty "Unreleased" section. The heading has to be written

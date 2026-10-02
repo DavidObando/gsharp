@@ -19,7 +19,8 @@ SPEC = importlib.util.spec_from_file_location(
     "check_release_version_refs",
     REPO / "build" / "check-release-version-refs.py",
 )
-assert SPEC and SPEC.loader
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load build/check-release-version-refs.py")
 refs = importlib.util.module_from_spec(SPEC)
 # dataclasses resolve string annotations through sys.modules.
 sys.modules[SPEC.name] = refs
@@ -27,6 +28,8 @@ SPEC.loader.exec_module(refs)
 
 BASE = refs.Tree(REPO)
 RELEASE = json.loads(BASE.read(refs.RELEASE_JSON) or "{}")
+if not isinstance(RELEASE, dict) or "version" not in RELEASE or "docsVersion" not in RELEASE:
+    raise RuntimeError(f"{refs.RELEASE_JSON} must hold version and docsVersion; run the check for details")
 VERSION = RELEASE["version"]
 OTHER = "0.0.1"  # never a release, never allow-listed
 
@@ -37,7 +40,9 @@ class ReleaseVersionRefsTests(unittest.TestCase):
 
     def replaced(self, path: str, old: str, new: str) -> dict[str, str]:
         text = BASE.read(path)
-        assert text is not None and old in text, f"{path} no longer contains {old!r}"
+        self.assertIsNotNone(text, f"{path} is missing")
+        assert text is not None  # narrows the type; assertIsNotNone above reports the failure
+        self.assertIn(old, text, f"{path} no longer contains {old!r}")
         return {path: text.replace(old, new)}
 
     def assertReported(self, problems: list[str], *fragments: str) -> None:
@@ -81,7 +86,8 @@ class ReleaseVersionRefsTests(unittest.TestCase):
             path = entry.path.replace("{D}", docs_version)
             pattern = entry.pattern.replace("{V}", refs.VER)
             text = BASE.read(path)
-            assert text is not None, path
+            self.assertIsNotNone(text, f"{path} is missing")
+            assert text is not None  # narrows the type; assertIsNotNone above reports the failure
             # Make only this entry's references stale; other refs stay current.
             stale = refs.re.sub(
                 pattern, lambda m: m.group(0).replace(VERSION, OTHER), text, flags=refs.re.MULTILINE)
@@ -152,6 +158,24 @@ class ReleaseVersionRefsTests(unittest.TestCase):
         name = f"{refs.DOWNLOADS}concurrency-patterns-{VERSION}.zip"
         problems = self.problems_with({name: None})
         self.assertReported(problems, name, "missing")
+
+    def test_invalid_json_is_reported_not_raised(self) -> None:
+        for path in (refs.RELEASE_JSON, refs.VERSIONS_JSON):
+            with self.subTest(path=path):
+                self.assertReported(self.problems_with({path: "{ not json"}), path, "invalid JSON")
+
+    def test_crlf_checkout_reads_like_lf(self) -> None:
+        self.assertEqual(refs._scan("a\r\nGsharp.NET.Sdk/0.0.1\r\n"), (("0.0.1", 2),))
+        root = REPO / "out" / "test-check-release-version-refs"
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            (root / "notes.md").write_bytes(f"## {VERSION} at a glance\r\nnext\r\n".encode())
+            text = refs._read(root, "notes.md")
+            self.assertRegex(text or "", refs.re.compile(rf"^## {refs.re.escape(VERSION)} at a glance$",
+                                                         refs.re.MULTILINE))
+        finally:
+            (root / "notes.md").unlink(missing_ok=True)
+            root.rmdir()
 
     def test_release_json_tag_must_match_version(self) -> None:
         problems = self.problems_with(self.replaced(refs.RELEASE_JSON, f"v{VERSION}", f"v{OTHER}"))
