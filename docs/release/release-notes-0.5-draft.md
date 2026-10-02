@@ -9,6 +9,7 @@
 >
 > Items marked **pending D*n*** depend on an owner decision in the self-hosting
 > assessment (section 7) and must be confirmed or rewritten before publishing.
+> The stage-2 shipping rule follows the owner decision recorded in #4631.
 > `0.4.NNNN` is the final C#-built release; `0.5.x` is the first 0.5 version
 > number NBGV produces.
 
@@ -28,15 +29,20 @@ install or use G#: the package ids, the `Gsharp.NET.Sdk` project SDK, the
 `dotnet new` templates, and the VS Code and Visual Studio extensions are the
 same.
 
-How 0.5 is built (**pending D3**; the assessment recommends this staging):
+How 0.5 is built (owner decision recorded in #4631; the assessment's D3
+had suggested shipping stage 1 first):
 
-- **Stage 1 (this release):** the G# source is compiled by the published
-  `Gsharp.NET.Sdk` **0.4.NNNN**, the final C#-built SDK, pinned once in the
-  repository's `global.json` `msbuild-sdks`.
-- **Stage 2 (later):** the pin moves to a 0.5 SDK only after a CI gate shows
-  that the compiler built by stage 1 reproduces itself (stage-1 and stage-2
-  outputs identical under deterministic emit). From then on, each release is
-  built by an earlier G# release.
+- **Stage 1 (bootstrap, not shipped):** the G# source is compiled by the
+  published `Gsharp.NET.Sdk` **0.4.NNNN**, the final C#-built SDK, pinned once
+  in the repository's `global.json` `msbuild-sdks`.
+- **Stage 2 (what 0.5.x ships):** the G# source compiled again by the
+  stage-1 compiler, so the shipped compiler is built by a G#-built compiler.
+  The cut-over is accepted only when stage 1 and stage 2 produce
+  IL/metadata-identical `GSharp.Core.dll` and `gsc.dll` (MVIDs zeroed), and
+  `RefactoringBaselineTests`, Core.Tests and Compiler.Tests pass under stage 2
+  (#4631).
+- After 0.5.x is published, the pin moves from 0.4.NNNN to a 0.5 release.
+  From then on, each release is built by an earlier G# release.
 
 Where the C# source went (**pending D2**; the assessment recommends this
 policy):
@@ -79,7 +85,7 @@ documentation, run the project's tests, and review the affected diagnostics.
   by G# programs immediately. Under the N-1 rule, the compiler's own source
   can use it only once a release containing it is the pinned SDK.
 - *(placeholder)* Tooling and SDK additions.
-- *(placeholder, if adopted)* A stage-2 self-hosting check in CI (the
+- *(placeholder)* The stage-2 self-hosting check in CI (the
   stage-1/stage-2 equivalence gate).
 
 ### Fixed

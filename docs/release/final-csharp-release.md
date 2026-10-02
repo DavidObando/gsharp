@@ -2,9 +2,10 @@
 
 This runbook covers the last release whose compiler is built from C# source.
 It is a fresh `v0.4.NNNN` tag on the freeze commit. The C# source is then kept
-on branch `cs2gs/csharp-0.4`, and the compiler source on `main` becomes G#,
-built by the pinned 0.4.NNNN SDK. 0.5.x is the first G#-built line; see
-[`release-notes-0.5-draft.md`](release-notes-0.5-draft.md).
+on branch `cs2gs/csharp-0.4`, and the compiler source on `main` becomes G#.
+The pinned 0.4.NNNN SDK builds it (stage 1, the bootstrap). Per #4631, 0.5.x
+ships the stage-2 compiler, which is the G# source rebuilt by the stage-1
+compiler. See [`release-notes-0.5-draft.md`](release-notes-0.5-draft.md).
 
 Everything here comes from the workflows and the scripts they call. Citations
 are `file:line` at commit `6c4824cbc`; later edits to `build.yml` shift them.
@@ -143,17 +144,43 @@ The tag must be exactly `v` plus the printed version, digits and dots only
 ### 3. Watch the tag run
 
 `build.yml` runs in full on the tag. `publish` starts only after all ten jobs
-it needs pass. A flake in one of them (for example
-`JobSchedulerTests.Bounded_Concurrency_Limit_Is_Enforced` in `cs2gs-oahu`,
-DavidObando/Oahu#71) holds publishing until it is re-run. Check the job log
-first, then `gh run rerun <run-id> --failed`.
+it needs pass. If one of them fails, read its job log first and prove the
+failure is unrelated to the release (for example, the same failure on `main`
+or on an unrelated PR) before running `gh run rerun <run-id> --failed`. Don't
+re-run a failure you haven't explained.
 
-Re-running is safe at every publish step:
+Re-running the GitHub release and NuGet steps is safe:
 
 - the GitHub release step is `view || create` plus `upload --clobber` (`build.yml:745-747`);
-- NuGet uses `--skip-duplicate` (`:755`);
-- a failed `vsce publish` published nothing. If `vsce` succeeded and only the
-  Visual Studio job failed, `--failed` re-runs only that job.
+- NuGet uses `--skip-duplicate` (`:755`).
+
+The VS Code Marketplace step is not reliably idempotent. A timeout or an error
+page (both seen in past releases, #4640) doesn't prove the upload was rejected:
+the Marketplace may have accepted the version before the client lost the
+response. `vsce publish` of a version that already exists fails, so a re-run
+would fail again and `publish-visual-studio-extension` would stay skipped.
+After any failure of that step, first query the Marketplace (the command in
+step 4) for `gsharplang.vscode-gsharp`:
+
+- **0.4.NNNN absent:** run `gh run rerun <run-id> --failed`. This re-runs
+  `publish` (the release and NuGet steps are no-ops) and then the Visual Studio
+  job.
+- **0.4.NNNN present:** don't re-run `publish`. The Visual Studio VSIX still
+  has to be published by hand. Download the `visual-studio-gsharp-vsix`
+  artifact of the tag run (`gh run download <run-id> -n visual-studio-gsharp-vsix`).
+  Then, on Windows with the Visual Studio SDK, run the same command as
+  `build.yml:800-803`:
+
+  ```text
+  VsixPublisher.exe publish -payload GSharp.VisualStudio.vsix -publishManifest src/vs-gsharp/vs-publish.json -personalAccessToken <VSCE_PAT>
+  ```
+
+  Alternatively, upload the VSIX in the Marketplace publisher portal for
+  `gsharplang`. The `publish` job stays red in the run history; record the
+  manual publish in the release notes PR.
+- **The Visual Studio job itself failed after `publish` succeeded:**
+  `gh run rerun <run-id> --failed` re-runs only that job. Check the Visual
+  Studio Marketplace first for the same reason.
 
 ### 4. Post-publish verification
 
@@ -175,7 +202,7 @@ gh release view "v$V" --repo DavidObando/gsharp --json assets --jq '.assets[].na
   - `dotnet new install Gsharp.Templates::$V --debug:custom-hive <tmp>`;
   - build `samples/Trail` with its pin changed to `$V`;
   - `dotnet tool install Gsharp.Gsfmt --version $V --tool-path <tmp>`;
-  - the same for `Gsharp.Cs2Gs`.
+  - the same for `Gsharp.Cs2Gs` and `Gsharp.Repl` (`gsi`).
 - **Marketplaces:** expect latest `0.4.NNNN` for `gsharplang.vscode-gsharp`
   and `0.4.NNNN.*` for `gsharplang.GSharp-VisualStudio`:
 
