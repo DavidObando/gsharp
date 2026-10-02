@@ -404,7 +404,9 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
             var instance = Activator.CreateInstance(type);
             var shadow = type.GetMethod("ToString", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!;
 
-            Assert.True((shadow.Attributes & MethodAttributes.NewSlot) != 0);
+            Assert.False(shadow.IsVirtual);
+            Assert.False(shadow.IsFinal);
+            Assert.False((shadow.Attributes & MethodAttributes.NewSlot) != 0);
             Assert.Equal("shadow", shadow.Invoke(instance, null));
             Assert.Equal("Issue2486.Shadow", typeof(object).GetMethod("ToString")!.Invoke(instance, null));
         }
@@ -600,7 +602,9 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
             var closedBase = baseAssembly.GetType("Issue2443Base.ExternalBase`1")!.MakeGenericType(typeof(int));
             var shadow = derivedType.GetMethod("Echo", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!;
 
-            Assert.True((shadow.Attributes & MethodAttributes.NewSlot) != 0);
+            Assert.False(shadow.IsVirtual);
+            Assert.False(shadow.IsFinal);
+            Assert.False((shadow.Attributes & MethodAttributes.NewSlot) != 0);
             Assert.Equal("shadow", shadow.Invoke(instance, new object[] { 1 }));
             Assert.Equal("base", closedBase.GetMethod("Echo")!.Invoke(instance, new object[] { 1 }));
         }
