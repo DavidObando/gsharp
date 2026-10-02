@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -76,7 +77,7 @@ Console.WriteLine(p.X + p.Y + z.X + z.Y + v + miss)
         // PR-0 generalization: as the Binder/Emitter decomposition plan
         // moves these allocation sites out of ReflectionMetadataEmitter.cs
         // into sibling files (SlotPlanner, MetadataTokenCache, …), this
-        // test now reads every C# file under src/Core/CodeAnalysis/Emit/
+        // test now reads every source file under src/Core/CodeAnalysis/Emit/
         // and asserts each expected substring is present in *any* of them.
         var emitterSources = LocateEmitterSources();
         Assert.NotEmpty(emitterSources);
@@ -93,17 +94,14 @@ Console.WriteLine(p.X + p.Y + z.X + z.Y + v + miss)
         // guard at the allocation site — aliased receivers across spill
         // positions share a slot by design. Make sure that explicit guard
         // is still present so that aliasing remains safe.
-        Assert.Contains("if (receiverSpillSlots.ContainsKey(receiver))", combinedText);
-        Assert.Contains("if (receiverSpillSlots.ContainsKey(assn))", combinedText);
+        // Issue #4656: `if (x)` in C#, `if x {` in G#.
+        Assert.Matches(@"\bif\s*\(?\s*receiverSpillSlots\.ContainsKey\(receiver\)", combinedText);
+        Assert.Matches(@"\bif\s*\(?\s*receiverSpillSlots\.ContainsKey\(assn\)", combinedText);
     }
 
-    private static string[] LocateEmitterSources()
-    {
-        return Directory.GetFiles(
-            Path.Combine(TestSource.Root, "src", "Core", "CodeAnalysis", "Emit"),
-            "*.cs",
-            SearchOption.TopDirectoryOnly);
-    }
+    // Issue #4656: the tree's own language, and an empty scan throws.
+    private static IReadOnlyList<string> LocateEmitterSources() =>
+        TestSource.SourceFiles(SearchOption.TopDirectoryOnly, "src/Core/CodeAnalysis/Emit");
 
     private static EmitResult Compile(string source, Stream peStream)
     {

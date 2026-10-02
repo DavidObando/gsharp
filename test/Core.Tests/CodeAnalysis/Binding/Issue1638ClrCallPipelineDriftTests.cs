@@ -76,8 +76,8 @@ Console.WriteLine(s)
 
     private static string CompileAndRun(string source, string contextName)
     {
-        using var fixture = new CSharpFixture(File.ReadAllText(
-            Path.Combine(TestSource.Root, "test", "Core.Tests", "Fixtures", "InterpolatedStringHandlerFixtures.cs")));
+        // Issue #4656: the C# text survives the fixtures' translation to G#.
+        using var fixture = new CSharpFixture(TestSource.CSharpFixtureSource("InterpolatedStringHandlerFixtures.cs"));
         using var references = ReferenceResolver.WithReferences(new[] { fixture.AssemblyPath });
         Assert.True(references.TryResolveType("GSharp.Core.Tests.Fixtures.Issue1638FormattableBaseFixture", out var baseType));
         Assert.False(baseType.IsSealed);

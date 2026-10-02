@@ -14,9 +14,9 @@ namespace GSharp.Core.Tests.CodeAnalysis;
 
 public sealed class ManagedReferenceSemanticExhaustivenessTests
 {
-    private const string SafetyAnalyzerPath = "src/Core/CodeAnalysis/Binding/ManagedReferenceSafetyAnalyzer.cs";
-    private const string OriginsPath = "src/Core/CodeAnalysis/Binding/ManagedReferenceOrigins.cs";
-    private const string CapturePath = "src/Core/CodeAnalysis/Binding/ClosureCaptureLegalityChecker.cs";
+    private const string SafetyAnalyzerPath = "src/Core/CodeAnalysis/Binding/ManagedReferenceSafetyAnalyzer";
+    private const string OriginsPath = "src/Core/CodeAnalysis/Binding/ManagedReferenceOrigins";
+    private const string CapturePath = "src/Core/CodeAnalysis/Binding/ClosureCaptureLegalityChecker";
 
     private static readonly Dictionary<string, string> HighRiskExpressionDispositions = new(StringComparer.Ordinal)
     {
@@ -140,6 +140,8 @@ public sealed class ManagedReferenceSemanticExhaustivenessTests
         return required.Where(name => !found.Contains(name)).OrderBy(name => name, StringComparer.Ordinal).ToList();
     }
 
-    private static string ReadSource(string relativePath)
-        => File.ReadAllText(Path.Combine(TestSource.Root, relativePath));
+    // Issue #4656: the paths carry no extension; the file is read in the
+    // tree's own language (C# before the cut-over, G# after).
+    private static string ReadSource(string relativePathWithoutExtension)
+        => File.ReadAllText(TestSource.SourcePath(relativePathWithoutExtension));
 }

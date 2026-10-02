@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -34,36 +35,34 @@ public sealed class Adr0193SymbolicProjectionGapCallersTests
 
     private static readonly string[] Expected =
     [
-        "Binding/ExpressionBinder.Access.MemberLookup.cs: ExpressionBinder.TryBindTypeParameterStaticClrCall -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
-        "Binding/ExpressionBinder.Calls.Arguments.cs: ExpressionBinder.TryBindConstrainedClrCall -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
-        "Binding/ExpressionBinder.Calls.Arguments.cs: ExpressionBinder.TryBindImportedExtensionCall -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
-        "Binding/ExpressionBinder.Calls.Arguments.cs: ExpressionBinder.TryResolveAndBindClrInstanceCall -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
-        "Binding/ExpressionBinder.Calls.Invocation.cs: ExpressionBinder.BindAccessorCallCore -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
-        "Binding/ExpressionBinder.Calls.Invocation.cs: ExpressionBinder.RebindInlineOutVarArguments -> ResolveByRefParameterPointeeFromSymbolicTypeArgs x1",
-        "Binding/ExpressionBinder.Calls.Invocation.cs: ExpressionBinder.TryBuildSymbolicDelegateTarget -> MapOpenSignatureWithoutDeclarationMerge x1",
-        "Binding/ExpressionBinder.Calls.Invocation.cs: ExpressionBinder.TryBuildSymbolicDelegateTargetForMethodParam -> MapOpenSignatureWithoutDeclarationMerge x2",
-        "Binding/ExpressionBinder.Calls.Invocation.cs: ExpressionBinder.TryMapDeferredLambdaTargetsSymbolic -> MapOpenSignatureWithoutDeclarationMerge x3",
-        "Binding/ExpressionBinder.Literals.cs: ExpressionBinder.RefineSymbolicArgsForMethodGroups -> MapOpenSignatureWithoutDeclarationMerge x1",
-        "Binding/MemberLookup.cs: MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs -> MapOpenSignatureWithoutDeclarationMerge x1",
-        "Binding/MemberLookup.cs: MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs -> MapOpenSignatureWithoutDeclarationMerge x2",
-        "Binding/OverloadResolution/OverloadResolver.Arguments.cs: OverloadResolver.ExpandParamsArguments -> MapOpenSignatureWithoutDeclarationMerge x1",
-        "Symbols/ImportedClassSymbol.cs: ImportedClassSymbol.TryLookupFunction -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
+        "Binding/ExpressionBinder.Access.MemberLookup: ExpressionBinder.TryBindTypeParameterStaticClrCall -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
+        "Binding/ExpressionBinder.Calls.Arguments: ExpressionBinder.TryBindConstrainedClrCall -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
+        "Binding/ExpressionBinder.Calls.Arguments: ExpressionBinder.TryBindImportedExtensionCall -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
+        "Binding/ExpressionBinder.Calls.Arguments: ExpressionBinder.TryResolveAndBindClrInstanceCall -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
+        "Binding/ExpressionBinder.Calls.Invocation: ExpressionBinder.BindAccessorCallCore -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
+        "Binding/ExpressionBinder.Calls.Invocation: ExpressionBinder.RebindInlineOutVarArguments -> ResolveByRefParameterPointeeFromSymbolicTypeArgs x1",
+        "Binding/ExpressionBinder.Calls.Invocation: ExpressionBinder.TryBuildSymbolicDelegateTarget -> MapOpenSignatureWithoutDeclarationMerge x1",
+        "Binding/ExpressionBinder.Calls.Invocation: ExpressionBinder.TryBuildSymbolicDelegateTargetForMethodParam -> MapOpenSignatureWithoutDeclarationMerge x2",
+        "Binding/ExpressionBinder.Calls.Invocation: ExpressionBinder.TryMapDeferredLambdaTargetsSymbolic -> MapOpenSignatureWithoutDeclarationMerge x3",
+        "Binding/ExpressionBinder.Literals: ExpressionBinder.RefineSymbolicArgsForMethodGroups -> MapOpenSignatureWithoutDeclarationMerge x1",
+        "Binding/MemberLookup: MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs -> MapOpenSignatureWithoutDeclarationMerge x1",
+        "Binding/MemberLookup: MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs -> MapOpenSignatureWithoutDeclarationMerge x2",
+        "Binding/OverloadResolution/OverloadResolver.Arguments: OverloadResolver.ExpandParamsArguments -> MapOpenSignatureWithoutDeclarationMerge x1",
+        "Symbols/ImportedClassSymbol: ImportedClassSymbol.TryLookupFunction -> ResolveCallReturnTypeFromSymbolicTypeArgs x1",
     ];
 
     [Fact]
     public void EveryReferenceToTheGapMembersIsListed()
     {
-        var root = Path.Combine(TestSource.Root, "src", "Core", "CodeAnalysis");
-        var actual = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+        // Issue #4656: the tree's own language (C# before the cut-over, G#
+        // after), keyed by path WITHOUT extension so one list covers both, and a
+        // scan that finds nothing fails instead of passing.
+        var actual = TestSource.SourceFiles(SearchOption.AllDirectories, "src/Core/CodeAnalysis")
             .SelectMany(path =>
             {
-                var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
-                var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(path));
-                return tree.GetRoot()
-                    .DescendantNodes()
-                    .OfType<IdentifierNameSyntax>()
-                    .Where(name => GapMembers.Contains(name.Identifier.ValueText) && !IsInNameOf(name))
-                    .Select(name => $"{relative}: {ContainingMember(name)} -> {name.Identifier.ValueText}");
+                var relative = TestSource.RelativeStem(path)["src/Core/CodeAnalysis/".Length..];
+                var references = TestSource.IsGSharp ? GSharpReferences(path) : CSharpReferences(path);
+                return references.Select(reference => $"{relative}: {reference}");
             })
             .GroupBy(entry => entry, StringComparer.Ordinal)
             .Select(group => $"{group.Key} x{group.Count()}")
@@ -76,6 +75,21 @@ public sealed class Adr0193SymbolicProjectionGapCallersTests
                 + Environment.NewLine
                 + string.Join(Environment.NewLine, actual.Select(entry => $"        \"{entry}\",")));
     }
+
+    private static IEnumerable<string> CSharpReferences(string path)
+    {
+        var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(path));
+        return tree.GetRoot()
+            .DescendantNodes()
+            .OfType<IdentifierNameSyntax>()
+            .Where(name => GapMembers.Contains(name.Identifier.ValueText) && !IsInNameOf(name))
+            .Select(name => $"{ContainingMember(name)} -> {name.Identifier.ValueText}");
+    }
+
+    private static IEnumerable<string> GSharpReferences(string path) =>
+        GSharpSourceSyntax.NameReferences(GSharpSourceSyntax.Parse(path).Root)
+            .Where(reference => GapMembers.Contains(reference.Name) && !GSharpSourceSyntax.IsInNameOf(reference.Node))
+            .Select(reference => $"{GSharpSourceSyntax.ContainingMember(reference.Node)} -> {reference.Name}");
 
     // DescendantNodes() does not enter documentation trivia, so a cref is
     // never seen; a nameof() names a member without calling it.

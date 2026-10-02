@@ -30,9 +30,9 @@ public class BoundNodeKindExhaustivenessTests
     private static readonly Dictionary<string, string[]> KindToClassNames = BuildKindToClassMap();
 
     // Source paths relative to the repo root.
-    private const string EmitExpressionsPath = "src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Expressions.cs";
-    private const string EmitStatementsPath = "src/Core/CodeAnalysis/Emit/MethodBodyEmitter.cs";
-    private const string SpillSequenceSpillerPath = "src/Core/CodeAnalysis/Lowering/Async/SpillSequenceSpiller.cs";
+    private const string EmitExpressionsPath = "src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Expressions";
+    private const string EmitStatementsPath = "src/Core/CodeAnalysis/Emit/MethodBodyEmitter";
+    private const string SpillSequenceSpillerPath = "src/Core/CodeAnalysis/Lowering/Async/SpillSequenceSpiller";
 
     // ──────────────────────────────────────────────────────────────────────
     //  Allowlists: kinds that legitimately never appear in a given switch.
@@ -362,12 +362,28 @@ public class BoundNodeKindExhaustivenessTests
         "AwaitForRangeStatement",
     });
 
+    private static string EmitExpressionSignature => Signature(
+        "private void EmitExpression(BoundExpression expression)",
+        "private func EmitExpression(expression BoundExpression)");
+
+    private static string EmitStatementSignature => Signature(
+        "private void EmitStatement(BoundStatement statement)",
+        "private func EmitStatement(statement BoundStatement)");
+
+    private static string SpillExpressionSignature => Signature(
+        "private BoundSpillSequenceExpression SpillExpression(BoundExpression expression)",
+        "private func SpillExpression(expression BoundExpression) BoundSpillSequenceExpression");
+
+    private static string RewriteStatementToListSignature => Signature(
+        "private bool RewriteStatementToList(BoundStatement statement",
+        "private func RewriteStatementToList(");
+
     [Fact]
     public void EmitExpression_HandlesAllBoundNodeKinds()
     {
         var allKinds = GetAllBoundNodeKindNames();
         var source = ReadSourceFile(EmitExpressionsPath);
-        var handledKinds = ExtractHandledKinds(source, "private void EmitExpression(BoundExpression expression)");
+        var handledKinds = ExtractHandledKinds(source, EmitExpressionSignature);
         AssertExhaustive(allKinds, handledKinds, EmitExpressionAllowlist, "EmitExpression");
     }
 
@@ -376,7 +392,7 @@ public class BoundNodeKindExhaustivenessTests
     {
         var allKinds = GetAllBoundNodeKindNames();
         var source = ReadSourceFile(EmitStatementsPath);
-        var handledKinds = ExtractHandledKinds(source, "private void EmitStatement(BoundStatement statement)");
+        var handledKinds = ExtractHandledKinds(source, EmitStatementSignature);
         AssertExhaustive(allKinds, handledKinds, EmitStatementAllowlist, "EmitStatement");
     }
 
@@ -385,7 +401,7 @@ public class BoundNodeKindExhaustivenessTests
     {
         var allKinds = GetAllBoundNodeKindNames();
         var source = ReadSourceFile(SpillSequenceSpillerPath);
-        var handledKinds = ExtractHandledKinds(source, "private BoundSpillSequenceExpression SpillExpression(BoundExpression expression)");
+        var handledKinds = ExtractHandledKinds(source, SpillExpressionSignature);
         AssertExhaustive(allKinds, handledKinds, SpillExpressionAllowlist, "SpillExpression");
     }
 
@@ -394,7 +410,7 @@ public class BoundNodeKindExhaustivenessTests
     {
         var allKinds = GetAllBoundNodeKindNames();
         var source = ReadSourceFile(SpillSequenceSpillerPath);
-        var handledKinds = ExtractHandledKinds(source, "private bool RewriteStatementToList(BoundStatement statement");
+        var handledKinds = ExtractHandledKinds(source, RewriteStatementToListSignature);
         AssertExhaustive(allKinds, handledKinds, RewriteStatementAllowlist, "RewriteStatementToList");
     }
 
@@ -408,7 +424,7 @@ public class BoundNodeKindExhaustivenessTests
         allKinds.Add("SyntheticTestKind");
 
         var source = ReadSourceFile(EmitExpressionsPath);
-        var handledKinds = ExtractHandledKinds(source, "private void EmitExpression(BoundExpression expression)");
+        var handledKinds = ExtractHandledKinds(source, EmitExpressionSignature);
 
         var missing = GetMissingKinds(allKinds, handledKinds, EmitExpressionAllowlist);
         Assert.Contains("SyntheticTestKind", missing);
@@ -423,10 +439,9 @@ public class BoundNodeKindExhaustivenessTests
         return new HashSet<string>(Enum.GetNames(typeof(BoundNodeKind)));
     }
 
-    private static string ReadSourceFile(string relativePath)
+    private static string ReadSourceFile(string relativePathWithoutExtension)
     {
-        var repoRoot = FindRepoRoot();
-        var fullPath = Path.Combine(repoRoot, relativePath);
+        var fullPath = TestSource.SourcePath(relativePathWithoutExtension);
         Assert.True(File.Exists(fullPath), $"Source file not found: {fullPath}");
         return File.ReadAllText(fullPath);
     }
@@ -454,6 +469,11 @@ public class BoundNodeKindExhaustivenessTests
         var methodBody = source.Substring(bodyStart, bodyEnd - bodyStart + 1);
 
         var handled = new HashSet<string>();
+        if (TestSource.IsGSharp)
+        {
+            AddGSharpHandledKinds(methodBody, handled);
+            return handled;
+        }
 
         // Pattern 1: `case BoundXyzExpression …:` or `case BoundXyzStatement …:`
         // or `case BoundXyz:` (any Bound-prefixed type).
@@ -482,6 +502,38 @@ public class BoundNodeKindExhaustivenessTests
         }
 
         return handled;
+    }
+
+    /// <summary>
+    /// Issue #4656: the G# spelling of the same switch arms. G# folds C#'s
+    /// stacked labels into one comma-separated clause ending at the arm's
+    /// brace, and binds a designation before <c>is</c>:
+    /// <c>case BoundA,</c> / <c>BoundB {</c>, <c>case x is BoundC {</c>,
+    /// <c>case BoundNodeKind.D {</c>.
+    /// </summary>
+    private static void AddGSharpHandledKinds(string methodBody, HashSet<string> handled)
+    {
+        foreach (Match clause in Regex.Matches(methodBody, @"\bcase\s+([^{}]*)\{"))
+        {
+            foreach (var item in clause.Groups[1].Value.Split(','))
+            {
+                var enumArm = Regex.Match(item, @"^\s*BoundNodeKind\.(\w+)\s*$");
+                if (enumArm.Success)
+                {
+                    handled.Add(enumArm.Groups[1].Value);
+                    continue;
+                }
+
+                var typeArm = Regex.Match(item, @"^\s*(?:\w+\s+is\s+|is\s+)?(Bound\w+)\b");
+                if (typeArm.Success)
+                {
+                    foreach (var kind in MapClassNameToKinds(typeArm.Groups[1].Value))
+                    {
+                        handled.Add(kind);
+                    }
+                }
+            }
+        }
     }
 
     internal static List<string> GetMissingKinds(
@@ -589,5 +641,7 @@ public class BoundNodeKindExhaustivenessTests
         return map;
     }
 
-    private static string FindRepoRoot() => TestSource.Root;
+    // Issue #4656: each switch-hosting method is located by its signature in
+    // the tree's own language (C# before the cut-over, G# after).
+    private static string Signature(string csharp, string gsharp) => TestSource.IsGSharp ? gsharp : csharp;
 }

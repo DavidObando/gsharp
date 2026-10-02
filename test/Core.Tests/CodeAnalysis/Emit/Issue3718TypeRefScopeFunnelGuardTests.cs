@@ -40,7 +40,7 @@ public class Issue3718TypeRefScopeFunnelGuardTests
     /// </summary>
     private static readonly Dictionary<string, string> AllowedFiles = new(StringComparer.Ordinal)
     {
-        ["src/Core/CodeAnalysis/Emit/ImportedMemberRefFactory.cs"] =
+        ["src/Core/CodeAnalysis/Emit/ImportedMemberRefFactory"] =
             "#3718 — the funnel itself: projects host types onto the reference closure before scoping the row",
     };
 
@@ -63,33 +63,25 @@ public class Issue3718TypeRefScopeFunnelGuardTests
     [Fact]
     public void No_TypeRef_Or_AssemblyRef_Rows_Outside_The_Funnel()
     {
-        var repoRoot = LocateRepoRoot();
         var offenders = new List<string>();
 
-        foreach (var root in ScannedRoots)
+        // Issue #4656: the tree's own language (C# before the cut-over, G#
+        // after), and a scan that finds nothing fails instead of passing.
+        foreach (var file in TestSource.SourceFiles(SearchOption.AllDirectories, ScannedRoots))
         {
-            var rootDir = Path.Combine(repoRoot, root);
-            if (!Directory.Exists(rootDir))
+            var relative = TestSource.RelativeStem(file);
+            if (AllowedFiles.ContainsKey(relative))
             {
                 continue;
             }
 
-            foreach (var file in Directory.EnumerateFiles(rootDir, "*.cs", SearchOption.AllDirectories))
+            var lines = File.ReadAllLines(file);
+            for (var i = 0; i < lines.Length; i++)
             {
-                var relative = Path.GetRelativePath(repoRoot, file).Replace('\\', '/');
-                if (AllowedFiles.ContainsKey(relative))
+                var code = StripCommentAndStrings(lines[i]);
+                if (ForbiddenPattern.IsMatch(code))
                 {
-                    continue;
-                }
-
-                var lines = File.ReadAllLines(file);
-                for (var i = 0; i < lines.Length; i++)
-                {
-                    var code = StripCommentAndStrings(lines[i]);
-                    if (ForbiddenPattern.IsMatch(code))
-                    {
-                        offenders.Add($"{relative}:{i + 1}: {lines[i].Trim()}");
-                    }
+                    offenders.Add($"{relative}:{i + 1}: {lines[i].Trim()}");
                 }
             }
         }
@@ -111,8 +103,7 @@ public class Issue3718TypeRefScopeFunnelGuardTests
     [Fact]
     public void The_Funnel_Still_Projects_Onto_The_Reference_Closure()
     {
-        var repoRoot = LocateRepoRoot();
-        var funnel = Path.Combine(repoRoot, "src/Core/CodeAnalysis/Emit/ImportedMemberRefFactory.cs");
+        var funnel = TestSource.SourcePath("src/Core/CodeAnalysis/Emit/ImportedMemberRefFactory");
         Assert.True(File.Exists(funnel), $"the funnel moved: {funnel} does not exist");
 
         var text = File.ReadAllText(funnel);
@@ -140,6 +131,4 @@ public class Issue3718TypeRefScopeFunnelGuardTests
         var code = commentIndex >= 0 ? line.Substring(0, commentIndex) : line;
         return Regex.Replace(code, "\"[^\"]*\"", "\"\"");
     }
-
-    private static string LocateRepoRoot() => TestSource.Root;
 }
