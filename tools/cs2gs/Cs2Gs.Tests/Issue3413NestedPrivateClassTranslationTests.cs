@@ -1031,19 +1031,6 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             }));
     }
 
-    private static int CountOccurrences(string text, string value)
-    {
-        int count = 0;
-        for (int index = text.IndexOf(value, StringComparison.Ordinal);
-            index >= 0;
-            index = text.IndexOf(value, index + value.Length, StringComparison.Ordinal))
-        {
-            count++;
-        }
-
-        return count;
-    }
-
     private static bool IlVerifyToolAvailable()
     {
         try
