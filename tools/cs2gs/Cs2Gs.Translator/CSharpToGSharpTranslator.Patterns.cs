@@ -78,6 +78,11 @@ public sealed partial class CSharpToGSharpTranslator
                         return new TypeExpression(typeRef);
                     }
 
+                    if (this.TryTranslateLiftedLocalFunctionReference(generic, out GExpression liftedGeneric))
+                    {
+                        return liftedGeneric;
+                    }
+
                     return new IdentifierExpression(this.EmittedName(
                         this.context.GetSymbolInfo(generic).Symbol,
                         generic.Identifier.ValueText));
