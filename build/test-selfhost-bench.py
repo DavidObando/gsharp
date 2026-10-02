@@ -7,6 +7,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import stat
 import tempfile
 import unittest
@@ -77,6 +78,12 @@ class VerdictTests(unittest.TestCase):
         result = bench.verdict(self.summary(100, 100, 1000), self.summary(100, 100, 1600), 1.5)
         self.assertEqual(["maxRssMb"], result["overBudget"])
 
+    def test_the_budget_decision_uses_the_unrounded_ratio(self) -> None:
+        # 1.5004 rounds to 1.5 for display but is over a 1.5 budget.
+        result = bench.verdict(self.summary(10000, 10000, 10000), self.summary(15004, 10000, 10000), 1.5)
+        self.assertEqual(["wallSeconds"], result["overBudget"])
+        self.assertFalse(result["withinBudget"])
+
     def test_parse_time_reads_the_last_measurement(self) -> None:
         measured = bench.parse_time("warning: x\nBENCH 1.0 0.5 0.1 2048\nBENCH 12.34 10.00 0.50 1048576\n")
         self.assertEqual({"wallSeconds": 12.34, "cpuSeconds": 10.5, "maxRssMb": 1024.0}, measured)
@@ -121,6 +128,42 @@ class GateTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             run(["--rsp", str(self.rsp), "--native", "x", "--migrated", "y", "--warmup", "-1",
                  "--work", str(self.root / "work")])
+
+    def test_a_non_finite_or_non_positive_budget_is_rejected(self) -> None:
+        for value in ("nan", "inf", "0", "-1"):
+            with self.subTest(budget=value), self.assertRaises(SystemExit):
+                run(["--rsp", str(self.rsp), "--native", "x", "--migrated", "y", "--budget", value,
+                     "--work", str(self.root / "work")])
+
+    def test_a_relative_compiler_path_resolves_against_the_callers_directory(self) -> None:
+        native = fake_compiler(self.root, "native", 0.0)
+        migrated = fake_compiler(self.root, "migrated", 0.0)
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        previous = Path.cwd()
+        os.chdir(self.root)
+        try:
+            work = self.root / "work"
+            code = run(["--rsp", str(self.rsp), "--native", "./native", "--migrated", "./migrated",
+                        "--runs", "1", "--warmup", "0", "--cwd", str(elsewhere), "--work", str(work)])
+        finally:
+            os.chdir(previous)
+        # Both compilers ran (the verdict itself is noise for zero-work fakes).
+        self.assertIn(code, (0, 1))
+        self.assertNotIn("error", json.loads((work / "bench-report.json").read_text()))
+
+    def test_a_missing_compiler_is_a_tool_error(self) -> None:
+        code, report = self.gate(str(self.root / "no-such-compiler"), fake_compiler(self.root, "migrated", 0.0))
+        self.assertEqual(2, code)
+        self.assertIn("native run 0 failed", report["error"])
+
+    def test_a_missing_working_directory_is_a_tool_error_not_a_traceback(self) -> None:
+        work = self.root / "work"
+        code = run(["--rsp", str(self.rsp), "--native", fake_compiler(self.root, "native", 0.0),
+                    "--migrated", fake_compiler(self.root, "migrated", 0.0), "--runs", "1", "--warmup", "0",
+                    "--cwd", str(self.root / "no-such-dir"), "--work", str(work)])
+        self.assertEqual(2, code)
+        self.assertIn("could not start", json.loads((work / "bench-report.json").read_text())["error"])
 
     def test_a_failing_compile_is_a_tool_error(self) -> None:
         code, report = self.gate(fake_compiler(self.root, "native", 0.0),

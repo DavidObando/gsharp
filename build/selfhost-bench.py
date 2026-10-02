@@ -56,6 +56,18 @@ def redirect_outputs(rsp_text: str, directory: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def resolve_compiler(compiler: str) -> str:
+    """Anchors a path-like compiler to the caller's directory.
+
+    The compiler runs with `cwd=--cwd`, so a relative path would otherwise be
+    looked up under the project directory. A bare command name is left alone
+    for the PATH lookup.
+    """
+    if os.sep in compiler or (os.altsep and os.altsep in compiler) or compiler.endswith(".dll"):
+        return str(Path(compiler).resolve())
+    return compiler
+
+
 def command_for(compiler: str) -> list[str]:
     return ["dotnet", compiler] if compiler.endswith(".dll") else [compiler]
 
@@ -99,7 +111,11 @@ def run_once(compiler: str, rsp_text: str, work: Path, label: str, index: int, c
     env["LC_ALL"] = "C"
     # The compiler's output streams to the log; nothing is buffered here.
     with (run_dir / "compile.log").open("w", encoding="utf-8") as log:
-        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env, cwd=cwd)
+        try:
+            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env, cwd=cwd)
+        except OSError as error:
+            # A missing executable or working directory is a tool error (exit 2), not a traceback.
+            raise BenchError(f"{label} run {index} could not start: {error}") from error
     if result.returncode != 0:
         raise BenchError(f"{label} run {index} failed (exit {result.returncode}); see {run_dir / 'compile.log'}")
     return parse_time(measurement.read_text(encoding="utf-8") if measurement.exists() else "")
@@ -113,11 +129,13 @@ def summarize(runs: list[dict]) -> dict:
 
 def verdict(native: dict, migrated: dict, budget: float) -> dict:
     """Median migrated/native ratios and whether each is within `budget`."""
-    ratios = {}
+    exact = {}
     for metric in METRICS:
         base = native[metric]["median"]
-        ratios[metric] = round(migrated[metric]["median"] / base, 3) if base > 0 else float("inf")
-    over = [metric for metric in GATED if ratios[metric] > budget]
+        exact[metric] = migrated[metric]["median"] / base if base > 0 else float("inf")
+    # Decide on the unrounded ratio; rounding is for display only.
+    over = [metric for metric in GATED if exact[metric] > budget]
+    ratios = {metric: round(value, 3) if value != float("inf") else value for metric, value in exact.items()}
     return {"ratios": ratios, "budget": budget, "overBudget": over, "withinBudget": not over}
 
 
@@ -146,6 +164,10 @@ def main(argv: list[str]) -> int:
         parser.error("--runs must be at least 1")
     if args.warmup < 0:
         parser.error("--warmup must not be negative")
+    if not 0 < args.budget < float("inf"):  # also rejects nan, which would disable the gate
+        parser.error("--budget must be a positive, finite number")
+    args.native = resolve_compiler(args.native)
+    args.migrated = resolve_compiler(args.migrated)
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     rsp_text = args.rsp.read_text(encoding="utf-8-sig")
