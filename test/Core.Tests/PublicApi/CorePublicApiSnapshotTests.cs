@@ -98,6 +98,7 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains("  property protected internal Int32 Shared { get; set; }", baseline, StringComparison.Ordinal);
         Assert.Contains("  field public const String Quoted = \"a\\\"b\\\\c\\nd\"", baseline, StringComparison.Ordinal);
         Assert.Contains("  method protected virtual Void OnChanged()", baseline, StringComparison.Ordinal);
+        Assert.Contains("  method public virtual override String ToString()", baseline, StringComparison.Ordinal);
         Assert.DoesNotContain("Hidden", baseline, StringComparison.Ordinal);
 
         // An enum records its underlying type: changing it changes the enum's size.
@@ -478,6 +479,14 @@ public sealed class CorePublicApiSnapshotTests
             modifiers.Append((attributes & MethodAttributes.Final) != 0 ? " sealed" : " virtual");
         }
 
+        // A virtual without newslot reuses an inherited slot (an override);
+        // with newslot it starts one. The difference changes dispatch for
+        // derived types, so it is part of the contract.
+        if ((attributes & MethodAttributes.Virtual) != 0 && (attributes & MethodAttributes.NewSlot) == 0)
+        {
+            modifiers.Append(" override");
+        }
+
         return modifiers.ToString();
     }
 
@@ -694,6 +703,10 @@ public class SnapshotFixture
         this.hidden++;
         this.HiddenHelper();
     }
+
+    /// <summary>Overrides an inherited slot.</summary>
+    /// <returns>A fixed string.</returns>
+    public override string ToString() => "fixture";
 
     private void HiddenHelper() => this.hidden--;
 }
