@@ -113,9 +113,10 @@ PLAN_VERSION = 1
 BENIGN_RPC_ERRORS = {-32800, -32801}
 METHOD_NOT_FOUND = -32601
 ICE_CODE = "GS9998"
-# FileLogger writes {"Timestamp":"...","Level":"...","Message":...} per line, and System.Text.Json
-# escapes every quote inside the message, so this anchored match only sees the Level field.
-LOG_ERROR_LINE = re.compile(rb'^\{"Timestamp":"[^"]*","Level":"Error",')
+# FileLogger writes one JSON object per line. System.Text.Json escapes every quote inside the
+# message text, so this raw substring only occurs as a real key/value; it is a cheap prefilter,
+# and the Level field of the parsed entry decides.
+LOG_ERROR_MARKER = b'"Level":"Error"'
 
 GARBAGE = [
     '"unterminated',
@@ -338,14 +339,25 @@ def find_largest(tree: Path, largest: int) -> list[Path]:
     return candidates[:largest]
 
 
+def count_lines(path: Path, stop_after: int) -> int:
+    """Lines in the file (a final line without a newline counts), or stop_after + 1 once exceeded."""
+    lines, last = 0, b"\n"
+    with path.open("rb") as stream:
+        while chunk := stream.read(1 << 20):
+            lines += chunk.count(b"\n")
+            last = chunk[-1:]
+            if lines > stop_after:
+                return stop_after + 1
+    return lines + (0 if last == b"\n" else 1)
+
+
 def sample_band(tree: Path, count: int, min_lines: int, max_lines: int, seed: int) -> list[Path]:
     """A seeded sample of .gs files whose line count lies in [min_lines, max_lines]."""
     band = []
     for p in sorted(tree.rglob("*.gs")):
         if not p.is_file():
             continue
-        with p.open("rb") as stream:
-            lines = sum(1 for _ in stream)
+        lines = count_lines(p, stop_after=max_lines)
         if min_lines <= lines <= max_lines:
             band.append(p)
     rng = random.Random(f"sample:{seed}")
@@ -586,13 +598,16 @@ class LogScanner:
         lines = data.split(b"\n")
         self.partial = lines.pop()
         for line in lines:
-            if not LOG_ERROR_LINE.match(line):
+            if LOG_ERROR_MARKER not in line:
                 continue
             try:
                 entry = json.loads(line.decode("utf-8", "replace"))
             except json.JSONDecodeError:
-                entry = {"Message": line[:400].decode("utf-8", "replace")}
-            errors.append(entry)
+                # A torn or unparseable line that carries the marker: report it rather than lose it.
+                errors.append({"Message": line[:400].decode("utf-8", "replace")})
+                continue
+            if isinstance(entry, dict) and entry.get("Level") == "Error":
+                errors.append(entry)
         return errors
 
 

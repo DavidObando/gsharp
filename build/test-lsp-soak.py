@@ -196,11 +196,20 @@ class LspSoakTests(unittest.TestCase):
         log = SCRATCH / "server.log"
         log.write_text(
             '{"Timestamp":"t","Level":"Debug","Message":"[IN] \\"Level\\":\\"Error\\",\\"Message\\":","Exception":null}\n'
-            '{"Timestamp":"t","Level":"Debug","Message":"x","Level":"Error","Exception":null}\n'
-            '{"Timestamp":"t","Level":"Error","Message":"HoverAsync failed: boom","Exception":null}\n',
+            '{"Timestamp":"t","Level":"Info","Message":"m","Extra":{"Level":"Error"}}\n'
+            '{"Timestamp":"t","Level":"Error","Message":"HoverAsync failed: boom","Exception":null}\n'
+            '{"Level":"Error","Timestamp":"t","Message":"fields reordered"}\n',
             encoding="utf-8")
         errors = soak.LogScanner(log).new_errors()
-        self.assertEqual(["HoverAsync failed: boom"], [e["Message"] for e in errors])
+        self.assertEqual(["HoverAsync failed: boom", "fields reordered"], [e["Message"] for e in errors])
+
+    def test_line_counting_matches_the_band_definition(self) -> None:
+        cases = {"a.gs": "", "b.gs": "one", "c.gs": "one\n", "d.gs": "one\ntwo", "e.gs": "1\n2\n3\n4\n"}
+        for name, text in cases.items():
+            path = SCRATCH / name
+            path.write_text(text, encoding="utf-8")
+            self.assertEqual(len(text.splitlines()), soak.count_lines(path, stop_after=100), name)
+        self.assertEqual(3, soak.count_lines(SCRATCH / "e.gs", stop_after=2))
 
     def test_internal_compiler_error_diagnostic_is_recorded(self) -> None:
         code, result = self.run_stub("ice", at=5)
