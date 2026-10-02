@@ -73,6 +73,19 @@ internal static class Program
             }
         }
 
+        if (verb is "capture-test-oracle")
+        {
+            try
+            {
+                return CaptureTestOracleCommand.Run(args.Skip(1).ToArray());
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("cs2gs: " + ex.Message);
+                return 2;
+            }
+        }
+
         if (verb is "report")
         {
             try
@@ -267,6 +280,12 @@ internal static class Program
         {
             options.TestParityAllowList = TestParityAllowList.LoadForRepository(
                 options.SourceRoot, allowListPath);
+
+            // The default baseline only matters when per-name parity runs.
+            if (options.TestNameParityBaseline is null && !string.IsNullOrEmpty(options.CSharpTestOracleDirectory))
+            {
+                options.TestNameParityBaseline = TestNameParityBaseline.LoadForRepository(options.SourceRoot, null);
+            }
         }
         catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
         {
@@ -634,6 +653,13 @@ internal static class Program
                     case "--test-allowlist":
                         allowListPath = NextValue(args, ref i, arg);
                         break;
+                    case "--csharp-test-oracle":
+                        options.CSharpTestOracleDirectory = Path.GetFullPath(NextValue(args, ref i, arg));
+                        break;
+                    case "--test-name-baseline":
+                        options.TestNameParityBaseline = TestNameParityBaseline.Load(
+                            Path.GetFullPath(NextValue(args, ref i, arg)));
+                        break;
                     case "--baseline-strict":
                         baselineStrict = true;
                         break;
@@ -746,6 +772,7 @@ internal static class Program
         Console.WriteLine("Usage:");
         Console.WriteLine("  cs2gs migrate [options]");
         Console.WriteLine("  cs2gs validate --corpus <repo-root> --migrated <dir> [--shard i/N | --app <id>...]");
+        Console.WriteLine("  cs2gs capture-test-oracle --corpus <repo-root> --out <dir> [--exclude <path>...]");
         Console.WriteLine("  cs2gs report --run <runDir> [--out <file-or-dir>]");
         Console.WriteLine("  cs2gs coverage [--write] [--repo-root <dir>]");
         Console.WriteLine("  cs2gs triage list --run <runDir> [--gaps <file>]");
@@ -771,6 +798,10 @@ internal static class Program
         Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries (nightly mode).");
         Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list (issue #3885); default:");
         Console.WriteLine("                    <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.");
+        Console.WriteLine("  --csharp-test-oracle <dir>  Check mirrored test projects name for name against the");
+        Console.WriteLine("                    C# case lists `cs2gs capture-test-oracle` wrote (issue #4633); the");
+        Console.WriteLine("                    justified differences are read from <corpus>/" + TestNameParityBaseline.DefaultRelativePath);
+        Console.WriteLine("  --test-name-baseline <file>  Use this per-test-name baseline instead of the default.");
         Console.WriteLine("  --via-sdk         Build emitted G# via 'dotnet build' + Gsharp.NET.Sdk (default).");
         Console.WriteLine("  --no-via-sdk      Use the legacy direct-gsc compile path.");
         Console.WriteLine("  --allow-conditional-compilation  Report each C# #if/#elif as a non-fatal");

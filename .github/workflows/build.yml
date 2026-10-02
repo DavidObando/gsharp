@@ -203,6 +203,9 @@ jobs:
       - name: Verify cs2gs counter contract
         run: build/test-cs2gs-counters.sh
 
+      - name: Verify self-host stage-1 packer contract
+        run: python3 build/test-selfhost-pack-stage1.py
+
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
         with:
@@ -225,6 +228,12 @@ jobs:
       # red nightly nobody is watching.
       - name: Verify the concurrency benchmark harness
         run: python3 build/verify-concurrency-bench.py --smoke
+
+      - name: Verify the self-host compiler benchmark gate
+        run: |
+          # The benchmark measures peak memory with GNU time.
+          command -v /usr/bin/time >/dev/null || { sudo apt-get update && sudo apt-get install -y time; }
+          python3 build/test-selfhost-bench.py
 
   e2e:
     runs-on: ubuntu-latest

@@ -51,6 +51,8 @@ namespace GSharp.Tests;
 /// </remarks>
 public static class EmittedFixture
 {
+    private static readonly List<AssemblyLoadContext> LiveContexts = new List<AssemblyLoadContext>();
+
     /// <summary>
     /// Loads the emitted assembly at <paramref name="assemblyPath"/> into a
     /// fresh collectible context that probes the assembly's own directory for
@@ -158,6 +160,16 @@ public static class EmittedFixture
         var context = new AssemblyLoadContext(
             "gsharp-emitted-fixture-" + Guid.NewGuid().ToString("N"),
             isCollectible: true);
+
+        // Issue #4688: the context is documented as never unloaded, but nothing
+        // else references it, and AssemblyLoadContext's finalizer initiates
+        // unload. Root it for the process lifetime so a GC cannot unload it
+        // under a running test.
+        lock (LiveContexts)
+        {
+            LiveContexts.Add(context);
+        }
+
         context.Resolving += (resolving, name) => Resolve(resolving, name, probeDirectories);
         return context;
     }

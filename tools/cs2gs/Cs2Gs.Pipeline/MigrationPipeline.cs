@@ -957,6 +957,7 @@ public sealed class MigrationPipeline
         // was excused, and a stale entry is visible without reading a log.
         appResult.AllowedTestFailures.AddRange(context.AllowedTestFailures);
         appResult.StaleAllowListEntries.AddRange(context.StaleTestAllowListEntries);
+        appResult.TestNameParity = context.TestNameParity;
 
         if (appResult.Succeeded && appResult.Stages.Any(s => s.Status == "skipped"))
         {

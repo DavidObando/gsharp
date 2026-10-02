@@ -127,6 +127,73 @@ public sealed class AppResult
     [JsonPropertyName("staleAllowListEntries")]
     [JsonPropertyOrder(8)]
     public List<string> StaleAllowListEntries { get; set; } = new List<string>();
+
+    /// <summary>
+    /// Gets or sets the per-test-name parity summary of a mirrored test project
+    /// (issue #4633), PASS or FAIL, so a passing app's case counts are
+    /// auditable from the run record. <see langword="null"/> for apps that
+    /// never reached a completed mirrored test run.
+    /// </summary>
+    [JsonPropertyName("testNameParity")]
+    [JsonPropertyOrder(9)]
+    public TestNameParitySummary? TestNameParity { get; set; }
+}
+
+/// <summary>
+/// Issue #4633: the per-test-name parity numbers for one mirrored test project.
+/// </summary>
+public sealed class TestNameParitySummary
+{
+    /// <summary>The mode recorded when the C# oracle was compared name for name.</summary>
+    public const string PerNameMode = "per-name";
+
+    /// <summary>The mode recorded when no oracle directory was configured.</summary>
+    public const string CountOnlyMode = "count-only";
+
+    /// <summary>Gets or sets the mode: <see cref="PerNameMode"/> or <see cref="CountOnlyMode"/>.</summary>
+    [JsonPropertyName("mode")]
+    [JsonPropertyOrder(0)]
+    public string Mode { get; set; } = CountOnlyMode;
+
+    /// <summary>Gets or sets the number of cases the C# original's discovery listed.</summary>
+    [JsonPropertyName("csharpCases")]
+    [JsonPropertyOrder(1)]
+    public int CSharpCases { get; set; }
+
+    /// <summary>Gets or sets the number of results in the migrated run's TRX.</summary>
+    [JsonPropertyName("migratedCases")]
+    [JsonPropertyOrder(2)]
+    public int MigratedCases { get; set; }
+
+    /// <summary>Gets or sets the number of C# cases matched by a migrated result.</summary>
+    [JsonPropertyName("matched")]
+    [JsonPropertyOrder(3)]
+    public int Matched { get; set; }
+
+    /// <summary>Gets or sets the migrated rows matched to a non-enumerated C# theory.</summary>
+    [JsonPropertyName("theoryRows")]
+    [JsonPropertyOrder(4)]
+    public int TheoryRows { get; set; }
+
+    /// <summary>Gets or sets the number of C# cases the migrated run lacks (before the baseline).</summary>
+    [JsonPropertyName("missing")]
+    [JsonPropertyOrder(5)]
+    public int Missing { get; set; }
+
+    /// <summary>Gets or sets the number of migrated cases the oracle lacks (before the baseline).</summary>
+    [JsonPropertyName("extra")]
+    [JsonPropertyOrder(6)]
+    public int Extra { get; set; }
+
+    /// <summary>Gets or sets the number of differences a baseline entry explained.</summary>
+    [JsonPropertyName("explained")]
+    [JsonPropertyOrder(7)]
+    public int Explained { get; set; }
+
+    /// <summary>Gets or sets the baseline entries for this app that explained nothing (advisory).</summary>
+    [JsonPropertyName("staleBaselineEntries")]
+    [JsonPropertyOrder(8)]
+    public List<string> StaleBaselineEntries { get; set; } = new List<string>();
 }
 
 /// <summary>
