@@ -743,8 +743,10 @@ public sealed class CorePublicApiSnapshotTests
         public string GetGenericInstantiation(string genericType, ImmutableArray<string> typeArguments) =>
             genericType + "<" + string.Join(", ", typeArguments) + ">";
 
+        // A general (non-vector) array is a different type from T[] even at
+        // rank one; csc's own notation for that is T[*].
         public string GetArrayType(string elementType, ArrayShape shape) =>
-            elementType + "[" + new string(',', shape.Rank - 1) + "]";
+            shape.Rank == 1 ? elementType + "[*]" : elementType + "[" + new string(',', shape.Rank - 1) + "]";
 
         public string GetByReferenceType(string elementType) => "ref " + elementType;
 
