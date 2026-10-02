@@ -93,6 +93,10 @@ def run_once(compiler: str, rsp_text: str, work: Path, label: str, index: int, c
                *command_for(compiler), f"@{rsp}"]
     env = dict(os.environ)
     env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+    env["DOTNET_NOLOGO"] = "1"
+    env["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1"
+    # GNU time formats numbers per locale; the parser expects '.' decimals.
+    env["LC_ALL"] = "C"
     # The compiler's output streams to the log; nothing is buffered here.
     with (run_dir / "compile.log").open("w", encoding="utf-8") as log:
         result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env, cwd=cwd)
