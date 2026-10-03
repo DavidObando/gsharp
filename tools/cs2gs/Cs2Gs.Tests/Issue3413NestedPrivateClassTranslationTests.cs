@@ -64,16 +64,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     Console.WriteLine(35.AddCached());
                     Console.WriteLine(6.DelayIdentityAsync().GetAwaiter().GetResult());
                     7.DelayAsync().GetAwaiter().GetResult();
-                    Func<Task<int>> lengthAsync = "four".LengthAsync;
-                    Console.WriteLine(lengthAsync().GetAwaiter().GetResult());
-                    Func<Task> delayAsync = "later".DelayTextAsync;
-                    delayAsync().GetAwaiter().GetResult();
+                    Console.WriteLine("four".LengthAsync().GetAwaiter().GetResult());
+                    "later".DelayTextAsync().GetAwaiter().GetResult();
                     Console.WriteLine(9.ValueAsync().AsTask().GetAwaiter().GetResult());
                     10.ValueNoteAsync().AsTask().GetAwaiter().GetResult();
-                    Func<ValueTask<int>> valueLengthAsync = "five".ValueLengthAsync;
-                    Console.WriteLine(valueLengthAsync().AsTask().GetAwaiter().GetResult());
-                    Func<ValueTask> valueDelayAsync = "later".ValueDelayAsync;
-                    valueDelayAsync().AsTask().GetAwaiter().GetResult();
+                    Console.WriteLine("five".ValueLengthAsync().AsTask().GetAwaiter().GetResult());
+                    "later".ValueDelayAsync().AsTask().GetAwaiter().GetResult();
                     Console.WriteLine("async");
                 }
             }
@@ -210,55 +206,37 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal(
             Visibility.Private,
             extensionShared.Members.OfType<FieldDeclaration>().Single(field => field.Name == "cache").Visibility);
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "AddCached");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayIdentityAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "LengthAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayTextAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueNoteAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueLengthAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueDelayAsync");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "Identity");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "AddCached");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "DelayIdentityAsync");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "DelayAsync");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "LengthAsync");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "DelayTextAsync");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "ValueAsync");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "ValueNoteAsync");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "ValueLengthAsync");
-        Assert.Contains(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "ValueDelayAsync");
+
+        // Issue #4676: an extension on an EXTERNAL receiver (`this T`, `int`, `string`)
+        // is lifted with its real body and hosted on the owner through
+        // `@ExtensionOwner`, which reaches the owner's private nested type and
+        // field. It is not kept as an in-owner helper plus a public forwarding
+        // companion on the package's `<Program>`.
+        string[] extensionNames =
+        {
+            "Identity", "AddCached", "DelayIdentityAsync", "DelayAsync", "LengthAsync",
+            "DelayTextAsync", "ValueAsync", "ValueNoteAsync", "ValueLengthAsync", "ValueDelayAsync",
+        };
+        foreach (string name in extensionNames)
+        {
+            MethodDeclaration lifted = Assert.Single(
+                unit.Members.OfType<MethodDeclaration>(),
+                method => method.Name == name);
+            Assert.NotNull(lifted.Receiver);
+            Assert.Contains(lifted.Attributes, attribute => attribute.Name == "ExtensionOwner");
+            Assert.True(lifted.Body != null || lifted.ExpressionBody != null, name);
+            Assert.DoesNotContain(
+                extensionShared.Members.OfType<MethodDeclaration>(),
+                method => method.Name == name);
+        }
 
         string rendered = GSharpPrinter.Print(unit);
         Assert.Contains("private class EntryHelper[T]", rendered, StringComparison.Ordinal);
         Assert.Contains("private class Cache[T]", rendered, StringComparison.Ordinal);
         Assert.Contains("private var cache Cache[int32]", rendered, StringComparison.Ordinal);
-        Assert.Contains("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
-        Assert.Contains("ExtensionOwner.AddCached", rendered, StringComparison.Ordinal);
-        Assert.Contains("return await ExtensionOwner.DelayIdentityAsync", rendered, StringComparison.Ordinal);
-        Assert.Contains("await ExtensionOwner.DelayAsync", rendered, StringComparison.Ordinal);
+        Assert.Contains("func (value T) Identity[T]() T -> Cache[T].Echo(value)", rendered, StringComparison.Ordinal);
+        Assert.Contains("func (value int32) AddCached() int32 -> value + ExtensionOwner.cache.Value", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", rendered, StringComparison.Ordinal);
 
         // Issue #4674: `Helper` is a C# `sealed` class whose `protected override`
@@ -272,7 +250,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
     }
 
     [Fact]
-    public void ExtensionUsingPrivateNestedGenericHelper_StaysOnOwnerAndBinds()
+    public void ExtensionUsingPrivateNestedGenericHelper_IsHostedOnItsOwnerAndBinds()
     {
         const string source = """
             using System;
@@ -303,22 +281,190 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         TypeDeclaration cache = Assert.Single(owner.Members.OfType<TypeDeclaration>());
         string rendered = GSharpPrinter.Print(unit);
         TranslationTestValidation.AssertBinds(rendered);
-        SharedBlock shared = Assert.Single(owner.Members.OfType<SharedBlock>());
 
         Assert.Equal(Visibility.Private, cache.Visibility);
-        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
-        Assert.Contains(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
+
+        // Issue #4676: the real body is lifted and hosted on the owner; the owner keeps
+        // no `Identity` helper and the package gets no forwarding companion.
+        Assert.Empty(owner.Members.OfType<SharedBlock>());
+        MethodDeclaration identity = Assert.Single(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "Identity");
+        Assert.Contains(identity.Attributes, attribute => attribute.Name == "ExtensionOwner");
         Assert.Contains("private class Cache[T]", rendered, StringComparison.Ordinal);
-        Assert.Contains("Cache[T].Echo(value)", rendered, StringComparison.Ordinal);
-        Assert.Contains("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
-        Assert.Contains(
-            "func (value T) Identity[T]() T -> ExtensionOwner.Identity[T](value)",
-            rendered,
-            StringComparison.Ordinal);
+        Assert.Contains("@ExtensionOwner(typeof(ExtensionOwner))", rendered, StringComparison.Ordinal);
+        Assert.Contains("func (value T) Identity[T]() T -> Cache[T].Echo(value)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void PrivateOwnerScopedExtension_RemainsStaticHelper()
+    public void PrivateExtensionWhoseSignatureOrAttributesNameAPrivateNestedType_StaysAnInOwnerHelper()
+    {
+        // gsc binds a function's receiver, parameter and return types, and its attributes
+        // (`[Marker(typeof(Box))]`), before it resolves `@ExtensionOwner`, so a lifted function could not name the private `Box`; the
+        // in-owner helper can. (A public method cannot expose a private type, so such a
+        // method is never API.) A method whose signature names no private nested type is
+        // still lifted and hosted on its owner.
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+
+            namespace Issue3413
+            {
+                public static class Program
+                {
+                    public static void Main() => Console.WriteLine(Owner.Run("ok"));
+                }
+
+                public sealed class Outer<T>
+                {
+                    public sealed class Inner
+                    {
+                    }
+                }
+
+                [AttributeUsage(AttributeTargets.Method | AttributeTargets.ReturnValue | AttributeTargets.Parameter | AttributeTargets.GenericParameter)]
+                public sealed class MarkerAttribute : Attribute
+                {
+                    public MarkerAttribute(Type type)
+                    {
+                        Type = type;
+                    }
+
+                    public MarkerAttribute(object value)
+                    {
+                        Value = value;
+                    }
+
+                    public MarkerAttribute(Type[] types)
+                    {
+                        Types = types;
+                    }
+
+                    public Type[] Types { get; }
+
+                    public Type Type { get; }
+
+                    public object Value { get; }
+                }
+
+                public static class Owner
+                {
+                    private sealed class Box
+                    {
+                        public int N;
+                    }
+
+                    private enum Mode
+                    {
+                        Fast,
+                    }
+
+                    [Marker(typeof(Box))]
+                    private static int Tagged(this string value) => 1;
+
+                    [Marker(typeof(Box))]
+                    public static int PublicTagged(this string value) => 4;
+
+                    [return: Marker(typeof(Box))]
+                    public static int PublicReturnTagged(this string value) => 6;
+
+                    public static int PublicParameterTagged(this string value, [Marker(typeof(Box))] int x) => 7;
+
+                    [Marker(typeof(Box))]
+                    [Obsolete("use something else")]
+                    public static int PublicTaggedAndObsolete(this string value, [Marker(typeof(Box))] [System.Diagnostics.CodeAnalysis.NotNull] string note) => 9;
+
+                    public static int GenericTagged<[Marker(typeof(Box))] T>(this string value, T item) => 10;
+
+                    [Marker((Type[])null)]
+                    private static int NullArray(this string value) => 5;
+
+                    [Marker(Mode.Fast)]
+                    private static int Moded(this string value) => 2;
+
+                    [Marker(new object[] { new[] { Mode.Fast } })]
+                    private static int Nested(this string value) => 3;
+
+                    private static Box Make(this string value, Box seed) => seed;
+
+                    private static int Deep(this string value, Outer<Box>.Inner arg) => 8;
+
+                    private static int Count(this string value, List<Box> boxes) => boxes.Count;
+
+                    private static int Sum(this string value, Box[] boxes) => boxes.Length;
+
+                    public static string Echo(this string value) => value;
+
+                    public static int Run(string value) =>
+                        value.Make(new Box()).N + value.Deep(new Outer<Box>.Inner()) + value.Count(new List<Box>()) + value.Sum(new Box[0]) + value.Tagged() + value.Moded() + value.Nested() + value.PublicTagged() + value.PublicReturnTagged() + value.PublicParameterTagged(1) + value.PublicTaggedAndObsolete("") + value.GenericTagged(1) + value.NullArray();
+                }
+            }
+            """;
+
+        (CompilationUnit unit, _) = Translate(source);
+        string rendered = GSharpPrinter.Print(unit);
+        TypeDeclaration owner = unit.Members
+            .OfType<TypeDeclaration>()
+            .Single(type => type.Name == "Owner");
+        IReadOnlyList<GMember> shared = Assert.Single(owner.Members.OfType<SharedBlock>()).Members;
+
+        foreach (string name in new[] { "Make", "Count", "Sum", "Deep", "Tagged", "Moded", "Nested" })
+        {
+            Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == name);
+            Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == name);
+        }
+
+        // A PUBLIC extension whose only mention of the private type is an attribute (method,
+        // return or parameter target) is legal C# and API: it keeps the in-owner helper, with
+        // its attributes, AND its public forwarding companion (so it is still discoverable as an
+        // extension), and the companion, at top level where `Box` is out of scope, carries none
+        // of the source attributes.
+        foreach (string name in new[] { "PublicTagged", "PublicReturnTagged", "PublicParameterTagged" })
+        {
+            MethodDeclaration publicHelper = Assert.Single(
+                shared.OfType<MethodDeclaration>(),
+                method => method.Name == name);
+            Assert.NotEmpty(publicHelper.Attributes.Concat(publicHelper.Parameters.SelectMany(parameter => parameter.Attributes)));
+            MethodDeclaration companion = Assert.Single(
+                unit.Members.OfType<MethodDeclaration>(),
+                method => method.Name == name);
+            Assert.NotNull(companion.Receiver);
+            Assert.Empty(companion.Attributes);
+            Assert.Empty(companion.Parameters.SelectMany(parameter => parameter.Attributes));
+        }
+
+        // A type-parameter attribute is not translated, so it does not pull the extension into
+        // the helper scheme: it is lifted onto the owner like any other external-receiver extension.
+        Assert.DoesNotContain(shared.OfType<MethodDeclaration>(), method => method.Name == "GenericTagged");
+        Assert.Contains(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "GenericTagged");
+
+        // Only the attributes that name the private type are left off the companion: an unrelated
+        // API-significant attribute in the same position survives (method and parameter).
+        MethodDeclaration obsoleteCompanion = Assert.Single(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "PublicTaggedAndObsolete");
+        Assert.Contains(obsoleteCompanion.Attributes, attribute => attribute.Name.Contains("Obsolete"));
+        Assert.DoesNotContain(obsoleteCompanion.Attributes, attribute => attribute.Name.Contains("Marker"));
+        Parameter noteParameter = Assert.Single(obsoleteCompanion.Parameters, parameter => parameter.Name == "note");
+        Assert.Contains(noteParameter.Attributes, attribute => attribute.Name.Contains("NotNull"));
+        Assert.DoesNotContain(noteParameter.Attributes, attribute => attribute.Name.Contains("Marker"));
+
+        // A null array argument (`[Marker(null)]` for a `Type[]` parameter) names no type and
+        // must not break the check (its `Values` is the default array): the method is lifted.
+        Assert.Contains(
+            Assert.Single(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "NullArray").Attributes,
+            attribute => attribute.Name == "ExtensionOwner");
+
+        MethodDeclaration echo = Assert.Single(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "Echo");
+        Assert.Contains(echo.Attributes, attribute => attribute.Name == "ExtensionOwner");
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void PrivateExtensionOnExternalReceiver_IsLiftedAndHostedOnItsOwner()
     {
         const string source = """
             using System;
@@ -349,18 +495,23 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             .OfType<TypeDeclaration>()
             .Single(type => type.Name == "Owner");
 
-        Assert.Contains(
-            Assert.Single(owner.Members.OfType<SharedBlock>()).Members.OfType<MethodDeclaration>(),
-            method => method.Name == "Secret" && method.Visibility == Visibility.Private);
-        Assert.DoesNotContain(
+        // Issue #4676: a `private` extension on an external receiver is lifted like
+        // any other and hosted on its owner, where the owner's own `Run` still
+        // reaches it. It stays `private`, so it is not API.
+        MethodDeclaration secret = Assert.Single(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Secret");
-        Assert.Contains("Owner.Secret(value)", rendered, StringComparison.Ordinal);
+        Assert.Equal(Visibility.Private, secret.Visibility);
+        Assert.Contains(secret.Attributes, attribute => attribute.Name == "ExtensionOwner");
+        Assert.DoesNotContain(
+            Assert.Single(owner.Members.OfType<SharedBlock>()).Members.OfType<MethodDeclaration>(),
+            method => method.Name == "Secret");
+        Assert.Contains("func Run(value string) string -> value.Secret()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
     [Fact]
-    public void OwnerScopedCompanion_RespectsInstanceAndSiblingCollisions()
+    public void OwnerScoped_ExtensionsRespectInstanceCollisionsAndKeepTheirNames()
     {
         const string source = """
             using System;
@@ -396,7 +547,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
 
                 public static class Sibling
                 {
-                    public static string Format(this string value) => "sibling";
+                    public static string Shout(this string value) => "sibling";
 
                     public static string func_(this string value) => "sibling keyword";
                 }
@@ -410,33 +561,46 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             .Single(type => type.Name == "OwnerScoped");
         SharedBlock shared = Assert.Single(owner.Members.OfType<SharedBlock>());
 
+        // The receiver `Host` is OWNED by the project, so an extension on it is moved
+        // into `Host` and could not reach the owner's private nested type: that case
+        // keeps the owner-scoped scheme. `Describe` collides with `Host`'s own
+        // instance method, so it stays an in-owner static helper.
         Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Describe");
-        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Format");
         Assert.DoesNotContain(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Describe");
-        Assert.Single(
+
+        // Issue #4676: an extension on an EXTERNAL receiver is lifted and hosted on its
+        // owner; the owner keeps no helper copy.
+        Assert.DoesNotContain(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Format");
+        MethodDeclaration format = Assert.Single(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Format");
+        Assert.Contains(format.Attributes, attribute => attribute.Name == "ExtensionOwner");
+        MethodDeclaration shout = Assert.Single(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "Shout");
+        Assert.Contains(shout.Attributes, attribute => attribute.Name == "ExtensionOwner");
         Assert.Single(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "func_");
         Assert.DoesNotContain(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "func__");
-        // ADR-0170: the metadata-visible `@func` extensions keep their CLR
-        // name via the escape; the legal func_ members keep their own names.
-        Assert.Equal(
-            2,
-            shared.Members.OfType<MethodDeclaration>().Count(method => method.Name == "$func"));
-        Assert.DoesNotContain(
-            shared.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "func__");
+
+        // ADR-0170: the metadata-visible `@func` extension keeps its CLR name via the
+        // escape; the legal func_ members keep their own names.
+        MethodDeclaration externalEscaped = Assert.Single(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "$func" && method.Attributes.Any(attribute => attribute.Name == "ExtensionOwner"));
+        Assert.Equal("string", GSharpPrinter.RenderTypeReference(externalEscaped.Receiver.Type));
+        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "$func");
+        Assert.Contains("OwnerScoped.$func(host)", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
     [Fact]
-    public void OwnerScopedCompanion_DeduplicatesCanonicalSiblingSignatures()
+    public void PrivateNestedOwners_InSiblingProjects_EachHostTheirOwnExtension()
     {
         LoadedCSharpProject first = CSharpProjectLoader.LoadInMemory(
             new[]
@@ -490,26 +654,26 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         string printedSecond = TranslateProject(
             second,
             new[] { first.Compilation, second.Compilation });
-        string combined = printedFirst + printedSecond;
 
-        Assert.Equal(
-            1,
-            CountOccurrences(combined, "func (value object) Convert(argument object) object"));
-        Assert.Contains(
-            "func (value object) Convert(argument object) object",
-            printedFirst,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "func (value object) Convert(argument object) object",
-            printedSecond,
-            StringComparison.Ordinal);
-        Assert.Contains("class First", combined, StringComparison.Ordinal);
-        Assert.Contains("class Second", combined, StringComparison.Ordinal);
-        TranslationTestValidation.AssertBinds(printedFirst, printedSecond);
+        // Issue #4676: extensions on an EXTERNAL receiver (`object`) are not forwarded
+        // through a companion any more, so there is no cross-project companion to
+        // deduplicate: each project hosts its own function on its own owner, exactly
+        // like the two C# methods, and each project binds.
+        Assert.Contains("@ExtensionOwner(typeof(First))", printedFirst, StringComparison.Ordinal);
+        Assert.Contains("func (value object) Convert(argument object) object", printedFirst, StringComparison.Ordinal);
+        Assert.Contains("@ExtensionOwner(typeof(Second))", printedSecond, StringComparison.Ordinal);
+        Assert.Contains("func (value object) Convert(argument object) object", printedSecond, StringComparison.Ordinal);
+        Assert.DoesNotContain("First.Convert", printedFirst + printedSecond, StringComparison.Ordinal);
+        Assert.DoesNotContain("Second.Convert", printedFirst + printedSecond, StringComparison.Ordinal);
+
+        // They are separate assemblies, so each binds on its own (binding them together
+        // would put both `Convert(object, object)` in one package).
+        TranslationTestValidation.AssertBinds(printedFirst);
+        TranslationTestValidation.AssertBinds(printedSecond);
     }
 
     [Fact]
-    public void OwnerScopedCompanion_RejectsExternAndNonPublicOwners()
+    public void ExtensionsOnNonPublicAndExternOwners_AreHostedOnTheirOwners()
     {
         const string source = """
             using System;
@@ -559,12 +723,27 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         (CompilationUnit unit, _) = Translate(source);
         string rendered = GSharpPrinter.Print(unit);
 
-        Assert.DoesNotContain(
-            unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name is "InternalEcho" or "FileEcho" or "NativeAbs");
-        Assert.Contains("InternalOwner.InternalEcho(\"a\")", rendered, StringComparison.Ordinal);
-        Assert.Contains("FileOwner.FileEcho(\"b\")", rendered, StringComparison.Ordinal);
-        Assert.Contains("func NativeAbs(value int32) int32", rendered, StringComparison.Ordinal);
+        // Issue #4676: internal, file-local and P/Invoke extension owners need no
+        // special case; each extension is lifted and hosted on its own owner, so
+        // none leaves a public forwarding companion behind.
+        foreach ((string name, string owner) in new[]
+            {
+                ("InternalEcho", "InternalOwner"),
+                ("FileEcho", "FileOwner"),
+                ("NativeAbs", "NativeOwner"),
+            })
+        {
+            MethodDeclaration lifted = Assert.Single(
+                unit.Members.OfType<MethodDeclaration>(),
+                method => method.Name == name);
+            Assert.Contains(lifted.Attributes, attribute => attribute.Name == "ExtensionOwner");
+            Assert.Contains($"@ExtensionOwner(typeof({owner}))", rendered, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("func (value string) InternalEcho() string -> value", rendered, StringComparison.Ordinal);
+        Assert.Contains("func (value int32) NativeAbs() int32;", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("InternalOwner.InternalEcho", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("FileOwner.FileEcho", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
@@ -632,40 +811,17 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains("class Program", translated, StringComparison.Ordinal);
         Assert.Contains("private class EntryHelper[T]", translated, StringComparison.Ordinal);
         Assert.Contains("private class Cache[T]", translated, StringComparison.Ordinal);
-        Assert.Contains("return await ExtensionOwner.DelayIdentityAsync", translated, StringComparison.Ordinal);
-        Assert.Contains("await ExtensionOwner.DelayAsync", translated, StringComparison.Ordinal);
-        Assert.Contains(
-            "let lengthAsync async () -> int32 = () -> ExtensionOwner.LengthAsync(\"four\")",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "let delayAsync async () -> void = () -> ExtensionOwner.DelayTextAsync(\"later\")",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "async func (value int32) ValueAsync() ValueTask[int32]",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "return await ExtensionOwner.ValueAsync(value)",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "async func (value int32) ValueNoteAsync() ValueTask",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "await ExtensionOwner.ValueNoteAsync(value)",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "let valueLengthAsync() -> ValueTask[int32] = () -> ExtensionOwner.ValueLengthAsync(\"five\")",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "let valueDelayAsync() -> ValueTask = () -> ExtensionOwner.ValueDelayAsync(\"later\")",
-            translated,
-            StringComparison.Ordinal);
+        // Issue #4676: every extension on the owner is one lifted function hosted on it
+        // through `@ExtensionOwner`; no helper copy and no forwarding companion. (A
+        // bound method group of an async extension, `Func<Task<int>> f = "x".M;`,
+        // is a separate gsc gap, #4699, so the fixture calls them directly.)
+        Assert.Contains("@ExtensionOwner(typeof(ExtensionOwner))", translated, StringComparison.Ordinal);
+        Assert.Contains("async func (value T) DelayIdentityAsync[T]() T", translated, StringComparison.Ordinal);
+        Assert.Contains("return Cache[T].Echo(value)", translated, StringComparison.Ordinal);
+        Assert.Contains("async func (value int32) ValueAsync() ValueTask[int32]", translated, StringComparison.Ordinal);
+        Assert.Contains("async func (value int32) ValueNoteAsync() ValueTask", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExtensionOwner.DelayIdentityAsync", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExtensionOwner.ValueAsync", translated, StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", translated, StringComparison.Ordinal);
         Assert.Contains("private class Helper[TInner]", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("open class Helper[TInner]", translated, StringComparison.Ordinal);
@@ -751,7 +907,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
     }
 
     [Fact]
-    public void PrivateNestedExtensionBody_StaysOnOwnerAcrossProjectBoundary()
+    public void PrivateNestedExtensionBody_IsHostedOnItsOwnerAcrossProjectBoundary()
     {
         LoadedCSharpProject producer = CSharpProjectLoader.LoadInMemory(
             new[]
@@ -821,12 +977,15 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     consumerDocument.FilePath,
                     siblings)));
 
+        // Issue #4676: the producer's extension is one lifted function hosted on its owner
+        // (which reaches the private `Box`), not an in-owner helper plus a companion.
         Assert.Contains("private class Box[T]", printedProducer, StringComparison.Ordinal);
-        Assert.Contains("func Echo[T](value T) T", printedProducer, StringComparison.Ordinal);
+        Assert.Contains("@ExtensionOwner(typeof(Extensions))", printedProducer, StringComparison.Ordinal);
         Assert.Contains(
-            "func (value T) Echo[T]() T -> Extensions.Echo[T](value)",
+            "func (value T) Echo[T]() T -> Box[T].Echo(value)",
             printedProducer,
             StringComparison.Ordinal);
+        Assert.DoesNotContain("Extensions.Echo", printedProducer, StringComparison.Ordinal);
         Assert.Contains("value.Echo()", printedConsumer, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printedProducer, printedConsumer);
     }
@@ -870,19 +1029,6 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                 return GSharpPrinter.Print(
                     translator.TranslateDocument(document, context));
             }));
-    }
-
-    private static int CountOccurrences(string text, string value)
-    {
-        int count = 0;
-        for (int index = text.IndexOf(value, StringComparison.Ordinal);
-            index >= 0;
-            index = text.IndexOf(value, index + value.Length, StringComparison.Ordinal))
-        {
-            count++;
-        }
-
-        return count;
     }
 
     private static bool IlVerifyToolAvailable()
