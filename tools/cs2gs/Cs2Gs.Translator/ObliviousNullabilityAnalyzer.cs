@@ -4373,11 +4373,18 @@ internal static class ObliviousNullabilityAnalyzer
         HashSet<TupleElementKey> tupleTainted,
         List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
     {
+        ITypeSymbol comparisonType = firstType;
+        if (first.Arity > 0 && first.Arity == second.Arity)
+        {
+            // Compare method parameters by ordinal without changing tuple-key ownership.
+            comparisonType = SymbolValueType(first.ConstructedFrom.Construct(second.TypeArguments.ToArray()));
+        }
+
         // Covariant envelopes can reorder type arguments. Bare tuple
         // conversions still pair their elements directly, as before.
         if ((firstType is not INamedTypeSymbol { IsTupleType: true }
                 || secondType is not INamedTypeSymbol { IsTupleType: true })
-            && !SymbolEqualityComparer.Default.Equals(firstType, secondType))
+            && !SymbolEqualityComparer.Default.Equals(comparisonType, secondType))
         {
             return;
         }
@@ -5006,17 +5013,20 @@ internal static class ObliviousNullabilityAnalyzer
                 case ElseClauseSyntax elseClause
                     when elseClause.Parent is IfStatementSyntax elseIf
                         && node == elseClause.Statement
-                        && IsNullTestOf(elseIf.Condition, symbol, whenTrueIsNull: true):
+                        && IsNullTestOf(elseIf.Condition, symbol, whenTrueIsNull: true)
+                        && GuardValueRemainsUnchanged(elseIf.Condition, node, identifier, symbol, model):
                     return true;
 
                 case IfStatementSyntax ifStatement
                     when node == ifStatement.Statement
-                        && IsNullTestOf(ifStatement.Condition, symbol, whenTrueIsNull: false):
+                        && IsNullTestOf(ifStatement.Condition, symbol, whenTrueIsNull: false)
+                        && GuardValueRemainsUnchanged(ifStatement.Condition, node, identifier, symbol, model):
                     return true;
 
                 case ConditionalExpressionSyntax ternary
-                    when (node == ternary.WhenFalse && IsNullTestOf(ternary.Condition, symbol, whenTrueIsNull: true))
-                        || (node == ternary.WhenTrue && IsNullTestOf(ternary.Condition, symbol, whenTrueIsNull: false)):
+                    when ((node == ternary.WhenFalse && IsNullTestOf(ternary.Condition, symbol, whenTrueIsNull: true))
+                            || (node == ternary.WhenTrue && IsNullTestOf(ternary.Condition, symbol, whenTrueIsNull: false)))
+                        && GuardValueRemainsUnchanged(ternary.Condition, node, identifier, symbol, model):
                     return true;
 
                 // Issue #3714: a LOOP condition guards its body exactly as an
@@ -5033,13 +5043,15 @@ internal static class ObliviousNullabilityAnalyzer
                 // tested AFTER the body, so it proves nothing on entry.
                 case WhileStatementSyntax whileStatement
                     when node == whileStatement.Statement
-                        && IsNullTestOf(whileStatement.Condition, symbol, whenTrueIsNull: false):
+                        && IsNullTestOf(whileStatement.Condition, symbol, whenTrueIsNull: false)
+                        && GuardValueRemainsUnchanged(whileStatement.Condition, node, identifier, symbol, model):
                     return true;
 
                 case ForStatementSyntax forStatement
                     when node == forStatement.Statement
                         && forStatement.Condition is { } forCondition
-                        && IsNullTestOf(forCondition, symbol, whenTrueIsNull: false):
+                        && IsNullTestOf(forCondition, symbol, whenTrueIsNull: false)
+                        && GuardValueRemainsUnchanged(forCondition, node, identifier, symbol, model):
                     return true;
             }
 
@@ -5053,7 +5065,8 @@ internal static class ObliviousNullabilityAnalyzer
                     if (block.Statements[i] is IfStatementSyntax guard
                         && guard.Else is null
                         && IsNullTestOf(guard.Condition, symbol, whenTrueIsNull: true)
-                        && AlwaysExits(guard.Statement))
+                        && AlwaysExits(guard.Statement)
+                        && GuardValueRemainsUnchanged(guard, block, identifier, symbol, model))
                     {
                         return true;
                     }
@@ -5071,6 +5084,51 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         return false;
+    }
+
+    private static bool GuardValueRemainsUnchanged(
+        SyntaxNode guard,
+        SyntaxNode region,
+        IdentifierNameSyntax use,
+        ISymbol symbol,
+        SemanticModel model)
+    {
+        static bool Descend(SyntaxNode node) =>
+            node is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax);
+
+        bool Writes(SyntaxNode node) =>
+            CSharpToGSharpTranslator.SyntaxNodeWritesSymbol(node, symbol, model);
+
+        if (guard.DescendantNodesAndSelf(Descend).Any(Writes)
+            || region.DescendantNodesAndSelf(Descend).Any(node =>
+                node.SpanStart >= guard.Span.End && node.SpanStart < use.SpanStart && Writes(node)))
+        {
+            return false;
+        }
+
+        for (SyntaxNode node = use.Parent; node != null; node = node.Parent)
+        {
+            if (node is WhileStatementSyntax
+                    or DoStatementSyntax
+                    or ForStatementSyntax
+                    or ForEachStatementSyntax
+                    or ForEachVariableStatementSyntax
+                && !node.Span.Contains(guard.Span)
+                && node.DescendantNodes(Descend).Any(Writes))
+            {
+                return false;
+            }
+
+            if (node is AccessorDeclarationSyntax
+                or BaseMethodDeclarationSyntax
+                or LocalFunctionStatementSyntax
+                or AnonymousFunctionExpressionSyntax)
+            {
+                break;
+            }
+        }
+
+        return true;
     }
 
     private static bool AlwaysExits(StatementSyntax statement) => statement switch

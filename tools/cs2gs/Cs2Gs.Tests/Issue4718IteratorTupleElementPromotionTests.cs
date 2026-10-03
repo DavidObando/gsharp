@@ -172,6 +172,90 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         TranslationTestValidation.AssertBinds(resolver, printed);
     }
 
+    [Theory]
+    [InlineData("IEnumerable", "", true)]
+    [InlineData("IEnumerable", "", false)]
+    [InlineData("IAsyncEnumerable", "async ", true)]
+    [InlineData("IAsyncEnumerable", "async ", false)]
+    public void GenericIteratorContracts_UseTypeParameterOrdinals(
+        string envelope,
+        string modifier,
+        bool interfaceContract)
+    {
+        string contract = interfaceContract
+            ? $"public interface IRows {{ {envelope}<(string Text, T Value)> Rows<T>(T value, bool choose); }}"
+            : $"public abstract class RowsBase {{ public abstract {envelope}<(string Text, T Value)> Rows<T>(T value, bool choose); }}";
+        string owner = interfaceContract ? "IRows" : "RowsBase";
+        string implementationModifier = interfaceContract ? modifier : "override " + modifier;
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            {{contract}}
+            public sealed class MissingRows : {{owner}} {
+                public {{implementationModifier}}{{envelope}}<(string Text, U Value)> Rows<U>(U value, bool choose) {
+                    string text = null;
+                    yield return choose ? (text, value) : ("x", value);
+                }
+            }
+            public sealed class PresentRows : {{owner}} {
+                public {{implementationModifier}}{{envelope}}<(string Text, V Value)> Rows<V>(V value, bool choose) {
+                    yield return ("x", value);
+                }
+            }
+            """);
+
+        Assert.Contains("(Text string?, Value T)", printed);
+        Assert.Contains("(Text string?, Value U)", printed);
+        Assert.Contains("(Text string?, Value V)", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData("if (text != null) { text = null; yield return (text, 1); }", true)]
+    [InlineData("if (text == null) { throw new System.Exception(); } text = null; yield return (text, 1);", true)]
+    [InlineData("if (text != null) { Reset(ref text); yield return (text, 1); }", true)]
+    [InlineData("if (text != null) { (text, choose) = (null, true); yield return (text, 1); }", true)]
+    [InlineData("if (text != null) { for (int i = 0; i < 2; i++) { yield return (text, i); text = null; } }", true)]
+    [InlineData("if (text != null) { text = choose ? null : \"fresh\"; if (text != null) { yield return (text, 1); } }", false)]
+    [InlineData("if (text != null) { choose = false; yield return (text, 1); }", false)]
+    public void TupleYieldGuards_RequireAnUnchangedValue(string body, bool nullable)
+    {
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    {{body}}
+                }
+                private static void Reset(ref string value) { value = null; }
+            }
+            """);
+
+        string textType = nullable ? "string?" : "string";
+        Assert.Contains($"func Rows(choose bool) sequence[(Text {textType}, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void RefAliasEscape_InvalidatesTupleYieldGuard()
+    {
+        string printed = Translate("""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    if (text != null) {
+                        ref string alias = ref text;
+                        alias = null;
+                        yield return (text, 1);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("func Rows(choose bool) sequence[(Text string?, Code int32)]", printed);
+        // #4726 tracks the independent ref-alias storage/smart-cast bind failure.
+    }
+
     [Fact]
     public void NestedSwitchTupleYield_UsesTheSameElementPathsAsForwardedCollection()
     {
