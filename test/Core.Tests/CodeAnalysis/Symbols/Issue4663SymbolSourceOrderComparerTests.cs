@@ -22,40 +22,53 @@ public class Issue4663SymbolSourceOrderComparerTests
     [Fact]
     public void ConstructorsInNamespaceAndNestedType_AreDistinctInTheBoundProgram()
     {
-        var compilation = new Compilation(
-            SyntaxTree.Parse("package p\nclass A { class B { init() { } } }"),
-            SyntaxTree.Parse("package p.A\nclass B { init() { } }"));
-        Assert.Empty(compilation.GlobalScope.Diagnostics.Where(d => d.IsError));
-        var bound = compilation.BoundProgram;
-        Assert.Empty(bound.Diagnostics.Where(d => d.IsError));
-        var constructors = bound.Structs.SelectMany(s => s.ExplicitConstructors)
-            .Where(c => c.DeclaringType?.Name == "B").Select(c => c.Function).ToArray();
-        Assert.Equal(2, constructors.Length);
-        AssertOrderedBothWays(constructors[0], constructors[1]);
+        foreach (var count in new[] { 1, 7, 23, 61, 157, 401 })
+        {
+            var compilation = new Compilation(
+                SyntaxTree.Parse(UnrelatedFunctions(count)),
+                SyntaxTree.Parse("package p\nclass A { class B { init() { } } }"),
+                SyntaxTree.Parse("package p.A\nclass B { init() { } }"));
+            Assert.Empty(compilation.GlobalScope.Diagnostics.Where(d => d.IsError));
+            var bound = compilation.BoundProgram;
+            Assert.Empty(bound.Diagnostics.Where(d => d.IsError));
+            var constructors = bound.Structs.SelectMany(s => s.ExplicitConstructors)
+                .Where(c => c.DeclaringType?.Name == "B").ToArray();
+            Assert.Equal(2, constructors.Length);
+            var nested = Assert.Single(constructors, c => c.DeclaringType?.ContainingType is not null);
+            var topLevel = Assert.Single(constructors, c => c.DeclaringType?.ContainingType is null);
+            // The namespace segment p precedes p.A; these are not the same containing path.
+            AssertSourceOrder(nested.Function, topLevel.Function, -1);
+        }
     }
 
     /// <summary>Explicit constructors have no FunctionDeclarationSyntax: signatures must disambiguate them.</summary>
     [Theory]
-    [InlineData("x Foo.X", "x Bar.X", "")]
-    [InlineData("x Foo.Box[int32]", "x Bar.Box[int32]", "")]
-    [InlineData("x List[Foo.X]", "x List[Bar.X]", "")]
-    [InlineData("x int32", "ref x int32", "")]
-    [InlineData("x int32", "out x int32", "x = 0")]
-    public void QualifiedConstructorSignatures_AreDistinctInBoundSymbols(string first, string second, string body)
+    [InlineData("x Foo.X", "x Bar.X", "", 1)]
+    [InlineData("x Foo.Box[int32]", "x Bar.Box[int32]", "", 1)]
+    [InlineData("x List[Foo.X]", "x List[Bar.X]", "", 1)]
+    [InlineData("x int32", "ref x int32", "", -1)]
+    [InlineData("x int32", "out x int32", "x = 0", -1)]
+    public void QualifiedConstructorSignatures_AreDistinctInBoundSymbols(string first, string second, string body, int expectedDirection)
     {
-        var constructors = new[] { first, second }.Select(parameter =>
+        foreach (var count in new[] { 1, 7, 23, 61, 157, 401 })
         {
-            var compilation = new Compilation(
-                SyntaxTree.Parse("package Foo\nclass X { }\nclass Box[T] { }"),
-                SyntaxTree.Parse("package Bar\nclass X { }\nclass Box[T] { }"),
-                SyntaxTree.Parse($"package P\nimport System.Collections.Generic\nclass Host {{ init({parameter}) {{ {(parameter == second ? body : string.Empty)} }} }}"));
-            Assert.Empty(compilation.GlobalScope.Diagnostics.Where(d => d.IsError));
-            var bound = compilation.BoundProgram;
-            Assert.Empty(bound.Diagnostics.Where(d => d.IsError));
-            return Assert.Single(Assert.Single(bound.Structs, s => s.Name == "Host").ExplicitConstructors).Function;
-        }).ToArray();
-        Assert.All(constructors, constructor => Assert.Null(constructor.Declaration));
-        AssertOrderedBothWays(constructors[0], constructors[1]);
+            var constructors = new[] { first, second }.Select(parameter =>
+            {
+                var compilation = new Compilation(
+                    SyntaxTree.Parse(UnrelatedFunctions(count)),
+                    SyntaxTree.Parse("package Foo\nclass X { }\nclass Box[T] { }"),
+                    SyntaxTree.Parse("package Bar\nclass X { }\nclass Box[T] { }"),
+                    SyntaxTree.Parse($"package P\nimport System.Collections.Generic\nclass Host {{ init({parameter}) {{ {(parameter == second ? body : string.Empty)} }} }}"));
+                Assert.Empty(compilation.GlobalScope.Diagnostics.Where(d => d.IsError));
+                var bound = compilation.BoundProgram;
+                Assert.Empty(bound.Diagnostics.Where(d => d.IsError));
+                return Assert.Single(Assert.Single(bound.Structs, s => s.Name == "Host").ExplicitConstructors).Function;
+            }).ToArray();
+            Assert.Equal(2, constructors.Length);
+            Assert.All(constructors, constructor => Assert.Null(constructor.Declaration));
+            // Equal-length package names Bar < Foo; None < Ref/Out in the retained ref-kind key.
+            AssertSourceOrder(constructors[0], constructors[1], expectedDirection);
+        }
     }
 
     /// <summary>Generic arity and lowered sequence specialization are identity, even at identical source coordinates.</summary>
@@ -65,13 +78,13 @@ public class Issue4663SymbolSourceOrderComparerTests
         var ordinary = TopLevelFunction("P");
         var generic = TopLevelFunction("P");
         generic.TypeParameters = ImmutableArray.Create(new TypeParameterSymbol("T", 0, TypeParameterConstraint.Any, TypeParameterVariance.None));
-        AssertOrderedBothWays(ordinary, generic);
+        AssertSourceOrder(ordinary, generic, -1);
 
         var reference = TopLevelFunction("P");
         var value = TopLevelFunction("P");
         reference.NullableSequenceSpecialization = NullableSequenceSpecializationKind.ReferenceType;
         value.NullableSequenceSpecialization = NullableSequenceSpecializationKind.ValueType;
-        AssertOrderedBothWays(reference, value);
+        AssertSourceOrder(reference, value, -1);
     }
 
     /// <summary>Source kinds and constructed owner arguments are retained, not only their display names.</summary>
@@ -80,13 +93,13 @@ public class Issue4663SymbolSourceOrderComparerTests
     {
         var structure = new StructSymbol("Owner", ImmutableArray<FieldSymbol>.Empty, Accessibility.Public, declaration: null, packageName: "P");
         var referenceType = new StructSymbol("Owner", ImmutableArray<FieldSymbol>.Empty, Accessibility.Public, declaration: null, packageName: "P", isData: false, isInline: false, isClass: true);
-        AssertOrderedBothWays(FunctionIn(structure), FunctionIn(referenceType));
+        AssertSourceOrder(FunctionIn(structure), FunctionIn(referenceType), 1);
         var compilation = new Compilation(SyntaxTree.Parse("package P\nclass Owner[T] { }"));
         Assert.Empty(compilation.GlobalScope.Diagnostics.Where(d => d.IsError));
         var definition = Assert.Single(compilation.BoundProgram.Structs);
         var first = StructSymbol.Construct(definition, ImmutableArray.Create(TypeSymbol.Int32));
         var second = StructSymbol.Construct(definition, ImmutableArray.Create(TypeSymbol.String));
-        AssertOrderedBothWays(FunctionIn(first), FunctionIn(second));
+        AssertSourceOrder(FunctionIn(first), FunctionIn(second), -1);
     }
 
     /// <summary>The pre-existing untied MethodDef keys take precedence over every new identity tie-break.</summary>
@@ -111,14 +124,18 @@ public class Issue4663SymbolSourceOrderComparerTests
         return new FunctionSymbol(declaration.Identifier.Text, ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, declaration);
     }
 
-    private static void AssertOrderedBothWays(FunctionSymbol first, FunctionSymbol second)
+    private static string UnrelatedFunctions(int count) => "package Noise4663\n" + string.Concat(
+        Enumerable.Range(0, count).Select(i => $"func g{i}(x int32) int32 {{ return x + {i} }}\n"));
+
+    private static void AssertSourceOrder(FunctionSymbol first, FunctionSymbol second, int expectedDirection)
     {
         int forward = SymbolSourceOrderComparer.Instance.Compare(first, second);
         int backward = SymbolSourceOrderComparer.Instance.Compare(second, first);
-        Assert.NotEqual(0, forward);
-        Assert.Equal(System.Math.Sign(forward), -System.Math.Sign(backward));
-        Assert.Equal(new[] { first, second }.OrderBy(s => s, SymbolSourceOrderComparer.Instance),
-            new[] { second, first }.OrderBy(s => s, SymbolSourceOrderComparer.Instance));
+        Assert.Equal(expectedDirection, System.Math.Sign(forward));
+        Assert.Equal(-expectedDirection, System.Math.Sign(backward));
+        var expected = expectedDirection < 0 ? new[] { first, second } : new[] { second, first };
+        Assert.Equal(expected, new[] { first, second }.OrderBy(s => s, SymbolSourceOrderComparer.Instance));
+        Assert.Equal(expected, new[] { second, first }.OrderBy(s => s, SymbolSourceOrderComparer.Instance));
     }
 
     /// <summary>
