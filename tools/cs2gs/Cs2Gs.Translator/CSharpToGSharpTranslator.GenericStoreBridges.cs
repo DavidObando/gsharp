@@ -349,8 +349,11 @@ public sealed partial class CSharpToGSharpTranslator
                     return (iterator, iterator == null ? null : this.GetIteratorStoreSlot(value, iterator));
                 }
 
+                case AnonymousFunctionExpressionSyntax lambda when lambda.Body == node:
+                    return ((this.context.GetTypeInfo(lambda).ConvertedType as INamedTypeSymbol)?.DelegateInvokeMethod, null);
+
                 default:
-                    return (null, null);
+                    return (this.ResolveValueSink((ExpressionSyntax)node), null);
             }
         }
 
@@ -419,7 +422,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     // An expression-bodied lambda's result: unwrap Task<T> when
                     // the lambda is async, as the bridge guards the inner value.
-                    bool asyncLambda = value.Parent is AnonymousFunctionExpressionSyntax function
+                    bool asyncLambda = OutermostTransparentNode(value).Parent is AnonymousFunctionExpressionSyntax function
                         && function.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
                     return DelegateResultSlot(invoke, asyncLambda, out slotType);
                 }
