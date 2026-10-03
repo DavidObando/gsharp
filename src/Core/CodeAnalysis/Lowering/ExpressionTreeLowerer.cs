@@ -705,21 +705,16 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             && structLiteral.StructType.HasPrimaryConstructor)
         {
             var arguments = ImmutableArray.CreateBuilder<BoundExpression>();
-            var parameterNames = new HashSet<string>(StringComparer.Ordinal);
+            var consumed = new HashSet<BoundFieldInitializer>();
             foreach (var parameter in structLiteral.StructType.PrimaryConstructorParameters)
             {
-                parameterNames.Add(parameter.Name);
-                BoundExpression value = new BoundDefaultExpression(null, parameter.Type);
-                foreach (var initializer in structLiteral.Initializers)
+                var initializer = structLiteral.GetPrimaryArgument(parameter.Name);
+                if (initializer != null)
                 {
-                    if (initializer.MemberName == parameter.Name)
-                    {
-                        value = initializer.Value;
-                        break;
-                    }
+                    consumed.Add(initializer);
                 }
 
-                arguments.Add(value);
+                arguments.Add(initializer?.Value ?? new BoundDefaultExpression(null, parameter.Type));
             }
 
             var construction = this.BuildUserConstructorExpression(
@@ -728,7 +723,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             var bindings = ImmutableArray.CreateBuilder<BoundExpression>();
             foreach (var initializer in structLiteral.Initializers)
             {
-                if (parameterNames.Contains(initializer.MemberName))
+                if (consumed.Contains(initializer))
                 {
                     continue;
                 }

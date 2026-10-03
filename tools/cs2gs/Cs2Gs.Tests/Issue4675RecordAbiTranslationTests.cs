@@ -392,7 +392,7 @@ namespace Corpus.Issue4675
     [Fact]
     public void TranslatedCoreRecordAbi_MatchesCSharpSourceApi()
     {
-        string repoRoot = LocateRepoRoot();
+        string repoRoot = TestFixtureSource.Root;
         string[] paths =
         {
             "src/Core/CodeAnalysis/OptionalValue.cs",
@@ -500,17 +500,42 @@ namespace Corpus.Issue4675
         }
     }
 
-    private static string LocateRepoRoot()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CoreRecordAbi_RejectsUnavailableConfiguredSource(bool rootExists)
     {
-        for (DirectoryInfo directory = new DirectoryInfo(AppContext.BaseDirectory); directory != null; directory = directory.Parent)
+        string root = Path.Combine(AppContext.BaseDirectory, "issue4675-source-" + Guid.NewGuid().ToString("N"));
+        string previous = Environment.GetEnvironmentVariable("CS2GS_TEST_SOURCE_ROOT");
+        if (rootExists)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "CONTRIBUTING.md")))
-            {
-                return directory.FullName;
-            }
+            Directory.CreateDirectory(Path.Combine(root, "src", "Core", "CodeAnalysis"));
         }
 
-        throw new DirectoryNotFoundException("Could not locate the G# repository root.");
+        try
+        {
+            Environment.SetEnvironmentVariable("CS2GS_TEST_SOURCE_ROOT", root);
+            if (rootExists)
+            {
+                FileNotFoundException error = Assert.Throws<FileNotFoundException>(
+                    () => this.TranslatedCoreRecordAbi_MatchesCSharpSourceApi());
+                Assert.Contains(root, error.FileName, StringComparison.Ordinal);
+            }
+            else
+            {
+                DirectoryNotFoundException error = Assert.Throws<DirectoryNotFoundException>(
+                    () => this.TranslatedCoreRecordAbi_MatchesCSharpSourceApi());
+                Assert.Contains(root, error.Message, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CS2GS_TEST_SOURCE_ROOT", previous);
+            if (rootExists)
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     private static void AssertRecordInterface(Assembly baseline, Assembly translated, string typeName)

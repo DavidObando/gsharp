@@ -1180,19 +1180,9 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitStructLiteralPrimaryArguments(BoundStructLiteralExpression literal, HashSet<BoundFieldInitializer> consumed)
     {
-        var definition = literal.StructType.Definition ?? literal.StructType;
-        foreach (var parameter in definition.PrimaryConstructorParameters)
+        foreach (var parameter in literal.StructType.PrimaryConstructorParameters)
         {
-            BoundFieldInitializer? value = null;
-            foreach (var initializer in literal.Initializers)
-            {
-                if (initializer.MemberName == parameter.Name)
-                {
-                    value = initializer;
-                    break;
-                }
-            }
-
+            var value = literal.GetPrimaryArgument(parameter.Name);
             if (value != null)
             {
                 consumed.Add(value);
@@ -1200,17 +1190,7 @@ internal sealed partial class MethodBodyEmitter
                 continue;
             }
 
-            var type = parameter.Type;
-            foreach (var property in literal.StructType.Properties)
-            {
-                if (property.Name == parameter.Name)
-                {
-                    type = property.Type;
-                    break;
-                }
-            }
-
-            this.EmitExpression(new BoundDefaultExpression(null, type));
+            this.EmitExpression(new BoundDefaultExpression(null, parameter.Type));
         }
     }
 
