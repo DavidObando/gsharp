@@ -5107,6 +5107,12 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        if (!ReferenceEquals(scope, useScope)
+            && scope.DescendantNodes().Any(node => !useScope.Span.Contains(node.Span) && Writes(node)))
+        {
+            return false;
+        }
+
         // Writable captures and escaped references are not stable smart-cast
         // values. Without an interprocedural proof, never trust their storage.
         if (scope.DescendantNodes().Any(node =>

@@ -487,6 +487,44 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CapturedIteratorStorage_AccountsForEnclosingWritesAcrossResumption(bool mutates)
+    {
+        string mutation = mutates ? "text = null;" : string.Empty;
+        string result = mutates ? "rows.Current.Text == null ? 1 : -2" : "rows.Current.Text.Length";
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static int Run(bool choose) {
+                    string text = choose ? null : "x";
+                    IEnumerable<(string Text, int Code)> Rows() {
+                        if (text != null) {
+                            yield return (text, 1);
+                            yield return (text, 2);
+                        }
+                    }
+                    var rows = Rows().GetEnumerator();
+                    if (!rows.MoveNext()) { return -1; }
+                    {{mutation}}
+                    if (!rows.MoveNext()) { return -3; }
+                    return {{result}};
+                }
+            }
+            """);
+
+        string textType = mutates ? "string?" : "string";
+        Assert.Contains($"IEnumerable[(Text {textType}, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+        EmittedOracleResult execution = EmittedOracle.Evaluate(printed + Environment.NewLine + "Obj.Run(false)");
+        Assert.False(
+            execution.Diagnostics.Any(diagnostic => diagnostic.IsError),
+            string.Join(Environment.NewLine, execution.Diagnostics) + Environment.NewLine + printed);
+        Assert.Null(execution.UnhandledException);
+        Assert.Equal(1, execution.Value);
+    }
+
+    [Theory]
     [InlineData("void Reset() { text = null; }", "Reset();", true)]
     [InlineData("System.Action reset = () => text = null;", "reset();", true)]
     [InlineData("void Clear() { text = null; } void Reset() { Clear(); }", "Reset();", true)]
