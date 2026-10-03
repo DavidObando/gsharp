@@ -1200,7 +1200,9 @@ public static class GSharpPrinter
             // inferred as void (and supports recursion).
             var arrowOpen = lambda.IsFunctionLiteral
                 ? $"{asyncPrefix}func ({parameters})" +
-                    (lambda.ReturnType != null ? " " + RenderTypeReference(lambda.ReturnType) : string.Empty) +
+                    (lambda.ReturnType != null
+                        ? " " + (lambda.IsRefReturn ? "ref " : string.Empty) + RenderTypeReference(lambda.ReturnType)
+                        : string.Empty) +
                     " {"
                 : $"{asyncPrefix}({parameters}) -> {{";
             var sb = new StringBuilder();
