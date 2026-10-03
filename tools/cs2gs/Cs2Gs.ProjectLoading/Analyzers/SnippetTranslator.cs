@@ -98,9 +98,13 @@ public static class SnippetTranslator
             {
                 // The same document is translated once per package, so a
                 // diagnostic about a construct outside every filter is raised
-                // by every unit; report each distinct one once.
+                // by every unit; report each distinct one once. Equal bridge
+                // messages at different source spans are still distinct sites.
                 if (!diagnostics.Any(existing =>
-                        string.Equals(existing.Message, reported.Message, StringComparison.Ordinal)))
+                        string.Equals(existing.Message, reported.Message, StringComparison.Ordinal)
+                        && (reported.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId
+                            || (existing.DiagnosticId == reported.DiagnosticId
+                                && Equals(existing.Location, reported.Location)))))
                 {
                     diagnostics.Add(reported);
                 }

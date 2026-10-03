@@ -508,6 +508,10 @@ public sealed class TranslateStage : IMigrationStage
                 allUnits[i].Unit = stableUnits[i];
             }
 
+            // Issue #4612: generic-store bridges can number in the
+            // hundreds per app, so each one goes to translate.log and stderr
+            // gets one count per app.
+            int genericStoreBridges = 0;
             foreach (TranslatedDocument translatedDocument in translatedDocuments)
             {
                 LoadedDocument document = translatedDocument.Document;
@@ -635,7 +639,14 @@ public sealed class TranslateStage : IMigrationStage
                     {
                         string line = FormatForwardedTranslationWarning(diagnostic, document.FilePath);
                         Note(context, line);
-                        Console.Error.WriteLine($"cs2gs: warning: {context.App.Id}: {line}");
+                        if (diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+                        {
+                            genericStoreBridges++;
+                        }
+                        else
+                        {
+                            Console.Error.WriteLine($"cs2gs: warning: {context.App.Id}: {line}");
+                        }
                     }
 
                     RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
@@ -646,6 +657,16 @@ public sealed class TranslateStage : IMigrationStage
                             roundTrip.Errors.FirstOrDefault() ?? "unknown parse error"));
                     }
                 }
+            }
+
+            if (genericStoreBridges > 0)
+            {
+                Console.Error.WriteLine(
+                    $"cs2gs: warning: {context.App.Id}: {genericStoreBridges} "
+                    + $"{CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId} site(s): a fail-fast '!!' on a "
+                    + "value stored into generic storage (a type-parameter slot, an array or collection element, or a "
+                    + "C# '!' on a type-parameter value), where C# would store a null (#4612). "
+                    + "Each site is listed in translate.log.");
             }
 
             // Issue #2200: generate each .resx's strongly-typed codebehind via the
@@ -929,7 +950,8 @@ public sealed class TranslateStage : IMigrationStage
         diagnostic.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId
         || diagnostic.DiagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
         || diagnostic.DiagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId
-        || diagnostic.DiagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId;
+        || diagnostic.DiagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId
+        || diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId;
 
     /// <summary>
     /// True for an ordinary C# compiler error (<c>CS####</c>). cs2gs's own
