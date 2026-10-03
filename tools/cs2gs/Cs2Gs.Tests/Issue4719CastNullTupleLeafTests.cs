@@ -138,6 +138,228 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
+    [InlineData("struct", "(T)(object)null", typeof(NullReferenceException))]
+    [InlineData("unmanaged", "(T)(object)null", typeof(NullReferenceException))]
+    [InlineData("struct", "(T)(object)(string)null", typeof(NullReferenceException))]
+    [InlineData("unmanaged", "(T)(object)(string)null", typeof(NullReferenceException))]
+    [InlineData("struct", "(T)(object)default(T?)", typeof(NullReferenceException))]
+    [InlineData("unmanaged", "(T)(object)default(T?)", typeof(NullReferenceException))]
+    [InlineData("struct", "(object)(T)(object)null", typeof(NullReferenceException))]
+    [InlineData("unmanaged", "(object)(T)(object)null", typeof(NullReferenceException))]
+    public void NonNullableGenericCastResult_PreservesTheNonNullTupleLeafAndException(
+        string constraint,
+        string value,
+        Type exception)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}} => ({{value}}, 1);
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object, Code int32)", printed);
+        AssertBindsAndThrows(printed, fixture, exception, "Obj.Row[int32]()");
+    }
+
+    [Theory]
+    [InlineData("struct")]
+    [InlineData("unmanaged")]
+    public void NonNullableGenericNullableUnboxResult_PreservesTheNonNullTupleLeaf(string constraint)
+    {
+        // Generic nullable unwrap binding is independently tracked in #4735.
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}}
+                    => ((T)default(T?), 1);
+            }
+            """);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object, Code int32)", printed);
+    }
+
+    [Theory]
+    [InlineData("struct", false)]
+    [InlineData("unmanaged", false)]
+    [InlineData("struct", true)]
+    [InlineData("unmanaged", true)]
+    public void NonNullableCastResult_DoesNotForwardScalarOrTupleSourceTaint(string constraint, bool tupleSource)
+    {
+        string fixture = this.EmitFixture();
+        string setup = tupleSource ? "var source = Seed();" : "object source = null;";
+        string value = tupleSource ? "source.Value" : "source";
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Seed() => (null, 1);
+                public static (object Value, int Code) Row<T>() where T : {{constraint}} {
+                    {{setup}}
+                    return ((T){{value}}, 1);
+                }
+                public static object Scalar<T>() where T : {{constraint}} {
+                    {{setup}}
+                    return (T){{value}};
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object, Code int32)", printed);
+        Assert.Contains($"func Scalar[T {constraint}]() object", printed);
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Row[int32]()");
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Scalar[int32]()");
+    }
+
+    [Theory]
+    [InlineData("int")]
+    [InlineData("bool")]
+    [InlineData("System.DateTime")]
+    public void NonNullableConcreteCastResult_PreservesTheNonNullTupleLeafAndException(string type)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row() => (({{type}})(object)null, 1);
+            }
+            """, fixture);
+
+        Assert.Contains("func Row() (Value object, Code int32)", printed);
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Row()");
+    }
+
+    [Theory]
+    [InlineData("struct", "(T?)(object)null")]
+    [InlineData("unmanaged", "(T?)(object)null")]
+    [InlineData("struct", "(T?)default(T?)")]
+    [InlineData("unmanaged", "(T?)default(T?)")]
+    public void NullableGenericCastResult_PreservesTheNullableTupleLeaf(
+        string constraint,
+        string value)
+    {
+        // Generic implicit nullable boxing is independently tracked in #4735.
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}} => ({{value}}, 1);
+            }
+            """);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object?, Code int32)", printed);
+    }
+
+    [Theory]
+    [InlineData("struct", "(T?)(object)null")]
+    [InlineData("unmanaged", "(T?)(object)null")]
+    [InlineData("struct", "(T?)default(T?)")]
+    [InlineData("unmanaged", "(T?)default(T?)")]
+    public void ExplicitlyBoxedNullableGenericCastResult_PreservesRuntimeNull(string constraint, string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}} => ((object){{value}}, 1);
+                public static int Run() {
+                    var row = Row<int>();
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("(int?)1")]
+    [InlineData("((int?)1)")]
+    public void ExplicitlyBoxedNullableLift_PreservesTheNonNullTupleLeaf(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row() => ((object){{value}}, 1);
+                public static int Run() {
+                    var row = Row();
+                    return (int)row.Value + row.Code;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row() (Value object, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 2);
+    }
+
+    [Fact]
+    public void UserDefinedCastResult_DoesNotForwardItsNullableInputsTaint()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (Box Value, int Code) Row() {
+                    string text = null;
+                    return ((Box)text, 1);
+                }
+                public static Box Scalar() {
+                    string text = null;
+                    return (Box)text;
+                }
+                public static int Run() {
+                    var row = Row();
+                    return row.Value != null && row.Code == 1 && Scalar() != null ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row() (Value Box, Code int32)", printed);
+        Assert.Contains("func Scalar() Box", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("(int?)(object)null")]
+    [InlineData("(int?)default(int?)")]
+    public void NullableConcreteCastResult_PreservesTheNullableTupleLeafAndRuntimeNull(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row() => ({{value}}, 1);
+                public static int Run() {
+                    var row = Row();
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("where T : class", " class")]
+    public void ReferenceOrUnconstrainedCastResult_PreservesTheNullableTupleLeafAndRuntimeNull(
+        string constraint,
+        string mappedConstraint)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() {{constraint}} => ((T)(object)null, 1);
+                public static int Run() {
+                    var row = Row<string>();
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T{mappedConstraint}]() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+        if (constraint.Length == 0)
+        {
+            AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Row[int32]()");
+        }
+    }
+
+    [Theory]
     [InlineData("default(int?)", true)]
     [InlineData("(int?)default", true)]
     [InlineData("(int?)null", true)]
@@ -544,6 +766,17 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         Assert.False(result.Diagnostics.Any(diagnostic => diagnostic.IsError), string.Join(Environment.NewLine, result.Diagnostics));
         Assert.Null(result.UnhandledException);
         Assert.Equal(expected, result.Value);
+    }
+
+    private static void AssertBindsAndThrows(string printed, string fixture, Type exception, string invocation)
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixture });
+        TranslationTestValidation.AssertBinds(resolver, printed);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + invocation,
+            new[] { fixture });
+        Assert.IsType(exception, result.UnhandledException);
+        Assert.Equal("GS9999", Assert.Single(result.Diagnostics.Where(diagnostic => diagnostic.IsError)).Id);
     }
 
     private static string Translate(string source, string fixture = null)
