@@ -5099,6 +5099,22 @@ internal static class ObliviousNullabilityAnalyzer
         bool Writes(SyntaxNode node) =>
             CSharpToGSharpTranslator.SyntaxNodeWritesSymbol(node, symbol, model);
 
+        SyntaxNode declaration = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        SyntaxNode scope = declaration?.Ancestors().FirstOrDefault(node =>
+            node is AccessorDeclarationSyntax
+                or BaseMethodDeclarationSyntax
+                or LocalFunctionStatementSyntax
+                or AnonymousFunctionExpressionSyntax);
+
+        // Writable captures are not stable smart-cast values. Without an
+        // interprocedural proof, never trust a guard on their shared storage.
+        if (scope != null && scope.DescendantNodes().Any(node =>
+            node is LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax
+                && node.DescendantNodes().Any(Writes)))
+        {
+            return false;
+        }
+
         if (guard.DescendantNodesAndSelf(Descend).Any(Writes)
             || region.DescendantNodesAndSelf(Descend).Any(node =>
                 node.SpanStart >= guard.Span.End && node.SpanStart < use.SpanStart && Writes(node)))

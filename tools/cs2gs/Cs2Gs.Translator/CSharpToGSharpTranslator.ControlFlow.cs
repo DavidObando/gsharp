@@ -38,7 +38,8 @@ public sealed partial class CSharpToGSharpTranslator
                         || prefix.IsKind(SyntaxKind.AddressOfExpression))
                     && BindsTo(prefix.Operand, symbol, model) => true,
             ArgumentSyntax argument
-                when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None)
+                when (argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword)
+                        || argument.RefOrOutKeyword.IsKind(SyntaxKind.OutKeyword))
                     && BindsTo(argument.Expression, symbol, model) => true,
             InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax member } invocation
                 when ExtensionReceiverWritesSymbol(invocation, member.Expression, symbol, model) => true,

@@ -256,6 +256,60 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         // #4726 tracks the independent ref-alias storage/smart-cast bind failure.
     }
 
+    [Theory]
+    [InlineData("void Reset() { text = null; }", "Reset();", true)]
+    [InlineData("System.Action reset = () => text = null;", "reset();", true)]
+    [InlineData("void Clear() { text = null; } void Reset() { Clear(); }", "Reset();", true)]
+    [InlineData("void Clear() { text = null; } System.Action reset = Clear;", "reset();", true)]
+    [InlineData("void Observe() { choose = false; }", "Observe();", false)]
+    [InlineData("System.Action observe = () => choose = false;", "observe();", false)]
+    public void CapturedWrites_DoNotEstablishStableTupleYieldGuards(
+        string declaration,
+        string invocation,
+        bool nullable)
+    {
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    {{declaration}}
+                    if (text != null) {
+                        {{invocation}}
+                        yield return (text, 1);
+                    }
+                }
+            }
+            """);
+
+        string textType = nullable ? "string?" : "string";
+        Assert.Contains($"func Rows(choose bool) sequence[(Text {textType}, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData("in ")]
+    [InlineData("")]
+    public void ReadOnlyInArgument_PreservesTupleYieldGuard(string argumentModifier)
+    {
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    if (text != null) {
+                        Observe({{argumentModifier}}text);
+                        yield return (text, 1);
+                    }
+                }
+                private static void Observe(in string value) { }
+            }
+            """);
+
+        Assert.Contains("func Rows(choose bool) sequence[(Text string, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     [Fact]
     public void NestedSwitchTupleYield_UsesTheSameElementPathsAsForwardedCollection()
     {
