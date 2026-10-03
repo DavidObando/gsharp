@@ -1263,6 +1263,76 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void WrappedForgivenValues_ResolveNullableDeclarationAndResultStores()
+    {
+        string source = """
+            #nullable enable
+            public class Box<T> where T : class
+            {
+                private static string? FieldSource;
+                private static string? PropertySource;
+                private static string? ArrowSource;
+                public static T? Field = FieldSource! as T;
+                public static T? Initialized { get; } = PropertySource! as T;
+                public static T? Property => ArrowSource! as T;
+                public static T? Local(string? localValue)
+                {
+                    T? result = localValue! as T;
+                    return result;
+                }
+
+                public static T? Block(string? blockValue) { return blockValue! as T; }
+                public static T? Arrow(string? arrowValue) => arrowValue! as T;
+                public static System.Func<T?> Lambda(string? lambdaValue) => () => lambdaValue! as T;
+                public static System.Func<T?> BlockLambda(string? blockLambdaValue) => () => { return blockLambdaValue! as T; };
+                public static async System.Threading.Tasks.Task<T?> Async(string? asyncValue)
+                {
+                    await System.Threading.Tasks.Task.Yield();
+                    return asyncValue! as T;
+                }
+
+                public static System.Func<System.Threading.Tasks.Task<T?>> AsyncLambda(string? asyncLambdaValue) => async () =>
+                {
+                    await System.Threading.Tasks.Task.Yield();
+                    return asyncLambdaValue! as T;
+                };
+                public static System.Func<System.Threading.Tasks.Task<T?>> AsyncExpression(string? expressionValue) => async () => expressionValue! as T;
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("FieldSource!!", printed, StringComparison.Ordinal);
+        Assert.Contains("PropertySource!!", printed, StringComparison.Ordinal);
+        Assert.Contains("ArrowSource!!", printed, StringComparison.Ordinal);
+        Assert.Contains("localValue!!", printed, StringComparison.Ordinal);
+        Assert.Contains("blockValue!!", printed, StringComparison.Ordinal);
+        Assert.Contains("arrowValue!!", printed, StringComparison.Ordinal);
+        Assert.Contains("lambdaValue!!", printed, StringComparison.Ordinal);
+        Assert.Contains("blockLambdaValue!!", printed, StringComparison.Ordinal);
+        Assert.Contains("asyncValue!!", printed, StringComparison.Ordinal);
+        Assert.Contains("asyncLambdaValue!!", printed, StringComparison.Ordinal);
+        Assert.Contains("expressionValue!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "FieldSource!") + " kind=forgiven,constructed-generic-member | slot-type=T?",
+                Expected(source, "PropertySource!") + " kind=forgiven,constructed-generic-member | slot-type=T?",
+                Expected(source, "ArrowSource!") + " kind=forgiven,constructed-generic-member | slot-type=T?",
+                Expected(source, "localValue!") + " kind=forgiven,type-parameter-local | slot-type=T?",
+                Expected(source, "blockValue!") + " kind=forgiven,type-parameter-return | slot-type=T?",
+                Expected(source, "arrowValue!") + " kind=forgiven,type-parameter-return | slot-type=T?",
+                Expected(source, "lambdaValue!") + " kind=forgiven,delegate-result | slot-type=T?",
+                Expected(source, "blockLambdaValue!") + " kind=forgiven,delegate-result | slot-type=T?",
+                Expected(source, "asyncValue!") + " kind=forgiven,type-parameter-return | slot-type=T?",
+                Expected(source, "asyncLambdaValue!") + " kind=forgiven,delegate-result | slot-type=T?",
+                Expected(source, "expressionValue!") + " kind=forgiven,delegate-result | slot-type=T?",
+            },
+            sites.Select(site => Position(site)
+                + " " + site.Message.Substring(0, site.Message.IndexOf(" | target=", StringComparison.Ordinal))
+                + site.Message.Substring(site.Message.IndexOf(" | slot-type=", StringComparison.Ordinal)).Split(" (")[0]));
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
