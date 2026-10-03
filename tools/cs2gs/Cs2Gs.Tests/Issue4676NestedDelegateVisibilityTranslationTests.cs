@@ -3,11 +3,15 @@
 // </copyright>
 
 using System;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -106,21 +110,189 @@ namespace Corpus.Issue4676
         Assert.Contains("\ndelegate PublicHost_Reachable", rendered, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("public", TypeAttributes.Public)]
+    [InlineData("protected", TypeAttributes.NotPublic)]
+    [InlineData("protected internal", TypeAttributes.NotPublic)]
+    [InlineData("internal", TypeAttributes.NotPublic)]
+    [InlineData("private", TypeAttributes.NotPublic)]
+    public void LiftedDelegates_CompileAndRun_WithExactVisibilityAndSignatures(
+        string containerVisibility,
+        TypeAttributes expectedVisibility)
+    {
+        string source = $$"""
+            using System;
+
+            namespace Corpus.Issue4676
+            {
+                public class Outer
+                {
+                    {{containerVisibility}} class Inner
+                    {
+                        public delegate int D(int value);
+                        public delegate T Identity<T>(T value);
+                        internal delegate int Friend(int value);
+                        private delegate int Hidden(int value);
+                        protected delegate int Derived(int value);
+                        protected internal delegate int DerivedOrFriend(int value);
+
+                        public class Middle
+                        {
+                            public class Leaf
+                            {
+                                public delegate int Deep(int value);
+
+                                public static int Run()
+                                {
+                                    Deep d = x => x + 3;
+                                    return d(39);
+                                }
+                            }
+                        }
+
+                        public static int Run()
+                        {
+                            D d = x => x + 1;
+                            Friend f = x => x + 1;
+                            Hidden h = x => x + 1;
+                            Derived p = x => x + 1;
+                            DerivedOrFriend q = x => x + 1;
+                            Identity<int> i = x => x;
+                            return i(q(p(h(f(d(37))))));
+                        }
+                    }
+
+                    public static int Run() => Inner.Run() + Inner.Middle.Leaf.Run();
+
+                    public static Type DelegateType() => typeof(Inner.D);
+                }
+
+                {{(containerVisibility == "private" ? "" : """
+                public sealed class Child : Outer
+                {
+                    public static int RunDerived() => Inner.Run() + Inner.Middle.Leaf.Run();
+                }
+                """)}}
+            }
+            """;
+        LoadedCSharpProject project = Load(source);
+        using var csharpImage = new MemoryStream();
+        var csharpEmit = project.Compilation.Emit(csharpImage);
+        Assert.True(csharpEmit.Success, string.Join(Environment.NewLine, csharpEmit.Diagnostics));
+        Assembly original = EmittedFixture.Load(csharpImage.ToArray());
+        Type originalDelegate = Assert.IsAssignableFrom<Type>(Invoke(original, "Outer", "DelegateType"));
+        Assert.Equal(expectedVisibility == TypeAttributes.Public, originalDelegate.IsVisible);
+        Assert.Equal(84, Invoke(original, "Outer", "Run"));
+        if (containerVisibility != "private")
+        {
+            Assert.Equal(84, Invoke(original, "Child", "RunDerived"));
+        }
+
+        // Validate and emit the C# fixture before translating it: these are legal
+        // inside-owner/derived uses, not inaccessible source or ambient test types.
+        string printed = GSharpPrinter.Print(Translate(project));
+        string compiler = GscInvoker.Resolve(null, "Release", AppContext.BaseDirectory);
+        Assert.NotNull(compiler);
+        string directory = Directory.CreateTempSubdirectory("gs_issue4676_delegates_").FullName;
+        try
+        {
+            string sourcePath = Path.Combine(directory, "Delegates.gs");
+            string assemblyPath = Path.Combine(directory, "Delegates.dll");
+            File.WriteAllText(sourcePath, printed);
+            GscResult compiled = new GscInvoker(compiler).Compile(
+                new[] { sourcePath },
+                assemblyPath,
+                TargetKind.Library,
+                Array.Empty<string>());
+            Assert.True(compiled.ExitCode == 0, compiled.Output + Environment.NewLine + printed);
+            Assert.True(File.Exists(assemblyPath), compiled.Output);
+            Assembly translated = EmittedFixture.Load(assemblyPath);
+            Type[] delegates = translated.GetTypes()
+                .Where(type => type.BaseType == typeof(MulticastDelegate))
+                .OrderBy(type => type.FullName, StringComparer.Ordinal)
+                .ToArray();
+            string[] names =
+            {
+                "Corpus.Issue4676.Outer_Inner_D",
+                "Corpus.Issue4676.Outer_Inner_Derived",
+                "Corpus.Issue4676.Outer_Inner_DerivedOrFriend",
+                "Corpus.Issue4676.Outer_Inner_Friend",
+                "Corpus.Issue4676.Outer_Inner_Hidden",
+                "Corpus.Issue4676.Outer_Inner_Identity`1",
+                "Corpus.Issue4676.Outer_Inner_Middle_Leaf_Deep",
+            };
+            Assert.Equal(names, delegates.Select(type => type.FullName));
+            foreach (Type type in delegates)
+            {
+                bool publicDeclaration = type.Name is "Outer_Inner_D"
+                    or "Outer_Inner_Identity`1" or "Outer_Inner_Middle_Leaf_Deep";
+                Assert.Equal(
+                    publicDeclaration ? expectedVisibility : TypeAttributes.NotPublic,
+                    type.Attributes & TypeAttributes.VisibilityMask);
+                Type constructed = type.IsGenericTypeDefinition
+                    ? type.MakeGenericType(typeof(int))
+                    : type;
+                MethodInfo invoke = constructed.GetMethod("Invoke");
+                Assert.NotNull(invoke);
+                Assert.Equal(typeof(int), invoke.ReturnType);
+                Assert.Equal(typeof(int), Assert.Single(invoke.GetParameters()).ParameterType);
+                Assert.Equal("value", Assert.Single(invoke.GetParameters()).Name);
+            }
+
+            Assert.Equal(
+                expectedVisibility == TypeAttributes.Public
+                    ? new[] { names[0], names[5], names[6] }
+                    : Array.Empty<string>(),
+                translated.GetExportedTypes()
+                    .Where(type => type.BaseType == typeof(MulticastDelegate))
+                    .Select(type => type.FullName)
+                    .OrderBy(name => name, StringComparer.Ordinal));
+            Assert.Equal(delegates[0], Invoke(translated, "Outer", "DelegateType"));
+            Assert.Equal(84, Invoke(translated, "Outer", "Run"));
+            if (containerVisibility != "private")
+            {
+                Assert.Equal(84, Invoke(translated, "Child", "RunDerived"));
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static object Invoke(Assembly assembly, string typeName, string methodName)
+    {
+        Type type = assembly.GetType("Corpus.Issue4676." + typeName);
+        Assert.NotNull(type);
+        MethodInfo method = type.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static);
+        Assert.NotNull(method);
+        return method.Invoke(null, null);
+    }
+
     private static NamedDelegateDeclaration[] LiftedDelegates() =>
         Translate().Members.OfType<NamedDelegateDeclaration>().ToArray();
 
-    private static CompilationUnit Translate()
+    private static LoadedCSharpProject Load(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Delegates.cs", Source) });
+            new[] { ("Delegates.cs", source) });
 
         Assert.True(
             project.BoundWithoutErrors,
             "inline source should bind with no C# errors: " +
                 string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
+        return project;
+    }
+
+    private static CompilationUnit Translate() => Translate(Load(Source));
+
+    private static CompilationUnit Translate(LoadedCSharpProject project)
+    {
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        return new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        CompilationUnit translated = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.DoesNotContain(context.Diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        return translated;
     }
 }

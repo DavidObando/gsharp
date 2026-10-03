@@ -703,11 +703,11 @@ public sealed partial class CSharpToGSharpTranslator
                 // was lifted to a top-level `public` delegate, publishing a type the
                 // C# assembly never exported.
                 //
-                // Only a delegate that is public (the default) AND reachable through every
-                // container stays public. Anything else becomes `internal`: a lifted
+                // Only a delegate that is public (the default) AND has exclusively public
+                // containers stays public. Anything else becomes `internal`: a lifted
                 // delegate has no container left to be `protected` or `private` in, and a
                 // top-level `protected` declaration is GS0380.
-                if (visibility is not (Visibility.Default or Visibility.Public) || !IsExternallyVisible(symbol))
+                if (visibility is not (Visibility.Default or Visibility.Public) || !IsEffectivelyPublic(symbol))
                 {
                     visibility = Visibility.Internal;
                 }
