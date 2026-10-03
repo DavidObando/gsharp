@@ -16,6 +16,15 @@ if [[ "${1:-}" == build ]]; then
   exit 0
 fi
 
+if [[ "${2:-}" != migrate ]]; then
+  exit 0
+fi
+
+if [[ -n "${FAKE_CAPTURE_ARGS:-}" ]]; then
+  printf '%s\n' "$@" > "$FAKE_CAPTURE_ARGS"
+  exit 76
+fi
+
 artifacts=
 while (( $# )); do
   if [[ "$1" == --artifacts ]]; then
@@ -45,6 +54,29 @@ echo "8/8 apps green; run $([[ "$FAKE_RUN_SUCCEEDED" == true ]] && echo PASSED |
 exit "$FAKE_MIGRATE_EXIT"
 EOF
 chmod +x "$fake_bin/dotnet"
+
+pin_failures=0
+for entrypoint in run-cs2gs-selfmig.sh run-cs2gs-selfmig-migrate.sh run-cs2gs-selfmig-pr-guard.sh; do
+  case_root="$test_root/$entrypoint"
+  args="$case_root.args"
+  set +e
+  PATH="$fake_bin:$PATH" \
+    FAKE_CAPTURE_ARGS="$args" \
+    SELFMIG_GATE_ROOT="$case_root" \
+    SELFMIG_PR_GUARD_ROOT="$case_root" \
+    "$repo_root/build/$entrypoint" > "$case_root.log" 2>&1
+  actual_exit=$?
+  set -e
+  if [[ "$actual_exit" != 1 ]] || [[ ! -f "$args" ]] ||
+    ! awk 'previous == "--sdk-pin" && $0 == "global-json" { found = 1 } { previous = $0 } END { exit !found }' "$args"; then
+    echo "$entrypoint: real migration invocation must select --sdk-pin global-json" >&2
+    pin_failures=$((pin_failures + 1))
+  fi
+done
+if (( pin_failures )); then
+  echo "$pin_failures/3 self-migration SDK pin regressions FAILED." >&2
+  exit 1
+fi
 
 run_case() {
   local name=$1 run_succeeded=$2 migrate_exit=$3 expected_exit=$4
