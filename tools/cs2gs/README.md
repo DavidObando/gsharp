@@ -107,7 +107,10 @@ file; all other settings in each file are preserved. A source
 `global.json` that already pins `Gsharp.NET.Sdk` is an error in `project` mode.
 Rebinding and validation recognize each entry in a multi-SDK `Sdk` attribute,
 top-level `<Sdk Name="..." Version="...">` elements, and SDK `<Import>` elements.
-Excluded projects retain unrelated SDK declarations and their order.
+Translated and excluded projects retain unrelated SDK declarations and their order.
+Explicit SDK elements and imports keep their declaration style rather than gaining
+a second implicit SDK import. Global-json migration replaces an old root G# pin,
+including malformed versions or case-variant duplicates, just as it does for nested files.
 `validate` takes the pin from the migrated tree: the `global.json` pin, or
 else the one version the generated projects record. A tree that pins in both
 places, or a disagreeing `validate --sdk-version`, is an error rather than a

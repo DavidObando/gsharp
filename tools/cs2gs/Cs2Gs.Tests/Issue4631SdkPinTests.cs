@@ -198,10 +198,71 @@ public sealed class Issue4631SdkPinTests : IDisposable
             "Gsharp.NET.Sdk",
             new Dictionary<string, string>());
 
-        Assert.Equal("Gsharp.NET.Sdk", transformed.Root.Attribute("Sdk").Value);
+        Assert.Null(transformed.Root.Attribute("Sdk"));
         XElement explicitSdk = transformed.Root.Element("Sdk") ?? transformed.Root.Element("Import");
         Assert.NotNull(explicitSdk);
         Assert.Null(explicitSdk.Attribute("Version"));
+    }
+
+    /// <summary>Only the source compiler SDK is replaced; other declarations keep their order and shape.</summary>
+    /// <param name="sourceXml">The source SDK declarations.</param>
+    /// <param name="expectedXml">The declarations after migration.</param>
+    [Theory]
+    [InlineData(
+        """<Project Sdk="Microsoft.NET.Sdk;Other.Sdk/1.2.3" />""",
+        """<Project Sdk="Gsharp.NET.Sdk;Other.Sdk/1.2.3" />""")]
+    [InlineData(
+        """<Project Sdk="Other.Sdk/1.2.3;Microsoft.NET.Sdk" />""",
+        """<Project Sdk="Other.Sdk/1.2.3;Gsharp.NET.Sdk" />""")]
+    [InlineData(
+        """<Project Sdk="Other.Sdk/1.2.3" />""",
+        """<Project Sdk="Gsharp.NET.Sdk;Other.Sdk/1.2.3" />""")]
+    [InlineData(
+        """<Project><Sdk Name="Other.Sdk" Version="1.2.3" /><Sdk Name="Microsoft.NET.Sdk" /></Project>""",
+        """<Project><Sdk Name="Other.Sdk" Version="1.2.3" /><Sdk Name="Gsharp.NET.Sdk" /></Project>""")]
+    [InlineData(
+        """<Project><Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" /><Import Project="Sdk.props" Sdk="Other.Sdk" Version="1.2.3" /><Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" /></Project>""",
+        """<Project><Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk" /><Import Project="Sdk.props" Sdk="Other.Sdk" Version="1.2.3" /><Import Project="Sdk.targets" Sdk="Gsharp.NET.Sdk" /></Project>""")]
+    public void Transform_PreservesUnrelatedSourceSdkDeclarations(string sourceXml, string expectedXml)
+    {
+        string project = Path.Combine(this.root, "Existing.csproj");
+        File.WriteAllText(project, sourceXml);
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            project,
+            this.root,
+            "Gsharp.NET.Sdk",
+            new Dictionary<string, string>());
+
+        Assert.True(XNode.DeepEquals(XDocument.Parse(expectedXml).Root, transformed.Root));
+    }
+
+    /// <summary>Explicit SDK elements retain the same source defaults and target kind as SDK attributes.</summary>
+    /// <param name="sdk">The source SDK.</param>
+    [Theory]
+    [InlineData("Microsoft.NET.Sdk.Web")]
+    [InlineData("Microsoft.NET.Sdk.Worker")]
+    public void Transform_ExplicitDotnetSdkKeepsExecutableDefaults(string sdk)
+    {
+        string project = Path.Combine(this.root, "Existing.csproj");
+        File.WriteAllText(project, "<Project><Sdk Name=\"" + sdk + "\" /></Project>");
+
+        Assert.Equal(TargetKind.Exe, CorpusDiscovery.ReadTargetKind(project));
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            project,
+            this.root,
+            "Gsharp.NET.Sdk",
+            new Dictionary<string, string>());
+
+        Assert.Null(transformed.Root.Attribute("Sdk"));
+        Assert.Equal("Gsharp.NET.Sdk", transformed.Root.Element("Sdk").Attribute("Name").Value);
+        Assert.Equal("Exe", Assert.Single(transformed.Descendants("OutputType")).Value);
+        if (sdk == "Microsoft.NET.Sdk.Web")
+        {
+            Assert.Equal(
+                "Microsoft.AspNetCore.App",
+                Assert.Single(transformed.Descendants("FrameworkReference")).Attribute("Include").Value);
+        }
     }
 
     /// <summary>Per-project mode pins explicit SDK elements and imports without losing their shape.</summary>
@@ -422,6 +483,33 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.True(run.Succeeded);
         Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(fixture.Destination));
         Assert.Equal("Gsharp.NET.Sdk", SdkAttribute(fixture.MirroredWidget));
+    }
+
+    /// <summary>Global-json migration replaces malformed or duplicate old G# pins consistently.</summary>
+    /// <param name="sourceJson">The source root configuration.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Theory]
+    [InlineData("""{ "msbuild-sdks": { "Gsharp.NET.Sdk": "latest", "Other.Sdk": "1.2.3" } }""")]
+    [InlineData("""{ "msbuild-sdks": { "Gsharp.NET.Sdk": "0.3.1", "gsharp.net.sdk": "0.3.2", "Other.Sdk": "1.2.3" } }""")]
+    public async Task Migrate_GlobalJsonPin_CanonicalizesExistingRootPin(string sourceJson)
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+        Fixture fixture = this.CreateFixture(sourceJson);
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+        options.SdkPinLocation = SdkPinLocation.GlobalJson;
+
+        RunResult run = await new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+
+        Assert.True(run.Succeeded);
+        Assert.Equal(PinnedVersion, SdkPin.ReadGlobalJsonPin(fixture.Destination));
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(fixture.Destination, SdkPin.GlobalJsonFileName)));
+        Assert.Equal(
+            "1.2.3",
+            document.RootElement.GetProperty("msbuild-sdks").GetProperty("Other.Sdk").GetString());
     }
 
     /// <summary>Global-json mode updates nested configs so each scope uses the root pin.</summary>

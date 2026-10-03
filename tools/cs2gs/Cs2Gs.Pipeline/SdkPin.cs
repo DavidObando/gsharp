@@ -104,20 +104,23 @@ internal static class SdkPin
         return false;
     }
 
-    /// <summary>Rebinds only G# SDK declarations, retaining other SDKs and their order.</summary>
+    /// <summary>Rebinds compiler SDK declarations, retaining other SDKs and their order.</summary>
     /// <param name="root">The project's root element.</param>
     /// <param name="sdkMoniker">The SDK name with an optional version suffix.</param>
+    /// <param name="migrateCSharpSdk">Whether to replace the source .NET compiler SDK too.</param>
     /// <returns>Whether the project declares any SDK, including an unrelated one.</returns>
-    internal static bool RebindProjectSdk(XElement root, string sdkMoniker)
+    internal static bool RebindProjectSdk(XElement root, string sdkMoniker, bool migrateCSharpSdk = false)
     {
         IReadOnlyList<XAttribute> declarations = ProjectSdkAttributes(root);
+        bool rebound = false;
         foreach (XAttribute declaration in declarations)
         {
             string[] sdks = declaration.Value.Split(';');
             bool changed = false;
             for (int i = 0; i < sdks.Length; i++)
             {
-                if (!IsGsharpSdkMoniker(sdks[i]))
+                if (!IsGsharpSdkMoniker(sdks[i])
+                    && !(migrateCSharpSdk && IsDotnetCompilerSdkMoniker(sdks[i])))
                 {
                     continue;
                 }
@@ -137,6 +140,7 @@ internal static class SdkPin
                 }
 
                 changed = true;
+                rebound = true;
             }
 
             if (changed)
@@ -145,7 +149,65 @@ internal static class SdkPin
             }
         }
 
+        if (migrateCSharpSdk && !rebound)
+        {
+            string? existingSdk = root.Attribute("Sdk")?.Value;
+            root.SetAttributeValue(
+                "Sdk",
+                string.IsNullOrWhiteSpace(existingSdk) ? sdkMoniker : sdkMoniker + ";" + existingSdk);
+        }
+
         return declarations.Count > 0;
+    }
+
+    /// <summary>Enumerates SDK declaration attributes in their original document order.</summary>
+    /// <param name="root">The project's root element.</param>
+    /// <returns>Root SDK attributes, SDK element names, and SDK import attributes.</returns>
+    internal static IReadOnlyList<XAttribute> ProjectSdkAttributes(XElement root)
+    {
+        var declarations = new List<XAttribute>();
+        XAttribute? projectSdk = root.Attribute("Sdk");
+        if (projectSdk is not null)
+        {
+            declarations.Add(projectSdk);
+        }
+
+        foreach (XElement element in root.Descendants())
+        {
+            string? attributeName = element.Name.LocalName switch
+            {
+                "Sdk" => "Name",
+                "Import" => "Sdk",
+                _ => null,
+            };
+            XAttribute? declaration = attributeName is null ? null : element.Attribute(attributeName);
+            if (declaration is not null)
+            {
+                declarations.Add(declaration);
+            }
+        }
+
+        return declarations;
+    }
+
+    /// <summary>Reads SDK names without their optional version suffixes.</summary>
+    /// <param name="root">The project's root element.</param>
+    /// <returns>The declared SDK names.</returns>
+    internal static IReadOnlyList<string> ProjectSdkNames(XElement root)
+    {
+        var names = new List<string>();
+        foreach (XAttribute declaration in ProjectSdkAttributes(root))
+        {
+            foreach (string entry in declaration.Value.Split(';'))
+            {
+                if (!string.IsNullOrWhiteSpace(entry))
+                {
+                    names.Add(SdkName(entry));
+                }
+            }
+        }
+
+        return names;
     }
 
     /// <summary>Lists nested <c>global.json</c> paths in a repository file list.</summary>
@@ -200,8 +262,9 @@ internal static class SdkPin
                         continue;
                     }
 
-                    string? inlineVersion = sdk.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase)
-                        ? sdk.Substring(PackageId.Length + 1)
+                    int versionSeparator = sdk.IndexOf('/');
+                    string? inlineVersion = versionSeparator >= 0
+                        ? sdk.Substring(versionSeparator + 1).Trim()
                         : null;
                     string? elementVersion = declaration.Parent != root
                         ? declaration.Parent?.Attribute("Version")?.Value
@@ -380,37 +443,18 @@ internal static class SdkPin
 
     private static bool IsGsharpSdkMoniker(string sdk)
     {
-        string moniker = sdk.Trim();
-        return string.Equals(moniker, PackageId, StringComparison.OrdinalIgnoreCase)
-            || moniker.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(SdkName(sdk), PackageId, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static IReadOnlyList<XAttribute> ProjectSdkAttributes(XElement root)
+    private static bool IsDotnetCompilerSdkMoniker(string sdk)
     {
-        var declarations = new List<XAttribute>();
-        XAttribute? projectSdk = root.Attribute("Sdk");
-        if (projectSdk is not null)
-        {
-            declarations.Add(projectSdk);
-        }
-
-        foreach (XElement element in root.Descendants())
-        {
-            string? attributeName = element.Name.LocalName switch
-            {
-                "Sdk" => "Name",
-                "Import" => "Sdk",
-                _ => null,
-            };
-            XAttribute? declaration = attributeName is null ? null : element.Attribute(attributeName);
-            if (declaration is not null)
-            {
-                declarations.Add(declaration);
-            }
-        }
-
-        return declarations;
+        string name = SdkName(sdk);
+        return string.Equals(name, "Microsoft.NET.Sdk", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Microsoft.NET.Sdk.Worker", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string SdkName(string sdk) => sdk.Trim().Split('/')[0].Trim();
 
     private static JsonObject ParseGlobalJson(string path)
     {

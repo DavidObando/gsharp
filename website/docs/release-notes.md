@@ -119,7 +119,8 @@ Before moving an application to a different compiler version, pin the intended S
   `cs2gs validate` follows the pin recorded in the migrated tree, rejects
   missing or conflicting nested pins, and accepts `--sdk-version` to check it.
   SDK attributes, explicit SDK elements, and SDK imports participate in pin
-  rebinding and validation without dropping unrelated SDKs in excluded projects.
+  rebinding and validation without dropping unrelated SDKs in translated or
+  excluded projects. Global-json migration canonicalizes existing root pins.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values

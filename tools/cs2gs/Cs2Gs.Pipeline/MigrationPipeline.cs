@@ -235,7 +235,6 @@ public sealed class MigrationPipeline
                     "Could not resolve a local Gsharp.NET.Sdk package for the mirrored projects.");
             }
 
-            string? mirroredGlobalJsonPin = SdkPin.ReadGlobalJsonPin(destinationRoot);
             if (this.options.SdkPinLocation == SdkPinLocation.GlobalJson)
             {
                 if (SdkPin.WriteGlobalJsonPin(destinationRoot, sdkVersion))
@@ -250,15 +249,19 @@ public sealed class MigrationPipeline
                         sdkVersion);
                 }
             }
-            else if (mirroredGlobalJsonPin is not null)
+            else
             {
-                // A versioned Sdk attribute silently overrides a global.json
-                // msbuild-sdks pin, and validate takes a pinned global.json to
-                // mean the tree is in global-json mode. Mixing the two would
-                // build different projects against different SDKs.
-                throw new InvalidOperationException(
-                    "The repository global.json (mirrored from the source) already pins Gsharp.NET.Sdk " + mirroredGlobalJsonPin +
-                    "; migrate with --sdk-pin global-json.");
+                string? mirroredGlobalJsonPin = SdkPin.ReadGlobalJsonPin(destinationRoot);
+                if (mirroredGlobalJsonPin is not null)
+                {
+                    // A versioned Sdk attribute silently overrides a global.json
+                    // msbuild-sdks pin, and validate takes a pinned global.json to
+                    // mean the tree is in global-json mode. Mixing the two would
+                    // build different projects against different SDKs.
+                    throw new InvalidOperationException(
+                        "The repository global.json (mirrored from the source) already pins Gsharp.NET.Sdk " + mirroredGlobalJsonPin +
+                        "; migrate with --sdk-pin global-json.");
+                }
             }
 
             string sdkMoniker = SdkPin.ProjectSdkAttribute(sdkVersion, this.options.SdkPinLocation);
