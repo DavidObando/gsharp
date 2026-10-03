@@ -44,8 +44,7 @@ public sealed partial class CSharpToGSharpTranslator
             InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax member } invocation
                 when ExtensionReceiverWritesSymbol(invocation, member.Expression, symbol, model) => true,
             RefExpressionSyntax refOf
-                when refOf.Expression is IdentifierNameSyntax
-                    && BindsTo(refOf.Expression, symbol, model)
+                when BindsTo(refOf.Expression, symbol, model)
                     && !(refOf.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator }
                         && model.GetDeclaredSymbol(declarator) is ILocalSymbol local
                         && local.RefKind == RefKind.RefReadOnly) => true,
@@ -54,8 +53,31 @@ public sealed partial class CSharpToGSharpTranslator
 
     private static bool BindsTo(ExpressionSyntax expression, ISymbol target, SemanticModel model)
     {
+        expression = UnwrapParenthesesAndSuppressions(expression);
         ISymbol symbol = model.GetSymbolInfo(expression).Symbol;
         return symbol != null && SymbolEqualityComparer.Default.Equals(symbol, target);
+    }
+
+    // Transparent wrappers change neither storage identity nor collection elements.
+    private static ExpressionSyntax UnwrapParenthesesAndSuppressions(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            if (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+                continue;
+            }
+
+            if (expression is PostfixUnaryExpressionSyntax suppression
+                && suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+            {
+                expression = suppression.Operand;
+                continue;
+            }
+
+            return expression;
+        }
     }
 
     private static bool TupleAssignmentTargetsInclude(

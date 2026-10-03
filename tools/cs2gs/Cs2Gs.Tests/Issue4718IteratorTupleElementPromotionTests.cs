@@ -327,6 +327,46 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Theory]
+    [InlineData("(text)", false)]
+    [InlineData("text!", false)]
+    [InlineData("(text!)", false)]
+    [InlineData("(text)", true)]
+    [InlineData("text!", true)]
+    [InlineData("(text!)", true)]
+    public void WrappedRefStorage_UsesCentralWriteProof(string target, bool readOnly)
+    {
+        string modifier = readOnly ? "readonly " : string.Empty;
+        string mutation = readOnly ? "_ = alias;" : "alias = null;";
+        LoadedCSharpProject loaded = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Wrapped.cs", $$"""
+                using System.Collections.Generic;
+                public static class Obj {
+                    public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                        string text = choose ? null : "x";
+                        ref {{modifier}}string? alias = ref {{target}};
+                        if (text != null) {
+                            {{mutation}}
+                            yield return (text, 1);
+                        }
+                    }
+                }
+                """),
+        });
+        Assert.True(loaded.BoundWithoutErrors, string.Join(Environment.NewLine, loaded.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(loaded.Documents);
+        var context = new TranslationContext(loaded.Compilation, document.SemanticModel, document.FilePath);
+        string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        TranslationDiagnostic unsupported = Assert.Single(
+            context.Diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("RefExpression", unsupported.ToString());
+
+        string textType = readOnly ? "string" : "string?";
+        Assert.Contains($"func Rows(choose bool) sequence[(Text {textType}, Code int32)]", printed);
+        // Wrapped ref lowering already fails loudly; its diagnostic is unchanged.
+    }
+
     [Fact]
     public void ReadOnlyRefAliasBeforeGuard_PreservesTupleYieldProof()
     {

@@ -630,31 +630,6 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.AwaitedReturnIsTainted(enumerable.TypeArguments[0], method);
         }
 
-        // Issue #4578: a C# `!` on the collection (`Items(x)!`) only changes the
-        // collection's static flow state, never its element type, so the
-        // iterator call behind any mix of parentheses and suppressions still
-        // decides the binding's nullability.
-        private static ExpressionSyntax UnwrapParenthesesAndSuppressions(ExpressionSyntax expression)
-        {
-            while (true)
-            {
-                if (expression is ParenthesizedExpressionSyntax parenthesized)
-                {
-                    expression = parenthesized.Expression;
-                    continue;
-                }
-
-                if (expression is PostfixUnaryExpressionSyntax suppression
-                    && suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression))
-                {
-                    expression = suppression.Operand;
-                    continue;
-                }
-
-                return expression;
-            }
-        }
-
         // Issue #2423: mirrors PromoteAwaitedReturnIfTainted's decision for a
         // NON-async `Task<T>`/`ValueTask<T>`-returning declaration (a C#
         // interface member — interfaces cannot declare `async` members — or a
