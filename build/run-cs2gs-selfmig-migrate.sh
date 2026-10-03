@@ -41,6 +41,7 @@ selfmig_build_prerequisites
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$repo_root" \
+  --sdk-pin global-json \
   --out "$migrated_dir" \
   --artifacts "$runs_dir" \
   --config Release \
