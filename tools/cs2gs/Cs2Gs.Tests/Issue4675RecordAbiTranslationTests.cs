@@ -54,6 +54,10 @@ namespace Corpus.Issue4675
 
     public record GenericDerivedRecord<T>(T Value) : RecordBase(1);
 
+    public record GenericBase<T>(T BaseValue);
+
+    public record GenericChild(int Own) : GenericBase<int>(1);
+
     public readonly record struct GenericRecordStruct<T>(T Value);
 
     public record RefOverloadedPrintMembers(int Value)
@@ -213,6 +217,23 @@ namespace Corpus.Issue4675
                 new[] { Activator.CreateInstance(translatedClassType, new object[] { value }) });
             Assert.Equal(expected, actual);
         }
+
+        Type baselineGenericBase = csharpAssembly.GetType("Corpus.Issue4675.GenericBase`1", throwOnError: true).MakeGenericType(typeof(int));
+        Type translatedGenericBase = gsharpAssembly.GetType("Corpus.Issue4675.GenericBase`1", throwOnError: true).MakeGenericType(typeof(int));
+        Type baselineChild = csharpAssembly.GetType("Corpus.Issue4675.GenericChild", throwOnError: true);
+        Type translatedChild = gsharpAssembly.GetType("Corpus.Issue4675.GenericChild", throwOnError: true);
+        object expectedLeft = Activator.CreateInstance(baselineChild, new object[] { 42 });
+        object expectedRight = Activator.CreateInstance(baselineChild, new object[] { 42 });
+        object actualLeft = Activator.CreateInstance(translatedChild, new object[] { 42 });
+        object actualRight = Activator.CreateInstance(translatedChild, new object[] { 42 });
+        baselineGenericBase.GetProperty("BaseValue").SetValue(expectedRight, 2);
+        translatedGenericBase.GetProperty("BaseValue").SetValue(actualRight, 2);
+        object expectedEquality = typeof(IEquatable<>).MakeGenericType(baselineGenericBase).GetMethod("Equals")
+            .Invoke(expectedLeft, new[] { expectedRight });
+        Assert.Equal(false, expectedEquality);
+        object actualEquality = typeof(IEquatable<>).MakeGenericType(translatedGenericBase).GetMethod("Equals")
+            .Invoke(actualLeft, new[] { actualRight });
+        Assert.Equal(expectedEquality, actualEquality);
     }
 
     [Theory]
