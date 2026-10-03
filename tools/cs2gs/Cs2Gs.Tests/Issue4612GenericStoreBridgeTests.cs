@@ -1198,6 +1198,71 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void WholeParamsVariableAssignments_AreNotExpandedElementStores()
+    {
+        string source = """
+            #nullable enable
+            public static class C
+            {
+                public static void Concrete(string[]? concrete, params string[] items) => items = concrete!;
+                public static void Generic<T>(T[]? generic, params T[] items) => items = generic!;
+                public static void Collection(System.Collections.Generic.List<string>? collection, params System.Collections.Generic.List<string> items) =>
+                    items = collection!;
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("concrete!!", printed, StringComparison.Ordinal);
+        Assert.Contains("generic!!", printed, StringComparison.Ordinal);
+        Assert.Contains("collection!!", printed, StringComparison.Ordinal);
+        Assert.Empty(sites);
+    }
+
+    [Fact]
+    public void GenericParameterVariableAssignments_UseAssignmentMetadataAndPreserveFinalArguments()
+    {
+        string source = """
+            #nullable enable
+            public static class C
+            {
+                private static T Id<T>(T value) => value;
+                public static T Method<T>(T copy, T? maybe) where T : class
+                {
+                    copy = maybe;
+                    return copy;
+                }
+
+                public static string[] Result(string[]? source, params string[] items) => Id<string[]>(items = source!);
+            }
+
+            public class Box<T> where T : class
+            {
+                public T Member(T copy, T? other)
+                {
+                    copy = other;
+                    return copy;
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("maybe!!", printed, StringComparison.Ordinal);
+        Assert.Contains("other!!", printed, StringComparison.Ordinal);
+        Assert.Contains("source!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "maybe;") + " kind=type-parameter-assignment | target=C.Method<T>(T, T?) parameter 'copy' | slot-type=T",
+                Expected(source, "source!") + " kind=forgiven,explicit-type-argument | target=C.Id<string[]>(string[]) parameter 'value' | slot-type=string[]",
+                Expected(source, "other;") + " kind=type-parameter-assignment | target=Box<T>.Member(T, T?) parameter 'copy' | slot-type=T",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
+        Assert.All(
+            sites.Where(site => site.Message.StartsWith("kind=type-parameter-assignment", StringComparison.Ordinal)),
+            site => Assert.Contains("result-depends-on-slot=no", site.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
