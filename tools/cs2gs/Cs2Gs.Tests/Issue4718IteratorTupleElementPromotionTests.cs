@@ -696,6 +696,85 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NestedConstructedIteratorContracts_MapOwnArgumentsSeparately(bool guarded)
+    {
+        string body = guarded
+            ? "if (text != null) { yield return (text, 1); }"
+            : "yield return (text, 1);";
+        string source = $$"""
+            using System.Collections.Generic;
+            public class Outer<T> {
+                public interface IRows<U> { IEnumerable<U> Rows(); }
+            }
+            public sealed class MissingRows : Outer<int>.IRows<(string Text, int Code)> {
+                public IEnumerable<(string Text, int Code)> Rows() {
+                    string text = null;
+                    {{body}}
+                }
+            }
+            public static class Consumer {
+                public static Outer<int>.IRows<(string Text, int Code)> Carry(
+                    Outer<int>.IRows<(string Text, int Code)> value) {
+                    return value;
+                }
+            }
+            """;
+        LoadedCSharpProject loaded = CSharpProjectLoader.LoadInMemory(new[] { ("Nested.cs", source) });
+        INamedTypeSymbol implementation = Assert.IsAssignableFrom<INamedTypeSymbol>(
+            loaded.Compilation.GetTypeByMetadataName("MissingRows"));
+        INamedTypeSymbol nested = Assert.Single(implementation.AllInterfaces);
+        Assert.Equal(1, nested.Arity);
+        Assert.Single(nested.TypeArguments);
+        Assert.Single(nested.ContainingType.TypeArguments);
+        string printed = Translate(source);
+
+        string textType = guarded ? "string" : "string?";
+        Assert.Equal(3, printed.Split($"Outer[int32].IRows[(Text {textType}, Code int32)]").Length - 1);
+        Assert.Contains($"sequence[(Text {textType}, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ConstructedInheritedContracts_ProjectParametersEmbeddedInsideTuples(bool interfaceContract, bool guarded)
+    {
+        string declaration = interfaceContract
+            ? "public interface IAlias<X> : IRows<(X Value, int Code)> { }"
+            : "public abstract class IAlias<X> : IRows<(X Value, int Code)> { public abstract IEnumerable<(X Value, int Code)> Rows(); }";
+        string modifier = interfaceContract ? string.Empty : "override ";
+        string body = guarded
+            ? "if (text != null) { yield return ((text, 1), 2); }"
+            : "yield return ((text, 1), 2);";
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public interface IRows<T> { IEnumerable<T> Rows(); }
+            {{declaration}}
+            public sealed class MissingRows : IAlias<(string Text, int Id)> {
+                public {{modifier}}IEnumerable<((string Text, int Id) Value, int Code)> Rows() {
+                    string text = null;
+                    {{body}}
+                }
+            }
+            public static class Consumer {
+                public static IEnumerable<((string Text, int Id) Value, int Code)> Copy(
+                    IAlias<(string Text, int Id)> source) {
+                    return source.Rows();
+                }
+            }
+            """);
+
+        string textType = guarded ? "string" : "string?";
+        Assert.Equal(2, printed.Split($"IAlias[(Text {textType}, Id int32)]").Length - 1);
+        Assert.Contains("IRows[(Value X, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]

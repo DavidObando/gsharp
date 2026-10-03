@@ -4418,15 +4418,22 @@ internal static class ObliviousNullabilityAnalyzer
                 pending.Enqueue(inherited);
                 foreach ((string path, INamedTypeSymbol tuple) in NestedTupleSlots(inherited))
                 {
-                    (ISymbol owner, string sourcePath) = ProjectTupleContractPosition(
-                        inherited, path, template, type);
-                    if (SymbolEqualityComparer.Default.Equals(owner, inherited))
+                    var leaves = new List<(TupleElementKey Target, TupleElementKey Source)>();
+                    AddTupleShapeEdges(
+                        inherited, tuple, path, inherited, tuple, path, tupleTainted, leaves);
+                    foreach ((TupleElementKey leaf, TupleElementKey _) in leaves)
                     {
-                        continue;
-                    }
+                        (ISymbol owner, string sourcePath) = ProjectTupleContractPosition(
+                            inherited, leaf.Path, template, type);
+                        var projected = new TupleElementKey(owner, sourcePath);
+                        if (TupleElementKeyComparer.Instance.Equals(leaf, projected))
+                        {
+                            continue;
+                        }
 
-                    AddTupleShapeEdges(inherited, tuple, path, owner, tuple, sourcePath, tupleTainted, tupleEdges);
-                    AddTupleShapeEdges(owner, tuple, sourcePath, inherited, tuple, path, tupleTainted, tupleEdges);
+                        tupleEdges.Add((leaf, projected));
+                        tupleEdges.Add((projected, leaf));
+                    }
                 }
             }
         }
