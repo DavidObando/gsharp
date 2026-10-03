@@ -106,6 +106,8 @@ public class GsStubClassShapeTests
     [InlineData("abstract partial class Target(N int32) {}", "App.Target", true, "Protected();Public(Int32)")]
     [InlineData("abstract partial class Target() {}", "App.Target", true, "Public()")]
     [InlineData("open class Base(N int32) {}\nopen partial class Target(N int32) : Base(N) { open func Visit(); }", "App.Target", true, "Public(Int32)")]
+    [InlineData("open class Base(N int32) {}\nabstract partial class Target(N int32) : Base(N) {}", "App.Target", true, "Public(Int32)")]
+    [InlineData("open class Base(N int32) {}\nabstract partial class Target() : Base(1) {}", "App.Target", true, "Public()")]
     [InlineData("open class Base(N int32) {}\nopen partial class Target : Base(1) { open func Visit(); }", "App.Target", true, "Public()")]
     [InlineData("open class Base(N int32) {}\nabstract partial class Target : Base(1) {}", "App.Target", true, "Protected()")]
     [InlineData("open partial class Target { private init(n int32) {} open func Visit(); }", "App.Target", true, "Private(Int32)")]
