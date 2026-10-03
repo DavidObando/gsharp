@@ -41,6 +41,92 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         Assert.DoesNotContain("text!!", printed);
     }
 
+    [Theory]
+    [InlineData("IEnumerable", "", true, false)]
+    [InlineData("IEnumerator", "", true, false)]
+    [InlineData("IAsyncEnumerable", "async ", true, false)]
+    [InlineData("IAsyncEnumerator", "async ", true, false)]
+    [InlineData("IEnumerable", "", false, false)]
+    [InlineData("IEnumerator", "", false, false)]
+    [InlineData("IAsyncEnumerable", "async ", false, false)]
+    [InlineData("IAsyncEnumerator", "async ", false, false)]
+    [InlineData("IEnumerable", "", true, true)]
+    [InlineData("IEnumerator", "", true, true)]
+    [InlineData("IAsyncEnumerable", "async ", true, true)]
+    [InlineData("IAsyncEnumerator", "async ", true, true)]
+    [InlineData("IEnumerable", "", false, true)]
+    [InlineData("IEnumerator", "", false, true)]
+    [InlineData("IAsyncEnumerable", "async ", false, true)]
+    [InlineData("IAsyncEnumerator", "async ", false, true)]
+    public void IteratorTupleContracts_SynchronizeInterfacesOverridesAndSiblingImplementations(
+        string envelope,
+        string modifier,
+        bool interfaceContract,
+        bool guarded)
+    {
+        string yielded = """
+            yield return choose ? ((choose ? text : "x", "keep"), 1) : (("x", "keep"), 2);
+            """;
+        string row = envelope.EndsWith("Enumerator", StringComparison.Ordinal) ? "rows.Current" : "row";
+        string read = guarded
+            ? $"result += {row}.Names.Text.Length;"
+            : $"if ({row}.Names.Text == null) {{ result++; }}";
+        string scan = envelope switch
+        {
+            "IEnumerable" => $"foreach (var row in source.Rows(choose)) {{ {read} }}",
+            "IEnumerator" => $"var rows = source.Rows(choose); while (rows.MoveNext()) {{ {read} }}",
+            "IAsyncEnumerable" => $"await foreach (var row in source.Rows(choose)) {{ {read} }}",
+            _ => $"var rows = source.Rows(choose); while (await rows.MoveNextAsync()) {{ {read} }}",
+        };
+        string returnType = modifier.Length == 0 ? "int" : "System.Threading.Tasks.Task<int>";
+        string contract = interfaceContract
+            ? $$"""
+                public interface IRows {
+                    {{envelope}}<((string Text, string Keep) Names, int Code)> Rows(bool choose);
+                }
+                """
+            : $$"""
+                public abstract class RowsBase {
+                    public abstract {{envelope}}<((string Text, string Keep) Names, int Code)> Rows(bool choose);
+                }
+                """;
+        string contractType = interfaceContract ? "IRows" : "RowsBase";
+        string implementationModifier = interfaceContract ? modifier : "override " + modifier;
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            {{contract}}
+            public sealed class MissingRows : {{contractType}} {
+                public {{implementationModifier}}{{envelope}}<((string Text, string Keep) Names, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    {{(guarded ? "if (text != null) { " + yielded + " }" : yielded)}}
+                }
+            }
+            public sealed class PresentRows : {{contractType}} {
+                public {{implementationModifier}}{{envelope}}<((string Text, string Keep) Names, int Code)> Rows(bool choose) {
+                    yield return (("present", "keep"), 3);
+                }
+            }
+            public static class Consumer {
+                public static {{modifier}}{{returnType}} Read({{contractType}} source, bool choose) {
+                    int result = 0;
+                    {{scan}}
+                    return result;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(printed);
+        string[] signatures = printed.Split(Environment.NewLine)
+            .Where(line => line.Contains("func Rows(", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(3, signatures.Length);
+        string textType = guarded ? "string" : "string?";
+        Assert.All(
+            signatures,
+            signature => Assert.Contains($"(Names (Text {textType}, Keep string), Code int32)", signature));
+        Assert.DoesNotContain("Keep string?", printed);
+    }
+
     [Fact]
     public void NestedSwitchTupleYield_UsesTheSameElementPathsAsForwardedCollection()
     {

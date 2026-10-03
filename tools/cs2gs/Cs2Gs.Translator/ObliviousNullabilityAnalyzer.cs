@@ -4326,20 +4326,18 @@ internal static class ObliviousNullabilityAnalyzer
         {
             foreach (IMethodSymbol method in type.GetMembers().OfType<IMethodSymbol>())
             {
-                if (method.MethodKind != MethodKind.Ordinary
-                    || !TryGetTupleType(method, out INamedTypeSymbol methodTuple))
+                if (method.MethodKind != MethodKind.Ordinary)
                 {
                     continue;
                 }
 
-                if (method.OverriddenMethod is IMethodSymbol overridden
-                    && TryGetTupleType(overridden, out INamedTypeSymbol overriddenTuple))
+                if (method.OverriddenMethod is IMethodSymbol overridden)
                 {
                     AddTupleContractPair(
                         method,
-                        methodTuple,
+                        SymbolValueType(method),
                         overridden,
-                        overriddenTuple,
+                        SymbolValueType(overridden),
                         tupleTainted,
                         tupleEdges);
                 }
@@ -4350,18 +4348,16 @@ internal static class ObliviousNullabilityAnalyzer
                 foreach (IMethodSymbol interfaceMethod in iface.GetMembers().OfType<IMethodSymbol>())
                 {
                     if (interfaceMethod.MethodKind != MethodKind.Ordinary
-                        || !TryGetTupleType(interfaceMethod, out INamedTypeSymbol interfaceTuple)
-                        || type.FindImplementationForInterfaceMember(interfaceMethod) is not IMethodSymbol implementation
-                        || !TryGetTupleType(implementation, out INamedTypeSymbol implementationTuple))
+                        || type.FindImplementationForInterfaceMember(interfaceMethod) is not IMethodSymbol implementation)
                     {
                         continue;
                     }
 
                     AddTupleContractPair(
                         interfaceMethod,
-                        interfaceTuple,
+                        SymbolValueType(interfaceMethod),
                         implementation,
-                        implementationTuple,
+                        SymbolValueType(implementation),
                         tupleTainted,
                         tupleEdges);
                 }
@@ -4371,32 +4367,60 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static void AddTupleContractPair(
         IMethodSymbol first,
-        INamedTypeSymbol firstTuple,
+        ITypeSymbol firstType,
         IMethodSymbol second,
-        INamedTypeSymbol secondTuple,
+        ITypeSymbol secondType,
         HashSet<TupleElementKey> tupleTainted,
         List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
     {
+        List<(string Path, INamedTypeSymbol Tuple)> firstSlots = NestedTupleSlots(firstType);
+        List<(string Path, INamedTypeSymbol Tuple)> secondSlots = NestedTupleSlots(secondType);
+        if (firstType is INamedTypeSymbol { IsTupleType: true } firstTuple)
+        {
+            firstSlots.Add((string.Empty, firstTuple));
+        }
+
+        if (secondType is INamedTypeSymbol { IsTupleType: true } secondTuple)
+        {
+            secondSlots.Add((string.Empty, secondTuple));
+        }
+
+        if (firstSlots.Count == 0 || firstSlots.Count != secondSlots.Count)
+        {
+            return;
+        }
+
+        for (int i = 0; i < firstSlots.Count; i++)
+        {
+            if (firstSlots[i].Tuple.TupleElements.Length != secondSlots[i].Tuple.TupleElements.Length)
+            {
+                return;
+            }
+        }
+
         ISymbol firstCanonical = Canonical(first);
         ISymbol secondCanonical = Canonical(second);
-        AddTupleShapeEdges(
-            firstCanonical,
-            firstTuple,
-            string.Empty,
-            secondCanonical,
-            secondTuple,
-            string.Empty,
-            tupleTainted,
-            tupleEdges);
-        AddTupleShapeEdges(
-            secondCanonical,
-            secondTuple,
-            string.Empty,
-            firstCanonical,
-            firstTuple,
-            string.Empty,
-            tupleTainted,
-            tupleEdges);
+        for (int i = 0; i < firstSlots.Count; i++)
+        {
+            AddTupleShapeEdges(
+                firstCanonical,
+                firstSlots[i].Tuple,
+                firstSlots[i].Path,
+                secondCanonical,
+                secondSlots[i].Tuple,
+                secondSlots[i].Path,
+                tupleTainted,
+                tupleEdges);
+            AddTupleShapeEdges(
+                secondCanonical,
+                secondSlots[i].Tuple,
+                secondSlots[i].Path,
+                firstCanonical,
+                firstSlots[i].Tuple,
+                firstSlots[i].Path,
+                tupleTainted,
+                tupleEdges);
+        }
     }
 
     // Issue #2504: a source named delegate's Invoke return is a declaration
