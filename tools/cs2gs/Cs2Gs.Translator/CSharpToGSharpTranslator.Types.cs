@@ -272,7 +272,11 @@ public sealed partial class CSharpToGSharpTranslator
                     expressionBody = this.TranslateExpression(bodyExpression);
                     if (this.IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(bodyExpression))
                     {
-                        expressionBody = new NonNullAssertionExpression(expressionBody);
+                        expressionBody = this.ReportStoreBridge(
+                            bodyExpression,
+                            expressionBody,
+                            new NonNullAssertionExpression(expressionBody),
+                            this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod);
                     }
                     else if (this.IsGSharpNullableAnalyzerExpression(bodyExpression)
                         && this.AnalyzerBridgeTargetIsNonNull(GetEffectiveReturnType(
@@ -284,7 +288,11 @@ public sealed partial class CSharpToGSharpTranslator
                         // the `T` of an async `Task<T>`, never the envelope — the
                         // same bridge a `return` statement takes. (gsc erases the
                         // reference `!!` inside an expression tree.)
-                        expressionBody = EnsureNonNullAssertion(expressionBody);
+                        expressionBody = this.ReportStoreBridge(
+                            bodyExpression,
+                            expressionBody,
+                            EnsureNonNullAssertion(expressionBody),
+                            this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod);
                     }
                 }
                 finally
@@ -1486,7 +1494,8 @@ public sealed partial class CSharpToGSharpTranslator
                         tupleLiteral.Elements[i],
                         tupleTarget.TupleElements[i].Type,
                         enclosingIterator,
-                        includePromotedValue: true));
+                        includePromotedValue: true,
+                        reportedSlotType: tupleTarget.TupleElements[i].Type));
                 }
 
                 value = new TupleLiteralExpression(bridged);
