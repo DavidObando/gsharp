@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Immutable;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -18,6 +19,87 @@ namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
 {
+    [Theory]
+    [InlineData("ImmutableArray[int32]", "IEnumerable[object]")]
+    [InlineData("ImmutableArray[List[Item]]", "IEnumerable[List[object]]")]
+    public void ImportedValueWrapper_UnsafeVarianceIsRejectedWithoutEmission(string sourceType, string targetType)
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile($$"""
+            package Issue4731.ImportedValueProjectionNegative
+            import System.Collections.Generic
+            import System.Collections.Immutable
+            class Item {}
+            func Unsafe(value {{sourceType}}) {{targetType}} -> value
+            """);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("error GS0155:", result.Output, StringComparison.Ordinal);
+        Assert.False(File.Exists(result.AssemblyPath));
+    }
+
+    [Fact]
+    public void ImportedValueWrapper_ClosedInterfaceProjection_BoxesAndEnumeratesActualSymbols()
+    {
+        using var fixture = new Fixture();
+        string roslynReference = typeof(IMethodSymbol).Assembly.Location;
+        var result = fixture.Compile("""
+            package Issue4731.ImportedValueProjection
+            import System.Collections.Generic
+            import System.Collections.Immutable
+            import Microsoft.CodeAnalysis
+            public func Direct(value ImmutableArray[IMethodSymbol]) IEnumerable[ISymbol] -> value
+            public func Constructors(value INamedTypeSymbol) IEnumerable[ISymbol] -> value.InstanceConstructors
+            public func Implementations(value IMethodSymbol) IEnumerable[ISymbol] -> value.ExplicitInterfaceImplementations
+            """, roslynReference);
+        Assert.True(result.ExitCode == 0, result.Output);
+        IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath, roslynReference });
+
+        var compilation = CSharpCompilation.Create(
+            "Issue4731.SymbolProducer",
+            new[]
+            {
+                CSharpSyntaxTree.ParseText("""
+                    interface IContract { void Read(); }
+                    sealed class Sample : IContract
+                    {
+                        public Sample() { }
+                        void IContract.Read() { }
+                    }
+                    """),
+            },
+            ReferenceResolver.HostTrustedPlatformAssemblyPaths().Select(path => MetadataReference.CreateFromFile(path)),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        var owner = compilation.GetTypeByMetadataName("Sample");
+        Assert.NotNull(owner);
+        var implementation = Assert.Single(
+            owner.GetMembers().OfType<IMethodSymbol>(),
+            method => !method.ExplicitInterfaceImplementations.IsEmpty);
+        var assembly = EmittedFixture.Load(result.AssemblyPath);
+        var direct = FindMethod(assembly, "Direct");
+        Assert.Equal(typeof(ImmutableArray<IMethodSymbol>), Assert.Single(direct.GetParameters()).ParameterType);
+        Assert.Equal(typeof(System.Collections.Generic.IEnumerable<ISymbol>), direct.ReturnType);
+        foreach (string name in new[] { "Direct", "Constructors", "Implementations" })
+        {
+            var method = FindMethod(assembly, name);
+            object argument = name switch
+            {
+                "Direct" => owner.InstanceConstructors,
+                "Constructors" => owner,
+                _ => implementation,
+            };
+            var values = Assert.IsAssignableFrom<System.Collections.Generic.IEnumerable<ISymbol>>(
+                method.Invoke(null, new[] { argument }));
+            var symbol = Assert.Single(values);
+            Assert.Equal(name == "Implementations" ? "Read" : ".ctor", symbol.Name);
+            Assert.Same(
+                name == "Implementations"
+                    ? implementation.ExplicitInterfaceImplementations[0]
+                    : owner.InstanceConstructors[0],
+                symbol);
+        }
+    }
+
     private const string ContractSource = """
         #nullable enable
         namespace Issue4731.Contracts;
@@ -454,7 +536,7 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
 
         public string AssemblyPath { get; }
 
-        public (int ExitCode, string Output, string AssemblyPath) Compile(string source)
+        public (int ExitCode, string Output, string AssemblyPath) Compile(string source, params string[] additionalReferences)
         {
             var sourcePath = Path.Combine(directory, "Consumer.gs");
             var outputPath = Path.Combine(directory, "Consumer.dll");
@@ -475,7 +557,7 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
                     "/r:" + AssemblyPath,
                     "/out:" + outputPath,
                     sourcePath,
-                });
+                }.Concat(additionalReferences.Select(path => "/r:" + path)).ToArray());
             }
             finally
             {

@@ -17,6 +17,43 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public sealed class Issue4731InheritedClrInterfaceConversionTests
 {
     [Theory]
+    [InlineData("ImmutableArray[int32]", "IEnumerable[object]")]
+    [InlineData("ImmutableArray[List[Item]]", "IEnumerable[List[object]]")]
+    public void ImportedValueWrapper_UnsafeVarianceCannotUseErasedBoxing(string sourceType, string targetType)
+    {
+        var compilation = Bind(
+            "import System.Collections.Immutable\nclass Item {}",
+            sourceType,
+            targetType,
+            "value");
+        var error = Assert.Single(
+            compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics),
+            diagnostic => diagnostic.IsError);
+        Assert.Equal("GS0155", error.Id);
+    }
+
+    [Theory]
+    [InlineData("ImmutableArray[IMethodSymbol]", "value")]
+    [InlineData("INamedTypeSymbol", "value.InstanceConstructors")]
+    [InlineData("IMethodSymbol", "value.ExplicitInterfaceImplementations")]
+    public void ImportedValueWrapper_InterfaceProjectionPreservesCovariance(string sourceType, string expression)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From($"""
+            package Issue4731.ImportedValueProjection
+            import System.Collections.Generic
+            import System.Collections.Immutable
+            import Microsoft.CodeAnalysis
+            func Convert(value {sourceType}) IEnumerable[ISymbol] -> {expression}
+            """));
+        var references = ReferenceResolver.WithReferences(
+            new[] { typeof(Microsoft.CodeAnalysis.IMethodSymbol).Assembly.Location });
+        var compilation = new Compilation(references, tree) { Nullability = NullabilityMode.PlatformTypes };
+        Assert.DoesNotContain(
+            compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics),
+            value => value.IsError);
+    }
+
+    [Theory]
     [InlineData("sequence[List[Item]]", "sequence[List[object]]", "GS0155")]
     [InlineData("sequence[List[Item]]", "IEnumerable[List[object]]", "GS0155")]
     [InlineData("async sequence[List[Item]]", "async sequence[List[object]]", "GS0155")]

@@ -3257,6 +3257,10 @@ public sealed class Conversion
         // boxes, and the boxed reference is runtime-assignment-compatible with
         // the variant interface, so only classification was missing. Non-
         // interface targets keep the value-type exclusion.
+
+        // Closed CLR signatures have no symbolic owner vector to map.
+        // Project their real interface closure; symbolic sources must
+        // keep the owner-aware path and never fall back to erased probes.
         ImmutableArray<TypeSymbol> sourceArguments;
         if (TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments)
             && (!sourceOpen.IsValueType || targetOpen.IsInterface))
@@ -3266,10 +3270,12 @@ public sealed class Conversion
                 sourceArguments = sourceTypeArguments;
             }
             else if (from is not ImportedTypeSymbol importedSource
-                || !MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
-                         importedSource,
-                         targetOpen,
-                         out sourceArguments))
+                || (importedSource.OpenDefinition != null && !importedSource.TypeArguments.IsDefaultOrEmpty
+                    ? !MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
+                          importedSource,
+                          targetOpen,
+                          out sourceArguments)
+                    : !TryProjectClrInterfaceArguments(importedSource, targetOpen, out sourceArguments)))
             {
                 return false;
             }
@@ -6395,8 +6401,14 @@ public sealed class Conversion
             }
         }
 
-        // Either side imported / CLR-typed: defer to the CLR's own
-        // assignability check.
+        if (from is ImportedTypeSymbol
+            && RequiresSymbolicTypeArgumentIdentity(from)
+            && TryGetConstructedGenericShape(to, out _, out _))
+        {
+            return TryClassifyConstructedImportedReferenceConversion(from, to);
+        }
+
+        // Only faithful closed CLR shapes may decide interface boxing.
         var fromClr = from?.ClrType;
         var toClr = to?.ClrType;
         if (fromClr != null && toClr != null)
