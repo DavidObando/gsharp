@@ -17,6 +17,105 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 public class Issue4675RecordPrimaryConstructorEmitTests
 {
     [Fact]
+    public void PositionalLiteralWithBracedMember_UsesExplicitConstructorArgument()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Collections.Generic
+            data struct Box(Value int32) {
+                public var Items List[int32] = List[int32]()
+                private let Marker int32 = Value + 4
+                public func Read() int32 -> Marker + Items[0]
+            }
+            Box{Value: 7, Items: {1}}.Read()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(12, result.Value);
+    }
+
+    [Theory]
+    [InlineData("data struct", false)]
+    [InlineData("data class", false)]
+    [InlineData("data struct", true)]
+    [InlineData("data class", true)]
+    public void PositionalLiteral_StagesBodyValuesInWrittenOrder(string kind, bool braced)
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Collections.Generic
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            KIND Pair(A int32) {
+                public var Extra int32
+                public var Items List[int32] = List[int32]()
+            }
+            let pair = Pair{Extra: Counter.Next(), A: Counter.Next()SUFFIX}
+            pair.A * 10 + pair.Extra
+            """.Replace("KIND", kind, StringComparison.Ordinal)
+                .Replace("SUFFIX", braced ? ", Items: {1}" : string.Empty, StringComparison.Ordinal));
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(21, result.Value);
+    }
+
+    [Fact]
+    public void EmittedDeconstruct_DispatchesVirtualPositionalGetter()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Item(Value int32) {
+                public open prop Value int32 { get; init; }
+            }
+            data class Derived : Item(1) {
+                public override prop Value int32 {
+                    get { return 42 }
+                    init { }
+                }
+            }
+            Derived{}
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.NotNull(result.Value);
+        Assert.True(result.Value.GetType().BaseType.GetProperty("Value").GetMethod.IsVirtual);
+        Assert.Contains(
+            result.Value.GetType().BaseType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly),
+            field => field.FieldType == typeof(int) && Equals(field.GetValue(result.Value), 1));
+        MethodInfo deconstruct = result.Value.GetType().BaseType.GetMethod("Deconstruct");
+        Assert.NotNull(deconstruct);
+        object[] arguments = { null };
+        deconstruct.Invoke(result.Value, arguments);
+        Assert.Equal(42, arguments[0]);
+    }
+
+    [Theory]
+    [InlineData("ref")]
+    [InlineData("ref readonly")]
+    public void EmittedDeconstruct_ReadsRefReturningPositionalGetter(string refKind)
+    {
+        var result = EmittedOracle.Evaluate("""
+            data class Item(Value int32) {
+                private var Storage int32 = Value
+                public prop Value REF int32 { get { return ref Storage } }
+            }
+            Item(41)
+            """.Replace("REF", refKind, StringComparison.Ordinal));
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.NotNull(result.Value);
+        MethodInfo deconstruct = result.Value.GetType().GetMethod("Deconstruct");
+        Assert.NotNull(deconstruct);
+        object[] arguments = { null };
+        deconstruct.Invoke(result.Value, arguments);
+        Assert.Equal(41, arguments[0]);
+    }
+
+    [Fact]
     public void PositionalLiteral_EvaluatesArgumentsInWrittenOrder()
     {
         var result = EmittedOracle.Evaluate("""

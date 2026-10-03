@@ -2599,15 +2599,16 @@ internal sealed partial class ExpressionBinder
 
         ImmutableArray<BoundStatement>.Builder? argumentStatements = null;
         var definition = structSymbol.Definition ?? structSymbol;
+        var stagedMemberNames = new HashSet<string>(StringComparer.Ordinal);
         if (orderedInitializers == null && structSymbol.ClrType == null
             && definition.IsData && definition.HasPrimaryConstructor)
         {
-            var parameterNames = definition.PrimaryConstructorParameters.Select(parameter => parameter.Name)
-                .ToHashSet(StringComparer.Ordinal);
             for (int i = 0; i < inits.Count; i++)
             {
                 var initializer = inits[i];
-                if (!parameterNames.Contains(initializer.MemberName))
+                if (initializer.Field != null
+                    && structSymbol.InstanceFieldInitializers.TryGetValue(initializer.Field, out var declaredValue)
+                    && ReferenceEquals(initializer.Value, declaredValue))
                 {
                     continue;
                 }
@@ -2624,6 +2625,41 @@ internal sealed partial class ExpressionBinder
                     : new BoundFieldInitializer(
                         Invariant.Required(initializer.Property, "a positional initializer targets a field or property"),
                         value);
+            }
+        }
+
+        if (orderedInitializers != null && structSymbol.ClrType == null
+            && definition.IsData && definition.HasPrimaryConstructor)
+        {
+            var parameterNames = definition.PrimaryConstructorParameters.Select(parameter => parameter.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            bool scalarPrefix = true;
+            foreach (var step in orderedInitializers)
+            {
+                if (step.Content != null || step.Braced != null)
+                {
+                    scalarPrefix = false;
+                    continue;
+                }
+
+                if (step.MemberSyntax is not { } member
+                    || (!scalarPrefix && !parameterNames.Contains(member.FieldIdentifier.ValueText)))
+                {
+                    continue;
+                }
+
+                var expression = BindExpression(member.Value, Invariant.Required(step.MemberType, "a positional member has a type"));
+                var name = "$literalarg" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var argument = new LocalVariableSymbol(name, isReadOnly: true, expression.Type);
+                scope.TryDeclareVariable(argument);
+                argumentStatements ??= ImmutableArray.CreateBuilder<BoundStatement>();
+                argumentStatements.Add(new BoundVariableDeclaration(null, argument, expression));
+                var value = new BoundVariableExpression(null, argument);
+                inits.Add(step.Field != null
+                    ? new BoundFieldInitializer(step.Field, value, step.FieldDeclaringType)
+                    : new BoundFieldInitializer(Invariant.Required(step.Property, "a positional member is a field or property"), value));
+                stagedMemberNames.Add(member.FieldIdentifier.ValueText);
             }
         }
 
@@ -2651,6 +2687,11 @@ internal sealed partial class ExpressionBinder
         scope.TryDeclareVariable(litTemp);
 
         var bracedStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (argumentStatements != null)
+        {
+            bracedStatements.AddRange(argumentStatements);
+        }
+
         bracedStatements.Add(new BoundVariableDeclaration(syntax, litTemp, structLiteral));
         foreach (var initializer in orderedInitializers)
         {
@@ -2672,6 +2713,11 @@ internal sealed partial class ExpressionBinder
 
             var memberSyntax = Invariant.Required(initializer.MemberSyntax, "a member step has member syntax");
             var memberType = Invariant.Required(initializer.MemberType, "a member step has a member type");
+            if (stagedMemberNames.Contains(memberSyntax.FieldIdentifier.ValueText))
+            {
+                continue;
+            }
+
             if (initializer.Braced != null)
             {
                 var litReceiver = new BoundVariableExpression(memberSyntax, litTemp);

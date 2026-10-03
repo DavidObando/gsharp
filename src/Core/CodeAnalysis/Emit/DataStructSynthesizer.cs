@@ -1038,13 +1038,13 @@ internal sealed class DataStructSynthesizer
                 il.OpCode(ILOpCode.Ceq);
                 il.Branch(ILOpCode.Brfalse, retFalse);
 
-                if (structSym.BaseClass?.IsData == true
-                    && this.dataClassEqualsTypedMethods.TryGetValue(structSym.BaseClass, out var baseEqualsTyped))
+                if (structSym.BaseClass is { IsData: true } baseClass
+                    && this.dataClassEqualsTypedMethods.TryGetValue(baseClass.Definition ?? baseClass, out var baseEqualsTyped))
                 {
                     il.LoadArgument(0);
                     il.LoadArgument(1);
                     il.OpCode(ILOpCode.Call);
-                    il.Token(baseEqualsTyped);
+                    il.Token(this.ResolveEqualsTypedToken(baseClass, baseEqualsTyped));
                     il.Branch(ILOpCode.Brfalse, retFalse);
                 }
             }
@@ -1467,7 +1467,8 @@ internal sealed class DataStructSynthesizer
                 var field = GetDeconstructionBackingField(members[i]);
                 il.LoadArgument(i + 1);
                 il.LoadArgument(0);
-                if (field != null)
+                if (field != null && members[i] is not PropertySymbol { IsVirtual: true }
+                    && members[i] is not PropertySymbol { IsOverride: true })
                 {
                     il.OpCode(ILOpCode.Ldfld);
                     il.Token(this.resolveUserFieldToken(structSym, field));
@@ -1476,13 +1477,30 @@ internal sealed class DataStructSynthesizer
                 {
                     var signature = new BlobBuilder();
                     new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
-                        .Parameters(0, result => this.encodeTypeSymbol(result.Type(), memberType), _ => { });
+                        .Parameters(
+                            0,
+                            result =>
+                            {
+                                var property = (PropertySymbol)members[i];
+                                if (property.ReturnRefKind == RefKind.RefReadOnly)
+                                {
+                                    result.CustomModifiers().AddModifier(this.wellKnown.GetInAttributeTypeRef(), isOptional: false);
+                                }
+
+                                this.encodeTypeSymbol(result.Type(isByRef: property.ReturnRefKind != RefKind.None), memberType);
+                            },
+                            _ => { });
                     var getter = this.emitCtx.Metadata.AddMemberReference(
                         this.resolveUserTypeToken(structSym),
                         this.emitCtx.Metadata.GetOrAddString("get_" + members[i].Name),
                         this.emitCtx.Metadata.GetOrAddBlob(signature));
                     il.OpCode(structSym.IsClass ? ILOpCode.Callvirt : ILOpCode.Call);
                     il.Token(getter);
+                    if (members[i] is PropertySymbol { ReturnRefKind: not RefKind.None })
+                    {
+                        il.OpCode(ILOpCode.Ldobj);
+                        il.Token(this.getElementTypeToken(memberType));
+                    }
                 }
 
                 // ADR-0087 §3 R3: TypeParameterSymbol fields are now
@@ -1570,7 +1588,7 @@ internal sealed class DataStructSynthesizer
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
-            .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
+            .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym.Definition ?? structSym));
         return this.resolveUserMethodRef(structSym, equalsTypedHandle, "Equals", sig);
     }
 

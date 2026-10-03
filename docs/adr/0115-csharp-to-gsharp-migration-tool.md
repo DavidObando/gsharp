@@ -127,14 +127,21 @@ positional data construction always invokes the primary constructor, independent
 of initializer-binding order. A redeclared positional property must retain its
 parameter's type, and closed-hierarchy bases retain protected copy constructors.
 Positional literals and structural projections likewise run initializers in the
-primary constructor's parameter scope. Native copying is a distinct bound
+primary constructor's parameter scope. Scalar literal inputs are prepared in
+written order; collection-initializer forms prepare constructor inputs and the
+leading scalar prefix before construction, then retain the order of remaining
+member/collection operations. Native copying is a distinct bound
 operation: value types copy their entire value and classes dispatch through
 `<Clone>$`, preserving private, get-only and inherited state without rerunning
 initializers. The copied receiver is materialized once before any update,
 including awaited updates. Replacement positional getters remain deconstruction
-members in primary-parameter order. Derived data classes forward the nearest
+members in primary-parameter order; virtual getters retain dispatch and
+ref-returning getters retain their CLR return signature before loading the
+referenced value. Derived data classes forward the nearest
 record base's typed `Equals` slot through virtual object equality, so inherited
-`IEquatable<Base>` includes derived state. Printing uses object formatting except
+`IEquatable<Base>` includes derived state; constructed generic base comparisons
+resolve the base definition's typed method through an instantiated MemberRef.
+Printing uses object formatting except
 for ref-like values, which call `ToString` without boxing; structural function
 values widen through `System.Delegate` before object formatting.
 
