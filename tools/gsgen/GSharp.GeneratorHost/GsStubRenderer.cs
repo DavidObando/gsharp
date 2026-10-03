@@ -604,8 +604,36 @@ public sealed class GsStubRenderer
 
     private void RenderConstructors(StringBuilder sb, string indent, StructSymbol structSymbol)
     {
+        if (structSymbol.IsSharedClass)
+        {
+            // The emitter's private placeholder is not a C# static-class member.
+            return;
+        }
+
         if (structSymbol.ExplicitConstructors.IsDefaultOrEmpty)
         {
+            if (structSymbol.IsClass)
+            {
+                // Match ReflectionMetadataEmitter.EmitClassMethodBodies: a
+                // forwarding primary constructor suppresses the default one.
+                if (!structSymbol.HasPrimaryConstructor || structSymbol.BaseConstructorInitializer == null)
+                {
+                    var emptyPrimary = !structSymbol.HasPrimaryConstructor
+                        && (structSymbol.Declaration?.HasPrimaryConstructor ?? false);
+                    var accessibility = structSymbol.IsDeclaredAbstract && !emptyPrimary
+                        ? Accessibility.Protected
+                        : structSymbol.HasPrimaryConstructor && !structSymbol.IsData
+                            ? Accessibility.Internal
+                            : Accessibility.Public;
+                    RenderConstructor(sb, indent, structSymbol, accessibility, ImmutableArray<ParameterSymbol>.Empty, structSymbol.BaseConstructorInitializer);
+                }
+
+                if (structSymbol.HasPrimaryConstructor)
+                {
+                    RenderConstructor(sb, indent, structSymbol, Accessibility.Public, structSymbol.PrimaryConstructorParameters, structSymbol.BaseConstructorInitializer);
+                }
+            }
+
             return;
         }
 
@@ -614,13 +642,36 @@ public sealed class GsStubRenderer
             var function = ctor.Function;
             RenderAttributes(sb, indent, function?.Attributes ?? ImmutableArray<BoundAttribute>.Empty);
             var accessibility = function?.Accessibility ?? Accessibility.Public;
-            sb.Append(indent).Append(AccessibilityKeyword(accessibility)).Append(' ');
-            sb.Append(structSymbol.Name).Append('(').Append(RenderParameters(ctor.Parameters)).Append(')');
-
-            // A value struct cannot carry a body-less expression ctor; give it an
-            // empty block. Classes get the elided throwing body.
-            sb.AppendLine(structSymbol.IsClass ? " => throw null!;" : " { }");
+            var baseInitializer = ctor.IsSynthesizedFromPrimaryConstructor
+                ? structSymbol.BaseConstructorInitializer
+                : ctor.BaseInitializer;
+            RenderConstructor(sb, indent, structSymbol, accessibility, ctor.Parameters, baseInitializer);
         }
+    }
+
+    private void RenderConstructor(
+        StringBuilder sb,
+        string indent,
+        StructSymbol structSymbol,
+        Accessibility accessibility,
+        ImmutableArray<ParameterSymbol> parameters,
+        BaseConstructorInitializer baseInitializer)
+    {
+        sb.Append(indent).Append(AccessibilityKeyword(accessibility)).Append(' ');
+        sb.Append(structSymbol.Name).Append('(').Append(RenderParameters(parameters)).Append(')');
+        if (baseInitializer != null && !baseInitializer.Arguments.IsDefaultOrEmpty
+            && baseInitializer.ArgumentRefKinds.All(refKind => refKind == RefKind.None))
+        {
+            // Only signatures are projected; typed defaults select the bound
+            // base overload without evaluating the source's initializer. Keep
+            // the existing elision for by-reference arguments, not rvalue defaults.
+            sb.Append(" : base(").Append(string.Join(", ", baseInitializer.Arguments
+                .Select(argument => "default(" + speller.Spell(argument.Type) + ")"))).Append(')');
+        }
+
+        // A value struct cannot carry a body-less expression ctor; give it an
+        // empty block. Classes get the elided throwing body.
+        sb.AppendLine(structSymbol.IsClass ? " => throw null!;" : " { }");
     }
 
     private void RenderMethods(

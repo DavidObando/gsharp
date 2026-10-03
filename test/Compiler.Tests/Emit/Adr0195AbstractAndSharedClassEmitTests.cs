@@ -47,6 +47,22 @@ public class Adr0195AbstractAndSharedClassEmitTests
         open class Seed(N int32) {
         }
 
+        open class Inferred {
+            open func Visit() int32;
+        }
+
+        open class InferredChild : Inferred {
+            override func Visit() int32 { return 1 }
+        }
+
+        open class InferredForwarding(N int32) : Seed(N) {
+            open func Visit() int32;
+        }
+
+        open class InferredForwardingChild() : InferredForwarding(1) {
+            override func Visit() int32 { return N }
+        }
+
         abstract class Forwarding : Seed(1) {
         }
 
@@ -80,6 +96,9 @@ public class Adr0195AbstractAndSharedClassEmitTests
             Console.WriteLine(Helpers.Triple(5))
             Console.WriteLine(Helpers.Triple(2) + Helpers.calls)
             Console.WriteLine(Square(2).Sides + Square(2).Side)
+            if InferredChild().Visit() != 1 || InferredForwardingChild().Visit() != 1 {
+                throw Exception("inferred constructor control failed")
+            }
             Console.WriteLine(Leaf().N)
         }
         """;
@@ -119,6 +138,16 @@ public class Adr0195AbstractAndSharedClassEmitTests
             var counting = GetTypeAttributes(dll, "Counting");
             Assert.Equal(default(TypeAttributes), counting & TypeAttributes.Abstract);
             Assert.Equal(default(TypeAttributes), counting & TypeAttributes.Sealed);
+
+            foreach (var name in new[] { "Inferred", "InferredForwarding" })
+            {
+                var attributes = GetTypeAttributes(dll, name);
+                Assert.Equal(TypeAttributes.Abstract, attributes & TypeAttributes.Abstract);
+                Assert.Equal(default(TypeAttributes), attributes & TypeAttributes.Sealed);
+                Assert.Equal(
+                    MethodAttributes.Public,
+                    GetMethodAttributes(dll, name, ".ctor") & MethodAttributes.MemberAccessMask);
+            }
         }
         finally
         {
