@@ -1089,7 +1089,7 @@ internal sealed class DataStructSynthesizer
                 il.OpCode(ILOpCode.Ceq);
                 il.Branch(ILOpCode.Brfalse, retFalse);
 
-                if (structSym.BaseClass is { IsData: true } baseClass
+                if (structSym.GetDataCloneAncestor() is { } baseClass
                     && this.cache.DataClassEqualsTypedHandles.TryGetValue(baseClass.Definition ?? baseClass, out var baseEqualsTyped))
                 {
                     il.LoadArgument(0);

@@ -50,6 +50,24 @@ public sealed class BoundStructLiteralExpression : BoundExpression
 
     public override BoundNodeKind Kind => BoundNodeKind.StructLiteralExpression;
 
+    internal BoundFieldInitializer? GetPrimaryArgument(string name)
+    {
+        var member = TypeMemberModel.LookupMember(
+            StructType,
+            name,
+            new MemberQuery(includeInstance: true, includeStatic: false, includeInherited: false, MemberKinds.Property | MemberKinds.Field));
+        foreach (var initializer in Initializers)
+        {
+            if ((initializer.Property != null && initializer.Property == member)
+                || (initializer.Field != null && initializer.Field == member))
+            {
+                return initializer;
+            }
+        }
+
+        return null;
+    }
+
     internal static bool IsStagedConstruction(BoundBlockExpression block)
     {
         if (block.Expression is not BoundStructLiteralExpression { CopySource: null } literal

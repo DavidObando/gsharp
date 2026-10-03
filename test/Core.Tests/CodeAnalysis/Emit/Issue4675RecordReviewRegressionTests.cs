@@ -15,6 +15,70 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 public class Issue4675RecordReviewRegressionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void IndirectDataBaseEquality_ComparesInheritedState(bool generic)
+    {
+        var result = EmittedOracle.Evaluate("""
+            data class Child(Own int32) : MiddleTYPE
+            open class MiddlePARAM : BasePARENT
+            open data class BasePARAM : IEquatable[BasePARAM] { public var BaseValue int32 }
+            Child(7)
+            """.Replace("TYPE", generic ? "[int32]" : string.Empty, StringComparison.Ordinal)
+                .Replace("PARAM", generic ? "[T]" : string.Empty, StringComparison.Ordinal)
+                .Replace("PARENT", generic ? "[T]" : string.Empty, StringComparison.Ordinal));
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.NotNull(result.Value);
+        var type = result.Value.GetType();
+        var other = Activator.CreateInstance(type, new object[] { 7 });
+        var dataBase = type.BaseType.BaseType;
+        var field = dataBase.GetField("BaseValue");
+        Assert.NotNull(field);
+        field.SetValue(result.Value, 1);
+        field.SetValue(other, 2);
+        var baseEquality = typeof(IEquatable<>).MakeGenericType(dataBase).GetMethod("Equals");
+        Assert.NotNull(baseEquality);
+        Assert.Equal(false, baseEquality.Invoke(result.Value, new[] { other }));
+        Assert.False(result.Value.Equals(other));
+        field.SetValue(other, 1);
+        Assert.Equal(true, baseEquality.Invoke(result.Value, new[] { other }));
+        Assert.True(result.Value.Equals(other));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void PositionalLiteral_DoesNotConsumeHiddenInheritedField(bool tree, bool generic)
+    {
+        var source = """
+            import System
+            import System.Linq.Expressions
+            open class BasePARAM { public var Value FIELD }
+            data class Child(Value int32) : BaseTYPE
+            CONSTRUCTION
+            """.Replace("PARAM", generic ? "[T]" : string.Empty, StringComparison.Ordinal)
+                .Replace("FIELD", generic ? "T" : "string", StringComparison.Ordinal)
+                .Replace("TYPE", generic ? "[string]" : string.Empty, StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", tree
+                    ? "let expression Expression[Func[Child]] = () -> Child{Value: \"hello\"}\nexpression.Compile()()"
+                    : "Child{Value: \"hello\"}", StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.NotNull(result.Value);
+        var type = result.Value.GetType();
+        var field = type.BaseType.GetField("Value");
+        var property = type.GetProperty("Value");
+        Assert.NotNull(field);
+        Assert.NotNull(property);
+        Assert.Equal("hello", field.GetValue(result.Value));
+        Assert.Equal(0, property.GetValue(result.Value));
+    }
+
     [Fact]
     public void StructLiteral_PreservesThreeParameterClrConstructor()
     {
