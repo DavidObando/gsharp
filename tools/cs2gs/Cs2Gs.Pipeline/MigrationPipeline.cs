@@ -250,7 +250,7 @@ public sealed class MigrationPipeline
             }
             else
             {
-                string mirroredGlobalJsonPin = SdkPin.ReadGlobalJsonPin(destinationRoot);
+                string mirroredGlobalJsonPin = SdkPin.ReadGlobalJsonScopePin(destinationRoot);
                 if (mirroredGlobalJsonPin is not null)
                 {
                     // A versioned Sdk attribute silently overrides a global.json
@@ -725,25 +725,7 @@ public sealed class MigrationPipeline
     /// <param name="migratedRoot">The migrated tree.</param>
     private void ResolveValidationSdkPin(string migratedRoot)
     {
-        string treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
-        if (treePin is not null)
-        {
-            IReadOnlyList<string> nestedGlobalJsonFiles = SdkPin.EnumerateNestedGlobalJson(
-                migratedRoot,
-                Directory.EnumerateFiles(migratedRoot, SdkPin.GlobalJsonFileName, SearchOption.AllDirectories)
-                    .Select(path => Path.GetRelativePath(migratedRoot, path)));
-            foreach (string nestedGlobalJson in nestedGlobalJsonFiles)
-            {
-                string nestedPath = Path.Combine(migratedRoot, nestedGlobalJson);
-                string nestedPin = SdkPin.ReadGlobalJsonPinFile(nestedPath);
-                if (!string.Equals(treePin, nestedPin, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        "Nested global.json '" + nestedGlobalJson + "' must pin Gsharp.NET.Sdk to the root " +
-                        "version " + treePin + ", but its pin is " + (nestedPin ?? "<missing>") + ".");
-                }
-            }
-        }
+        string treePin = SdkPin.ReadGlobalJsonScopePin(migratedRoot);
 
         string projectPin = SdkPin.ReadProjectPin(
             SdkPin.BuildableProjectPaths(migratedRoot),

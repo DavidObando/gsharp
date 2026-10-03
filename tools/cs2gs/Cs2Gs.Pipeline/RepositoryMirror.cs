@@ -427,22 +427,14 @@ internal static class RepositoryMirror
 
         // Bootstrap projects can explicitly import Microsoft.NET.Sdk before
         // their bootstrap targets; both imports must still be replaced.
-        bool bootstrapProject = project.Root.Attribute("Sdk") is null
-            && project.Root.Descendants().Any(element =>
+        bool bootstrapProject = project.Root.Descendants().Any(element =>
                 element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase)
                 && element.Attribute("Project")?.Value?.Contains(
                     "Gsharp.NET.Sdk.Bootstrap", StringComparison.OrdinalIgnoreCase) == true);
-        if (SdkPin.RebindProjectSdk(project.Root, sdkMoniker) && !bootstrapProject)
+        if (!bootstrapProject && SdkPin.RebindProjectSdk(project.Root, sdkMoniker))
         {
             return;
         }
-
-        // The Sdk ATTRIBUTE, not <Import Sdk="…"/>: the attribute carries the
-        // run's moniker exactly as every generated project does — "Name/Version"
-        // under a per-project pin, or the bare name under a global.json pin
-        // (SdkPin), where a versioned attribute would silently override the
-        // tree's single pin.
-        project.Root.SetAttributeValue("Sdk", sdkMoniker);
 
         foreach (XElement import in project.Root.Descendants()
             .Where(element => element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase))
@@ -458,6 +450,8 @@ internal static class RepositoryMirror
 
             import.Remove();
         }
+
+        SdkPin.RebindProjectSdk(project.Root, sdkMoniker, migrateCSharpSdk: true);
 
         foreach (XElement reference in project.Root.Descendants()
             .Where(element =>

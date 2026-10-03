@@ -355,6 +355,33 @@ internal static class SdkPin
         return ReadGlobalJsonPinFile(Path.Combine(root, GlobalJsonFileName));
     }
 
+    /// <summary>Reads the root pin and enforces one consistent pin mode across effective nested scopes.</summary>
+    /// <param name="root">The mirrored repository root.</param>
+    /// <returns>The root pin, or <see langword="null"/> for a project-pinned tree.</returns>
+    internal static string ReadGlobalJsonScopePin(string root)
+    {
+        string rootPin = ReadGlobalJsonPin(root);
+        foreach (string nested in EnumerateNestedGlobalJson(root, RepositoryFileInventory.Enumerate(root)))
+        {
+            string nestedPin = ReadGlobalJsonPinFile(Path.Combine(root, nested));
+            if (rootPin is null && nestedPin is not null)
+            {
+                throw new InvalidOperationException(
+                    "Nested global.json '" + nested + "' pins " + PackageId + " to " + nestedPin +
+                    " without a root global pin; migrate with --sdk-pin global-json.");
+            }
+
+            if (rootPin is not null && !string.Equals(rootPin, nestedPin, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Nested global.json '" + nested + "' must pin " + PackageId + " to the root " +
+                    "version " + rootPin + ", but its pin is " + (nestedPin ?? "<missing>") + ".");
+            }
+        }
+
+        return rootPin;
+    }
+
     /// <summary>Reads the SDK pin from a specific <c>global.json</c> file.</summary>
     /// <param name="path">The file path.</param>
     /// <returns>The pinned version, or <see langword="null"/> when there is none.</returns>

@@ -510,6 +510,32 @@ public sealed class Issue4631SdkPinTests : IDisposable
             document.RootElement.GetProperty("msbuild-sdks").GetProperty("Other.Sdk").GetString());
     }
 
+    /// <summary>Project mode rejects G# pins in every effective nested configuration.</summary>
+    /// <param name="rootConfig">Whether the source already has a root configuration without a G# pin.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Migrate_ProjectPinRejectsNestedGlobalPin(bool rootConfig)
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+        Fixture fixture = this.CreateFixture(rootConfig ? SourceGlobalJson : null);
+        File.WriteAllText(
+            Path.Combine(fixture.Source, "src", "Widget", "global.json"),
+            """{ "msbuild-sdks": { "Gsharp.NET.Sdk": "0.3.356" } }""");
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+                .RunAsync(fixture.Apps));
+
+        Assert.Contains("Nested global.json", error.Message, StringComparison.Ordinal);
+        Assert.Contains("src/Widget/global.json", error.Message, StringComparison.Ordinal);
+        Assert.Contains("0.3.356", error.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>Global-json mode updates nested configs so each scope uses the root pin.</summary>
     /// <returns>A task representing the asynchronous test.</returns>
     [Fact]
@@ -607,10 +633,14 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Contains("both in global.json", error.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>Bootstrap rebinding must not discard an unrelated SDK import.</summary>
+    /// <summary>Bootstrap rebinding must not discard unrelated root SDKs or imports.</summary>
+    /// <param name="sdkAttribute">The optional root SDK declaration.</param>
     /// <returns>A task representing the asynchronous test.</returns>
-    [Fact]
-    public async Task Migrate_GlobalJsonPin_BootstrapRebindingPreservesOtherSdkImports()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Microsoft.NET.Sdk;Other.Sdk/1.2.3")]
+    [InlineData("Other.Sdk/1.2.3")]
+    public async Task Migrate_GlobalJsonPin_BootstrapRebindingPreservesOtherSdkImports(string sdkAttribute)
     {
         string compiler = FindCompiler();
         Assert.NotNull(compiler);
@@ -624,6 +654,10 @@ public sealed class Issue4631SdkPinTests : IDisposable
               <Import Project="Sdk.targets" Sdk="Other.Sdk" Version="1.2.3" />
             </Project>
             """);
+        string sourceProject = Path.Combine(fixture.Source, "src", "Extensions", "Extensions.csproj");
+        XDocument source = XDocument.Load(sourceProject);
+        source.Root.SetAttributeValue("Sdk", sdkAttribute);
+        source.Save(sourceProject);
         PipelineOptions options = this.RepositoryOptions(compiler, fixture);
         options.SdkVersion = PinnedVersion;
         options.SdkPinLocation = SdkPinLocation.GlobalJson;
@@ -633,7 +667,9 @@ public sealed class Issue4631SdkPinTests : IDisposable
 
         Assert.True(run.Succeeded);
         XDocument project = XDocument.Load(fixture.MirroredExtensions);
-        Assert.Equal("Gsharp.NET.Sdk", project.Root.Attribute("Sdk").Value);
+        Assert.Equal(
+            sdkAttribute is null ? "Gsharp.NET.Sdk" : "Gsharp.NET.Sdk;Other.Sdk/1.2.3",
+            project.Root.Attribute("Sdk").Value);
         XElement import = Assert.Single(project.Root.Elements("Import"));
         Assert.Equal("Other.Sdk", import.Attribute("Sdk").Value);
         Assert.Equal("1.2.3", import.Attribute("Version").Value);
@@ -820,6 +856,35 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Contains(actualPin, error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Validation cannot accept a nested global pin without a root global pin.</summary>
+    /// <param name="rootConfig">Whether the migrated root has configuration without a G# pin.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Validate_ProjectPinRejectsNestedGlobalPin(bool rootConfig)
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+        Fixture fixture = this.CreateFixture(rootConfig ? SourceGlobalJson : null);
+        PipelineOptions migrate = this.RepositoryOptions(compiler, fixture);
+        migrate.SdkVersion = PinnedVersion;
+        RunResult migrated = await new MigrationPipeline(migrate, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+        Assert.True(migrated.Succeeded);
+        File.WriteAllText(
+            Path.Combine(fixture.Destination, "src", "Widget", "global.json"),
+            """{ "msbuild-sdks": { "Gsharp.NET.Sdk": "0.3.356" } }""");
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { new PinProbeStage() })
+                .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId)));
+
+        Assert.Contains("Nested global.json", error.Message, StringComparison.Ordinal);
+        Assert.Contains("src/Widget/global.json", error.Message, StringComparison.Ordinal);
+        Assert.Contains("0.3.356", error.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>Every G# SDK declaration in project mode must carry the recorded pin.</summary>
     /// <param name="projectXml">The bare SDK declaration.</param>
     /// <returns>A task representing the asynchronous test.</returns>
@@ -838,10 +903,6 @@ public sealed class Issue4631SdkPinTests : IDisposable
             .RunAsync(fixture.Apps);
         Assert.True(migrated.Succeeded);
         File.WriteAllText(fixture.MirroredWidget, projectXml);
-        File.WriteAllText(
-            Path.Combine(fixture.Destination, "src", "Widget", "global.json"),
-            """{ "msbuild-sdks": { "Gsharp.NET.Sdk": "0.3.356" } }""");
-
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { new PinProbeStage() })
                 .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId)));

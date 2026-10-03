@@ -104,7 +104,8 @@ modes never mix: under `--sdk-pin global-json` every mirrored project, including
 an excluded project rebound onto the SDK, gets the bare name. Every nested
 `global.json` is updated with the same SDK pin because MSBuild uses the nearest
 file; all other settings in each file are preserved. A source
-`global.json` that already pins `Gsharp.NET.Sdk` is an error in `project` mode.
+`global.json` that already pins `Gsharp.NET.Sdk`, at the root or in a non-template
+nested scope, is an error in `project` mode during migration or validation.
 Rebinding and validation recognize each entry in a multi-SDK `Sdk` attribute,
 top-level `<Sdk Name="..." Version="...">` elements, and SDK `<Import>` elements.
 Translated, excluded, and copied native `.gsproj` projects use the same pin and
