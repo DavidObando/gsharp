@@ -30,7 +30,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-OUTPUT_OPTIONS = ("/out:", "/pdb:", "/refout:", "/doc:")
+# gsc writes a file for each of these; /log: is the compiler debug log (src/Compiler/Program.cs).
+OUTPUT_OPTIONS = ("/out:", "/pdb:", "/refout:", "/doc:", "/log:")
 METRICS = ("wallSeconds", "cpuSeconds", "maxRssMb")
 # The budget applies to time (wall and CPU) and to peak memory.
 GATED = ("wallSeconds", "cpuSeconds", "maxRssMb")
@@ -56,6 +57,10 @@ def redirect_outputs(rsp_text: str, directory: Path) -> str:
             lines.append(line)
             continue
         name = Path(probe[len(option):].strip('"')).name
+        if not name:
+            # `/log:` with no path means the compiler's default location; nothing to redirect.
+            lines.append(line)
+            continue
         target = str(directory / ("ref-" + name if option == "/refout:" else name))
         # Quote a path with whitespace so the response-file parser keeps it whole.
         lines.append(f'{option}"{target}"' if any(c.isspace() for c in target) else f"{option}{target}")

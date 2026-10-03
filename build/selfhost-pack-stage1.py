@@ -61,7 +61,8 @@ CORE_PROJECT = Path("src/Core/Core.gsproj")
 # effect from its solution-wide restore.
 NESTED_PROJECTS = ("src/Compiler/Compiler.gsproj", "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj",
                    "tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj", "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj")
-SIBLING_PACKAGES = ("GSharp.CodeAnalysis.Analyzers.Testing",)
+ANALYZER_VERIFIER_ID = "GSharp.CodeAnalysis.Analyzers.Testing"
+SIBLING_PACKAGES = (ANALYZER_VERIFIER_ID,)
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$")
 # Only the Project element's own Sdk attribute; never an <Import Sdk=...>.
 PROJECT_SDK_RE = re.compile(r'(<Project\b[^>]*?\bSdk=")([^"]*)(")', re.DOTALL)
@@ -246,31 +247,43 @@ def sibling_nupkgs(bootstrap: Path, version: str) -> list[Path]:
     return found
 
 
-def missing_siblings(bootstrap: Path, version: str) -> list[str]:
-    """The sibling packages expected beside the bootstrap that are absent.
+def needs_analyzer_verifier(tree: Path) -> bool:
+    """Whether a project in the tree restores the analyzer-testing package from a feed."""
+    pattern = re.compile(r'<PackageReference\s[^>]*Include="' + re.escape(ANALYZER_VERIFIER_ID) + '"')
+    return any(pattern.search(path.read_text(encoding="utf-8-sig")) for path in project_files(tree))
 
-    Optional: a tree without an analyzer test project never restores them.
-    """
+
+def missing_siblings(bootstrap: Path, version: str) -> list[str]:
+    """The sibling packages expected beside the bootstrap that are absent."""
     return [f"{package_id}.{version}.nupkg" for package_id in SIBLING_PACKAGES
             if not bootstrap.with_name(f"{package_id}.{version}.nupkg").exists()]
 
 
-def prepare_tree(tree: Path, bootstrap: Path) -> dict:
+def prepare_tree(tree: Path, bootstrap: Path, report: dict | None = None) -> dict:
+    """Prepares the tree; records each mutation into `report` as it completes.
+
+    A failure part-way (a leftover versioned pin, a missing sibling) therefore
+    still leaves an audit trail of what was already changed.
+    """
+    report = {} if report is None else report
     version = package_version(bootstrap)
     if not (tree / SDK_PROJECT).is_file():
         raise SelfHostError(f"{tree / SDK_PROJECT} not found; is {tree} a migrated repository?")
-    rewritten = normalize_pins(tree)
-    global_json_updated = pin_global_json(tree, version)
+    report["bootstrapVersion"] = version
+    report["rewrittenPins"] = normalize_pins(tree)
+    report["globalJsonUpdated"] = pin_global_json(tree, version)
     check_no_versioned_toolchain_pins(tree)
-    staged = stage_feed(tree, sibling_nupkgs(bootstrap, version))
-    return {
-        "bootstrapVersion": version,
-        "rewrittenPins": rewritten,
-        "globalJsonUpdated": global_json_updated,
-        "feed": str(tree / ".nugs"),
-        "stagedPackages": staged,
-        "missingSiblings": missing_siblings(bootstrap, version),
-    }
+    missing = missing_siblings(bootstrap, version)
+    report["missingSiblings"] = missing
+    if missing and needs_analyzer_verifier(tree):
+        # The tree's analyzer test project restores the package from the feed;
+        # without it, a later stage-2 test run fails far from the cause.
+        raise SelfHostError(
+            f"{ANALYZER_VERIFIER_ID} is referenced as a PackageReference in the tree but "
+            f"{', '.join(missing)} is not beside the bootstrap {bootstrap.name}")
+    report["feed"] = str(tree / ".nugs")
+    report["stagedPackages"] = stage_feed(tree, sibling_nupkgs(bootstrap, version))
+    return report
 
 
 def entry_name(name: str) -> str:
@@ -428,7 +441,7 @@ def main(argv: list[str]) -> int:
             raise SelfHostError("the stage-1 version must differ from the bootstrap version "
                                 "(package caches are keyed by id+version)")
         report.update({"tree": str(tree), "bootstrap": str(bootstrap), "stage1Version": version})
-        report.update(prepare_tree(tree, bootstrap))
+        prepare_tree(tree, bootstrap, report)
         if not args.prepare_only:
             nupkg = pack(tree, version, out, work, args.config)
             report["stage1Package"] = str(nupkg)

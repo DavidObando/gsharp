@@ -50,12 +50,14 @@ class RedirectTests(unittest.TestCase):
     def test_every_output_option_moves_and_inputs_stay(self) -> None:
         rsp = ("/out:/tree/out/obj/Core/Release/GSharp.Core.dll\n/pdb:/tree/out/obj/Core/Release/GSharp.Core.pdb\n"
                "/refout:/tree/out/obj/Core/Release/refint/GSharp.Core.dll\n/doc:/tree/out/bin/Core/GSharp.Core.xml\n"
+               "/log:/tree/out/logs/gsc.log\n"
                "/deterministic+\n/r:/packs/System.Runtime.dll\n/tree/src/Core/Binder.gs\n")
         redirected = bench.redirect_outputs(rsp, Path("/work/run"))
         self.assertIn("/out:/work/run/GSharp.Core.dll", redirected)
         self.assertIn("/pdb:/work/run/GSharp.Core.pdb", redirected)
         self.assertIn("/refout:/work/run/ref-GSharp.Core.dll", redirected)
         self.assertIn("/doc:/work/run/GSharp.Core.xml", redirected)
+        self.assertIn("/log:/work/run/gsc.log", redirected)
         self.assertIn("/r:/packs/System.Runtime.dll", redirected)
         self.assertIn("/tree/src/Core/Binder.gs", redirected)
         self.assertNotIn("/tree/out/", redirected)
