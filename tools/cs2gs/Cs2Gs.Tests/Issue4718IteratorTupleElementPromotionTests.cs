@@ -614,9 +614,11 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ConstructedContractReferences_UseSiblingTupleEvidence(bool nullableConsumer)
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ConstructedContractReferences_UseSiblingTupleEvidence(bool nullableConsumer, bool siblingContract)
     {
         var producer = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -634,10 +636,12 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         using var image = new MemoryStream();
         var emitted = producer.Emit(image);
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        string ownContract = siblingContract ? string.Empty : "public interface IRows<T> { }";
         LoadedCSharpProject loaded = CSharpProjectLoader.LoadInMemory(
             new[]
             {
-                ("Consumer.cs", """
+                ("Consumer.cs", $$"""
+                    {{ownContract}}
                     public static class Consumer {
                         public static IRows<(string Label, int Number)> Carry(IRows<(string Label, int Number)> value) {
                             return value;
@@ -663,10 +667,13 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
             printed.Add(GSharpPrinter.Print(unit));
         }
 
+        string textType = siblingContract ? "string?" : "string";
         Assert.True(
-            printed[1].Split("IRows[(Label string?, Number int32)]").Length - 1 == 2,
+            printed[1].Split($"IRows[(Label {textType}, Number int32)]").Length - 1 == 2,
             string.Join(Environment.NewLine, printed));
-        TranslationTestValidation.AssertBinds(string.Join(Environment.NewLine, printed));
+        TranslationTestValidation.AssertBinds(siblingContract
+            ? string.Join(Environment.NewLine, printed)
+            : printed[1]);
     }
 
     [Theory]

@@ -1239,7 +1239,9 @@ internal static class ObliviousNullabilityAnalyzer
             string reference = DocumentationCommentId.CreateReferenceId(symbol);
             return reference == null
                 ? null
-                : DocumentationCommentId.GetFirstSymbolForReferenceId(reference, targetCompilation);
+                : DocumentationCommentId.GetSymbolsForReferenceId(reference, targetCompilation)
+                    .FirstOrDefault(candidate =>
+                        Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity));
         }
 
         if (symbol is IParameterSymbol parameter)
