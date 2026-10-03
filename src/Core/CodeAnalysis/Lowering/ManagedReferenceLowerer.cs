@@ -33,14 +33,16 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
     {
         var rewriter = new ManagedReferenceLowerer(references);
         var functions = program.Functions.ToBuilder();
-        foreach (var pair in program.Functions)
+
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var pair in BoundProgramOrder.Functions(program))
         {
             rewriter.function = pair.Key;
             functions[pair.Key] = (BoundBlockStatement)rewriter.RewriteStatement(pair.Value);
         }
 
         var initializers = program.Initializers.ToBuilder();
-        foreach (var pair in program.Initializers)
+        foreach (var pair in BoundProgramOrder.Initializers(program))
         {
             rewriter.function = pair.Value.Function;
             initializers[pair.Key] = pair.Value.Rewrite(rewriter.RewriteExpression, rewriter.RewriteStatement);
