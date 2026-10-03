@@ -387,6 +387,11 @@ public class Issue3501ResidualSyntheticRetargetTests
             }
             """);
 
+        EmittedOracleResult emitted = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + """Widget().Render("p", 2)""");
+        Assert.DoesNotContain(emitted.Diagnostics, diagnostic => diagnostic.IsError || diagnostic.Id is "GS0227" or "GS0229");
+        Assert.Null(emitted.UnhandledException);
+        Assert.Equal("p2", emitted.Value);
         Assert.Contains("@param package The declaring package.", printed, StringComparison.Ordinal);
         Assert.Contains("Render($package string, count int32)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("@param $package ", printed, StringComparison.Ordinal);
@@ -398,11 +403,6 @@ public class Issue3501ResidualSyntheticRetargetTests
         int doc = printed.IndexOf("/// Renders a widget.", StringComparison.Ordinal);
         Assert.True(note >= 0 && doc >= 0 && note < doc, printed);
         TranslationTestValidation.AssertBinds(printed);
-        EmittedOracleResult emitted = EmittedOracle.Evaluate(
-            printed + Environment.NewLine + """Widget().Render("p", 2)""");
-        Assert.DoesNotContain(emitted.Diagnostics, diagnostic => diagnostic.IsError || diagnostic.Id is "GS0227" or "GS0229");
-        Assert.Null(emitted.UnhandledException);
-        Assert.Equal("p2", emitted.Value);
     }
 
     [Fact]
