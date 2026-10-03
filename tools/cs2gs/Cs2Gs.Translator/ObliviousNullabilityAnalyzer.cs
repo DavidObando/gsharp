@@ -5092,6 +5092,13 @@ internal static class ObliviousNullabilityAnalyzer
             case ParenthesizedExpressionSyntax paren:
                 return IsDirectlyNullable(paren.Expression, model);
 
+            // A built-in reference cast preserves null; a user-defined
+            // conversion can replace it, so its result keeps its own contract.
+            case CastExpressionSyntax cast
+                when model.GetOperation(cast) is IConversionOperation { OperatorMethod: null } conversion
+                    && IsReferenceLike(conversion.Type):
+                return IsDirectlyNullable(cast.Expression, model);
+
             // `await expr`: an awaited `Task<T>`'s own nullability is that of
             // T, which is exactly what the UNWRAPPED awaited expression's own
             // syntactic shape already answers here (mirrors ResolveSources'
