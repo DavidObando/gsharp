@@ -1,0 +1,153 @@
+name: selfhost-windows
+
+# Issue #4631 (C7): run the cs2gs-migrated (G#-source) Core.Tests on Windows.
+#
+# The compiler is moving to G# source. Its recursion depth matters (binder,
+# lowering, emit walk deep trees) and Windows gives the main thread a 1 MB
+# stack (Linux: 8 MB), while frame sizes of G#-compiled code have never been
+# measured. This job builds the migrated Core.Tests with the C#-built SDK of
+# the same commit (stage 1), runs it beside the C# Core.Tests on the same
+# runner, and fails if the migrated suite fails anything the C# suite passes
+# or stops early (a crashed test host, e.g. a stack overflow). Failures the
+# C# suite already has on Windows (windows-nightly tracks them) are reported,
+# not counted against the migration.
+#
+# The migrated tree comes from a cs2gs-selfmig-nightly run (default: the
+# latest successful one) with its shards' polish deltas replayed, exactly as
+# that run's gate does.
+
+on:
+  workflow_dispatch:
+    inputs:
+      nightly-run:
+        description: 'cs2gs-selfmig-nightly run id to take the migrated tree from (default: latest successful)'
+        required: false
+        default: ''
+  pull_request:
+    paths:
+      - '.github/workflows/selfhost-windows.yml'
+      - 'build/selfhost-compare-trx.py'
+      - 'build/test-selfhost-compare-trx.py'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: selfhost-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      NBGV_SetCloudBuildVersionVars: false
+      MSBUILDDISABLENODEREUSE: 1
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+    steps:
+      - uses: actions/checkout@v5
+        # Match the Linux-produced artifact: CRLF in C# raw-string theory
+        # arguments changes xUnit test names and defeats paired comparison.
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.sln
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build (stage 0 and the C# Core.Tests)
+        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+
+      - name: Download the migrated tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_RUN: ${{ inputs.nightly-run }}
+        run: |
+          run_id=$REQUESTED_RUN
+          if [[ -z "$run_id" ]]; then
+            run_id=$(gh run list --workflow cs2gs-selfmig-nightly.yml --branch main \
+              --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          fi
+          echo "migrated tree from cs2gs-selfmig-nightly run $run_id" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Git Bash tar needs POSIX paths, including its -C directory.
+          work="$(cygpath -u "$RUNNER_TEMP")/selfmig"
+          gh run download "$run_id" --name cs2gs-selfmig-migrated --dir "$work"
+          gh run download "$run_id" --pattern 'cs2gs-selfmig-shard-*' --dir "$work-shards"
+          tree="$work/migrated"
+          for polished in "$work-shards"/*/polished.tar.gz; do
+            [[ -f "$polished" ]] && tar --force-local -xzf "$polished" -C "$tree"
+          done
+          rm -rf "$tree/out"
+          # Actions working-directory and native Python need a Windows path.
+          echo "SELFHOST_TREE=$(cygpath -w "$tree")" >> "$GITHUB_ENV"
+
+      - name: Pin the tree to this commit's C#-built SDK
+        run: |
+          bootstrap=$(ls out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg | grep -v '\.snupkg$' | head -1)
+          python build/selfhost-pack-stage1.py --tree "$SELFHOST_TREE" --bootstrap "$bootstrap" \
+            --out "$RUNNER_TEMP/stage1" --prepare-only
+
+      - name: Test C# Core.Tests
+        run: |
+          set +e
+          dotnet test test/Core.Tests/Core.Tests.csproj --configuration Release --no-build --no-restore \
+            --logger "trx;LogFileName=csharp-core.trx" --results-directory "$RUNNER_TEMP/trx" | tee csharp-core.log
+          echo "C# Core.Tests exit ${PIPESTATUS[0]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Test migrated Core.Tests
+        working-directory: ${{ env.SELFHOST_TREE }}
+        env:
+          # Older nightly artifacts have C#-only source guards. Keep the
+          # stage-4 source-root contract rather than scanning an empty tree.
+          CS2GS_TEST_SOURCE_ROOT: ${{ github.workspace }}
+        run: |
+          set +e
+          dotnet test test/Core.Tests/Core.Tests.gsproj --configuration Release \
+            --logger "trx;LogFileName=migrated-core.trx" --results-directory "$RUNNER_TEMP/trx" | tee "$RUNNER_TEMP/migrated-core.log"
+          echo "migrated Core.Tests exit ${PIPESTATUS[0]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Compare
+        run: |
+          set +e
+          python build/selfhost-compare-trx.py \
+            --baseline "$RUNNER_TEMP/trx/csharp-core.trx" \
+            --migrated "$RUNNER_TEMP/trx/migrated-core.trx" \
+            --out "$RUNNER_TEMP/trx/compare.json" > compare.txt 2>&1
+          status=$?
+          cat compare.txt
+          {
+            echo '### migrated vs C# Core.Tests (windows-latest)'
+            echo '```'
+            cat compare.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: selfhost-windows-core-tests
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/trx/**
+            ${{ runner.temp }}/migrated-core.log
+            csharp-core.log
