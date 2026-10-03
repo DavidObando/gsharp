@@ -52,16 +52,29 @@ public sealed class BoundStructLiteralExpression : BoundExpression
 
     internal BoundFieldInitializer? GetPrimaryArgument(string name)
     {
-        var member = TypeMemberModel.LookupMember(
-            StructType,
-            name,
-            new MemberQuery(includeInstance: true, includeStatic: false, includeInherited: false, MemberKinds.Property | MemberKinds.Field));
+        var member = GetPrimaryMember(StructType, name);
         foreach (var initializer in Initializers)
         {
             if ((initializer.Property != null && initializer.Property == member)
                 || (initializer.Field != null && initializer.Field == member))
             {
                 return initializer;
+            }
+        }
+
+        return null;
+    }
+
+    internal static Symbol? GetPrimaryMember(StructSymbol type, string name)
+    {
+        foreach (var parameter in type.PrimaryConstructorParameters)
+        {
+            if (parameter.Name == name)
+            {
+                return TypeMemberModel.LookupMember(
+                    type,
+                    name,
+                    new MemberQuery(includeInstance: true, includeStatic: false, includeInherited: false, MemberKinds.Property | MemberKinds.Field));
             }
         }
 

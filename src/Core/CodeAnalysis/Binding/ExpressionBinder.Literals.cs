@@ -2643,8 +2643,6 @@ internal sealed partial class ExpressionBinder
 
         if (orderedInitializers != null && callsPrimary)
         {
-            var parameterNames = definition.PrimaryConstructorParameters.Select(parameter => parameter.Name)
-                .ToHashSet(StringComparer.Ordinal);
             bool scalarPrefix = true;
             foreach (var step in orderedInitializers)
             {
@@ -2654,10 +2652,18 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                if (step.MemberSyntax is not { } member
-                    || (!scalarPrefix && !parameterNames.Contains(member.FieldIdentifier.ValueText)))
+                if (step.MemberSyntax is not { } member)
                 {
                     continue;
+                }
+
+                if (!scalarPrefix)
+                {
+                    var primaryMember = BoundStructLiteralExpression.GetPrimaryMember(structSymbol, member.FieldIdentifier.ValueText);
+                    if (primaryMember == null || (step.Field != primaryMember && step.Property != primaryMember))
+                    {
+                        continue;
+                    }
                 }
 
                 var expression = BindExpression(member.Value, Invariant.Required(step.MemberType, "a positional member has a type"));

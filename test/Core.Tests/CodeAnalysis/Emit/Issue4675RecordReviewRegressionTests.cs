@@ -79,6 +79,51 @@ public class Issue4675RecordReviewRegressionTests
         Assert.Equal(0, property.GetValue(result.Value));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void PositionalLiteral_HiddenInheritedFieldKeepsCollectionOrder(bool content, bool generic)
+    {
+        var source = """
+            import System.Collections.Generic
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            open class BasePARAM { public var Value FIELD }
+            data class Child(Value int32) : BaseTYPE {
+                public var Items List[int32] = List[int32]()
+                public func Add(value int32) { Items.Add(value) }
+            }
+            Child{ENTRY, Value: Counter.Next()}
+            """.Replace("PARAM", generic ? "[T]" : string.Empty, StringComparison.Ordinal)
+                .Replace("FIELD", generic ? "T" : "int32", StringComparison.Ordinal)
+                .Replace("TYPE", generic ? "[int32]" : string.Empty, StringComparison.Ordinal)
+                .Replace("ENTRY", content ? "Items: List[int32](), Counter.Next()" : "Items: {Counter.Next()}", StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.NotNull(result.Value);
+        var type = result.Value.GetType();
+        var field = type.BaseType.GetField("Value");
+        var property = type.GetProperty("Value");
+        var itemsField = type.GetField("Items");
+        Assert.NotNull(field);
+        Assert.NotNull(property);
+        Assert.NotNull(itemsField);
+        Assert.Equal(2, field.GetValue(result.Value));
+        Assert.Equal(0, property.GetValue(result.Value));
+        var items = Assert.IsType<System.Collections.Generic.List<int>>(itemsField.GetValue(result.Value));
+        Assert.Equal(1, Assert.Single(items));
+    }
+
     [Fact]
     public void StructLiteral_PreservesThreeParameterClrConstructor()
     {
