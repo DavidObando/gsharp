@@ -4515,7 +4515,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedRhs;
             }
 
-            return EnsureNonNullAssertion(translatedRhs);
+            // An array element write has no symbol; the array is the target.
+            ISymbol storeTarget = this.context.GetSymbolInfo(assignment.Left).Symbol
+                ?? (assignment.Left is ElementAccessExpressionSyntax elementAccess
+                    ? this.context.GetTypeInfo(elementAccess.Expression).Type as IArrayTypeSymbol
+                    : null);
+            return this.ReportStoreBridge(
+                assignment.Right,
+                translatedRhs,
+                EnsureNonNullAssertion(translatedRhs),
+                storeTarget);
         }
 
         // Issue #4211: the SINK half of the #2259 rule above, factored out so the
@@ -4603,7 +4612,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedRhs;
             }
 
-            return EnsureNonNullAssertion(translatedRhs);
+            return this.ReportStoreBridge(
+                assignment.Right,
+                translatedRhs,
+                EnsureNonNullAssertion(translatedRhs),
+                leftSymbol);
         }
 
         // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),

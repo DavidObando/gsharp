@@ -2188,7 +2188,12 @@ public sealed partial class CSharpToGSharpTranslator
                 && !isFlowNarrowedLocal
                 && this.ReceiverNeedsNullForgiveness(argument.Expression))
             {
-                return EnsureNonNullAssertion(this.TranslateExpression(argument.Expression));
+                GExpression unbridged = this.TranslateExpression(argument.Expression);
+                return this.ReportStoreBridge(
+                    argument.Expression,
+                    unbridged,
+                    EnsureNonNullAssertion(unbridged),
+                    targetParameter);
             }
 
             // A C# argument whose declared numeric type differs from the type C#
@@ -3949,7 +3954,12 @@ public sealed partial class CSharpToGSharpTranslator
                     || (this.IsObliviousCompilation()
                         ? this.IsNullablePromotedValue(valueExpression)
                         : this.IsGeneratedDeclarationPromotedValue(valueExpression)))
-                ? EnsureNonNullAssertion(translatedValue)
+                ? this.ReportStoreBridge(
+                    valueExpression,
+                    translatedValue,
+                    EnsureNonNullAssertion(translatedValue),
+                    targetSymbolForPromotionCheck,
+                    targetType)
                 : translatedValue;
         }
 
