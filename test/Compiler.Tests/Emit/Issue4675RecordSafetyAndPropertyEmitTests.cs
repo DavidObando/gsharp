@@ -215,6 +215,109 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
         Assert.Equal(inherited ? "1\ninherited\ninherited\nidentity\n" : "1\n2\n2\nidentity\n", fixture.Run(dll));
     }
 
+    [Theory]
+    [InlineData("class", false)]
+    [InlineData("struct", false)]
+    [InlineData("class", true)]
+    [InlineData("struct", true)]
+    public void ConstrainedPropertySelector_UsesTheActualInterfaceOwner(string kind, bool inherited)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package ConstrainedPropertyTree
+            import System
+            import System.Linq.Expressions
+            interface IValue { prop Value int32 { get; } }
+            interface IChild : IValue {}
+            KIND Item : CONSTRAINT { public prop Value int32 -> 7 }
+            func make[T CONSTRAINT]() Expression[Func[T, int32]] -> (item T) -> item.Value
+            func Main() {
+                let tree = make[Item]()
+                Console.WriteLine(tree.Compile()(Item{}))
+                let read = tree.Body as MemberExpression
+                Console.WriteLine(read!!.Member.DeclaringType == typeof(IValue))
+            }
+            """.Replace("KIND", kind, StringComparison.Ordinal)
+                .Replace("CONSTRAINT", inherited ? "IChild" : "IValue", StringComparison.Ordinal), "ConstrainedPropertyTree", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\nTrue\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData("private", "")]
+    [InlineData("public", "private var Extra []int32")]
+    [InlineData("public", "")]
+    public void DataZeroHelper_AnalyzesItsActualNestedConstructorValues(string visibility, string sibling)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package NestedRequiredZero
+            import System
+            class Counter {
+                shared {
+                    public var Child int32
+                    public var Parent int32
+                    public func ChildValue() int32 {
+                        Child += 1
+                        return 7
+                    }
+                    public func ParentValue() int32 {
+                        Parent += 1
+                        return 5
+                    }
+                }
+            }
+            struct Inner {
+                private let Reference readonly managed[int32] = {
+                    var value = Counter.ChildValue()
+                    readonly managed(value)
+                }
+                private var Items []int32
+                public func Read() int32 -> *Reference
+                public func Length() int32 -> Items.Length
+            }
+            data struct Outer(Value int32) {
+                VISIBILITY var Nested Inner
+                SIBLING
+                private var Marker int32 = Counter.ParentValue()
+                public func Read() int32 -> Nested.Read()
+                public func Length() int32 -> Nested.Length()
+                public func Mark() int32 -> Marker
+            }
+            func Main() {
+                var outer Outer
+                Console.WriteLine(outer.Read())
+                Console.WriteLine(outer.Length())
+                Console.WriteLine(outer.Value)
+                Console.WriteLine(outer.Mark())
+                Console.WriteLine(Counter.Child)
+                Console.WriteLine(Counter.Parent)
+            }
+            """.Replace("VISIBILITY", visibility, StringComparison.Ordinal)
+                .Replace("SIBLING", sibling, StringComparison.Ordinal), "NestedRequiredZero", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n0\n0\n0\n1\n0\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void DataZeroHelper_DoesNotCreditANestedInitializerWithoutAZeroValue()
+    {
+        Reject("""
+            package MissingNestedRequiredZero
+            struct Inner {
+                private let Reference readonly managed[int32] = {
+                    var value = 7
+                    readonly managed(value)
+                }
+            }
+            data struct Outer(Value int32) {
+                private var Nested Inner = Inner{}
+                private var Items []int32
+            }
+            func Main() { var outer Outer }
+            """, "var outer Outer");
+    }
+
     private static void Reject(string source, string anchor)
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
@@ -226,6 +329,8 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
         var line = 1 + source[..offset].Count(c => c == '\n');
         var column = offset - source.LastIndexOf('\n', offset);
         Assert.Contains($"({line},{column},{line},{column + anchor.Length}): error GS0604:", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("error GS9998:", output, StringComparison.Ordinal);
+        var diagnostics = output.Split('\n').Where(line => line.Contains(": error ", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(diagnostics);
+        Assert.All(diagnostics, line => Assert.Contains(": error GS0604:", line, StringComparison.Ordinal));
     }
 }

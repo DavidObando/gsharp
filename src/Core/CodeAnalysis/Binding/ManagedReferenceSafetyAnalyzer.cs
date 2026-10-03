@@ -444,7 +444,15 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             {
                 if (!supplied.Contains(field) && this.RequiredHandle(field.Type) != null)
                 {
-                    this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{field.Name}'; explicitly construct the aggregate");
+                    if (type.ValueStructDefaultCtorIsZeroInitialization
+                        && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, field.Type) is { } helperValue)
+                    {
+                        this.VisitExpression(helperValue);
+                    }
+                    else
+                    {
+                        this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{field.Name}'; explicitly construct the aggregate");
+                    }
                 }
             }
 

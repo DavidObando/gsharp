@@ -138,6 +138,8 @@ their ordered `NewExpression.Members` contract, recorded by their synthesizer.
 Remaining property bindings and reads resolve the bound member's actual
 declaring construction by symbol/accessor identity and use declared-only
 reflection, preserving hidden and truly inherited generic properties.
+Source-constrained receivers resolve through their existing constraint reference
+before that same identity lookup, including inherited interface properties.
 Ordered literals pass their original syntax to retained omitted arguments;
 required managed-reference defaults remain source-anchored diagnostics.
 Collection-initializer forms prepare constructor inputs and the

@@ -441,6 +441,18 @@ public static class TypeMemberModel
         [NotNullWhen(true)] out PropertySymbol? property,
         [NotNullWhen(true)] out TypeSymbol? declaringType)
     {
+        HashSet<TypeParameterSymbol>? visited = null;
+        while (type is TypeParameterSymbol parameter && parameter.ConstraintReferenceType is { } constraint)
+        {
+            visited ??= new HashSet<TypeParameterSymbol>();
+            if (!visited.Add(parameter))
+            {
+                break;
+            }
+
+            type = constraint;
+        }
+
         IEnumerable<TypeSymbol> owners = type switch
         {
             StructSymbol aggregate => aggregate.GetHierarchy(),
