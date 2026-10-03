@@ -146,13 +146,15 @@ public sealed partial class CSharpToGSharpTranslator
         /// <param name="bridged">The translated value after the bridge.</param>
         /// <param name="targetSymbol">The slot's symbol, or <see langword="null"/> when unknown.</param>
         /// <param name="knownSlotType">The element type a collection-expression translation resolved, or <see langword="null"/>.</param>
+        /// <param name="projection">The asserted synthesized member path, or null for the source value.</param>
         /// <returns><paramref name="bridged"/>, unchanged.</returns>
         private GExpression ReportStoreBridge(
             ExpressionSyntax value,
             GExpression original,
             GExpression bridged,
             ISymbol targetSymbol,
-            ITypeSymbol knownSlotType = null)
+            ITypeSymbol knownSlotType = null,
+            string projection = null)
         {
             // gsc erases a reference `!!` inside an expression tree, so it
             // cannot throw there and is not reported.
@@ -179,7 +181,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             slotType = GetBridgedSlotType(value, knownSlotType) ?? slotType;
-            this.ReportGenericStore(value, value.ToString(), kind, targetSymbol, slotType, resultDependsOnSlot);
+            this.ReportGenericStore(value, value.ToString(), kind, targetSymbol, slotType, resultDependsOnSlot, projection);
             return bridged;
         }
 
@@ -248,7 +250,8 @@ public sealed partial class CSharpToGSharpTranslator
             string kind,
             ISymbol targetSymbol,
             ITypeSymbol slotType,
-            bool resultDependsOnSlot)
+            bool resultDependsOnSlot,
+            string projection = null)
         {
             string target = targetSymbol is IParameterSymbol parameterTarget && parameterTarget.ContainingSymbol != null
                 ? parameterTarget.ContainingSymbol.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat)
@@ -260,7 +263,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             // The value's first line, at most 160 characters, keeps each
             // report on one line.
-            string text = valueText;
+            string text = valueText + projection;
             int lineEnd = text.IndexOfAny(LineBreakCharacters);
             if (lineEnd >= 0 || text.Length > MaxValueTextLength)
             {
@@ -268,14 +271,16 @@ public sealed partial class CSharpToGSharpTranslator
                 text = text.Substring(0, cut).TrimEnd() + Ellipsis;
             }
 
-            this.context.ReportOnce(new TranslationDiagnostic(
-                "GenericStoreBridge",
-                $"kind={kind} | target={target} | slot-type={typeArgument} | result-depends-on-slot={(resultDependsOnSlot ? "yes" : "no")} | value={text}",
-                value.GetLocation(),
-                TranslationSeverity.Warning)
-            {
-                DiagnosticId = GenericStoreBridgeDiagnosticId,
-            });
+            this.context.ReportOnce(
+                new TranslationDiagnostic(
+                    "GenericStoreBridge",
+                    $"kind={kind} | target={target} | slot-type={typeArgument} | result-depends-on-slot={(resultDependsOnSlot ? "yes" : "no")} | value={text}",
+                    value.GetLocation(),
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = GenericStoreBridgeDiagnosticId,
+                },
+                projection);
         }
 
         /// <summary>
