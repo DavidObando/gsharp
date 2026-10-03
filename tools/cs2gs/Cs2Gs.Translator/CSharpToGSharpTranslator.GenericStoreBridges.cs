@@ -99,7 +99,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && GetParamsElementType(parameter.OriginalDefinition) is { } declaredElement
                 && GetParamsElementType(parameter) is { } constructedElement)
             {
-                declared = declaredElement;
+                declared = GetBridgedSlotType(value, declaredElement);
                 slotType = constructedElement;
                 paramsElement = true;
             }
@@ -497,7 +497,7 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     return DelegateResultSlot(delegateInvoke, lambda.IsAsync, value, out slotType)
-                        ?? this.ClassifyTupleStoreSlot(value, lambda, out slotType, out resultDependsOnSlot);
+                        ?? this.ClassifyTupleStoreSlot(value, delegateInvoke, out slotType, out resultDependsOnSlot, isAsync: lambda.IsAsync);
                 }
 
                 default:
@@ -510,7 +510,8 @@ public sealed partial class CSharpToGSharpTranslator
             ISymbol targetSymbol,
             out ITypeSymbol slotType,
             out bool resultDependsOnSlot,
-            bool parameterArgument = false)
+            bool parameterArgument = false,
+            bool isAsync = false)
         {
             slotType = null;
             resultDependsOnSlot = false;
@@ -521,8 +522,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
-            bool asyncLambda = node.Parent is AnonymousFunctionExpressionSyntax function
-                && function.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
+            bool asyncLambda = isAsync
+                || (node.Parent is AnonymousFunctionExpressionSyntax function
+                    && function.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword));
             ITypeSymbol declared = GetTupleSlot(GetStoreType(targetSymbol?.OriginalDefinition, asyncLambda), tupleIndices);
             if (declared is not ITypeParameterSymbol typeParameter)
             {
