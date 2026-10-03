@@ -522,6 +522,17 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundBlockExpression block:
+                if (BoundStructLiteralExpression.IsStagedConstruction(block))
+                {
+                    foreach (BoundVariableDeclaration declaration in block.Statements)
+                    {
+                        ValidateExpression(declaration.Initializer, diagnostics);
+                    }
+
+                    ValidateExpression(block.Expression, diagnostics);
+                    return;
+                }
+
                 if (TryValidateObjectInitializer(block, diagnostics))
                 {
                     return;

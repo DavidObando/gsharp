@@ -103,7 +103,6 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
     private readonly Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef;
 
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassEqualsTypedMethods = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
 
     // Per-emit standalone signature cache for the >8-field GetHashCode fold
@@ -506,7 +505,6 @@ internal sealed class DataStructSynthesizer
         }
 
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
-        this.dataClassEqualsTypedMethods[structSym] = equalsTypedHandle;
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
         this.EmitDataStructGetHashCode(structSym);
 
@@ -1039,7 +1037,7 @@ internal sealed class DataStructSynthesizer
                 il.Branch(ILOpCode.Brfalse, retFalse);
 
                 if (structSym.BaseClass is { IsData: true } baseClass
-                    && this.dataClassEqualsTypedMethods.TryGetValue(baseClass.Definition ?? baseClass, out var baseEqualsTyped))
+                    && this.cache.DataClassEqualsTypedHandles.TryGetValue(baseClass.Definition ?? baseClass, out var baseEqualsTyped))
                 {
                     il.LoadArgument(0);
                     il.LoadArgument(1);
@@ -1088,7 +1086,7 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
 
-        var attributes = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig;
+        var attributes = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot;
         if (IsDataObjectOverrideFinal(structSym))
         {
             attributes |= MethodAttributes.Final;

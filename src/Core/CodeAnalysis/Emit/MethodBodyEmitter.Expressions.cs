@@ -1390,8 +1390,8 @@ internal sealed partial class MethodBodyEmitter
         }
 
         HashSet<BoundExpression>? declaredInitializerValues = null;
-        if (callsPrimary || (literal.CopySource == null && this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
-            && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition)))
+        if (!callsPrimary && literal.CopySource == null && this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
+            && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition))
         {
             declaredInitializerValues = new HashSet<BoundExpression>(ReferenceEqualityComparer.Instance);
             foreach (var declared in literal.StructType.InstanceFieldInitializers)

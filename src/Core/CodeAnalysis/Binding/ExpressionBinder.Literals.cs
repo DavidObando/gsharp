@@ -2564,10 +2564,14 @@ internal sealed partial class ExpressionBinder
         // zero-initializes the storage and then assigns the listed fields. For
         // a value type there is no constructor that could run inline field
         // initializers, so apply each declared `= expr` initializer here for any
-        // field the literal omitted. (For class/data-class literals the
+        // field the literal omitted. Positional data literals instead let
+        // their primary constructor own these initializers before rewriting.
+        // (For class/data-class literals the
         // synthesized default constructor — invoked by `newobj` — already runs
         // the instance field initializers, so this only applies to value types.)
-        if (!structSymbol.IsClass)
+        var definition = structSymbol.Definition ?? structSymbol;
+        bool callsPrimary = structSymbol.ClrType == null && definition.IsData && definition.HasPrimaryConstructor;
+        if (!structSymbol.IsClass && !callsPrimary)
         {
             foreach (var field in structSymbol.Fields)
             {
@@ -2598,21 +2602,12 @@ internal sealed partial class ExpressionBinder
         }
 
         ImmutableArray<BoundStatement>.Builder? argumentStatements = null;
-        var definition = structSymbol.Definition ?? structSymbol;
         var stagedMemberNames = new HashSet<string>(StringComparer.Ordinal);
-        if (orderedInitializers == null && structSymbol.ClrType == null
-            && definition.IsData && definition.HasPrimaryConstructor)
+        if (orderedInitializers == null && callsPrimary)
         {
             for (int i = 0; i < inits.Count; i++)
             {
                 var initializer = inits[i];
-                if (initializer.Field != null
-                    && structSymbol.InstanceFieldInitializers.TryGetValue(initializer.Field, out var declaredValue)
-                    && ReferenceEquals(initializer.Value, declaredValue))
-                {
-                    continue;
-                }
-
                 argumentStatements ??= ImmutableArray.CreateBuilder<BoundStatement>();
                 var argumentName = "$literalarg" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)
                     .ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -2628,8 +2623,7 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        if (orderedInitializers != null && structSymbol.ClrType == null
-            && definition.IsData && definition.HasPrimaryConstructor)
+        if (orderedInitializers != null && callsPrimary)
         {
             var parameterNames = definition.PrimaryConstructorParameters.Select(parameter => parameter.Name)
                 .ToHashSet(StringComparer.Ordinal);
