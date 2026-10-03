@@ -299,6 +299,37 @@ public class Issue4612GenericStoreBridgeTests
         Assert.StartsWith("kind=delegate-result | target=lambda expression | slot-type=string (None)", site.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BlockLambdaTupleLeaf_UsesTheDeclaredDelegateContract(bool isAsync)
+    {
+        string returnType = isAsync ? "System.Threading.Tasks.Task<((T, int), string)>" : "((T, int), string)";
+        string asyncModifier = isAsync ? "async " : string.Empty;
+        string awaited = isAsync ? "await System.Threading.Tasks.Task.Yield();" : string.Empty;
+        string source = $$"""
+            #nullable enable
+            public delegate {{returnType}} Factory<T>();
+            public static class C
+            {
+                public static Factory<string> Make(string? maybe) => {{asyncModifier}}() =>
+                {
+                    {{awaited}}
+                    return ((maybe!, 1), "tail");
+                };
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("maybe!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "maybe!"), Position(site));
+        Assert.StartsWith(
+            "kind=forgiven,type-parameter-tuple-element | target=lambda expression | slot-type=string (NotAnnotated)",
+            site.Message,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void UnresolvedTarget_IsReportedAsUnknownTarget()
     {
@@ -477,6 +508,28 @@ public class Issue4612GenericStoreBridgeTests
                 "not-reported string[] False",
             },
             kinds);
+    }
+
+    [Theory]
+    [InlineData("((T, int), string)[]")]
+    [InlineData("System.Collections.Generic.List<((T, int), string)>")]
+    public void ExpandedParamsTupleLeaf_RetainsDeclaredTypeParameterAndResultDependency(string carrierType)
+    {
+        string source = $$"""
+            #nullable enable
+            public static class C
+            {
+                public static T Pick<T>(params {{carrierType}} values) => values[0].Item1.Item1;
+                public static string Result(string? maybe) => Pick<string>(((maybe!, 1), "tail"));
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("maybe!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "maybe!"), Position(site));
+        Assert.StartsWith("kind=forgiven,explicit-type-argument,params-element | target=C.Pick<string>(params ", site.Message, StringComparison.Ordinal);
+        Assert.Contains("| slot-type=string (NotAnnotated) | result-depends-on-slot=yes | value=maybe!", site.Message, StringComparison.Ordinal);
     }
 
     [Fact]
