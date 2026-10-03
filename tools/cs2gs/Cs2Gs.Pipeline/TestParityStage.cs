@@ -698,6 +698,8 @@ public sealed partial class TestParityStage : IMigrationStage
             TestsName = libraryName + ".Tests",
             TestsRootNamespace = libraryName.Replace('-', '_') + ".Tests",
             TestFiles = tests.Files,
+            SdkVersion = context.Options.RepositorySdkVersion
+                ?? (context.Options.OutputLayout == MigrationOutputLayout.Repository ? context.Options.SdkVersion : null),
         };
 
         string workDir = Path.Combine(context.ArtifactDir, "test-parity");

@@ -109,6 +109,26 @@ Before moving an application to a different compiler version, pin the intended S
   - `cs2gs validate` now requires the oracle, or an explicit
     `--count-only-test-parity`.
   - The mirrored test budget ceiling is now 120 minutes (was 90).
+- **`cs2gs migrate --sdk-version <v>` and `--sdk-pin global-json`** (issue
+  [#4631](https://github.com/DavidObando/gsharp/issues/4631)). A repository
+  migration can now pin an exact `Gsharp.NET.Sdk` version, such as a published
+  release, instead of the newest locally built package, and can write that pin
+  under `msbuild-sdks` in the migrated repository's root and nested
+  `global.json` files instead of into every generated project file. All nested
+  scopes use the same version while retaining their other settings.
+  `cs2gs validate` follows the pin recorded in the migrated tree, rejects
+  missing or conflicting nested pins, and accepts `--sdk-version` to check it.
+  SDK attributes, explicit SDK elements, and SDK imports participate in pin
+  rebinding and validation without dropping unrelated SDKs in translated or
+  excluded projects. Global-json migration canonicalizes existing root pins.
+  Copied native `.gsproj` files use the same pin; template payloads, including
+  project/item templates and their `global.json` files, remain untouched.
+  Per-project validation rejects bare G# SDK declarations instead of silently
+  resolving a different SDK, and rejects root or nested global pins that would
+  mix pin modes. Bootstrap projects are rebound even with existing root SDKs,
+  without dropping unrelated SDK declarations.
+  Isolated stage-4 parity projects retain the resolved version, including when
+  the exact package must be restored from NuGet instead of a local build.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values
