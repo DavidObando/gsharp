@@ -122,6 +122,9 @@ only global-json mode permits bare declarations. A tree that pins in both
 places, or a disagreeing `validate --sdk-version`, is an error rather than a
 tie-break. An excluded project that already builds with `Gsharp.NET.Sdk` is
 rebound to the run's pin too.
+The resolved version also pins isolated stage-4 library parity projects. If its
+exact nupkg is unavailable locally, parity restore may use the configured NuGet
+sources rather than switching to a newer SDK or silently skipping the pin.
 
 Repository mode preserves relative directories, copies non-C# files, translates
 checked-in `.cs` files to `.gs`, and transforms `.csproj` files to `.gsproj`.

@@ -206,6 +206,9 @@ public sealed class PipelineOptions
     /// </summary>
     internal string? RepositorySdkMoniker { get; set; }
 
+    /// <summary>Gets or sets the resolved repository SDK version used by isolated parity projects.</summary>
+    internal string? RepositorySdkVersion { get; set; }
+
     /// <summary>
     /// Gets or sets the resolved version of the locally-built
     /// <c>GSharp.CodeAnalysis.Analyzers.Testing</c> package (issue #3780),

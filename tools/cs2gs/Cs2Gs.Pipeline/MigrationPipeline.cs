@@ -265,6 +265,7 @@ public sealed class MigrationPipeline
 
             string sdkMoniker = SdkPin.ProjectSdkAttribute(sdkVersion, this.options.SdkPinLocation);
             this.options.RepositorySdkMoniker = sdkMoniker;
+            this.options.RepositorySdkVersion = sdkVersion;
 
             // Issue #3780: resolved once, up front, like sdkMoniker above.
             // Not every repository migration includes an analyzer test
@@ -756,6 +757,7 @@ public sealed class MigrationPipeline
         this.options.RepositorySdkMoniker = sdkVersion is null
             ? null
             : SdkPin.ProjectSdkAttribute(sdkVersion, location);
+        this.options.RepositorySdkVersion = sdkVersion;
         this.options.RepositoryAnalyzerVerifierPackageVersion =
             SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion(this.options.Config, requestedVersion);
     }

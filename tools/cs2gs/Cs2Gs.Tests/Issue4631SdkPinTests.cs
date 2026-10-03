@@ -583,6 +583,7 @@ public sealed class Issue4631SdkPinTests : IDisposable
         PinObservation observation = Assert.Single(probe.Observations);
         Assert.Equal("Gsharp.NET.Sdk", observation.SdkMoniker);
         Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
+        Assert.Equal(PinnedVersion, observation.SdkVersion);
     }
 
     /// <summary>Rebinding preserves other SDKs and removes every version overriding the root pin.</summary>
@@ -713,7 +714,9 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Directory.CreateDirectory(itemDirectory);
         File.WriteAllText(
             Path.Combine(itemDirectory, "Template.vstemplate"),
-            """<VSTemplate xmlns="http://schemas.microsoft.com/developer/vstemplate/2005" Type="Item"><TemplateContent><ProjectItem>Item.gsproj</ProjectItem><ProjectItem>global.json</ProjectItem></TemplateContent></VSTemplate>""");
+            """<VSTemplate xmlns="http://schemas.microsoft.com/developer/vstemplate/2005" Type="Item"><TemplateContent><ProjectItem>Item.gsproj</ProjectItem><ProjectItem>global.json</ProjectItem></TemplateContent></VSTemplate>"""
+                .Replace("<ProjectItem>", "<ProjectItem>\n    ", StringComparison.Ordinal)
+                .Replace("</ProjectItem>", "\n  </ProjectItem>", StringComparison.Ordinal));
         File.WriteAllText(Path.Combine(itemDirectory, "Item.gsproj"), templateXml);
         File.WriteAllText(Path.Combine(itemDirectory, "global.json"), templateGlobalJson);
         PipelineOptions options = this.RepositoryOptions(compiler, fixture);
@@ -819,6 +822,7 @@ public sealed class Issue4631SdkPinTests : IDisposable
         PinObservation observation = Assert.Single(probe.Observations);
         Assert.Equal("Gsharp.NET.Sdk", observation.SdkMoniker);
         Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
+        Assert.Equal(PinnedVersion, observation.SdkVersion);
     }
 
     /// <summary>Validation rejects nested configuration without the tree's root pin.</summary>
@@ -1012,6 +1016,7 @@ public sealed class Issue4631SdkPinTests : IDisposable
         PinObservation observation = Assert.Single(probe.Observations);
         Assert.Equal("Gsharp.NET.Sdk/" + PinnedVersion, observation.SdkMoniker);
         Assert.Equal(PinnedVersion, observation.AnalyzerVerifierPackageVersion);
+        Assert.Equal(PinnedVersion, observation.SdkVersion);
 
         PipelineOptions disagreeing = this.ValidateOptions(compiler, fixture);
         disagreeing.SdkVersion = "0.0.3-other";
@@ -1019,6 +1024,30 @@ public sealed class Issue4631SdkPinTests : IDisposable
             () => new MigrationPipeline(disagreeing, new IMigrationStage[] { new PinProbeStage() })
                 .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId)));
         Assert.Contains(PinnedVersion, error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>An explicit parity SDK pin remains usable when no local package is present.</summary>
+    [Fact]
+    public void ParityRunner_ExplicitPinWithoutLocalPackageAttemptsRestore()
+    {
+        string repository = Path.Combine(this.root, "parity-sdk-repository");
+        Directory.CreateDirectory(Path.Combine(repository, "feed"));
+        File.WriteAllText(
+            Path.Combine(repository, "nuget.config"),
+            """<configuration><packageSources><clear /><add key="offline" value="feed" /></packageSources></configuration>""");
+        var project = new GsharpTestProject
+        {
+            SdkVersion = PinnedVersion,
+            LibraryName = "PinnedLibrary",
+            TestsName = "PinnedLibrary.Tests",
+        };
+        string work = Path.Combine(repository, "work");
+
+        GsharpTestRunResult result = new GsharpTestProjectRunner(repository).Run(project, work);
+
+        Assert.Equal(GsharpTestRunStatus.BuildFailed, result.Status);
+        Assert.Equal("Gsharp.NET.Sdk/" + PinnedVersion, SdkAttribute(Path.Combine(work, "PinnedLibrary", "PinnedLibrary.gsproj")));
+        Assert.Equal("Gsharp.NET.Sdk/" + PinnedVersion, SdkAttribute(Path.Combine(work, "PinnedLibrary.Tests", "PinnedLibrary.Tests.gsproj")));
     }
 
     private static string SdkAttribute(string projectPath) =>
@@ -1158,7 +1187,7 @@ public sealed class Issue4631SdkPinTests : IDisposable
         string MirroredDocs,
         IReadOnlyList<CorpusApp> Apps);
 
-    private readonly record struct PinObservation(string SdkMoniker, string AnalyzerVerifierPackageVersion);
+    private readonly record struct PinObservation(string SdkMoniker, string AnalyzerVerifierPackageVersion, string SdkVersion);
 
     /// <summary>Records the SDK pin a validate run hands its stages.</summary>
     private sealed class PinProbeStage : IMigrationStage
@@ -1173,7 +1202,8 @@ public sealed class Issue4631SdkPinTests : IDisposable
         {
             this.Observations.Add(new PinObservation(
                 context.Options.RepositorySdkMoniker,
-                context.Options.RepositoryAnalyzerVerifierPackageVersion));
+                context.Options.RepositoryAnalyzerVerifierPackageVersion,
+                context.Options.RepositorySdkVersion));
             return Task.FromResult(StageOutcome.Passed());
         }
     }

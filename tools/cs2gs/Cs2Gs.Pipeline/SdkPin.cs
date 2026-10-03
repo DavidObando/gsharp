@@ -575,7 +575,7 @@ internal static class SdkPin
         {
             yield return Path.GetFullPath(Path.Combine(
                 directory,
-                element.Value.Replace('\\', Path.DirectorySeparatorChar)));
+                element.Value.Trim().Replace('\\', Path.DirectorySeparatorChar)));
         }
 
         foreach (XElement child in element.Elements())

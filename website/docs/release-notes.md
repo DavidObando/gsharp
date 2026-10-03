@@ -127,6 +127,8 @@ Before moving an application to a different compiler version, pin the intended S
   resolving a different SDK, and rejects root or nested global pins that would
   mix pin modes. Bootstrap projects are rebound even with existing root SDKs,
   without dropping unrelated SDK declarations.
+  Isolated stage-4 parity projects retain the resolved version, including when
+  the exact package must be restored from NuGet instead of a local build.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values

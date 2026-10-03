@@ -15,7 +15,7 @@ namespace Cs2Gs.Pipeline;
 /// </summary>
 public enum GsharpTestRunStatus
 {
-    /// <summary>No locally-built SDK was found, so the run was not attempted.</summary>
+    /// <summary>No explicit SDK version or locally-built SDK was found, so the run was not attempted.</summary>
     Unavailable,
 
     /// <summary>The project failed to build or run; no TRX was produced.</summary>
@@ -28,8 +28,8 @@ public enum GsharpTestRunStatus
 /// <summary>
 /// The live library xUnit parity orchestration for stage 4 (ADR-0115 §C/§E):
 /// given a translated G# library and its translated G# xUnit tests, this writes
-/// an isolated G# test project that consumes the <b>locally-built</b>
-/// <c>Gsharp.NET.Sdk</c> (copied into the repo's <c>.nugs</c> feed and pinned in
+/// an isolated G# test project that consumes the pinned
+/// <c>Gsharp.NET.Sdk</c> (copied into the repo's <c>.nugs</c> feed when available locally and pinned in
 /// the generated <c>.gsproj</c>), runs <c>dotnet test</c> producing a TRX, and
 /// parses it into the <c>{name, outcome}</c> set the comparison engine consumes.
 /// All process I/O is local — it only shells out to <c>dotnet test</c>; there is
@@ -98,13 +98,16 @@ public class GsharpTestProjectRunner
             ? (FindNupkgForVersion(project.SdkVersion), project.SdkVersion)
             : ResolveLocalSdkPackage(this.RepoRoot);
 
-        if (sdk is null || sdk.Value.NupkgPath is null)
+        if (sdk is null)
         {
             return GsharpTestRunResult.Unavailable(
                 "No locally-built Gsharp.NET.Sdk nupkg was found under out/bin/<Config>/nupkgs/.");
         }
 
-        EnsureInLocalFeed(this.RepoRoot, sdk.Value.NupkgPath);
+        if (sdk.Value.NupkgPath is not null)
+        {
+            EnsureInLocalFeed(this.RepoRoot, sdk.Value.NupkgPath);
+        }
 
         Directory.CreateDirectory(workDir);
         WriteIsolationBoundary(workDir);
@@ -535,24 +538,7 @@ public class GsharpTestProjectRunner
 
     private string FindNupkgForVersion(string version)
     {
-        (string NupkgPath, string Version)? resolved = ResolveLocalSdkPackage(this.RepoRoot);
-        if (resolved is not null &&
-            string.Equals(resolved.Value.Version, version, StringComparison.Ordinal))
-        {
-            return resolved.Value.NupkgPath;
-        }
-
-        foreach (string cfg in new[] { "Release", "Debug" })
-        {
-            string candidate = Path.Combine(
-                this.RepoRoot, "out", "bin", cfg, "nupkgs", SdkPackagePrefix + version + ".nupkg");
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
+        return FindLocalPackageVersion(this.RepoRoot, SdkPackageId, version);
     }
 
     private static bool FilesAreIdentical(string left, string right)
