@@ -130,7 +130,8 @@ internal sealed partial class DeclarationBinder
     /// Issue #950: reports GS0380 for any member declared <c>protected</c> when
     /// the enclosing type is not an inheritable <c>open class</c>. Structs
     /// (value types) and non-open/sealed classes cannot be derived from, so a
-    /// <c>protected</c> member there has no meaning.
+    /// <c>protected</c> member there has no meaning. A <c>protected override</c>
+    /// method, property or event is exempt on a class (issue #4674).
     /// </summary>
     private void ValidateProtectedMemberPlacement(StructDeclarationSyntax syntax)
     {
@@ -139,6 +140,14 @@ internal sealed partial class DeclarationBinder
             return;
         }
 
+        // Issue #4674: an `override` takes its accessibility from the base member
+        // it overrides, so `protected override` is legal on a sealed (non-`open`)
+        // class — that is how a `sealed class Lowerer : BoundTreeRewriter` keeps
+        // overriding the base's protected visitor hooks while staying CLR-sealed.
+        // Value types cannot be derived from, so they have no base class members
+        // to override and keep the diagnostic.
+        var overridesAllowed = syntax.IsClass;
+
         foreach (var field in syntax.Fields)
         {
             ReportProtectedToken(field.AccessibilityModifier);
@@ -146,17 +155,26 @@ internal sealed partial class DeclarationBinder
 
         foreach (var method in syntax.Methods)
         {
-            ReportProtectedToken(method.AccessibilityModifier);
+            if (!(overridesAllowed && method.IsOverride))
+            {
+                ReportProtectedToken(method.AccessibilityModifier);
+            }
         }
 
         foreach (var prop in syntax.Properties)
         {
-            ReportProtectedToken(prop.AccessibilityModifier);
+            if (!(overridesAllowed && prop.OverrideModifier != null))
+            {
+                ReportProtectedToken(prop.AccessibilityModifier);
+            }
         }
 
         foreach (var evt in syntax.Events)
         {
-            ReportProtectedToken(evt.AccessibilityModifier);
+            if (!(overridesAllowed && evt.OverrideModifier != null))
+            {
+                ReportProtectedToken(evt.AccessibilityModifier);
+            }
         }
 
         if (!syntax.Constructors.IsDefaultOrEmpty)

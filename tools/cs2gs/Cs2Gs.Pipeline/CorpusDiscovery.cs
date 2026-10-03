@@ -145,10 +145,10 @@ public static class CorpusDiscovery
                 .Select(e => e.Value?.Trim())
                 .LastOrDefault(v => !string.IsNullOrEmpty(v));
 
-            string sdk = doc.Root?.Attribute("Sdk")?.Value;
-            bool executableSdk = sdk?.Split(';').Any(value =>
+            bool executableSdk = doc.Root is not null && SdkPin.ProjectSdkNames(doc.Root)
+                .Any(value =>
                 value.Equals("Microsoft.NET.Sdk.Worker", StringComparison.OrdinalIgnoreCase)
-                || value.Equals("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase)) == true;
+                || value.Equals("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase));
             return string.Equals(outputType, "Exe", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(outputType, "WinExe", StringComparison.OrdinalIgnoreCase)
                 || (string.IsNullOrEmpty(outputType) && executableSdk)

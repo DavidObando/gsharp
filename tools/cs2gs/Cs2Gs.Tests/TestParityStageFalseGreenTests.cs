@@ -100,6 +100,32 @@ public class TestParityStageFalseGreenTests
         Assert.NotEqual("passed", stage.Status);
     }
 
+    /// <summary>The live library-parity path passes an explicit repository SDK pin to its runner.</summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task LibraryParity_RepositorySdkPinReachesRunner()
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+        (CorpusApp app, string outRoot) = NewMinimalLibraryApp("sdk-pin");
+        var runner = new FakeGsharpTestProjectRunner(GsharpTestRunResult.Unavailable("probe"));
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            SdkVersion = "0.0.1-issue4631",
+            OutputLayout = MigrationOutputLayout.Repository,
+        };
+        var gsc = new GscInvoker(compiler);
+        var triage = new TriageBuilder("sdk-pin", "2026-10-03T00:00:00Z", gsc.GetVersion(), app.Id);
+        var context = new StageExecutionContext(app, options, gsc, outRoot, triage);
+
+        StageOutcome outcome = await new TestParityStage(runner).ExecuteAsync(context);
+
+        Assert.Equal(StageStatus.Skipped, outcome.Status);
+        Assert.NotNull(runner.Project);
+        Assert.Equal(options.SdkVersion, runner.Project.SdkVersion);
+    }
+
     private static async Task<StageOutcome> RunLibraryParityWithFakeResult(
         string compiler, GsharpTestRunResult fakeResult)
     {
@@ -200,6 +226,12 @@ public class TestParityStageFalseGreenTests
             this.result = result;
         }
 
-        public override GsharpTestRunResult Run(GsharpTestProject project, string workDir) => this.result;
+        internal GsharpTestProject Project { get; private set; }
+
+        public override GsharpTestRunResult Run(GsharpTestProject project, string workDir)
+        {
+            this.Project = project;
+            return this.result;
+        }
     }
 }

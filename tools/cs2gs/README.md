@@ -95,6 +95,37 @@ dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
 | `--gsc <path>` | Override `gsc.dll` (default `out/bin/<Config>/Compiler/gsc.dll`). |
 | `--config <name>` | Build config used to locate `gsc` (default `Release`). |
 | `--translate-only` | Repository mode: run stage 1 only, then stop (see `validate`). |
+| `--sdk-version <v>` | Repository mode: pin `Gsharp.NET.Sdk` to exactly `<v>` (default: the newest local nupkg). A local nupkg of `<v>` is staged into `.nugs`; otherwise `<v>` must be on nuget.org, such as a published release; the mirror's generated `nuget.config` lists only nuget.org and the local `.nugs` feed (issue #4631). |
+| `--sdk-pin <where>` | Repository mode: `project` (default) writes `Sdk="Gsharp.NET.Sdk/<v>"` into every generated project; `global-json` writes the version under `msbuild-sdks` in the root and nested `global.json` files and leaves every `Sdk` attribute bare. |
+
+**SDK pinning (issue #4631).** MSBuild lets a versioned `Sdk="Name/Version"`
+attribute silently override a `global.json` `msbuild-sdks` pin, so the two
+modes never mix: under `--sdk-pin global-json` every mirrored project, including
+an excluded project rebound onto the SDK, gets the bare name. Every nested
+`global.json` is updated with the same SDK pin because MSBuild uses the nearest
+file; all other settings in each file are preserved. A source
+`global.json` that already pins `Gsharp.NET.Sdk`, at the root or in a non-template
+nested scope, is an error in `project` mode during migration or validation.
+Rebinding and validation recognize each entry in a multi-SDK `Sdk` attribute,
+top-level `<Sdk Name="..." Version="...">` elements, and SDK `<Import>` elements.
+Translated, excluded, and copied native projects, plus shared `.props`,
+`.targets`, and other MSBuild `*proj` files, use the same pin and retain
+unrelated SDK declarations and their order. .NET template payloads and
+project- and item-template payloads referenced by Visual Studio `.vstemplate` files remain unchanged,
+including their `global.json` files, and are excluded from pin writing and validation.
+Explicit SDK elements and imports keep their declaration style rather than gaining
+a second implicit SDK import. Global-json migration replaces an old root G# pin,
+including malformed versions or case-variant duplicates, just as it does for nested files.
+`validate` takes the pin from the migrated tree: the `global.json` pin, or
+else the one version its buildable MSBuild files record. Project mode rejects every
+unversioned G# SDK declaration, including explicit SDK elements and imports;
+only global-json mode permits bare declarations. A tree that pins in both
+places, or a disagreeing `validate --sdk-version`, is an error rather than a
+tie-break. An excluded project that already builds with `Gsharp.NET.Sdk` is
+rebound to the run's pin too.
+The resolved version also pins isolated stage-4 library parity projects. If its
+exact nupkg is unavailable locally, parity restore may use the configured NuGet
+sources rather than switching to a newer SDK or silently skipping the pin.
 
 Repository mode preserves relative directories, copies non-C# files, translates
 checked-in `.cs` files to `.gs`, and transforms `.csproj` files to `.gsproj`.
@@ -169,6 +200,11 @@ them with the translate pass's results back into a single whole-run shape.
 See `build/run-cs2gs-selfmig-{migrate,validate,gate}.sh` and
 `.github/workflows/cs2gs-selfmig-nightly.yml`; `build/run-cs2gs-selfmig.sh`
 remains the equivalent single-job reference path for local proofs.
+Both migration entrypoints and the PR guard select `--sdk-pin global-json`
+to create a shared G# SDK pin in the migrated repository. The checked-in root
+`global.json` selects only the .NET SDK; migration preserves that selection and
+updates buildable nested G# SDK scopes to the resolved local package version.
+Validation shards follow the migrated tree's recorded pin.
 
 ### The PR-time translation guard (issue #3836)
 

@@ -54,6 +54,11 @@ namespace Corpus.Issue3724
     {
         public bool TryGet(string key) => key.Length > 0;
     }
+
+    internal class InternalPlainService
+    {
+        public bool TryGet(string key) => key.Length > 0;
+    }
 }
 ";
 
@@ -81,12 +86,15 @@ namespace Corpus.Issue3724
     }
 
     [Fact]
-    public void ClassWithoutVirtualMembers_StaysClosed()
+    public void ClassWithoutVirtualMembers_IsOpenOnlyWhenItIsApi()
     {
-        // The rule keys off declared inheritance intent, not visibility: a class
-        // with nothing overridable must not be widened.
-        Assert.False(TranslateType(VirtualWithoutLocalSubclass, "PlainService").IsOpen);
+        // Issue #4674: openness follows C#'s own inheritability for any type another
+        // assembly can reach, so a public non-sealed class with nothing overridable is
+        // open (it was widened by `virtual` alone before). A `sealed` class and a
+        // non-sealed class that is NOT reachable from another assembly are not.
+        Assert.True(TranslateType(VirtualWithoutLocalSubclass, "PlainService").IsOpen);
         Assert.False(TranslateType(VirtualWithoutLocalSubclass, "SealedService").IsOpen);
+        Assert.False(TranslateType(VirtualWithoutLocalSubclass, "InternalPlainService").IsOpen);
     }
 
     private static TypeDeclaration TranslateType(string source, string name) =>
