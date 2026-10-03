@@ -261,16 +261,18 @@ public sealed partial class CSharpToGSharpTranslator
                 ? "?"
                 : slotType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) + " (" + slotType.NullableAnnotation + ")";
 
-            // The value's first line, at most 160 characters, keeps each
-            // report on one line.
-            string text = valueText + projection;
+            // Keep the value on one line within 160 characters, reserving
+            // space for the asserted synthesized leaf.
+            string text = valueText;
+            int maxSourceTextLength = MaxValueTextLength - (projection?.Length ?? 0);
             int lineEnd = text.IndexOfAny(LineBreakCharacters);
-            if (lineEnd >= 0 || text.Length > MaxValueTextLength)
+            if (lineEnd >= 0 || text.Length > maxSourceTextLength)
             {
-                int cut = System.Math.Min(lineEnd >= 0 ? lineEnd : text.Length, MaxValueTextLength - Ellipsis.Length);
+                int cut = System.Math.Min(lineEnd >= 0 ? lineEnd : text.Length, maxSourceTextLength - Ellipsis.Length);
                 text = text.Substring(0, cut).TrimEnd() + Ellipsis;
             }
 
+            text += projection;
             this.context.ReportOnce(
                 new TranslationDiagnostic(
                     "GenericStoreBridge",

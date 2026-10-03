@@ -1560,6 +1560,36 @@ public class Issue4612GenericStoreBridgeTests
             site => site.Message.Substring(site.Message.IndexOf(" | value=", StringComparison.Ordinal) + " | value=".Length)));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TruncatedTupleIndexKeys_RetainEachAssertedLeaf(bool multiline)
+    {
+        string keyName = new string('k', 180);
+        string keyExpression = multiline ? "C.\n" + keyName : "C." + keyName;
+        string source = $$"""
+            using System.Collections.Generic;
+            public static class C
+            {
+                private static readonly (string, string) {{keyName}} = (Branch(), Branch());
+                private static string Branch() => null;
+                public static bool Lookup()
+                {
+                    return new Dictionary<(string, string), bool>()[{{keyExpression}}];
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source);
+
+        Assert.Contains(".Item1!!", printed, StringComparison.Ordinal);
+        Assert.Contains(".Item2!!", printed, StringComparison.Ordinal);
+        Assert.Equal(2, sites.Count);
+        Assert.All(sites, site => Assert.Equal(Expected(source, keyExpression + "];"), Position(site)));
+        string prefix = multiline ? "C...." : "C." + new string('k', 149) + "...";
+        Assert.Equal(new[] { prefix + ".Item1", prefix + ".Item2" }, sites.Select(
+            site => site.Message.Substring(site.Message.IndexOf(" | value=", StringComparison.Ordinal) + " | value=".Length)));
+    }
+
     [Fact]
     public void ReportOnce_DistinguishesSyntheticLeavesAndCollapsesRepeatedLeaves()
     {
