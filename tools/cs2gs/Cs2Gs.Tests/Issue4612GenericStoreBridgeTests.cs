@@ -249,7 +249,55 @@ public class Issue4612GenericStoreBridgeTests
         Assert.Equal("8:65", Position(site));
         Assert.StartsWith("kind=forgiven-type-parameter-value | target=", site.Message, StringComparison.Ordinal);
         Assert.Contains("| slot-type=T", site.Message, StringComparison.Ordinal);
+        Assert.Contains("| result-depends-on-slot=yes |", site.Message, StringComparison.Ordinal);
         Assert.EndsWith("| value=this.value!", site.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConstructorTupleSlot_ResultDependsOnContainingType()
+    {
+        string source = """
+            #nullable enable
+            public class Box<T>
+            {
+                public Box((T, string) pair) { }
+            }
+            public static class C
+            {
+                public static Box<string> Create(string? maybe) => new Box<string>((maybe!, ""));
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("maybe!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "maybe!"), Position(site));
+        Assert.StartsWith("kind=forgiven,type-parameter-tuple-element | ", site.Message, StringComparison.Ordinal);
+        Assert.Contains("| slot-type=string (NotAnnotated) | result-depends-on-slot=yes |", site.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChainedElementAssignments_ReportRetainedBridgeAgainstImmediateGenericStore()
+    {
+        string source = """
+            using System.Collections.Generic;
+            public static class C
+            {
+                public static void Stores(string[] array, List<string> list, Dictionary<int, string> dictionary)
+                {
+                    array[0] = list[0] = dictionary[0] = Maybe();
+                }
+            #nullable enable
+                private static string? Maybe() => null;
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source);
+
+        Assert.Equal(1, printed.Split("!!", StringSplitOptions.None).Length - 1);
+        Assert.Contains("dictionary[0] = Maybe()!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "Maybe();"), Position(site));
+        Assert.StartsWith("kind=constructed-generic-member | target=Dictionary<int, string>.this[int]", site.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1796,6 +1844,25 @@ public class Issue4612GenericStoreBridgeTests
         string prefix = multiline ? "C...." : "C." + new string('k', 149) + "...";
         Assert.Equal(new[] { prefix + ".Item1", prefix + ".Item2" }, sites.Select(
             site => site.Message.Substring(site.Message.IndexOf(" | value=", StringComparison.Ordinal) + " | value=".Length)));
+    }
+
+    [Fact]
+    public void ReportOnce_GenericStoresRetainDistinctMessagesAndProjections()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        Location location = document.GetRoot().GetLocation();
+        string id = CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId;
+
+        context.ReportOnce(new TranslationDiagnostic("GenericStoreBridge", "first store", location, TranslationSeverity.Warning) { DiagnosticId = id });
+        context.ReportOnce(new TranslationDiagnostic("GenericStoreBridge", "second store", location, TranslationSeverity.Warning) { DiagnosticId = id });
+        context.ReportOnce(new TranslationDiagnostic("GenericStoreBridge", "first store", location, TranslationSeverity.Warning) { DiagnosticId = id });
+        context.ReportOnce(new TranslationDiagnostic("GenericStoreBridge", "leaf store", location, TranslationSeverity.Warning) { DiagnosticId = id }, ".Item1");
+        context.ReportOnce(new TranslationDiagnostic("GenericStoreBridge", "leaf store", location, TranslationSeverity.Warning) { DiagnosticId = id }, ".Item2");
+        context.ReportOnce(new TranslationDiagnostic("GenericStoreBridge", "leaf store", location, TranslationSeverity.Warning) { DiagnosticId = id }, ".Item1");
+
+        Assert.Equal(new[] { "first store", "second store", "leaf store", "leaf store" }, context.Diagnostics.Select(site => site.Message));
     }
 
     [Fact]
