@@ -637,6 +637,11 @@ public abstract class BoundTreeWalker
 
     protected virtual void VisitStructLiteralExpression(BoundStructLiteralExpression node)
     {
+        if (node.CopySource != null)
+        {
+            VisitExpression(node.CopySource);
+        }
+
         foreach (var init in node.Initializers)
         {
             VisitExpression(init.Value);

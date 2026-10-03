@@ -126,6 +126,17 @@ storage in any other primary-constructor shape is an internal error. Native
 positional data construction always invokes the primary constructor, independently
 of initializer-binding order. A redeclared positional property must retain its
 parameter's type, and closed-hierarchy bases retain protected copy constructors.
+Positional literals and structural projections likewise run initializers in the
+primary constructor's parameter scope. Native copying is a distinct bound
+operation: value types copy their entire value and classes dispatch through
+`<Clone>$`, preserving private, get-only and inherited state without rerunning
+initializers. The copied receiver is materialized once before any update,
+including awaited updates. Replacement positional getters remain deconstruction
+members in primary-parameter order. Derived data classes forward the nearest
+record base's typed `Equals` slot through virtual object equality, so inherited
+`IEquatable<Base>` includes derived state. Printing uses object formatting except
+for ref-like values, which call `ToString` without boxing; structural function
+values widen through `System.Delegate` before object formatting.
 
 **T1 — C# tuples → native G# positional tuples.** *Amended by ADR-0172 (2026-08-28): G# now supports named tuple elements (`(name string, price int32)` types, `(name: e)` literal labels), so the name-dropping described below is superseded — cs2gs preserves element names once its ADR-0172 Phase C lands. The remainder of this section records the original positional-only mapping.* A C# value/named tuple (`(string Name, int Price, int Quantity)`) maps to the **native G# positional tuple type** `(string, int32, int32)` (spec §Type syntax), *not* to a synthesized `data struct`. G# tuples were **positional only** — the named-element spelling `(Name string, …)` did not parse — so C# element **names were dropped** at the type, and a named-element **access** `item.Price` lowered to the positional field `item.Item2` (resolved via Roslyn's `IFieldSymbol.CorrespondingTupleField`); positional `item.Item1` passes through. Tuple **construction** `(a, b, c)` maps to the G# tuple literal `(a, b, c)`. The mapping is recorded as an Info diagnostic. This was chosen over synthesizing a `data struct` per tuple shape because a `data struct` element type triggers a real compiler gap (below) and because native tuples are the genuinely canonical, round-trippable G# form.
 

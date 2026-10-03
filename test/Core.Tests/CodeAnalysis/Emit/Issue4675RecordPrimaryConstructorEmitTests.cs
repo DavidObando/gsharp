@@ -17,6 +17,109 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 public class Issue4675RecordPrimaryConstructorEmitTests
 {
     [Fact]
+    public void PositionalLiteral_EvaluatesArgumentsInWrittenOrder()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            data struct Pair(A int32, B int32) {
+                private let Marker int32 = A * 10 + B
+                public func Read() int32 -> Marker
+            }
+            Pair{B: Counter.Next(), A: Counter.Next()}.Read()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(21, result.Value);
+    }
+
+    [Fact]
+    public void PositionalDataProjection_RunsInitializerWithProjectedArgument()
+    {
+        var result = EmittedOracle.Evaluate("""
+            struct Source { public var Value int32 }
+            data struct Box[T](Value T) {
+                private let Storage T = Value
+                public func Read() T { return Storage }
+            }
+            let source = Source{Value: 7}
+            let box Box[int32] = source
+            box.Read()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void NativeCopy_ClonesBeforeAwaitedUpdates()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Threading.Tasks
+            open data class Item {
+                public var Value int32 = 1
+                public var Extra int32
+            }
+            async func Mutate(item Item) int32 {
+                item.Value = 9
+                return await Task.FromResult(2)
+            }
+            async func Run() int32 {
+                let original = Item{}
+                let copy = original with { Extra = await Mutate(original) }
+                return copy.Value * 10 + copy.Extra
+            }
+            Run().GetAwaiter().GetResult()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(12, result.Value);
+    }
+
+    [Theory]
+    [InlineData("data struct")]
+    [InlineData("data class")]
+    [InlineData("open data class")]
+    public void NativeCopy_PreservesInitializedGetOnlyAndPrivateState(string kind)
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            KIND Item[T](Value T) {
+                private let Storage T = Value
+                public prop Saved T -> Storage
+                private let Marker int32 = Counter.Next()
+                public var Extra int32
+                public func ReadMarker() int32 { return Marker }
+            }
+            func Get(item Item[int32]) Item[int32] {
+                Counter.Count += 100
+                return item
+            }
+            let original = Item[int32](7)
+            let copy = Get(original) with { Extra = 2 }
+            Counter.Count * 1000 + copy.ReadMarker() * 100 + copy.Saved * 10 + copy.Extra
+            """.Replace("KIND", kind, StringComparison.Ordinal));
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(101172, result.Value);
+    }
+
+    [Fact]
     public void MissingPrimaryConstructorStorage_FailsFast()
     {
         var compilation = new Compilation(SyntaxTree.Parse("data struct Item(Value int32)"));
@@ -245,5 +348,71 @@ public class Issue4675RecordPrimaryConstructorEmitTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal(11, result.Value);
+    }
+
+    [Theory]
+    [InlineData("data struct", "11")]
+    [InlineData("data struct", "Value + 4")]
+    [InlineData("data class", "Value + 4")]
+    public void PositionalDataLiteral_RunsInitializersInParameterScope(string kind, string initializer)
+    {
+        var result = EmittedOracle.Evaluate("""
+            KIND Box(Value int32) {
+                private var Marker int32 = INITIALIZER
+                public func ReadMarker() int32 -> Marker
+            }
+            Box{Value: 7}.ReadMarker()
+            """.Replace("INITIALIZER", initializer, StringComparison.Ordinal).Replace("KIND", kind, StringComparison.Ordinal));
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(11, result.Value);
+    }
+
+    [Theory]
+    [InlineData("data struct")]
+    [InlineData("data class")]
+    public void GenericComputedPositionalProperty_RetainsDeconstruction(string kind)
+    {
+        var result = EmittedOracle.Evaluate("""
+            KIND Item[T](Value T) {
+                private let Storage T = Value
+                public prop Value T -> Storage
+            }
+            Item[int32](41)
+            """.Replace("KIND", kind, StringComparison.Ordinal));
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.NotNull(result.Value);
+        MethodInfo deconstruct = result.Value.GetType().GetMethod("Deconstruct");
+        Assert.NotNull(deconstruct);
+        object[] arguments = { null };
+        deconstruct.Invoke(result.Value, arguments);
+        Assert.Equal(41, arguments[0]);
+    }
+
+    [Theory]
+    [InlineData("get;", 41)]
+    [InlineData("-> Storage", 42)]
+    public void ReplacementPositionalProperty_RetainsDeconstruction(string getter, int expected)
+    {
+        string property = getter == "get;" ? "{ get; }" : getter;
+        var result = EmittedOracle.Evaluate("""
+            data struct Item(Value int32) {
+                private var Storage int32 = Value + 1
+                public prop Value int32 GETTER
+            }
+            Item(41)
+            """.Replace("GETTER", property, StringComparison.Ordinal));
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.NotNull(result.Value);
+        MethodInfo deconstruct = result.Value.GetType().GetMethod("Deconstruct");
+        Assert.NotNull(deconstruct);
+        ParameterInfo parameter = Assert.Single(deconstruct.GetParameters());
+        Assert.True(parameter.IsOut);
+        Assert.Equal(typeof(int).MakeByRefType(), parameter.ParameterType);
+        object[] arguments = { null };
+        deconstruct.Invoke(result.Value, arguments);
+        Assert.Equal(expected, arguments[0]);
     }
 }

@@ -47,7 +47,7 @@ public static class TypeMemberModel
             {
                 foreach (var property in type.Properties)
                 {
-                    if (property.Name == parameter.Name && property.Declaration == null)
+                    if (property.Name == parameter.Name && property.HasGetter && !property.IsStatic && !property.IsIndexer)
                     {
                         members.Add(property);
                         break;

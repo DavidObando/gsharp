@@ -499,6 +499,12 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundStructLiteralExpression structLiteral:
+                if (structLiteral.CopySource != null)
+                {
+                    diagnostics.ReportExpressionTreeUnsupported(LocationOf(expression.Syntax), "a data copy");
+                    return;
+                }
+
                 // User-declared struct/class composite literals (`Point{X:
                 // 1, Y: 2}`) are legal inside expression-tree lambdas, for
                 // the same reason object initializers are (see

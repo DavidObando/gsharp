@@ -54,17 +54,9 @@ internal sealed partial class ExpressionBinder
         // platform receiver is a coercion to non-null (checked and unwrapped).
         receiver = binderCtx.InsertPlatformCheck(receiver, diagnosticLocation, "a copy/with receiver");
 
-        // Issue #2228: G# unifies `class` and `struct` into one StructSymbol
-        // (IsClass distinguishes reference vs. value semantics), so this check
-        // already accepts a `data class` receiver (IsClass && IsData) exactly
-        // like a `data struct` receiver — no separate ClassSymbol branch is
-        // needed. The clone below (BoundStructLiteralExpression) already
-        // special-cases IsClass at emit time (MethodBodyEmitter.EmitStructLiteral):
-        // `newobj` + per-field/property set for a class, vs. an inline value copy
-        // for a struct — so reference semantics (new heap instance, original left
-        // unchanged, aliasing/identity preserved for untouched members) fall out
-        // for free once cs2gs actually emits a `data class` instead of downgrading
-        // to a plain `class` (the cs2gs-side half of #2228).
+        // Native copies preserve the whole value or dispatch through the
+        // record clone; reconstructing visible members loses private state
+        // and incorrectly reruns construction initializers.
         var normalizedReceiverType = ImportedTypeSymbol.NormalizeSemanticAggregate(
             receiver.Type,
             receiver.Type.ClrType,
@@ -91,7 +83,7 @@ internal sealed partial class ExpressionBinder
         scope.TryDeclareVariable(tempVar);
 
         var seen = new HashSet<string>();
-        var explicitValues = new Dictionary<string, (FieldSymbol? Field, PropertySymbol? Property, BoundExpression Value)>();
+        var explicitValues = new Dictionary<string, (FieldSymbol? Field, PropertySymbol? Property, BoundExpression Value, StructSymbol? Owner)>();
         foreach (var initSyntax in overrides)
         {
             var memberName = initSyntax.FieldIdentifier.ValueText;
@@ -113,7 +105,7 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var fieldValueExpr = BindExpression(initSyntax.Value, field.Type);
-                explicitValues[memberName] = (field, null, fieldValueExpr);
+                explicitValues[memberName] = (field, null, fieldValueExpr, fieldDeclaringType);
                 continue;
             }
 
@@ -132,11 +124,39 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propertyValueExpr = BindExpression(initSyntax.Value, property.Type);
-                explicitValues[memberName] = (null, property, propertyValueExpr);
+                explicitValues[memberName] = (null, property, propertyValueExpr, propertyDeclaringType);
                 continue;
             }
 
             Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName);
+        }
+
+        if (structType.ClrType == null)
+        {
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            var copy = new BoundStructLiteralExpression(
+                null,
+                structType,
+                ImmutableArray<BoundFieldInitializer>.Empty,
+                receiver);
+            statements.Add(new BoundVariableDeclaration(null, tempVar, copy));
+            foreach (var value in explicitValues.Values)
+            {
+                BoundExpression assignment = value.Field != null
+                    ? new BoundFieldAssignmentExpression(null, tempVar, value.Owner ?? structType, value.Field, value.Value)
+                    : new BoundPropertyAssignmentExpression(
+                        null,
+                        new BoundVariableExpression(null, tempVar),
+                        value.Owner ?? structType,
+                        Invariant.Required(value.Property, "a copy update targets a field or property"),
+                        value.Value);
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
+
+            return new BoundBlockExpression(
+                null,
+                statements.ToImmutable(),
+                new BoundVariableExpression(null, tempVar));
         }
 
         var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
@@ -312,7 +332,7 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            target = new BoundStructLiteralExpression(literal.Syntax, literal.StructType, initializers.ToImmutable());
+            target = new BoundStructLiteralExpression(literal.Syntax, literal.StructType, initializers.ToImmutable(), literal.CopySource);
         }
 
         var resultType = target.Type;

@@ -2597,10 +2597,42 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        ImmutableArray<BoundStatement>.Builder? argumentStatements = null;
+        var definition = structSymbol.Definition ?? structSymbol;
+        if (orderedInitializers == null && structSymbol.ClrType == null
+            && definition.IsData && definition.HasPrimaryConstructor)
+        {
+            var parameterNames = definition.PrimaryConstructorParameters.Select(parameter => parameter.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            for (int i = 0; i < inits.Count; i++)
+            {
+                var initializer = inits[i];
+                if (!parameterNames.Contains(initializer.MemberName))
+                {
+                    continue;
+                }
+
+                argumentStatements ??= ImmutableArray.CreateBuilder<BoundStatement>();
+                var argumentName = "$literalarg" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var argument = new LocalVariableSymbol(argumentName, isReadOnly: true, initializer.Value.Type);
+                scope.TryDeclareVariable(argument);
+                argumentStatements.Add(new BoundVariableDeclaration(null, argument, initializer.Value));
+                var value = new BoundVariableExpression(null, argument);
+                inits[i] = initializer.Field != null
+                    ? new BoundFieldInitializer(initializer.Field, value, initializer.FieldDeclaringType)
+                    : new BoundFieldInitializer(
+                        Invariant.Required(initializer.Property, "a positional initializer targets a field or property"),
+                        value);
+            }
+        }
+
         var structLiteral = new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
         if (orderedInitializers == null)
         {
-            return structLiteral;
+            return argumentStatements == null
+                ? structLiteral
+                : new BoundBlockExpression(null, argumentStatements.ToImmutable(), structLiteral);
         }
 
         // A braced member, or an ADR-0180 content element/spread, forces

@@ -2079,16 +2079,38 @@ public sealed partial class CSharpToGSharpTranslator
                     new InvocationExpression(
                         new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
                         new GExpression[] { LiteralExpression.String((first ? string.Empty : ", ") + memberName + " = ") })));
+                GExpression memberValue = new MemberAccessExpression(
+                    new ThisExpression(), this.EmittedName(member, memberName));
+                ITypeSymbol memberType = member is IPropertySymbol propertyMember
+                    ? propertyMember.Type
+                    : ((IFieldSymbol)member).Type;
+                if (memberType.TypeKind == TypeKind.Delegate)
+                {
+                    GTypeReference delegateType = this.typeMapper.Map(
+                        this.context.Compilation.GetTypeByMetadataName("System.Delegate"),
+                        this.context,
+                        node.GetLocation());
+                    if (memberType.NullableAnnotation == NullableAnnotation.Annotated)
+                    {
+                        delegateType = MakeNullable(delegateType);
+                    }
+
+                    memberValue = new ConversionExpression(
+                        delegateType,
+                        memberValue);
+                }
+
+                GExpression printableValue = memberType.IsRefLikeType
+                    ? new InvocationExpression(new MemberAccessExpression(memberValue, "ToString"), Array.Empty<GExpression>())
+                    : new ConversionExpression(
+                        this.typeMapper.Map(this.context.Compilation.GetSpecialType(SpecialType.System_Object), this.context, node.GetLocation()),
+                        memberValue);
                 statements.Add(new ExpressionStatement(
                     new InvocationExpression(
                         new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
                         new GExpression[]
                         {
-                            new ConversionExpression(
-                                this.typeMapper.Map(this.context.Compilation.GetSpecialType(SpecialType.System_Object), this.context, node.GetLocation()),
-                                new MemberAccessExpression(
-                                    new ThisExpression(),
-                                    this.EmittedName(member, memberName))),
+                            printableValue,
                         })));
                 first = false;
             }

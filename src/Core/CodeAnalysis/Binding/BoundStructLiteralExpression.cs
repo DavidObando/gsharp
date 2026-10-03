@@ -16,16 +16,23 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundStructLiteralExpression : BoundExpression
 {
-    public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers)
+    public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers, BoundExpression? copySource = null)
         : base(syntax)
     {
         StructType = structType;
         Initializers = initializers;
+        CopySource = copySource;
     }
 
     public StructSymbol StructType { get; }
 
     public ImmutableArray<BoundFieldInitializer> Initializers { get; }
+
+    /// <summary>
+    /// Gets the whole-value copy or class-clone source, when this expression
+    /// materializes a native data copy rather than constructing a new value.
+    /// </summary>
+    public BoundExpression? CopySource { get; }
 
     public override TypeSymbol Type => StructType;
 

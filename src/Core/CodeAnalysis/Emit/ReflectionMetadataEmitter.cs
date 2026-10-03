@@ -2184,7 +2184,8 @@ internal sealed class ReflectionMetadataEmitter
                 this.cache.DataClassCloneHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 2);
                 methodRow += 10
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
-                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
+                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0)
+                    + (DataStructSynthesizer.GetDataEqualityBase(c) != null ? 1 : 0);
             }
 
             if (!c.Methods.IsDefaultOrEmpty)
