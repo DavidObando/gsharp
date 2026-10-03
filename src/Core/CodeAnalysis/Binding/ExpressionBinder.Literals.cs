@@ -2623,6 +2623,7 @@ internal sealed partial class ExpressionBinder
         var stagedMemberNames = new HashSet<string>(StringComparer.Ordinal);
         if (orderedInitializers == null && callsPrimary)
         {
+            inits = BoundStructLiteralExpression.PreparePrimaryArguments(syntax, structSymbol, inits.ToImmutable()).ToBuilder();
             for (int i = 0; i < inits.Count; i++)
             {
                 var initializer = inits[i];

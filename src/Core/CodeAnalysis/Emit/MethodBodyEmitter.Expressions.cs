@@ -1182,15 +1182,9 @@ internal sealed partial class MethodBodyEmitter
     {
         foreach (var parameter in literal.StructType.PrimaryConstructorParameters)
         {
-            var value = literal.GetPrimaryArgument(parameter.Name);
-            if (value != null)
-            {
-                consumed.Add(value);
-                this.EmitExpression(value.Value);
-                continue;
-            }
-
-            this.EmitExpression(new BoundDefaultExpression(null, parameter.Type));
+            var value = Invariant.Required(literal.GetPrimaryArgument(parameter.Name), "primary literal arguments, including defaults, are prepared before planning");
+            consumed.Add(value);
+            this.EmitExpression(value.Value);
         }
     }
 

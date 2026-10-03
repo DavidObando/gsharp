@@ -725,13 +725,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             var consumed = new HashSet<BoundFieldInitializer>();
             foreach (var parameter in structLiteral.StructType.PrimaryConstructorParameters)
             {
-                var initializer = structLiteral.GetPrimaryArgument(parameter.Name);
-                if (initializer != null)
-                {
-                    consumed.Add(initializer);
-                }
-
-                arguments.Add(initializer?.Value ?? new BoundDefaultExpression(null, parameter.Type));
+                var initializer = Invariant.Required(structLiteral.GetPrimaryArgument(parameter.Name), "primary literal arguments, including defaults, are prepared during binding");
+                consumed.Add(initializer);
+                arguments.Add(initializer.Value);
             }
 
             var construction = this.BuildUserConstructorExpression(

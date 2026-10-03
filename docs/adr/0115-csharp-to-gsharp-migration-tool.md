@@ -128,7 +128,10 @@ of initializer-binding order. A redeclared positional property must retain its
 parameter's type, and closed-hierarchy bases retain protected copy constructors.
 Positional literals and structural projections likewise run initializers in the
 primary constructor's parameter scope. Scalar literal inputs are prepared in
-written order; collection-initializer forms prepare constructor inputs and the
+written order; omitted primary arguments are retained as bound default children
+before rewriting and scratch-local planning, including struct-valued and open-generic
+defaults. Emission and expression trees consume those same prepared arguments.
+Collection-initializer forms prepare constructor inputs and the
 leading scalar prefix before construction, then retain the order of remaining
 member/collection operations. Native copying is a distinct bound
 operation: value types copy their entire value and classes dispatch through

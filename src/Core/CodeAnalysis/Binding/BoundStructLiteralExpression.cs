@@ -7,6 +7,8 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
+using System.Linq;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -32,8 +34,11 @@ public sealed class BoundStructLiteralExpression : BoundExpression
         }
 
         StructType = structType;
-        Initializers = initializers;
         CopySource = copySource;
+        IsZeroInitialization = isZeroInitialization;
+        Initializers = CallsPrimaryConstructor
+            ? PreparePrimaryArguments(syntax, structType, initializers)
+            : initializers;
     }
 
     public StructSymbol StructType { get; }
@@ -49,6 +54,37 @@ public sealed class BoundStructLiteralExpression : BoundExpression
     public override TypeSymbol Type => StructType;
 
     public override BoundNodeKind Kind => BoundNodeKind.StructLiteralExpression;
+
+    internal bool CallsPrimaryConstructor => !IsZeroInitialization && CopySource == null
+        && StructType.ClrType == null
+        && (StructType.Definition ?? StructType).IsData
+        && (StructType.Definition ?? StructType).HasPrimaryConstructor;
+
+    internal static ImmutableArray<BoundFieldInitializer> PreparePrimaryArguments(
+        SyntaxNode? syntax,
+        StructSymbol type,
+        ImmutableArray<BoundFieldInitializer> initializers)
+    {
+        ImmutableArray<BoundFieldInitializer>.Builder? builder = null;
+        foreach (var parameter in type.PrimaryConstructorParameters)
+        {
+            var member = Invariant.Required(GetPrimaryMember(type, parameter.Name), "a primary argument has an own field or property");
+            if (initializers.Any(initializer => initializer.Field == member || initializer.Property == member))
+            {
+                continue;
+            }
+
+            // Defaults are children of the bound literal, so rewriting and
+            // slot planning see exactly the nodes that emission will consume.
+            var value = new BoundDefaultExpression(syntax, parameter.Type);
+            builder ??= initializers.ToBuilder();
+            builder.Add(member is FieldSymbol field
+                ? new BoundFieldInitializer(field, value)
+                : new BoundFieldInitializer(Invariant.Required(member as PropertySymbol, "a primary member is a field or property"), value));
+        }
+
+        return builder?.ToImmutable() ?? initializers;
+    }
 
     internal BoundFieldInitializer? GetPrimaryArgument(string name)
     {
