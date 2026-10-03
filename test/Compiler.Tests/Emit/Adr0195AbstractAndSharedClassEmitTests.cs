@@ -87,7 +87,7 @@ public class Adr0195AbstractAndSharedClassEmitTests
     [Fact]
     public void AbstractClass_IsAbstractNotSealed_WithFamilyConstructor()
     {
-        var dll = CompileToDll(Source);
+        var dll = CompileToDll(Source, out var tempDir);
         try
         {
             foreach (var name in new[] { "Walker", "Both", "Shape" })
@@ -122,14 +122,14 @@ public class Adr0195AbstractAndSharedClassEmitTests
         }
         finally
         {
-            TryDeleteDir(Path.GetDirectoryName(dll));
+            Directory.Delete(tempDir, recursive: true);
         }
     }
 
     [Fact]
     public void SharedClass_IsAbstractAndSealed_WithNoReachableConstructor()
     {
-        var dll = CompileToDll(Source);
+        var dll = CompileToDll(Source, out var tempDir);
         try
         {
             var attributes = GetTypeAttributes(dll, "Helpers");
@@ -143,14 +143,14 @@ public class Adr0195AbstractAndSharedClassEmitTests
         }
         finally
         {
-            TryDeleteDir(Path.GetDirectoryName(dll));
+            Directory.Delete(tempDir, recursive: true);
         }
     }
 
     [Fact]
     public void AbstractAndSharedClasses_VerifyAndRun()
     {
-        var dll = CompileToDll(Source);
+        var dll = CompileToDll(Source, out var tempDir);
         try
         {
             IlVerifier.Verify(dll);
@@ -170,7 +170,7 @@ public class Adr0195AbstractAndSharedClassEmitTests
                 RedirectStandardError = true,
                 UseShellExecute = false,
             };
-            using var proc = Process.Start(psi)!;
+            using var proc = Process.Start(psi) ?? throw new InvalidOperationException("dotnet exec did not start");
             string stdout = proc.StandardOutput.ReadToEnd();
             string stderr = proc.StandardError.ReadToEnd();
             proc.WaitForExit();
@@ -179,7 +179,29 @@ public class Adr0195AbstractAndSharedClassEmitTests
         }
         finally
         {
-            TryDeleteDir(Path.GetDirectoryName(dll));
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CompileToDll_FailurePropagatesAndDeletesItsWorkspace()
+    {
+        string tempDir = null;
+        try
+        {
+            var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+                () => CompileToDll("func Main() { Missing() }", out tempDir));
+            Assert.Contains("compile failed", error.Message);
+            Assert.Contains("Missing", error.Message);
+            Assert.NotNull(tempDir);
+            Assert.False(Directory.Exists(tempDir), "failed compilation left its workspace: " + tempDir);
+        }
+        finally
+        {
+            if (tempDir != null && Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
         }
     }
 
@@ -226,54 +248,52 @@ public class Adr0195AbstractAndSharedClassEmitTests
         throw new Xunit.Sdk.XunitException($"method {typeName}.{methodName} not found in {dllPath}");
     }
 
-    private static string CompileToDll(string source)
+    private static string CompileToDll(string source, out string tempDir)
     {
-        var tempDir = Directory.CreateTempSubdirectory("gs_adr0195_emit_").FullName;
-        var srcPath = Path.Combine(tempDir, "test.gs");
-        var outPath = Path.Combine(tempDir, "test.dll");
-        File.WriteAllText(srcPath, source);
-
-        var args = new[]
-        {
-            "/out:" + outPath,
-            "/target:exe",
-            "/targetframework:net10.0",
-            "/nowarn:GS9100",
-            srcPath,
-        };
-
-        using var compileOut = new StringWriter();
-        using var compileErr = new StringWriter();
-        var prevOut = Console.Out;
-        var prevErr = Console.Error;
-        Console.SetOut(compileOut);
-        Console.SetError(compileErr);
-        int compileExit;
+        tempDir = Directory.CreateTempSubdirectory("gs_adr0195_emit_").FullName;
+        var succeeded = false;
         try
         {
-            compileExit = Program.Main(args);
+            var srcPath = Path.Combine(tempDir, "test.gs");
+            var outPath = Path.Combine(tempDir, "test.dll");
+            File.WriteAllText(srcPath, source);
+
+            var args = new[]
+            {
+                "/out:" + outPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/nowarn:GS9100",
+                srcPath,
+            };
+
+            using var compileOut = new StringWriter();
+            using var compileErr = new StringWriter();
+            var prevOut = Console.Out;
+            var prevErr = Console.Error;
+            Console.SetOut(compileOut);
+            Console.SetError(compileErr);
+            int compileExit;
+            try
+            {
+                compileExit = Program.Main(args);
+            }
+            finally
+            {
+                Console.SetOut(prevOut);
+                Console.SetError(prevErr);
+            }
+
+            Assert.True(compileExit == 0, $"compile failed ({compileExit}): {compileOut}{compileErr}");
+            succeeded = true;
+            return outPath;
         }
         finally
         {
-            Console.SetOut(prevOut);
-            Console.SetError(prevErr);
-        }
-
-        Assert.True(compileExit == 0, $"compile failed ({compileExit}): {compileOut}{compileErr}");
-        return outPath;
-    }
-
-    private static void TryDeleteDir(string dir)
-    {
-        try
-        {
-            if (dir != null)
+            if (!succeeded)
             {
-                Directory.Delete(dir, recursive: true);
+                Directory.Delete(tempDir, recursive: true);
             }
-        }
-        catch
-        {
         }
     }
 }

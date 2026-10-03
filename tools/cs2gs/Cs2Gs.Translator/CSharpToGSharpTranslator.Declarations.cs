@@ -1982,6 +1982,14 @@ public sealed partial class CSharpToGSharpTranslator
             // from abstract members alone, so `BoundTreeWalker` became concrete).
             bool isAbstract = symbol != null && symbol.IsAbstract && isOpenableKind;
 
+            // A gsgen stub can be temporarily abstract while instance partial
+            // methods await generation. Do not declare that status on a generated
+            // part unless the generator itself stated the modifier.
+            if (this.emitGeneratedImplementingParts && !node.Modifiers.Any(SyntaxKind.AbstractKeyword))
+            {
+                isAbstract = false;
+            }
+
             // Issue #1910 (gap 1 & 2): a `partial` type's attributes/`unsafe`
             // modifier can legally sit on ANY part, not just the primary one
             // (Roslyn's `symbol.GetAttributes()` already merges them). Union in

@@ -267,9 +267,9 @@ public sealed class GsStubRenderer
             sb.Append("static ");
         }
 
-        // A declared `abstract class` is a C# abstract class (or record), so a generator
-        // inspecting `INamedTypeSymbol.IsAbstract` sees the real shape.
-        if (structSymbol.IsDeclaredAbstract)
+        // Use the emitter's semantic status, including unimplemented inherited
+        // members. Shared classes already use C#'s static modifier above.
+        if (structSymbol.IsAbstract && !structSymbol.IsSharedClass)
         {
             sb.Append("abstract ");
         }
