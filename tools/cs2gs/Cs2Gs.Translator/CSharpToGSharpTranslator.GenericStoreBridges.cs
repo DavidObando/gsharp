@@ -167,9 +167,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return bridged;
             }
 
-            if (targetSymbol == null)
+            (ISymbol finalStore, ITypeSymbol resolvedSlotType) = this.ResolveFinalStore(value);
+            if (finalStore != null)
             {
-                (ISymbol finalStore, ITypeSymbol resolvedSlotType) = this.ResolveFinalStore(value);
                 targetSymbol = finalStore;
                 knownSlotType ??= resolvedSlotType;
             }
