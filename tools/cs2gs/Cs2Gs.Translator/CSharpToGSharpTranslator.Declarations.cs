@@ -759,18 +759,64 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private static bool HasProtectedMember(INamedTypeSymbol type)
         {
+            // Issue #4674: a C# `sealed` type is emitted as a non-`open` G# class
+            // (CLR-sealed), and `protected` is valid there only on an `override`
+            // (its accessibility is dictated by the base member, so gsc exempts
+            // it from GS0380). Only an explicit non-override `protected` member
+            // of a sealed type still forces `open`; counting the others made
+            // `Lowerer` and every sealed record (whose compiler-synthesized
+            // `EqualityContract`/`PrintMembers` are `protected`) un-sealed.
+            //
+            // `protected internal` / `private protected` are emitted as
+            // `internal` (see MapVisibility), so they never need `open` for the
+            // sealed case either (`FunctionSymbol`'s `private protected override`).
+            bool isSealed = type.IsSealed;
             foreach (var member in type.GetMembers())
             {
                 switch (member.DeclaredAccessibility)
                 {
                     case Accessibility.Protected:
+                        if (!isSealed || (!member.IsImplicitlyDeclared && !member.IsOverride))
+                        {
+                            return true;
+                        }
+
+                        break;
                     case Accessibility.ProtectedOrInternal:
                     case Accessibility.ProtectedAndInternal:
-                        return true;
+                        if (!isSealed)
+                        {
+                            return true;
+                        }
+
+                        break;
                 }
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Issue #4674: whether <paramref name="type"/> and every type enclosing it
+        /// are reachable from another assembly (public, protected or protected
+        /// internal), i.e. whether the type is part of the assembly's API.
+        /// </summary>
+        private static bool IsExternallyVisible(INamedTypeSymbol type)
+        {
+            for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+            {
+                switch (current.DeclaredAccessibility)
+                {
+                    case Accessibility.Public:
+                    case Accessibility.Protected:
+                    case Accessibility.ProtectedOrInternal:
+                        break;
+                    default:
+                        return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -832,16 +878,23 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (type.IsAbstract
-                || HasProtectedMember(type)
-                || this.efEntityTypes.Contains(type.OriginalDefinition))
+            if (type.IsAbstract || HasProtectedMember(type))
             {
                 return true;
             }
 
+            // Issue #4674: a C# class that is not `sealed` is inheritable, and when it
+            // is reachable from another assembly that inheritability is API (an
+            // analyzer deriving from `SyntaxTree` or `Parser` stops loading if
+            // the migrated type is CLR-sealed). `subclassedBases` only sees
+            // this project's own subclasses and the other signals only see
+            // members, so a public non-sealed class with none of them was
+            // emitted sealed.
             return !type.IsSealed
-                && (this.subclassedBases.Contains(type.OriginalDefinition)
-                    || DeclaresOverridableMember(type));
+                && (this.efEntityTypes.Contains(type.OriginalDefinition)
+                    || this.subclassedBases.Contains(type.OriginalDefinition)
+                    || DeclaresOverridableMember(type)
+                    || IsExternallyVisible(type));
         }
 
         /// <summary>
@@ -1888,10 +1941,10 @@ public sealed partial class CSharpToGSharpTranslator
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
 
             // A class with `protected` members must be an `open class` in G#
-            // (GS0380) — `protected` is meaningless on a non-inheritable type. A C#
-            // `sealed` class that carries `protected override` members (it overrides
-            // an abstract/virtual protected base) therefore still maps to `open`;
-            // G# has no `sealed` modifier so the sealedness is dropped (ADR-0115 §B.4).
+            // (GS0380) — `protected` is meaningless on a non-inheritable type —
+            // except that a `protected override` (whose accessibility the base
+            // dictates) is valid on a sealed, non-`open` class, so a C# `sealed`
+            // class keeps its sealedness (issue #4674; see HasProtectedMember).
             // A C# `record` (G# `data class`) is reference-typed and may be
             // subclassed (e.g. `record Derived : Base`); like a plain class it must
             // be declared `open` in G# to permit subclassing (GS0181) or to carry a
@@ -1900,17 +1953,13 @@ public sealed partial class CSharpToGSharpTranslator
             // nature).
             bool isOpenableKind = kind == TypeDeclarationKind.Class
                 || kind == TypeDeclarationKind.DataClass;
+
+            // Issue #4674: the openness decision lives in IsTypeEmittedOpen alone, so a
+            // member's `open` (IsMemberEmittedOpen) can never disagree with its
+            // declaring type's.
             bool isOpen = symbol != null &&
                 isOpenableKind &&
-                !symbol.IsStatic &&
-                ((!symbol.IsSealed && this.subclassedBases.Contains(symbol.OriginalDefinition))
-                    || HasProtectedMember(symbol)
-
-                    // Issue #3724: a `virtual`/`abstract` member declares inheritance
-                    // intent that `subclassedBases` cannot see when the only subclass
-                    // lives in a referencing project — see DeclaresOverridableMember.
-                    || (!symbol.IsSealed && DeclaresOverridableMember(symbol))
-                    || (!symbol.IsSealed && this.efEntityTypes.Contains(symbol.OriginalDefinition)));
+                this.IsTypeEmittedOpen(symbol);
 
             // G# has no `abstract` class modifier (the keyword is not recognized by
             // the parser); a C# `abstract class`/`abstract record` therefore maps to

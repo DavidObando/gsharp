@@ -630,7 +630,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        return new CompilationUnit(package, allImports, members, fileAttributes: fileAttributes);
+        // The C# file's header comment (license, copyright) stays at the top
+        // of every G# unit translated from it.
+        return new CompilationUnit(
+            package,
+            allImports,
+            members,
+            leadingComments: FileHeader.GetLines(root),
+            fileAttributes: fileAttributes);
     }
 
     /// <summary>Gets the distinct source namespaces declared by a document.</summary>

@@ -51,9 +51,21 @@ public sealed partial class CSharpToGSharpTranslator
                 return;
             }
 
+            // The file header belongs to the compilation unit (FileHeader),
+            // not to the first declaration, even when it is in that
+            // declaration's leading trivia.
+            TextSpan header = default;
+            bool hasHeader = source.FullSpan.Start == 0
+                && source.SyntaxTree?.GetRoot() is CompilationUnitSyntax root
+                && FileHeader.TryGetSpan(root, out header);
             List<string> lines = null;
             foreach (SyntaxTrivia trivia in source.GetLeadingTrivia())
             {
+                if (hasHeader && header.Contains(trivia.Span))
+                {
+                    continue;
+                }
+
                 switch (trivia.Kind())
                 {
                     case SyntaxKind.SingleLineCommentTrivia:

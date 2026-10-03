@@ -38,8 +38,8 @@ public class Issue4681NilElementTests
 
         Assert.True(ch.TrySend(null));
         var tuple = await ch.ReceiveTupleAsync();
-        Assert.Null(tuple.Value);
-        Assert.True(tuple.Ok);
+        Assert.Null(tuple.Item1);
+        Assert.True(tuple.Item2);
 
         Assert.True(ch.TrySend(null));
         var result = await ch.ReceiveAsync();
@@ -52,7 +52,9 @@ public class Issue4681NilElementTests
         Assert.True(ok);
 
         Assert.True(ch.TrySend(null));
-        Assert.Equal((null, true), ChannelOps.Receive2(ch, CancellationToken.None));
+        var received = ChannelOps.Receive2(ch, CancellationToken.None);
+        Assert.Null(received.Item1);
+        Assert.True(received.Item2);
     }
 
     [Fact]
@@ -69,8 +71,8 @@ public class Issue4681NilElementTests
         Assert.False(parkedTuple.IsCompleted);
         await tuples.SendAsync(null).AsTask().WaitAsync(Timeout);
         var tuple = await parkedTuple.WaitAsync(Timeout);
-        Assert.Null(tuple.Value);
-        Assert.True(tuple.Ok);
+        Assert.Null(tuple.Item1);
+        Assert.True(tuple.Item2);
     }
 
     [Fact]
@@ -83,8 +85,8 @@ public class Issue4681NilElementTests
         var tuple = await ch.ReceiveTupleAsync();
         await send.WaitAsync(Timeout);
 
-        Assert.Null(tuple.Value);
-        Assert.True(tuple.Ok);
+        Assert.Null(tuple.Item1);
+        Assert.True(tuple.Item2);
     }
 
     [Fact]
@@ -95,8 +97,8 @@ public class Issue4681NilElementTests
 
         Assert.Null(await ch.ReceiveValueAsync());
         var tuple = await ch.ReceiveTupleAsync();
-        Assert.Null(tuple.Value);
-        Assert.False(tuple.Ok);
+        Assert.Null(tuple.Item1);
+        Assert.False(tuple.Item2);
     }
 
     [Fact]
@@ -137,8 +139,8 @@ public class Issue4681NilElementTests
         var tuple = await rendezvous.ReceiveTupleAsync();
         Assert.Equal(0, await wait.WaitAsync(Timeout));
         parked.Return();
-        Assert.Null(tuple.Value);
-        Assert.True(tuple.Ok);
+        Assert.Null(tuple.Item1);
+        Assert.True(tuple.Item2);
     }
 
     [Fact]

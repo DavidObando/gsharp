@@ -20,6 +20,207 @@ namespace Cs2Gs.Translator;
 
 public sealed partial class CSharpToGSharpTranslator
 {
+    // Shared by declaration mutability, smart casts and taint guard proofs.
+    internal static bool SyntaxNodeWritesSymbol(SyntaxNode node, ISymbol symbol, SemanticModel model) =>
+        node switch
+        {
+            AssignmentExpressionSyntax assignment
+                when WritesStorageOf(assignment.Left, symbol, model) => true,
+            AssignmentExpressionSyntax { Left: TupleExpressionSyntax tuple }
+                when TupleAssignmentTargetsInclude(tuple, symbol, model) => true,
+            PostfixUnaryExpressionSyntax postfix
+                when (postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                        || postfix.IsKind(SyntaxKind.PostDecrementExpression))
+                    && WritesStorageOf(postfix.Operand, symbol, model) => true,
+            PrefixUnaryExpressionSyntax prefix
+                when (prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                        || prefix.IsKind(SyntaxKind.PreDecrementExpression)
+                        || prefix.IsKind(SyntaxKind.AddressOfExpression))
+                    && WritesStorageOf(prefix.Operand, symbol, model) => true,
+            ArgumentSyntax argument
+                when (argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword)
+                        || argument.RefOrOutKeyword.IsKind(SyntaxKind.OutKeyword))
+                    && WritesStorageOf(argument.Expression, symbol, model) => true,
+            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax member } invocation
+                when ExtensionReceiverWritesSymbol(invocation, member.Expression, symbol, model)
+                    || MutatingStructCallWritesSymbol(invocation, member, symbol, model) => true,
+            RefExpressionSyntax refOf
+                when WritesStorageOf(refOf.Expression, symbol, model)
+                    && !(refOf.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator }
+                        && model.GetDeclaredSymbol(declarator) is ILocalSymbol local
+                        && local.RefKind == RefKind.RefReadOnly) => true,
+            MemberAccessExpressionSyntax member
+                when MutatingStructAccessorWritesSymbol(
+                    member,
+                    member.Expression,
+                    symbol,
+                    model) => true,
+            ElementAccessExpressionSyntax element
+                when MutatingStructAccessorWritesSymbol(
+                    element,
+                    element.Expression,
+                    symbol,
+                    model) => true,
+            _ => false,
+        };
+
+    private static bool BindsTo(ExpressionSyntax expression, ISymbol target, SemanticModel model)
+    {
+        expression = UnwrapParenthesesAndSuppressions(expression);
+        ISymbol symbol = model.GetSymbolInfo(expression).Symbol;
+        return symbol != null && SymbolEqualityComparer.Default.Equals(symbol, target);
+    }
+
+    // Transparent wrappers change neither storage identity nor collection elements.
+    private static ExpressionSyntax UnwrapParenthesesAndSuppressions(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            if (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+                continue;
+            }
+
+            if (expression is PostfixUnaryExpressionSyntax suppression
+                && suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+            {
+                expression = suppression.Operand;
+                continue;
+            }
+
+            return expression;
+        }
+    }
+
+    private static bool TupleAssignmentTargetsInclude(
+        TupleExpressionSyntax tuple,
+        ISymbol symbol,
+        SemanticModel model)
+    {
+        foreach (ArgumentSyntax argument in tuple.Arguments)
+        {
+            switch (argument.Expression)
+            {
+                case TupleExpressionSyntax nested when TupleAssignmentTargetsInclude(nested, symbol, model):
+                    return true;
+                case DeclarationExpressionSyntax:
+                    break;
+                default:
+                    if (WritesStorageOf(argument.Expression, symbol, model))
+                    {
+                        return true;
+                    }
+
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool WritesStorageOf(
+        ExpressionSyntax target,
+        ISymbol symbol,
+        SemanticModel model)
+    {
+        while (true)
+        {
+            if (BindsTo(target, symbol, model))
+            {
+                return true;
+            }
+
+            ExpressionSyntax receiver = target switch
+            {
+                MemberAccessExpressionSyntax member
+                    when member.IsKind(SyntaxKind.SimpleMemberAccessExpression) => member.Expression,
+                ElementAccessExpressionSyntax element => element.Expression,
+                _ => null,
+            };
+            if (receiver is null
+                || model.GetTypeInfo(receiver).Type is not { IsReferenceType: false })
+            {
+                return false;
+            }
+
+            target = receiver;
+        }
+    }
+
+    private static bool MutatingStructCallWritesSymbol(
+        InvocationExpressionSyntax invocation,
+        MemberAccessExpressionSyntax member,
+        ISymbol symbol,
+        SemanticModel model)
+    {
+        if (model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
+            || method.IsStatic
+            || method.IsReadOnly
+            || method.IsExtensionMethod
+            || (method.ContainingType is { IsReferenceType: true } container
+                && container.TypeKind != TypeKind.Interface))
+        {
+            return false;
+        }
+
+        ITypeSymbol receiverType = model.GetTypeInfo(member.Expression).Type;
+        bool mutableValueReceiver =
+            receiverType is ITypeParameterSymbol typeParameter
+                ? !typeParameter.IsReferenceType
+                : receiverType is INamedTypeSymbol named
+                    && named.TypeKind == TypeKind.Struct
+                    && !named.IsReadOnly;
+        return mutableValueReceiver && WritesStorageOf(member.Expression, symbol, model);
+    }
+
+    private static bool MutatingStructAccessorWritesSymbol(
+        ExpressionSyntax access,
+        ExpressionSyntax receiver,
+        ISymbol symbol,
+        SemanticModel model)
+    {
+        if (model.GetSymbolInfo(access).Symbol is not IPropertySymbol property
+            || property.GetMethod is not { IsReadOnly: false }
+            || (property.ContainingType is { IsReferenceType: true } container
+                && container.TypeKind != TypeKind.Interface))
+        {
+            return false;
+        }
+
+        ITypeSymbol receiverType = model.GetTypeInfo(receiver).Type;
+        bool mutableValueReceiver =
+            receiverType is ITypeParameterSymbol typeParameter
+                ? !typeParameter.IsReferenceType
+                : receiverType is INamedTypeSymbol named
+                    && named.TypeKind == TypeKind.Struct
+                    && !named.IsReadOnly;
+        return mutableValueReceiver && WritesStorageOf(receiver, symbol, model);
+    }
+
+    private static bool ExtensionReceiverWritesSymbol(
+        InvocationExpressionSyntax invocation,
+        ExpressionSyntax receiver,
+        ISymbol symbol,
+        SemanticModel model)
+    {
+        if (!WritesStorageOf(receiver, symbol, model)
+            || model.GetOperation(invocation) is not IInvocationOperation operation
+            || !operation.TargetMethod.IsExtensionMethod)
+        {
+            return false;
+        }
+
+        IMethodSymbol extensionMethod = operation.TargetMethod.ReducedFrom ?? operation.TargetMethod;
+        if (extensionMethod.Parameters.IsEmpty)
+        {
+            return false;
+        }
+
+        RefKind refKind = extensionMethod.Parameters[0].RefKind;
+        return refKind == RefKind.Ref || refKind == RefKind.Out;
+    }
+
     private sealed partial class DeclarationVisitor
     {
         /// <summary>
@@ -2146,185 +2347,18 @@ public sealed partial class CSharpToGSharpTranslator
             return this.IsSymbolReassigned(local, this.state.CurrentBodyScope);
         }
 
-        private bool BindsTo(ExpressionSyntax expression, ISymbol target)
-        {
-            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
-            return symbol != null && SymbolEqualityComparer.Default.Equals(symbol, target);
-        }
-
-        // True when a deconstruction-assignment LHS tuple writes `symbol` as one
-        // of its (possibly nested, e.g. `((a, b), c) = ...`) elements. Elements
-        // that are themselves a `DeclarationExpressionSyntax` (`var y`, `int y`)
-        // introduce a brand-new local rather than writing an existing one, so
-        // they never match here — only plain-identifier elements (existing
-        // locals) and nested tuples are walked. A discard (`_`) element has no
-        // symbol and never matches either.
-        private bool TupleAssignmentTargetsInclude(TupleExpressionSyntax tuple, ISymbol symbol)
-        {
-            foreach (ArgumentSyntax argument in tuple.Arguments)
-            {
-                switch (argument.Expression)
-                {
-                    case TupleExpressionSyntax nested when this.TupleAssignmentTargetsInclude(nested, symbol):
-                        return true;
-
-                    case DeclarationExpressionSyntax:
-                        break;
-
-                    default:
-                        if (this.WritesStorageOf(argument.Expression, symbol))
-                        {
-                            return true;
-                        }
-
-                        break;
-                }
-            }
-
-            return false;
-        }
+        private bool BindsTo(ExpressionSyntax expression, ISymbol target) =>
+            CSharpToGSharpTranslator.BindsTo(expression, target, this.context.SemanticModel);
 
         // Shared by declaration mutability and smart-cast invalidation so tuple,
         // ref/out, address-of, and ref-alias writes cannot drift apart. A write
         // through value-type storage (`x.N = 1`, `ref x.N`, or a mutating struct
         // call `x.Mutate()`) writes `x` itself (issue #4302).
         private bool SyntaxNodeWritesSymbol(SyntaxNode node, ISymbol symbol) =>
-            node switch
-            {
-                AssignmentExpressionSyntax assignment
-                    when this.WritesStorageOf(assignment.Left, symbol) => true,
-                AssignmentExpressionSyntax { Left: TupleExpressionSyntax leftTuple }
-                    when this.TupleAssignmentTargetsInclude(leftTuple, symbol) => true,
-                PostfixUnaryExpressionSyntax postfix
-                    when (postfix.IsKind(SyntaxKind.PostIncrementExpression)
-                            || postfix.IsKind(SyntaxKind.PostDecrementExpression))
-                        && this.WritesStorageOf(postfix.Operand, symbol) => true,
-                PrefixUnaryExpressionSyntax prefix
-                    when (prefix.IsKind(SyntaxKind.PreIncrementExpression)
-                            || prefix.IsKind(SyntaxKind.PreDecrementExpression)
-                            || prefix.IsKind(SyntaxKind.AddressOfExpression))
-                        && this.WritesStorageOf(prefix.Operand, symbol) => true,
-                ArgumentSyntax argument
-                    when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None)
-                        && this.WritesStorageOf(argument.Expression, symbol) => true,
-                InvocationExpressionSyntax
-                    { Expression: MemberAccessExpressionSyntax member } invocation
-                    when this.ExtensionReceiverWritesSymbol(
-                        invocation,
-                        member.Expression,
-                        symbol)
-                        || this.MutatingStructCallWritesSymbol(invocation, member, symbol) => true,
-                RefExpressionSyntax refOf
-                    when this.WritesStorageOf(refOf.Expression, symbol) => true,
-                MemberAccessExpressionSyntax member
-                    when this.MutatingStructAccessorWritesSymbol(member, member.Expression, symbol) => true,
-                ElementAccessExpressionSyntax element
-                    when this.MutatingStructAccessorWritesSymbol(element, element.Expression, symbol) => true,
-                _ => false,
-            };
-
-        // True when `target` is `symbol` itself or a member reached from it
-        // only through value-type receivers, so writing `target` writes the
-        // storage of `symbol`.
-        private bool WritesStorageOf(ExpressionSyntax target, ISymbol symbol)
-        {
-            while (true)
-            {
-                if (this.BindsTo(target, symbol))
-                {
-                    return true;
-                }
-
-                ExpressionSyntax receiver = target switch
-                {
-                    MemberAccessExpressionSyntax member
-                        when member.IsKind(SyntaxKind.SimpleMemberAccessExpression) => member.Expression,
-                    ElementAccessExpressionSyntax element => element.Expression,
-                    _ => null,
-                };
-                if (receiver is null
-                    || this.context.GetTypeInfo(receiver).Type is not { IsReferenceType: false })
-                {
-                    break;
-                }
-
-                target = receiver;
-            }
-
-            return false;
-        }
-
-        private bool MutatingStructCallWritesSymbol(
-            InvocationExpressionSyntax invocation,
-            MemberAccessExpressionSyntax member,
-            ISymbol symbol)
-        {
-            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
-                || method.IsStatic
-                || method.IsReadOnly
-                || method.IsExtensionMethod
-                || (method.ContainingType is { IsReferenceType: true } container
-                    && container.TypeKind != TypeKind.Interface))
-            {
-                return false;
-            }
-
-            ITypeSymbol receiverType = this.context.GetTypeInfo(member.Expression).Type;
-            bool mutableValueReceiver =
-                receiverType is ITypeParameterSymbol typeParameter
-                    ? !typeParameter.IsReferenceType
-                    : receiverType is INamedTypeSymbol named
-                        && named.TypeKind == TypeKind.Struct
-                        && !named.IsReadOnly;
-            return mutableValueReceiver && this.WritesStorageOf(member.Expression, symbol);
-        }
-
-        private bool MutatingStructAccessorWritesSymbol(
-            ExpressionSyntax access,
-            ExpressionSyntax receiver,
-            ISymbol symbol)
-        {
-            if (this.context.GetSymbolInfo(access).Symbol is not IPropertySymbol property
-                || property.GetMethod is not { IsReadOnly: false }
-                || (property.ContainingType is { IsReferenceType: true } container
-                    && container.TypeKind != TypeKind.Interface))
-            {
-                return false;
-            }
-
-            ITypeSymbol receiverType = this.context.GetTypeInfo(receiver).Type;
-            bool mutableValueReceiver =
-                receiverType is ITypeParameterSymbol typeParameter
-                    ? !typeParameter.IsReferenceType
-                    : receiverType is INamedTypeSymbol named
-                        && named.TypeKind == TypeKind.Struct
-                        && !named.IsReadOnly;
-            return mutableValueReceiver && this.WritesStorageOf(receiver, symbol);
-        }
-
-        private bool ExtensionReceiverWritesSymbol(
-            InvocationExpressionSyntax invocation,
-            ExpressionSyntax receiver,
-            ISymbol symbol)
-        {
-            if (!this.WritesStorageOf(receiver, symbol)
-                || this.context.SemanticModel.GetOperation(invocation)
-                    is not IInvocationOperation operation
-                || !operation.TargetMethod.IsExtensionMethod)
-            {
-                return false;
-            }
-
-            IMethodSymbol extensionMethod =
-                operation.TargetMethod.ReducedFrom ?? operation.TargetMethod;
-            if (extensionMethod.Parameters.IsEmpty)
-            {
-                return false;
-            }
-
-            RefKind refKind = extensionMethod.Parameters[0].RefKind;
-            return refKind == RefKind.Ref || refKind == RefKind.Out;
-        }
+            CSharpToGSharpTranslator.SyntaxNodeWritesSymbol(
+                node,
+                symbol,
+                this.context.SemanticModel);
 
         // Returns true when <paramref name="symbol"/> is assigned, incremented,
         // decremented, or passed by ref/out anywhere in <paramref name="scope"/>.

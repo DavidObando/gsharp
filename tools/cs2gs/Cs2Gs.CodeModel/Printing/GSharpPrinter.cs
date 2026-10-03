@@ -1905,7 +1905,6 @@ public static class GSharpPrinter
         {
             foreach (var comment in unit.LeadingComments)
             {
-                sb.Append("// ");
                 sb.Append(comment);
                 sb.Append('\n');
             }
