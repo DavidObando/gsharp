@@ -3,9 +3,11 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
@@ -161,12 +163,17 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
         var result = fixture.Compile("""
             package Issue4731.Sequences
             import System
+            import System.Collections.Generic
             import Issue4731.Contracts
 
+            class Item(Label string) {}
             class Leaf[T] : SequenceOwner[T] {}
             func Exact[T](value Leaf[T]) sequence[T] -> value
             func Checked[T](value Leaf[T]) sequence[T] -> cast[sequence[T]](value)
             func Widen[T class](value Leaf[T]) sequence[object] -> value
+            func FromAlias[T](value sequence[T]) IEnumerable[T] -> value
+            func FromInterface[T](value IEnumerable[T]) sequence[T] -> value
+            func AliasWiden[T class](value sequence[T]) IEnumerable[object] -> value
 
             public func Probe() int32 {
                 let leaf = Leaf[string]()
@@ -176,8 +183,18 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
                 let widened = Widen(leaf)
                 if !Object.ReferenceEquals(leaf, exact)
                     || !Object.ReferenceEquals(leaf, checkedView)
-                    || !Object.ReferenceEquals(leaf, widened) {
+                    || !Object.ReferenceEquals(leaf, widened)
+                    || !Object.ReferenceEquals(leaf, FromAlias(exact))
+                    || !Object.ReferenceEquals(leaf, FromInterface(FromAlias(exact)))
+                    || !Object.ReferenceEquals(leaf, AliasWiden(exact)) {
                     return -1
+                }
+                let own = Leaf[Item]()
+                own.Add(Item("source"))
+                let ownView = FromInterface(FromAlias(Exact(own)))
+                if !Object.ReferenceEquals(own, ownView) { return -3 }
+                for item in ownView {
+                    if item.Label != "source" { return -4 }
                 }
                 var count int32 = 0
                 for item in widened {
@@ -191,6 +208,91 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
         IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
         var loaded = EmittedFixture.LoadTogether(fixture.AssemblyPath, result.AssemblyPath);
         Assert.Equal(1, FindMethod(loaded[1], "Probe").Invoke(null, null));
+    }
+
+    [Fact]
+    public void ImportedSequenceReturns_IteratorHoistedFields_RetainPhysicalElementAndRuntimeValues()
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile("""
+            package Issue4731.PhysicalSequences
+            import System.Linq
+
+            class Matrix {
+                private data class Item(Name string) { }
+
+                shared {
+                    private func Cases() sequence[Item] {
+                        yield Item("one")
+                    }
+
+                    func ConcatRows() sequence[[]object] {
+                        for item in Cases().Concat(Cases()) {
+                            yield []object{item.Name}
+                        }
+                    }
+
+                    func WhereRows() sequence[[]object] {
+                        for item in Cases().Where((item Item) -> item.Name == "one") {
+                            yield []object{item.Name}
+                        }
+                    }
+                }
+            }
+            """);
+        Assert.True(result.ExitCode == 0, result.Output);
+
+        var loaded = EmittedFixture.LoadTogether(fixture.AssemblyPath, result.AssemblyPath);
+        var assembly = loaded[1];
+        var item = Assert.Single(assembly.GetTypes(), type => type.Name == "Item");
+        var enumerable = typeof(IEnumerable<>).MakeGenericType(item);
+        var enumerator = typeof(IEnumerator<>).MakeGenericType(item);
+        foreach (var (name, producer, count) in new[]
+        {
+            ("ConcatRows", nameof(Enumerable.Concat), 2),
+            ("WhereRows", nameof(Enumerable.Where), 1),
+        })
+        {
+            var rows = Assert.IsAssignableFrom<IEnumerable<object[]>>(FindMethod(assembly, name).Invoke(null, null));
+            Assert.Equal(Enumerable.Repeat("one", count), rows.Select(row => Assert.IsType<string>(Assert.Single(row))));
+
+            var state = Assert.Single(assembly.GetTypes(), type => type.Name.StartsWith("<" + name + ">", StringComparison.Ordinal));
+            Assert.Contains(
+                state.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+                field => field.FieldType == enumerator);
+            var moveNext = Assert.Single(
+                state.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+                method => method.Name == "MoveNext");
+            var body = Assert.IsAssignableFrom<MethodBody>(moveNext.GetMethodBody());
+            var bytes = Assert.IsType<byte[]>(body.GetILAsByteArray());
+            var call = Assert.Single(
+                IlInstructionReader.Read(bytes)
+                    .Where(instruction => instruction.OpCode == OpCodes.Call || instruction.OpCode == OpCodes.Callvirt)
+                    .Where(instruction => instruction.MetadataToken.HasValue)
+                    .Select(instruction => moveNext.Module.ResolveMethod(instruction.MetadataToken.GetValueOrDefault()))
+                    .OfType<MethodInfo>(),
+                method => method.DeclaringType == typeof(Enumerable) && method.Name == producer);
+            Assert.Equal(enumerable, call.ReturnType);
+            Assert.Equal(item, Assert.Single(call.GetGenericArguments()));
+        }
+
+        IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
+    }
+
+    [Theory]
+    [InlineData("IEnumerable[object]")]
+    [InlineData("sequence[object]")]
+    public void UnconstrainedSequenceSource_CannotWidenToObjectElements(string target)
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile($"""
+            package Issue4731.ReifiedNegative
+            import System.Collections.Generic
+            func Unsafe[T](value sequence[T]) {target} -> value
+            """);
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(result.Output.Contains("GS0156", StringComparison.Ordinal), result.Output);
+        Assert.False(File.Exists(result.AssemblyPath));
     }
 
     [Theory]

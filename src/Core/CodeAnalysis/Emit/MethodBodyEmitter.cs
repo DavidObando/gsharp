@@ -988,10 +988,15 @@ internal sealed partial class MethodBodyEmitter
         // (`IEqualityComparer[IMethodSymbol]`): the binder now classifies it
         // through the CLR interface-closure projection, and the emitted form
         // is the same no-op reference upcast.
-        if (a is ImportedTypeSymbol importedReference
+        // #4731: sequence aliases also emit their actual symbolic element.
+        // A valid widening must retain that precise stack type when a
+        // reflected parameter is erased but its MethodSpec consumes the
+        // real element; casting to the erased envelope would lose it.
+        if (((a is ImportedTypeSymbol importedReference
             && (importedReference.OpenDefinition?.IsValueType == false
                 || (importedReference.OpenDefinition == null
-                    && importedReference.ClrType is { IsValueType: false, IsArray: false }))
+                    && importedReference.ClrType is { IsValueType: false, IsArray: false })))
+            || a is SequenceTypeSymbol or AsyncSequenceTypeSymbol)
             && b is ImportedTypeSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol
             && Conversion.ClassifyNonStructural(a, b) is
             {

@@ -973,9 +973,9 @@ public sealed class Conversion
         // applies equally to imported interfaces/classes, inferred or explicit
         // method arguments, nested generic arguments, and cross-context CLR
         // identities.
-        if (from is ImportedTypeSymbol fromConstructedReference
+        if (from is ImportedTypeSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol
             && TryClassifyConstructedImportedReferenceConversion(
-                fromConstructedReference,
+                from,
                 to))
         {
             return Conversion.Implicit;
@@ -3237,7 +3237,7 @@ public sealed class Conversion
     /// instead of their possibly-erased CLR probe types.
     /// </summary>
     private static bool TryClassifyConstructedImportedReferenceConversion(
-        ImportedTypeSymbol from,
+        TypeSymbol from,
         TypeSymbol? to)
     {
         if (from == null
@@ -3256,23 +3256,24 @@ public sealed class Conversion
         // the variant interface, so only classification was missing. Non-
         // interface targets keep the value-type exclusion.
         ImmutableArray<TypeSymbol> sourceArguments;
-        if (from.OpenDefinition != null
-            && !from.TypeArguments.IsDefaultOrEmpty
-            && (!from.OpenDefinition.IsValueType || targetOpen.IsInterface))
+        if (TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments)
+            && (!sourceOpen.IsValueType || targetOpen.IsInterface))
         {
-            if (ClrTypeUtilities.AreSame(from.OpenDefinition, targetOpen))
+            if (ClrTypeUtilities.AreSame(sourceOpen, targetOpen))
             {
-                sourceArguments = from.TypeArguments;
+                sourceArguments = sourceTypeArguments;
             }
-            else if (!MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
-                         from,
+            else if (from is not ImportedTypeSymbol importedSource
+                || !MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
+                         importedSource,
                          targetOpen,
                          out sourceArguments))
             {
                 return false;
             }
         }
-        else if (!TryProjectClrInterfaceArguments(from, targetOpen, out sourceArguments))
+        else if (from is not ImportedTypeSymbol importedSource
+            || !TryProjectClrInterfaceArguments(importedSource, targetOpen, out sourceArguments))
         {
             // Issue #3501: a NON-generic imported class (e.g. Roslyn's
             // `SymbolEqualityComparer : IEqualityComparer<ISymbol?>`) has no

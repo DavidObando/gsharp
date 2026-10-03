@@ -17,6 +17,36 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public sealed class Issue4731InheritedClrInterfaceConversionTests
 {
     [Theory]
+    [InlineData("sequence[Item]", "IEnumerable[object]")]
+    [InlineData("sequence[Item]", "sequence[object]")]
+    [InlineData("IEnumerable[Item]", "sequence[object]")]
+    [InlineData("async sequence[Item]", "IAsyncEnumerable[object]")]
+    [InlineData("async sequence[Item]", "async sequence[object]")]
+    public void ReifiedSequenceSource_SharedImportedVarianceAcceptsReferenceElements(string sourceType, string targetType)
+    {
+        var compilation = Bind("class Item {}", sourceType, targetType, "value");
+        Assert.Empty(compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics));
+    }
+
+    [Theory]
+    [InlineData("sequence[T]", "IEnumerable[object]", "[T]")]
+    [InlineData("sequence[T]", "sequence[object]", "[T]")]
+    [InlineData("async sequence[T]", "IAsyncEnumerable[object]", "[T]")]
+    [InlineData("sequence[int32]", "IEnumerable[object]", "")]
+    [InlineData("async sequence[int32]", "IAsyncEnumerable[object]", "")]
+    public void ReifiedSequenceSource_SharedVarianceRejectsValueOrUnconstrainedElements(
+        string sourceType,
+        string targetType,
+        string typeParameters)
+    {
+        var compilation = Bind("", sourceType, targetType, "value", typeParameters);
+        var error = Assert.Single(
+            compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics),
+            diagnostic => diagnostic.IsError);
+        Assert.Equal("GS0156", error.Id);
+    }
+
+    [Theory]
     [InlineData("class Leaf : ArrayList {}", "Leaf", "IEnumerable", "value")]
     [InlineData("class Leaf : ArrayList {}", "Leaf", "IEnumerable", "cast[IEnumerable](value)")]
     [InlineData("open class Mid : ArrayList {}\nclass Leaf : Mid {}", "Leaf", "IEnumerable", "value")]
