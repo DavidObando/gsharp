@@ -72,7 +72,10 @@ public class LspServerInitializedDispatchTests
 
             Assert.Null(workspace.RootPath);
             Assert.Empty(workspace.Projects);
-            Assert.DoesNotContain("\"Level\":\"Error\"", File.ReadAllText(logPath), StringComparison.Ordinal);
+            // Windows requires the reader to share write access with the still-open logger.
+            using var logStream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var logReader = new StreamReader(logStream);
+            Assert.DoesNotContain("\"Level\":\"Error\"", logReader.ReadToEnd(), StringComparison.Ordinal);
 
             // Single-file editing must remain usable after the no-root handshake.
             var uri = DocumentUri.FromFileSystemPath(Path.Combine(Path.GetTempPath(), "no-root.gs"));
