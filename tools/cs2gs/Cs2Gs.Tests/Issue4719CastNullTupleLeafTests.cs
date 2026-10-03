@@ -98,6 +98,170 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Theory]
+    [InlineData("struct", "default(T)")]
+    [InlineData("unmanaged", "default(T)")]
+    [InlineData("struct", "(T)default")]
+    [InlineData("unmanaged", "(T)default")]
+    public void NonNullableGenericBoxing_PreservesTheNonNullTupleLeaf(string constraint, string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}}
+                    => ((object){{value}}, 1);
+                public static int Run() {
+                    var row = Row<int>();
+                    return (int)row.Value + row.Code;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("int")]
+    [InlineData("bool")]
+    [InlineData("System.DateTime")]
+    public void NonNullableConcreteBoxing_PreservesTheNonNullTupleLeaf(string type)
+    {
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row() => ((object)default({{type}}), 1);
+            }
+            """);
+
+        Assert.Contains("func Row() (Value object, Code int32)", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData("default(int?)", true)]
+    [InlineData("(int?)default", true)]
+    [InlineData("(int?)null", true)]
+    [InlineData("choose ? (int?)null : 1", false)]
+    [InlineData("choose switch { true => default(int?), false => 1 }", false)]
+    public void NullableValueBoxing_PreservesNullAndThePromotedTupleLeaf(string value, bool alwaysNull)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row(bool choose) => ((object)({{value}}), 1);
+                public static int Run() {
+                    var missing = Row(true);
+                    var present = Row(false);
+                    return missing.Value == null && missing.Code == 1
+                        && {{(alwaysNull ? "present.Value == null" : "(int)present.Value == 1")}}
+                        && present.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row(choose bool) (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("where T : class", " class")]
+    public void ReferenceOrUnconstrainedDefaultCast_PreservesTheNullableTupleLeaf(
+        string constraint,
+        string mappedConstraint)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() {{constraint}} => ((object)default(T), 1);
+                public static int Run() {
+                    var row = Row<string>();
+                    {{(constraint.Length == 0 ? "if ((int)Row<int>().Value != 0) { return -2; }" : "")}}
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T{mappedConstraint}]() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void NullableGenericValueBoxing_PreservesNullAndThePromotedTupleLeaf()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : struct => ((object)default(T?), 1);
+                public static int Run() {
+                    var row = Row<int>();
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row[T struct]() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void GuardedReferenceTypeParameterCast_PreservesTheNonNullIteratorLeaf()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(object Value, int Code)> Rows<T>(T? value) where T : class {
+                    if (value != null) {
+                        yield return ((object)value, 1);
+                    }
+                }
+                public static int Run() {
+                    foreach (var row in Rows<string>(null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows<string>("keep")) {
+                        if ((string)row.Value != "keep" || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    return count;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Rows[T class](value T?) sequence[(Value object, Code int32)]", printed);
+        Assert.DoesNotContain("value!!", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void GuardedNullableValueBoxing_PreservesTheNonNullIteratorLeaf()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(object Value, int Code)> Rows(int? value) {
+                    if (value != null) {
+                        yield return ((object)value, 1);
+                    }
+                }
+                public static int Run() {
+                    foreach (var row in Rows(null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows(7)) {
+                        if ((int)row.Value != 7 || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    return count;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Rows(value int32?) sequence[(Value object, Code int32)]", printed);
+        Assert.DoesNotContain("value!!", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
     [Fact]
     public void OriginalNestedIteratorAndCastYield_PreserveContractsAndDeferredEvaluation()
     {

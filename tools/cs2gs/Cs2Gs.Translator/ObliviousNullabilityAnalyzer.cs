@@ -5355,11 +5355,17 @@ internal static class ObliviousNullabilityAnalyzer
             case ParenthesizedExpressionSyntax paren:
                 return IsDirectlyNullable(paren.Expression, model, respectNullGuards);
 
-            // A built-in reference cast preserves null; a user-defined
-            // conversion can replace it, so its result keeps its own contract.
+            // Boxing a non-nullable value cannot produce null. Nullable-value
+            // boxing can; user-defined conversions keep their own contracts.
             case CastExpressionSyntax cast
                 when model.GetOperation(cast) is IConversionOperation { OperatorMethod: null } conversion
                     && IsReferenceLike(conversion.Type):
+                if (conversion.Operand.Type is { IsValueType: true } valueType)
+                {
+                    return valueType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                        && (!respectNullGuards || !IsNullGuardDominatedRead(cast.Expression, model));
+                }
+
                 return IsDirectlyNullable(cast.Expression, model, respectNullGuards);
 
             // `await expr`: an awaited `Task<T>`'s own nullability is that of
