@@ -757,7 +757,8 @@ namespace Cs2Gs.Tests
                         }
 
                         Add(c: x, a: MutateX());
-                        return total + __spill0(0);
+                        int __spill1 = 8;
+                        return total + __spill0(0) + __spill1;
                         static int __spill0(int n) =>
                             n == 0 ? 7 : Other<int>(n - 1);
                         static int Other<T>(int n) => __spill0(n);
@@ -765,11 +766,11 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("let __spill1 = x", printed, StringComparison.Ordinal);
+            Assert.Contains("let __spill2 = x", printed, StringComparison.Ordinal);
             LocalFunctionHoistTranslationTests.CompileAndRun(
                 printed,
                 "Console.WriteLine(C().Run())",
-                "132");
+                "140");
         }
 
         [Fact]
@@ -807,7 +808,7 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
-        public void LoopScrutinee_ReservesAgainstLiftedHelper()
+        public void LoopScrutinee_AvoidsLiftedHelperSourceName()
         {
             string printed = Translate("""
                 using System;
@@ -835,7 +836,8 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("func __scrutinee0_2(", printed, StringComparison.Ordinal);
+            Assert.Contains("let __scrutinee1 =", printed, StringComparison.Ordinal);
+            Assert.Contains("func __scrutinee0(", printed, StringComparison.Ordinal);
             LocalFunctionHoistTranslationTests.CompileAndRun(
                 printed,
                 "Console.WriteLine(C().Run())",

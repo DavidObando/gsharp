@@ -1148,12 +1148,12 @@ public sealed partial class CSharpToGSharpTranslator
             string stem = this.nameAllocator.GetName(
                 preferredName ?? this.DeconstructionTempStem(anchor));
             SyntaxNode body = this.state.CurrentBodyScope ?? anchor.SyntaxTree.GetRoot();
-            if (!this.state.DeconstructionOccupiedNamesByBody.TryGetValue(
+            if (!this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(
                 body,
                 out HashSet<string> occupied))
             {
-                occupied = this.CollectOccupiedDeconstructionNames(body);
-                this.state.DeconstructionOccupiedNamesByBody.Add(body, occupied);
+                occupied = this.CollectOccupiedSynthesizedLocalNames(body);
+                this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, occupied);
             }
 
             if (!this.state.DeconstructionTempNamesByBody.TryGetValue(
@@ -1178,7 +1178,7 @@ public sealed partial class CSharpToGSharpTranslator
             return candidate;
         }
 
-        private HashSet<string> CollectOccupiedDeconstructionNames(SyntaxNode body)
+        private HashSet<string> CollectOccupiedSynthesizedLocalNames(SyntaxNode body)
         {
             bool DescendIntoCurrentBody(SyntaxNode node) =>
                 ReferenceEquals(node, body) ||

@@ -2030,12 +2030,36 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool TryClaimSynthesizedLocalName(string name, SyntaxNode site = null)
         {
+            if (this.SourceIdentifierClaimsSynthesizedLocalName(name, site))
+            {
+                return false;
+            }
+
             INamedTypeSymbol owner = this.state.CurrentEmittedAggregate
                 ?? this.context.SemanticModel.GetEnclosingSymbol(
                     site?.SpanStart ?? this.state.CurrentBodyScope?.SpanStart ?? 0)?.ContainingType;
             return LiftedLocalFunctionNameAllocator
                 .For(this.context.Compilation)
                 .TryClaimLocalName(owner, name);
+        }
+
+        private bool SourceIdentifierClaimsSynthesizedLocalName(string name, SyntaxNode site)
+        {
+            SyntaxNode body = this.state.CurrentBodyScope ?? site?.SyntaxTree.GetRoot();
+            if (body == null)
+            {
+                return false;
+            }
+
+            if (!this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(
+                body,
+                out HashSet<string> occupied))
+            {
+                occupied = this.CollectOccupiedSynthesizedLocalNames(body);
+                this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, occupied);
+            }
+
+            return occupied.Contains(name);
         }
 
         private bool ReserveSynthesizedLocalName(string name, SyntaxNode site = null)

@@ -224,8 +224,8 @@ internal sealed class DocumentTranslationState
         new Dictionary<SyntaxNode, HashSet<string>>();
 
     // Emitted spellings occupied by source identifiers in each body. Building
-    // this once avoids rescanning every token for every structural carrier.
-    public Dictionary<SyntaxNode, HashSet<string>> DeconstructionOccupiedNamesByBody { get; } =
+    // this once avoids rescanning every token for every synthesized local.
+    public Dictionary<SyntaxNode, HashSet<string>> SynthesizedLocalOccupiedNamesByBody { get; } =
         new Dictionary<SyntaxNode, HashSet<string>>();
 
     // Monotonic counter for synthesizing the hoist local when a loop condition

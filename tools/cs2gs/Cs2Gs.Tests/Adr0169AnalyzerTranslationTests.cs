@@ -452,6 +452,44 @@ public sealed class CtxAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void OperationRegistrationWrappers_ReserveVisibleSourceHandlerNames()
+    {
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class CtxAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TESTCTX3"", ""Title"", ""Message"", ""Testing"", DiagnosticSeverity.Warning, true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterOperationAction(Analyze, OperationKind.IsType);
+        var ctx_2 = (OperationAnalysisContext value) => Analyze(value);
+        context.RegisterOperationAction(ctx_2, OperationKind.PropertyReference);
+
+        static void Analyze(OperationAnalysisContext value)
+        {
+        }
+    }
+}");
+
+        Assert.Contains("ctx BoundNodeAnalysisContext", printed, StringComparison.Ordinal);
+        Assert.Contains("ctx_3 BoundNodeAnalysisContext", printed, StringComparison.Ordinal);
+        Assert.Contains("ctx_2(ctx_3)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void SpecialTypeComparison_AssertsTheNilableContainingTypeReceiver()
     {
         // Issue #4287: `x.SpecialType != SpecialType.System_Object` is
