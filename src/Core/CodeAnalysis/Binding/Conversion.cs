@@ -345,7 +345,8 @@ public sealed class Conversion
     /// <returns>Whether the type denotes an interface.</returns>
     internal static bool IsInterfaceLikeType(TypeSymbol? type)
     {
-        if (type is InterfaceSymbol or ImportedTypeSymbol { OpenDefinition.IsInterface: true })
+        if (type is InterfaceSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol
+            or ImportedTypeSymbol { OpenDefinition.IsInterface: true })
         {
             return true;
         }
@@ -973,10 +974,9 @@ public sealed class Conversion
         // method arguments, nested generic arguments, and cross-context CLR
         // identities.
         if (from is ImportedTypeSymbol fromConstructedReference
-            && to is ImportedTypeSymbol toConstructedReference
             && TryClassifyConstructedImportedReferenceConversion(
                 fromConstructedReference,
-                toConstructedReference))
+                to))
         {
             return Conversion.Implicit;
         }
@@ -2103,8 +2103,7 @@ public sealed class Conversion
                 || (TypeSymbol.ContainsSourceArrayShape(from)
                     && TypeSymbol.ContainsSourceArrayShape(to)
                     && IsRejectedFixedArrayShapeMismatch(from, to)))
-            && to is ImportedTypeSymbol mismatchedConstructedTarget
-            && TryGetConstructedGenericShape(mismatchedConstructedTarget, out _, out _))
+            && TryGetConstructedGenericShape(to, out _, out _))
         {
             return Conversion.None;
         }
@@ -3143,25 +3142,41 @@ public sealed class Conversion
 
     /// <summary>
     /// Issue #1420: extracts the open generic CLR definition and the symbolic
-    /// type arguments of a constructed generic <see cref="ImportedTypeSymbol"/>,
+    /// type arguments of a constructed generic imported type or sequence alias,
     /// whether the arguments are carried symbolically (#313 construction) or only
     /// by the closed <see cref="TypeSymbol.ClrType"/>. CLR-backed arguments are
     /// projected through <see cref="TypeSymbol.FromClrType"/> so primitive
     /// aliases and their BCL counterparts unify.
     /// </summary>
     private static bool TryGetConstructedGenericShape(
-        ImportedTypeSymbol symbol,
+        TypeSymbol? symbol,
         [NotNullWhen(true)] out Type? openDefinition,
         out ImmutableArray<TypeSymbol> typeArguments)
     {
-        if (symbol.OpenDefinition != null && !symbol.TypeArguments.IsDefaultOrEmpty)
+        // #4731: aliases must use the same symbolic relation AND rejection
+        // guard as their imported interface spellings, never erased CLR probes.
+        if (symbol is SequenceTypeSymbol or AsyncSequenceTypeSymbol
+            && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(symbol, out openDefinition, out var elementType))
         {
-            openDefinition = symbol.OpenDefinition;
-            typeArguments = symbol.TypeArguments;
+            typeArguments = ImmutableArray.Create(elementType);
+            return openDefinition != null;
+        }
+
+        if (symbol is not ImportedTypeSymbol imported)
+        {
+            openDefinition = null;
+            typeArguments = ImmutableArray<TypeSymbol>.Empty;
+            return false;
+        }
+
+        if (imported.OpenDefinition != null && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            openDefinition = imported.OpenDefinition;
+            typeArguments = imported.TypeArguments;
             return true;
         }
 
-        var clr = symbol.ClrType;
+        var clr = imported.ClrType;
         if (clr != null && clr.IsGenericType && !clr.IsGenericTypeDefinition)
         {
             var clrArgs = clr.GetGenericArguments();
@@ -3223,7 +3238,7 @@ public sealed class Conversion
     /// </summary>
     private static bool TryClassifyConstructedImportedReferenceConversion(
         ImportedTypeSymbol from,
-        ImportedTypeSymbol to)
+        TypeSymbol? to)
     {
         if (from == null
             || !TryGetConstructedGenericShape(to, out var targetOpen, out var targetArguments)
