@@ -499,8 +499,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || property.GetMethod == null
                 || property.IsAbstract
                 || property.IsIndexer
-                || property.ContainingType?.TypeKind == TypeKind.Interface
-                || !(property.IsStatic || property.IsVirtual || property.IsOverride))
+                || property.ContainingType?.TypeKind == TypeKind.Interface)
             {
                 return false;
             }
@@ -508,7 +507,9 @@ public sealed partial class CSharpToGSharpTranslator
             return property.DeclaringSyntaxReferences
                 .Select(reference => reference.GetSyntax())
                 .OfType<PropertyDeclarationSyntax>()
-                .Any(IsGetOnlyAutoProperty);
+                .Any(syntax => IsGetOnlyAutoProperty(syntax)
+                    && (property.IsStatic || property.IsVirtual || property.IsOverride
+                        || (property.ContainingType?.IsRecord == true && syntax.Initializer != null)));
         }
 
         // Issue #2382: whether `localFunction` — declared among the top-level
@@ -1893,7 +1894,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (symbol?.IsRecord == true
                 && kind == TypeDeclarationKind.DataClass
                 && !this.emitGeneratedImplementingParts
-                && !symbol.IsSealed
+                && (!symbol.IsSealed || symbol.BaseType?.IsRecord == true)
                 && this.ShouldAttachOwnedExtensions(node, symbol)
                 && !HasExplicitRecordPrintMembers(symbol))
             {
@@ -2083,9 +2084,11 @@ public sealed partial class CSharpToGSharpTranslator
                         new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
                         new GExpression[]
                         {
-                            new MemberAccessExpression(
-                                new ThisExpression(),
-                                this.EmittedName(member, memberName)),
+                            new ConversionExpression(
+                                this.typeMapper.Map(this.context.Compilation.GetSpecialType(SpecialType.System_Object), this.context, node.GetLocation()),
+                                new MemberAccessExpression(
+                                    new ThisExpression(),
+                                    this.EmittedName(member, memberName))),
                         })));
                 first = false;
             }

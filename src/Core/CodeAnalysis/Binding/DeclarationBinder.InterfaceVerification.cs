@@ -2123,8 +2123,9 @@ internal sealed partial class DeclarationBinder
                 && ClrTypeUtilities.AreSame(openDefinition, typeof(System.IEquatable<>))
                 && symbolicArgs.Length == 1
                 && symbolicArgs[0] is StructSymbol equatableSelf
-                && equatableSelf.EnclosingTypeArguments.SequenceEqual<TypeSymbol>(
-                    StructSymbol.CollectEnclosingTypeParameters(structSymbol))
+                && (equatableSelf.EnclosingTypeArguments.IsDefaultOrEmpty
+                    || equatableSelf.EnclosingTypeArguments.SequenceEqual<TypeSymbol>(
+                        StructSymbol.CollectEnclosingTypeParameters(structSymbol)))
                 && ConformanceSignaturesEquivalent(
                     equatableSelf,
                     StructSymbol.Construct(structSymbol, structSymbol.TypeParameters.Cast<TypeSymbol>().ToImmutableArray()))

@@ -667,7 +667,7 @@ internal sealed class DataStructSynthesizer
         var signature = new BlobBuilder();
         new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
-        var visibility = structSym.IsOpen ? MethodAttributes.Family : MethodAttributes.Private;
+        var visibility = IsDataObjectOverrideFinal(structSym) ? MethodAttributes.Private : MethodAttributes.Family;
         var copyConstructor = this.emitCtx.Metadata.AddMethodDefinition(
             visibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
             MethodImplAttributes.IL | MethodImplAttributes.Managed,
