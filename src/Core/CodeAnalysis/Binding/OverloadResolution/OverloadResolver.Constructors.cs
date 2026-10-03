@@ -198,7 +198,7 @@ internal sealed partial class OverloadResolver
                         paramIdx = -1;
                         for (var p = 0; p < defParams.Length; p++)
                         {
-                            if (string.Equals(defParams[p].Name, named.NameToken.Text, StringComparison.Ordinal))
+                            if (string.Equals(defParams[p].Name, named.NameToken.ValueText, StringComparison.Ordinal))
                             {
                                 paramIdx = p;
                                 break;
@@ -2561,7 +2561,7 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
-            var name = named.NameToken.Text;
+            var name = named.NameToken.ValueText;
             var matched = false;
             for (var p = 0; p < parameters.Length; p++)
             {

@@ -787,7 +787,7 @@ internal static class PInvokeBinder
 
         foreach (var arg in annotation.Arguments)
         {
-            if (arg is NamedArgumentExpressionSyntax named && named.NameToken.Text == name)
+            if (arg is NamedArgumentExpressionSyntax named && named.NameToken.ValueText == name)
             {
                 return named;
             }

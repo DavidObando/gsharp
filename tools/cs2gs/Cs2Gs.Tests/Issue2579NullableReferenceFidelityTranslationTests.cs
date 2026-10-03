@@ -77,7 +77,7 @@ public sealed class Issue2579NullableReferenceFidelityTranslationTests
         Assert.Contains("required = key!!", printed, StringComparison.Ordinal);
         Assert.Contains("Required = key!!", printed, StringComparison.Ordinal);
         Assert.Contains("Consume(key!!)", printed, StringComparison.Ordinal);
-        Assert.Contains("map_[key!!]", printed, StringComparison.Ordinal);
+        Assert.Contains("$map[key!!]", printed, StringComparison.Ordinal);
         Assert.Contains("let optional string? = key", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("optional string? = key!!", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("!!!!", printed, StringComparison.Ordinal);
