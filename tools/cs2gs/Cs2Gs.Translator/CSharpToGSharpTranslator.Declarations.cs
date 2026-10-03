@@ -1511,7 +1511,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 this.context.Report(new TranslationDiagnostic(
                     nameof(SyntaxKind.ClassDeclaration),
-                    $"C# 'static class {node.Identifier.Text}' has no direct G# form; mapped to a class whose members are all wrapped in a 'shared {{ }}' block (ADR-0115 §B.11 / ADR-0053).",
+                    $"C# 'static class {node.Identifier.Text}' is mapped to a G# 'shared class' whose members sit directly in its body, with no 'shared {{ }}' block (ADR-0195 / ADR-0115 §B.11).",
                     node.GetLocation(),
                     TranslationSeverity.Info));
             }
@@ -1887,7 +1887,17 @@ public sealed partial class CSharpToGSharpTranslator
             var members = new List<GMember>(instanceMembers);
             if (sharedMembers.Count > 0)
             {
-                members.Add(new SharedBlock(sharedMembers));
+                if (isStaticClass)
+                {
+                    // ADR-0195 / issue #4674: a C# static class is a G# `shared class`,
+                    // whose body IS its shared member list; a `shared { }` block
+                    // inside it is an error.
+                    members.AddRange(sharedMembers);
+                }
+                else
+                {
+                    members.Add(new SharedBlock(sharedMembers));
+                }
             }
 
             // Issue #1729 (mode 4): remove only the entries this invocation added
@@ -1923,8 +1933,17 @@ public sealed partial class CSharpToGSharpTranslator
             // point of keeping it is to give the self-hosted MethodDef this
             // class's CLR identity back (matching the native assembly's
             // metadata shape), not the package's `<Program>`.
+            //
+            // Issue #4674 (ADR-0195): only an extension HOLDER is elided, that is a class whose
+            // every member was an extension method. A static class the author wrote empty
+            // (`public static class Marker { }`), or one that holds only things that also
+            // leave the body (a nested delegate is lifted to a top-level declaration), is a
+            // declared type of the assembly's API and now has a direct form, a
+            // `shared class`, so it is kept.
             if (isStaticClass &&
                 members.Count == 0 &&
+                mergedMembers.Count > 0 &&
+                mergedMembers.All(IsExtensionMethodDeclaration) &&
                 !hostedAnyExtensionOnStaticClass &&
                 !IsTypeOfReferenced(this.context.Compilation, symbol, this.retainedFilePaths))
             {
@@ -1956,20 +1975,12 @@ public sealed partial class CSharpToGSharpTranslator
                 isOpenableKind &&
                 this.IsTypeEmittedOpen(symbol);
 
-            // G# has no `abstract` class modifier (the keyword is not recognized by
-            // the parser); a C# `abstract class`/`abstract record` therefore maps to
-            // an `open class`/`open data class` — subclassable but without enforced
-            // non-instantiation (ADR-0115 §B.4). The abstractness is intentionally
-            // dropped.
-            bool wasAbstract = symbol != null && symbol.IsAbstract && isOpenableKind;
-            if (wasAbstract)
-            {
-                this.context.Report(new TranslationDiagnostic(
-                    nameof(SyntaxKind.ClassDeclaration),
-                    $"C# 'abstract' on '{node.Identifier.Text}' is dropped; G# has no abstract-class modifier, so the type maps to an 'open class' (ADR-0115 §B.4).",
-                    node.GetLocation(),
-                    TranslationSeverity.Info));
-            }
+            // ADR-0195 / issue #4674: a C# `abstract class`/`abstract record` maps to
+            // G#'s `abstract class`/`abstract data class`, which is inheritable
+            // (the modifier implies `open`) and uninstantiable even when the
+            // type declares no abstract member (gsc used to infer abstractness
+            // from abstract members alone, so `BoundTreeWalker` became concrete).
+            bool isAbstract = symbol != null && symbol.IsAbstract && isOpenableKind;
 
             // Issue #1910 (gap 1 & 2): a `partial` type's attributes/`unsafe`
             // modifier can legally sit on ANY part, not just the primary one
@@ -2014,13 +2025,19 @@ public sealed partial class CSharpToGSharpTranslator
                 interfaces: interfaces,
                 members: members,
                 visibility: MapVisibility(symbol, this.context, node, preserveStaticClassPrivate: true),
-                isOpen: isOpen || wasAbstract,
-                isAbstract: false,
+                isOpen: isOpen && !isAbstract,
+                isAbstract: isAbstract,
                 attributes: this.MapAttributes(mergedAttributeLists),
                 isUnsafe: isUnsafe,
                 isPartial: isPartial,
-                isRefLike: isRefLike);
+                isRefLike: isRefLike,
+                isShared: isStaticClass);
         }
+
+        private static bool IsExtensionMethodDeclaration(MemberDeclarationSyntax member) =>
+            member is MethodDeclarationSyntax method
+            && method.ParameterList.Parameters.Count > 0
+            && method.ParameterList.Parameters[0].Modifiers.Any(SyntaxKind.ThisKeyword);
 
         private bool ShouldAttachOwnedExtensions(
             TypeDeclarationSyntax node,

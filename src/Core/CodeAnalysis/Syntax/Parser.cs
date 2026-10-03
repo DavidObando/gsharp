@@ -102,6 +102,12 @@ public partial class Parser
     // parenthesised lambda `(x) -> body` remains available in unsafe contexts.
     private int unsafeDepth;
 
+    // ADR-0195 / issue #4674: set for the duration of a `shared class` head's body parse
+    // (ParseStructDeclaration reads and clears it, so a nested type's body does not
+    // inherit it): members of a shared class are shared, and `init { }` in its body is
+    // the static initializer (ADR-0140) rather than an instance constructor.
+    private bool sharedClassBody;
+
     // Issue #1038: depth counter that suppresses the standalone range operator
     // (`lo..hi`) while parsing the bound of an index expression. Inside `[...]`
     // the `..` token is owned by the index-argument parser

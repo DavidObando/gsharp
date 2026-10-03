@@ -367,7 +367,11 @@ public sealed class StructSymbol : TypeSymbol
                 return effectiveProperties.Values.Any(property => property.IsAbstract);
             }
 
-            return (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
+            // ADR-0195 / issue #4674: an explicitly `abstract` or `shared` class is
+            // abstract whatever its members are.
+            return IsDeclaredAbstract
+                || IsSharedClass
+                || (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
                 || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
                 || HasUnimplementedAbstractProperties()
                 || ExternalClrOverrideResolver.HasUnimplementedAbstractMembers(this);
@@ -672,6 +676,25 @@ public sealed class StructSymbol : TypeSymbol
     /// CLR <c>Finalize</c> override.
     /// </summary>
     public DeinitSymbol? Deinitializer { get; private set; }
+
+    /// <summary>
+    /// Gets a value indicating whether the class was declared with the
+    /// <c>abstract</c> modifier (ADR-0195 / issue #4674). Unlike the
+    /// member-derived <see cref="IsAbstract"/>, this is the author's explicit
+    /// statement, so a class with no abstract member can still be
+    /// uninstantiable (a migrated C# <c>abstract class</c> with only concrete
+    /// members). Such a class is inheritable: the binder gives it
+    /// <see cref="IsOpen"/>.
+    /// </summary>
+    internal bool IsDeclaredAbstract => IsClass && (Declaration?.IsAbstract ?? false);
+
+    /// <summary>
+    /// Gets a value indicating whether the class was declared with the
+    /// <c>shared</c> modifier (ADR-0195 / issue #4674): emitted CLR
+    /// <c>abstract sealed</c> with no instance constructor, every member shared,
+    /// the shape of a C# <c>static class</c>.
+    /// </summary>
+    internal bool IsSharedClass => IsClass && (Declaration?.IsShared ?? false);
 
     /// <summary>
     /// Gets a value indicating whether non-public value-struct field initializers require an

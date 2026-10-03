@@ -258,6 +258,22 @@ public sealed class GsStubRenderer
         RenderAttributes(sb, indent, structSymbol.Attributes);
 
         sb.Append(indent).Append(AccessibilityKeyword(structSymbol.Accessibility)).Append(' ');
+
+        // ADR-0195: a G# `shared class` is a C# static class, so a generator (and the
+        // back-translation of what it emits) sees the real shape: every part of the
+        // type, including the generated one, is then translated as a `shared` part.
+        if (structSymbol.IsSharedClass)
+        {
+            sb.Append("static ");
+        }
+
+        // A declared `abstract class` is a C# abstract class (or record), so a generator
+        // inspecting `INamedTypeSymbol.IsAbstract` sees the real shape.
+        if (structSymbol.IsDeclaredAbstract)
+        {
+            sb.Append("abstract ");
+        }
+
         if (structSymbol.Declaration?.IsPartial ?? false)
         {
             sb.Append("partial ");
