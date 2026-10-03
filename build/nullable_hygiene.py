@@ -72,12 +72,6 @@ DISABLE_ALLOWLIST = {
     "tools/cs2gs/Cs2Gs.CodeModel/Ast/Parameter.cs",
     "tools/cs2gs/Cs2Gs.CodeModel/Ast/TypeDeclaration.cs",
     "tools/cs2gs/Cs2Gs.CodeModel/Printing/GSharpPrinter.cs",
-    # C1 SDK-pin contracts are nullable-annotated locally; surrounding legacy
-    # hot-core code stays oblivious because broad annotations break translation.
-    "tools/cs2gs/Cs2Gs.Pipeline/GsharpTestProjectRunner.cs",
-    "tools/cs2gs/Cs2Gs.Pipeline/MigrationPipeline.cs",
-    "tools/cs2gs/Cs2Gs.Pipeline/SdkCompileRunner.cs",
-    "tools/cs2gs/Cs2Gs.Tests/Issue4631SdkPinTests.cs",
 }
 # MEF [Import] fields legitimately use `= null!`; that tree is a separate
 # build island with its own Directory.Build.props.

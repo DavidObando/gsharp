@@ -227,8 +227,7 @@ public sealed class MigrationPipeline
             : null;
         if (repositoryLayout)
         {
-#nullable enable annotations
-            string? sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, this.options.SdkVersion);
+            string sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, this.options.SdkVersion);
             if (sdkVersion is null)
             {
                 throw new InvalidOperationException(
@@ -242,7 +241,7 @@ public sealed class MigrationPipeline
                     this.options.RepositoryAdditionalFiles.Add(SdkPin.GlobalJsonFileName);
                 }
 
-                foreach (string nestedGlobalJson in SdkPin.EnumerateNestedGlobalJson(repositoryFiles))
+                foreach (string nestedGlobalJson in SdkPin.EnumerateNestedGlobalJson(destinationRoot, repositoryFiles))
                 {
                     SdkPin.WriteGlobalJsonPinFile(
                         Path.Combine(destinationRoot, nestedGlobalJson),
@@ -251,7 +250,7 @@ public sealed class MigrationPipeline
             }
             else
             {
-                string? mirroredGlobalJsonPin = SdkPin.ReadGlobalJsonPin(destinationRoot);
+                string mirroredGlobalJsonPin = SdkPin.ReadGlobalJsonPin(destinationRoot);
                 if (mirroredGlobalJsonPin is not null)
                 {
                     // A versioned Sdk attribute silently overrides a global.json
@@ -274,7 +273,6 @@ public sealed class MigrationPipeline
             // project and finds this null.
             this.options.RepositoryAnalyzerVerifierPackageVersion =
                 SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion(this.options.Config, this.options.SdkVersion);
-#nullable restore annotations
 
             foreach (CorpusApp app in apps)
             {
@@ -725,21 +723,19 @@ public sealed class MigrationPipeline
     /// falls back to resolving one as <c>migrate</c> does.
     /// </summary>
     /// <param name="migratedRoot">The migrated tree.</param>
-#nullable enable annotations
     private void ResolveValidationSdkPin(string migratedRoot)
     {
-        string? treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
+        string treePin = SdkPin.ReadGlobalJsonPin(migratedRoot);
         if (treePin is not null)
         {
             IReadOnlyList<string> nestedGlobalJsonFiles = SdkPin.EnumerateNestedGlobalJson(
+                migratedRoot,
                 Directory.EnumerateFiles(migratedRoot, SdkPin.GlobalJsonFileName, SearchOption.AllDirectories)
-                    .Where(path => !RepositoryFileInventory.HasExcludedDirectory(
-                        Path.GetRelativePath(migratedRoot, path)))
                     .Select(path => Path.GetRelativePath(migratedRoot, path)));
             foreach (string nestedGlobalJson in nestedGlobalJsonFiles)
             {
                 string nestedPath = Path.Combine(migratedRoot, nestedGlobalJson);
-                string? nestedPin = SdkPin.ReadGlobalJsonPinFile(nestedPath);
+                string nestedPin = SdkPin.ReadGlobalJsonPinFile(nestedPath);
                 if (!string.Equals(treePin, nestedPin, StringComparison.Ordinal))
                 {
                     throw new InvalidOperationException(
@@ -749,7 +745,7 @@ public sealed class MigrationPipeline
             }
         }
 
-        string? projectPin = SdkPin.ReadProjectPin(SdkPin.BuildableProjectPaths(migratedRoot));
+        string projectPin = SdkPin.ReadProjectPin(SdkPin.BuildableProjectPaths(migratedRoot));
         if (treePin is not null && projectPin is not null)
         {
             throw new InvalidOperationException(
@@ -757,7 +753,7 @@ public sealed class MigrationPipeline
                 ") and in its projects (" + projectPin + "); a versioned Sdk attribute overrides global.json.");
         }
 
-        string? recordedPin = treePin ?? projectPin;
+        string recordedPin = treePin ?? projectPin;
         if (recordedPin is not null
             && this.options.SdkVersion is not null
             && !string.Equals(recordedPin, this.options.SdkVersion, StringComparison.Ordinal))
@@ -768,8 +764,8 @@ public sealed class MigrationPipeline
         }
 
         SdkPinLocation location = treePin is null ? SdkPinLocation.ProjectFile : SdkPinLocation.GlobalJson;
-        string? requestedVersion = recordedPin ?? this.options.SdkVersion;
-        string? sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, requestedVersion);
+        string requestedVersion = recordedPin ?? this.options.SdkVersion;
+        string sdkVersion = SdkCompileRunner.ResolveSdkVersion(this.options.Config, requestedVersion);
 
         // A null version is not thrown here: each app's compile reports the
         // missing package as an unavailable stage, as it always has.
@@ -779,7 +775,6 @@ public sealed class MigrationPipeline
         this.options.RepositoryAnalyzerVerifierPackageVersion =
             SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion(this.options.Config, requestedVersion);
     }
-#nullable restore annotations
 
     private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> LoadEvaluatedProjectReferencesAsync(
         IReadOnlyList<CorpusApp> apps,

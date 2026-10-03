@@ -12,8 +12,6 @@ using System.Xml.Linq;
 
 namespace Cs2Gs.Pipeline;
 
-#nullable enable annotations
-
 /// <summary>
 /// Where a repository migration pins the <c>Gsharp.NET.Sdk</c> version its
 /// generated projects build with.
@@ -60,7 +58,7 @@ internal static class SdkPin
     /// <summary>Returns whether <paramref name="version"/> is an acceptable SDK version.</summary>
     /// <param name="version">The candidate version.</param>
     /// <returns><see langword="true"/> when the version is well-formed.</returns>
-    internal static bool IsValidVersion(string? version) =>
+    internal static bool IsValidVersion(string version) =>
         !string.IsNullOrEmpty(version) && VersionPattern.IsMatch(version);
 
     /// <summary>
@@ -86,7 +84,7 @@ internal static class SdkPin
     /// </summary>
     /// <param name="sdkAttribute">The attribute value.</param>
     /// <returns><see langword="true"/> for <c>Gsharp.NET.Sdk</c> and <c>Gsharp.NET.Sdk/&lt;version&gt;</c>.</returns>
-    internal static bool IsGsharpSdkAttribute(string? sdkAttribute)
+    internal static bool IsGsharpSdkAttribute(string sdkAttribute)
     {
         if (sdkAttribute is null)
         {
@@ -125,11 +123,11 @@ internal static class SdkPin
                     continue;
                 }
 
-                XElement? element = declaration.Parent;
+                XElement element = declaration.Parent;
                 if (element is not null && element != root)
                 {
                     sdks[i] = PackageId;
-                    string? version = sdkMoniker.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase)
+                    string version = sdkMoniker.StartsWith(PackageId + "/", StringComparison.OrdinalIgnoreCase)
                         ? sdkMoniker.Substring(PackageId.Length + 1)
                         : null;
                     element.SetAttributeValue("Version", version);
@@ -151,7 +149,7 @@ internal static class SdkPin
 
         if (migrateCSharpSdk && !rebound)
         {
-            string? existingSdk = root.Attribute("Sdk")?.Value;
+            string existingSdk = root.Attribute("Sdk")?.Value;
             root.SetAttributeValue(
                 "Sdk",
                 string.IsNullOrWhiteSpace(existingSdk) ? sdkMoniker : sdkMoniker + ";" + existingSdk);
@@ -166,7 +164,7 @@ internal static class SdkPin
     internal static IReadOnlyList<XAttribute> ProjectSdkAttributes(XElement root)
     {
         var declarations = new List<XAttribute>();
-        XAttribute? projectSdk = root.Attribute("Sdk");
+        XAttribute projectSdk = root.Attribute("Sdk");
         if (projectSdk is not null)
         {
             declarations.Add(projectSdk);
@@ -174,13 +172,13 @@ internal static class SdkPin
 
         foreach (XElement element in root.Descendants())
         {
-            string? attributeName = element.Name.LocalName switch
+            string attributeName = element.Name.LocalName switch
             {
                 "Sdk" => "Name",
                 "Import" => "Sdk",
                 _ => null,
             };
-            XAttribute? declaration = attributeName is null ? null : element.Attribute(attributeName);
+            XAttribute declaration = attributeName is null ? null : element.Attribute(attributeName);
             if (declaration is not null)
             {
                 declarations.Add(declaration);
@@ -223,7 +221,7 @@ internal static class SdkPin
             if (!(extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".gsproj", StringComparison.OrdinalIgnoreCase))
                 || RepositoryFileInventory.HasExcludedDirectory(Path.GetRelativePath(fullRoot, path))
-                || IsTemplateProject(path, fullRoot))
+                || IsTemplatePayload(path, fullRoot))
             {
                 continue;
             }
@@ -236,15 +234,19 @@ internal static class SdkPin
     }
 
     /// <summary>Lists nested <c>global.json</c> paths in a repository file list.</summary>
+    /// <param name="root">The mirrored repository root.</param>
     /// <param name="repositoryFiles">Repository-relative file paths.</param>
     /// <returns>The nested paths.</returns>
-    internal static IReadOnlyList<string> EnumerateNestedGlobalJson(IEnumerable<string> repositoryFiles)
+    internal static IReadOnlyList<string> EnumerateNestedGlobalJson(string root, IEnumerable<string> repositoryFiles)
     {
+        string fullRoot = Path.GetFullPath(root);
         var nestedPaths = new List<string>();
         foreach (string path in repositoryFiles)
         {
             string normalized = path.Replace('\\', '/');
-            if (normalized.EndsWith("/" + GlobalJsonFileName, StringComparison.OrdinalIgnoreCase))
+            if (normalized.EndsWith("/" + GlobalJsonFileName, StringComparison.OrdinalIgnoreCase)
+                && !RepositoryFileInventory.HasExcludedDirectory(normalized)
+                && !IsTemplatePayload(Path.GetFullPath(Path.Combine(fullRoot, normalized)), fullRoot))
             {
                 nestedPaths.Add(path);
             }
@@ -261,7 +263,7 @@ internal static class SdkPin
     /// <param name="projectPaths">The generated project files (missing files are skipped).</param>
     /// <returns>The recorded version, or <see langword="null"/> when no project carries one.</returns>
     /// <exception cref="InvalidOperationException">The projects record more than one version.</exception>
-    internal static string? ReadProjectPin(IEnumerable<string> projectPaths)
+    internal static string ReadProjectPin(IEnumerable<string> projectPaths)
     {
         var versions = new SortedSet<string>(StringComparer.Ordinal);
         foreach (string path in projectPaths)
@@ -271,7 +273,7 @@ internal static class SdkPin
                 continue;
             }
 
-            XElement? root = XDocument.Load(path).Root;
+            XElement root = XDocument.Load(path).Root;
             if (root is null)
             {
                 continue;
@@ -288,10 +290,10 @@ internal static class SdkPin
                     }
 
                     int versionSeparator = sdk.IndexOf('/');
-                    string? inlineVersion = versionSeparator >= 0
+                    string inlineVersion = versionSeparator >= 0
                         ? sdk.Substring(versionSeparator + 1).Trim()
                         : null;
-                    string? elementVersion = declaration.Parent != root
+                    string elementVersion = declaration.Parent != root
                         ? declaration.Parent?.Attribute("Version")?.Value
                         : null;
                     if (inlineVersion is not null && elementVersion is not null
@@ -302,7 +304,7 @@ internal static class SdkPin
                             inlineVersion + " and " + elementVersion + ".");
                     }
 
-                    string? version = inlineVersion ?? elementVersion;
+                    string version = inlineVersion ?? elementVersion;
                     if (version is null)
                     {
                         continue;
@@ -338,7 +340,7 @@ internal static class SdkPin
     /// <exception cref="InvalidOperationException">
     /// The file exists but is not a JSON object, or the pin is not a valid version.
     /// </exception>
-    internal static string? ReadGlobalJsonPin(string root)
+    internal static string ReadGlobalJsonPin(string root)
     {
         return ReadGlobalJsonPinFile(Path.Combine(root, GlobalJsonFileName));
     }
@@ -346,7 +348,7 @@ internal static class SdkPin
     /// <summary>Reads the SDK pin from a specific <c>global.json</c> file.</summary>
     /// <param name="path">The file path.</param>
     /// <returns>The pinned version, or <see langword="null"/> when there is none.</returns>
-    internal static string? ReadGlobalJsonPinFile(string path)
+    internal static string ReadGlobalJsonPinFile(string path)
     {
         if (!File.Exists(path))
         {
@@ -354,7 +356,7 @@ internal static class SdkPin
         }
 
         JsonObject document = ParseGlobalJson(path);
-        if (!document.TryGetPropertyValue(MsbuildSdksProperty, out JsonNode? node))
+        if (!document.TryGetPropertyValue(MsbuildSdksProperty, out JsonNode node))
         {
             return null;
         }
@@ -368,9 +370,9 @@ internal static class SdkPin
 
         // The SDK resolver matches keys case-insensitively, and a JsonObject can
         // hold several spellings of one key: that is ambiguous, so it is an error.
-        string? pinned = null;
-        string? pinnedKey = null;
-        foreach (KeyValuePair<string, JsonNode?> entry in sdks)
+        string pinned = null;
+        string pinnedKey = null;
+        foreach (KeyValuePair<string, JsonNode> entry in sdks)
         {
             if (!string.Equals(entry.Key, PackageId, StringComparison.OrdinalIgnoreCase))
             {
@@ -384,7 +386,7 @@ internal static class SdkPin
                     pinnedKey + "' and '" + entry.Key + "'); keep exactly one.");
             }
 
-            string? version = entry.Value is JsonValue value && value.TryGetValue<string>(out string? text)
+            string version = entry.Value is JsonValue value && value.TryGetValue<string>(out string text)
                 ? text
                 : null;
             if (!IsValidVersion(version))
@@ -429,8 +431,8 @@ internal static class SdkPin
 
         bool created = !File.Exists(path);
         JsonObject document = created ? new JsonObject() : ParseGlobalJson(path);
-        bool hasExisting = document.TryGetPropertyValue(MsbuildSdksProperty, out JsonNode? existing);
-        JsonObject? sdks = existing as JsonObject;
+        bool hasExisting = document.TryGetPropertyValue(MsbuildSdksProperty, out JsonNode existing);
+        JsonObject sdks = existing as JsonObject;
         if (hasExisting && sdks is null)
         {
             // Never discard configuration we do not understand.
@@ -447,7 +449,7 @@ internal static class SdkPin
         // Keys are matched case-insensitively by the SDK resolver; drop every
         // differently-cased spelling so the file holds exactly one pin.
         var existingKeys = new List<string>();
-        foreach (KeyValuePair<string, JsonNode?> entry in sdks)
+        foreach (KeyValuePair<string, JsonNode> entry in sdks)
         {
             if (string.Equals(entry.Key, PackageId, StringComparison.OrdinalIgnoreCase))
             {
@@ -481,9 +483,9 @@ internal static class SdkPin
 
     private static string SdkName(string sdk) => sdk.Trim().Split('/')[0].Trim();
 
-    private static bool IsTemplateProject(string projectPath, string root)
+    private static bool IsTemplatePayload(string path, string root)
     {
-        for (DirectoryInfo? directory = new FileInfo(projectPath).Directory;
+        for (DirectoryInfo directory = new FileInfo(path).Directory;
             directory is not null;
             directory = directory.Parent)
         {
@@ -501,16 +503,45 @@ internal static class SdkPin
                         continue;
                     }
 
-                    string? file = element.Attribute("File")?.Value;
-                    if (file is not null
-                        && string.Equals(
-                            Path.GetFullPath(Path.Combine(
-                                directory.FullName,
-                                file.Replace('\\', Path.DirectorySeparatorChar))),
-                            projectPath,
-                            StringComparison.OrdinalIgnoreCase))
+                    string file = element.Attribute("File")?.Value;
+                    if (file is null)
+                    {
+                        continue;
+                    }
+
+                    string templateProjectPath = Path.GetFullPath(Path.Combine(
+                        directory.FullName,
+                        file.Replace('\\', Path.DirectorySeparatorChar)));
+                    if (string.Equals(templateProjectPath, path, StringComparison.OrdinalIgnoreCase))
                     {
                         return true;
+                    }
+
+                    foreach (XElement item in element.Descendants())
+                    {
+                        if (item.Name.LocalName != "ProjectItem")
+                        {
+                            continue;
+                        }
+
+                        string itemPath = item.Value.Replace('\\', Path.DirectorySeparatorChar);
+                        for (XElement parent = item.Parent; parent is not null && parent != element; parent = parent.Parent)
+                        {
+                            if (parent.Name.LocalName == "Folder" && parent.Attribute("Name") is XAttribute folderName)
+                            {
+                                itemPath = Path.Combine(
+                                    folderName.Value.Replace('\\', Path.DirectorySeparatorChar),
+                                    itemPath);
+                            }
+                        }
+
+                        if (string.Equals(
+                            Path.GetFullPath(Path.Combine(Path.GetDirectoryName(templateProjectPath), itemPath)),
+                            path,
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
                     }
                 }
             }
@@ -526,7 +557,7 @@ internal static class SdkPin
 
     private static JsonObject ParseGlobalJson(string path)
     {
-        JsonNode? node;
+        JsonNode node;
         try
         {
             node = JsonNode.Parse(

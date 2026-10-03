@@ -312,12 +312,10 @@ public sealed class Issue4631SdkPinTests : IDisposable
     [InlineData("0.4.1200\"", false)]
     [InlineData("", false)]
     [InlineData(null, false)]
-#nullable enable annotations
-    public void SdkVersionArgument_IsValidatedStrictly(string? version, bool valid)
+    public void SdkVersionArgument_IsValidatedStrictly(string version, bool valid)
     {
         Assert.Equal(valid, SdkPinArguments.IsValidVersion(version));
     }
-#nullable restore annotations
 
     /// <summary><c>--sdk-pin</c> accepts exactly the two documented spellings.</summary>
     [Fact]
@@ -661,13 +659,17 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Directory.CreateDirectory(Path.Combine(templateDirectory, ".template.config"));
         File.WriteAllText(Path.Combine(templateDirectory, ".template.config", "template.json"), "{}");
         const string templateXml = """<Project Sdk="Gsharp.NET.Sdk/$sdkVersion$" />""";
+        const string templateGlobalJson = """{ "msbuild-sdks": { "Gsharp.NET.Sdk": "$sdkVersion$" } }""";
         File.WriteAllText(Path.Combine(templateDirectory, "Template.gsproj"), templateXml);
+        Directory.CreateDirectory(Path.Combine(templateDirectory, "nested"));
+        File.WriteAllText(Path.Combine(templateDirectory, "nested", "global.json"), templateGlobalJson);
         string visualDirectory = Path.Combine(fixture.Source, "templates", "visual");
-        Directory.CreateDirectory(Path.Combine(visualDirectory, "child"));
+        Directory.CreateDirectory(Path.Combine(visualDirectory, "child", "settings"));
         File.WriteAllText(
             Path.Combine(visualDirectory, "Template.vstemplate"),
-            """<VSTemplate><TemplateContent><Project File="child\Template.gsproj" /></TemplateContent></VSTemplate>""");
+            """<VSTemplate xmlns="http://schemas.microsoft.com/developer/vstemplate/2005"><TemplateContent><Project File="child\Template.gsproj"><Folder Name="settings"><ProjectItem>global.json</ProjectItem></Folder></Project></TemplateContent></VSTemplate>""");
         File.WriteAllText(Path.Combine(visualDirectory, "child", "Template.gsproj"), templateXml);
+        File.WriteAllText(Path.Combine(visualDirectory, "child", "settings", "global.json"), templateGlobalJson);
         File.WriteAllText(
             Path.Combine(visualDirectory, "NotTemplate.gsproj"),
             """<Project Sdk="Gsharp.NET.Sdk/0.4.591" />""");
@@ -691,6 +693,12 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Equal(
             templateXml,
             File.ReadAllText(Path.Combine(fixture.Destination, "templates", "visual", "child", "Template.gsproj")));
+        Assert.Equal(
+            templateGlobalJson,
+            File.ReadAllText(Path.Combine(fixture.Destination, "templates", "dotnet", "nested", "global.json")));
+        Assert.Equal(
+            templateGlobalJson,
+            File.ReadAllText(Path.Combine(fixture.Destination, "templates", "visual", "child", "settings", "global.json")));
         var probe = new PinProbeStage();
         RunResult validated = await new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { probe })
             .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(options.ArtifactRoot, migrated.RunId));

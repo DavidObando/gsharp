@@ -195,7 +195,6 @@ public sealed class SdkCompileRunner
     /// graph; <see langword="null"/> is the gate's own strict compile.
     /// </param>
     /// <returns>The SDK compile result.</returns>
-#nullable enable annotations
     public SdkCompileResult CompileMirroredProject(
         string sourceProjectPath,
         string generatedProjectPath,
@@ -203,9 +202,9 @@ public sealed class SdkCompileRunner
         string config,
         IReadOnlyDictionary<string, string> generatedProjectPaths,
         bool isAnalyzerTestProject,
-        string? sdkMoniker,
-        string? analyzerVerifierPackageVersion,
-        string? warningsNotAsErrors = null)
+        string sdkMoniker,
+        string analyzerVerifierPackageVersion,
+        string warningsNotAsErrors = null)
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
         if (sdkMoniker is null)
@@ -320,7 +319,6 @@ public sealed class SdkCompileRunner
             }
         }
     }
-#nullable restore annotations
 
     /// <summary>
     /// Builds the supplied G# files via <c>dotnet build</c> against the
@@ -912,10 +910,9 @@ public sealed class SdkCompileRunner
             relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
     }
 
-#nullable enable annotations
-    internal static string? ResolveSdkMoniker(string config)
+    internal static string ResolveSdkMoniker(string config)
     {
-        string? version = ResolveSdkVersion(config, explicitVersion: null);
+        string version = ResolveSdkVersion(config, explicitVersion: null);
         return version is null ? null : SdkPin.ProjectSdkAttribute(version, SdkPinLocation.ProjectFile);
     }
 
@@ -931,7 +928,7 @@ public sealed class SdkCompileRunner
     /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
     /// <param name="explicitVersion">The requested version, or <see langword="null"/>.</param>
     /// <returns>The version, or <see langword="null"/> when no local nupkg exists and none was requested.</returns>
-    internal static string? ResolveSdkVersion(string config, string? explicitVersion)
+    internal static string ResolveSdkVersion(string config, string explicitVersion)
         => ResolvePinnedPackageVersion(SdkPackageId, config, explicitVersion);
 
     /// <summary>
@@ -945,7 +942,7 @@ public sealed class SdkCompileRunner
     /// </summary>
     /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
     /// <returns>The resolved package version, or <see langword="null"/> when no local nupkg exists.</returns>
-    internal static string? ResolveAnalyzerVerifierPackageVersion(string config)
+    internal static string ResolveAnalyzerVerifierPackageVersion(string config)
         => ResolveAnalyzerVerifierPackageVersion(config, explicitVersion: null);
 
     /// <summary>
@@ -956,9 +953,8 @@ public sealed class SdkCompileRunner
     /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
     /// <param name="explicitVersion">The pinned SDK version, or <see langword="null"/>.</param>
     /// <returns>The package version, or <see langword="null"/> when none is available.</returns>
-    internal static string? ResolveAnalyzerVerifierPackageVersion(string config, string? explicitVersion)
+    internal static string ResolveAnalyzerVerifierPackageVersion(string config, string explicitVersion)
         => ResolvePinnedPackageVersion(AnalyzerTestingPackageId, config, explicitVersion);
-#nullable restore annotations
 
     /// <summary>
     /// Issue #3501: returns the bounded stage-4 budget for one mirrored test
@@ -1668,8 +1664,7 @@ public sealed class SdkCompileRunner
         return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".nuget", "packages");
     }
 
-#nullable enable annotations
-    private static string? ResolvePinnedPackageVersion(string packageId, string config, string? explicitVersion)
+    private static string ResolvePinnedPackageVersion(string packageId, string config, string explicitVersion)
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
         if (explicitVersion is not null)
@@ -1681,7 +1676,7 @@ public sealed class SdkCompileRunner
                     nameof(explicitVersion));
             }
 
-            string? exactNupkg = GsharpTestProjectRunner.FindLocalPackageVersion(
+            string exactNupkg = GsharpTestProjectRunner.FindLocalPackageVersion(
                 repoRoot,
                 packageId,
                 explicitVersion,
@@ -1705,7 +1700,6 @@ public sealed class SdkCompileRunner
         GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, package.Value.NupkgPath);
         return package.Value.Version;
     }
-#nullable restore annotations
 
     private static (string NupkgPath, string Version)? ResolveFallbackSdkPackageFromLocalFeed(string repoRoot)
         => ResolveFallbackPackageFromLocalFeed(repoRoot, SdkPackageId);
@@ -1741,16 +1735,15 @@ public sealed class SdkCompileRunner
 /// <summary>
 /// The outcome of an <see cref="SdkCompileRunner.Compile"/> invocation.
 /// </summary>
-#nullable enable annotations
 public sealed class SdkCompileResult
 {
     private SdkCompileResult(
         bool isAvailable,
-        string? unavailableReason,
+        string unavailableReason,
         int exitCode,
-        string? output,
-        IReadOnlyList<GscDiagnostic>? diagnostics,
-        string? emittedAssemblyPath)
+        string output,
+        IReadOnlyList<GscDiagnostic> diagnostics,
+        string emittedAssemblyPath)
     {
         this.IsAvailable = isAvailable;
         this.UnavailableReason = unavailableReason;
@@ -1764,13 +1757,13 @@ public sealed class SdkCompileResult
     public bool IsAvailable { get; }
 
     /// <summary>Gets the reason the SDK build was unavailable, or <see langword="null"/> when available.</summary>
-    public string? UnavailableReason { get; }
+    public string UnavailableReason { get; }
 
     /// <summary>Gets the <c>dotnet build</c> process exit code.</summary>
     public int ExitCode { get; }
 
     /// <summary>Gets the combined stdout+stderr of the <c>dotnet build</c> invocation.</summary>
-    public string? Output { get; }
+    public string Output { get; }
 
     /// <summary>Gets the parsed diagnostics.</summary>
     public IReadOnlyList<GscDiagnostic> Diagnostics { get; }
@@ -1779,7 +1772,7 @@ public sealed class SdkCompileResult
     public IReadOnlyList<GscDiagnostic> Errors => this.Diagnostics.Where(d => d.IsError).ToList();
 
     /// <summary>Gets the absolute path of the built assembly, or <see langword="null"/> when not found.</summary>
-    public string? EmittedAssemblyPath { get; }
+    public string EmittedAssemblyPath { get; }
 
     /// <summary>Gets a value indicating whether the build passed: exit 0 and zero error-severity diagnostics.</summary>
     public bool Succeeded => this.IsAvailable && this.ExitCode == 0 && this.Errors.Count == 0;
@@ -1797,7 +1790,6 @@ public sealed class SdkCompileResult
     /// <param name="emittedAssemblyPath">The built assembly path, or <see langword="null"/>.</param>
     /// <returns>The completed result.</returns>
     public static SdkCompileResult Completed(
-        int exitCode, string? output, IReadOnlyList<GscDiagnostic>? diagnostics, string? emittedAssemblyPath) =>
+        int exitCode, string output, IReadOnlyList<GscDiagnostic> diagnostics, string emittedAssemblyPath) =>
         new SdkCompileResult(true, null, exitCode, output, diagnostics, emittedAssemblyPath);
 }
-#nullable restore annotations
