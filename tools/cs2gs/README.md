@@ -199,6 +199,10 @@ them with the translate pass's results back into a single whole-run shape.
 See `build/run-cs2gs-selfmig-{migrate,validate,gate}.sh` and
 `.github/workflows/cs2gs-selfmig-nightly.yml`; `build/run-cs2gs-selfmig.sh`
 remains the equivalent single-job reference path for local proofs.
+Both migration entrypoints and the PR guard select `--sdk-pin global-json`
+because the repository already carries a root G# SDK pin. Migration replaces
+that pin and every buildable nested scope with the resolved local SDK version;
+validation shards follow the migrated tree's recorded pin.
 
 ### The PR-time translation guard (issue #3836)
 
