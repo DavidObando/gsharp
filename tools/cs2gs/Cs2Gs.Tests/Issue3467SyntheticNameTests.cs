@@ -106,12 +106,13 @@ namespace Cs2Gs.Tests
                 }
                 """;
 
+            const string header = "// A long leading comment that shifts every span downstream.";
             string original = Translate(body);
-            string shifted = Translate(
-                "// A long leading comment that shifts every span downstream." +
-                Environment.NewLine + Environment.NewLine + body);
+            string shifted = Translate(header + Environment.NewLine + Environment.NewLine + body);
 
-            Assert.Equal(original, shifted);
+            // Issue #4653: the leading comment is kept as the file header;
+            // everything after it is unchanged.
+            Assert.Equal(header + "\n\n" + original, shifted);
         }
 
         [Fact]
