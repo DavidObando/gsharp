@@ -374,6 +374,24 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case IParameterSymbol parameter:
                 {
+                    // A parameter variable is not a call-site parameter slot.
+                    // Resolve the final slot first: an assignment result can
+                    // still feed a genuine argument, even to this same method.
+                    var parameterStores = new List<SyntaxNode>();
+                    SyntaxNode finalValue = OutermostTransparentNode(value, storeNodes: parameterStores);
+                    bool parameterIsFinalStore = SymbolEqualityComparer.Default.Equals(
+                        this.ResolveStoreAtNode(finalValue, value).Store,
+                        parameter);
+                    if ((parameterIsFinalStore && finalValue.Parent is AssignmentExpressionSyntax)
+                        || (!parameterIsFinalStore
+                            && parameterStores.Any(node => SymbolEqualityComparer.Default.Equals(
+                                this.ResolveStoreAtNode(node, value).Store,
+                                parameter))))
+                    {
+                        slotType = parameter.Type;
+                        return slotType is ITypeParameterSymbol ? "type-parameter-assignment" : null;
+                    }
+
                     // Fail-safe: a params value is an element unless it is
                     // provably the direct, non-expanded argument (an explicit
                     // argument operation of its own, as TranslateArgumentValue
