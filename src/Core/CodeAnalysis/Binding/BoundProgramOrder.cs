@@ -31,9 +31,9 @@ internal static class BoundProgramOrder
     /// <summary>
     /// Gets a field-initializer map's entries in <see cref="SymbolSourceOrderComparer"/>
     /// order. The maps are identity-keyed <c>ImmutableDictionary</c> instances, so a
-    /// pass that numbers temporaries while rewriting each initializer (the
-    /// <c>&lt;&gt;interpN</c> / <c>&lt;&gt;holeN</c> locals land in the Portable PDB)
-    /// must walk this view instead of the map.
+    /// pass that numbers temporaries while rewriting each initializer must walk
+    /// this view instead of the map. These field-initializer temporaries are
+    /// defensive ordering, not a Portable PDB determinism claim.
     /// </summary>
     /// <param name="initializers">A struct's or interface's field-initializer map.</param>
     /// <returns>The initializer entries, deterministically ordered by field.</returns>

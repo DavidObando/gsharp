@@ -4,6 +4,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Globalization;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -140,21 +142,13 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
 
     private static string FileName(SyntaxNode? node) => node?.SyntaxTree?.Text?.FileName ?? string.Empty;
 
-    // The full containing-type chain, so `A.Inner` and `B.Inner` differ.
+    // Namespace and type segments are distinct: p.A/B is not p/A/B.
     private static string ContainingTypeName(Symbol symbol)
     {
-        var containing = symbol.ContainingType;
-        if (containing is null)
-        {
-            // A top-level symbol is told apart by its package: same-shaped
-            // functions in packages A and B tie on every other key when the
-            // trees share a file name (or have none).
-            return symbol.ContainingNamespace ?? string.Empty;
-        }
-
-        var builder = new StringBuilder(containing.ContainingNamespace ?? string.Empty);
-        var chain = new List<string>();
-        for (var type = containing; type is not null; type = type.ContainingType)
+        var builder = new StringBuilder();
+        AppendSegment(builder, "namespace", symbol.ContainingType?.ContainingNamespace ?? symbol.ContainingNamespace ?? string.Empty);
+        var chain = new List<TypeSymbol>();
+        for (var type = symbol.ContainingType; type is not null; type = type.ContainingType)
         {
             // Containment is acyclic by construction. Truncating the chain would
             // make distinct deep paths tie, so a cycle fails loudly instead.
@@ -163,12 +157,12 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
                 throw new InvalidOperationException("Symbol containment chain exceeds " + MaxContainmentDepth + " levels; is it cyclic?");
             }
 
-            chain.Add(type.Name);
+            chain.Add(type);
         }
 
         for (int i = chain.Count - 1; i >= 0; i--)
         {
-            builder.Append('.').Append(chain[i]);
+            AppendNamedTypeSegment(builder, chain[i]);
         }
 
         return builder.ToString();
@@ -178,11 +172,23 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
     {
         if (symbol is not FunctionSymbol function)
         {
-            return symbol.ToString();
+            var key = new StringBuilder();
+            if (symbol is TypeSymbol type)
+            {
+                AppendTypeKey(key, type);
+            }
+
+            return key.ToString();
         }
 
         var builder = new StringBuilder();
-        builder.Append(function.Type?.ToString() ?? "?").Append('(');
+        builder.Append(function.TypeParameters.Length.ToString(CultureInfo.InvariantCulture))
+            .Append(':').Append(function.ReturnRefKind)
+            .Append(':').Append(function.NullableSequenceSpecialization)
+            .Append(':').Append(function.IsStatic).Append(':');
+        AppendTypeKey(builder, function.ExplicitInterfaceClauseTarget ?? function.ExplicitInterfaceSlotContainingType);
+        AppendTypeKey(builder, function.Type);
+        builder.Append('(');
         for (int i = 0; i < function.Parameters.Length; i++)
         {
             if (i > 0)
@@ -190,10 +196,105 @@ internal sealed class SymbolSourceOrderComparer : IComparer<Symbol>, IComparer<F
                 builder.Append(',');
             }
 
-            builder.Append(function.Parameters[i].Type?.ToString() ?? "?");
+            var parameter = function.Parameters[i];
+            builder.Append(parameter.RefKind).Append(':').Append(parameter.IsVariadic).Append(':');
+            AppendTypeKey(builder, parameter.Type);
         }
 
         return builder.Append(')').ToString();
+    }
+
+    private static void AppendSegment(StringBuilder builder, string kind, string text) =>
+        builder.Append(kind).Append(':').Append(text.Length.ToString(CultureInfo.InvariantCulture)).Append(':').Append(text).Append(';');
+
+    private static void AppendArguments(StringBuilder builder, ImmutableArray<TypeSymbol> arguments)
+    {
+        builder.Append('[');
+        foreach (var argument in arguments)
+        {
+            AppendTypeKey(builder, argument);
+            builder.Append(';');
+        }
+
+        builder.Append(']');
+    }
+
+    private static void AppendNamedTypeSegment(StringBuilder builder, TypeSymbol type)
+    {
+        AppendSegment(builder, type.GetType().Name, type.Name);
+        switch (type)
+        {
+            case StructSymbol structure:
+                builder.Append(structure.IsClass ? "class:" : "struct:")
+                    .Append((structure.Definition ?? structure).TypeParameters.Length.ToString(CultureInfo.InvariantCulture));
+                AppendArguments(builder, structure.EnclosingTypeArguments);
+                AppendArguments(builder, structure.TypeArguments);
+                break;
+            case InterfaceSymbol contract:
+                builder.Append((contract.Definition ?? contract).TypeParameters.Length.ToString(CultureInfo.InvariantCulture));
+                AppendArguments(builder, contract.TypeArguments);
+                break;
+            case DelegateTypeSymbol delegateType:
+                builder.Append((delegateType.Definition ?? delegateType).TypeParameters.Length.ToString(CultureInfo.InvariantCulture));
+                AppendArguments(builder, delegateType.TypeArguments);
+                break;
+            case EnumSymbol enumeration:
+                AppendArguments(builder, enumeration.EnclosingTypeArguments);
+                break;
+        }
+
+        builder.Append(';');
+    }
+
+    private static void AppendTypeKey(StringBuilder builder, TypeSymbol? type)
+    {
+        switch (type)
+        {
+            case null:
+                builder.Append("absent;");
+                break;
+            case TypeParameterSymbol parameter:
+                builder.Append("parameter:").Append(parameter.IsMethodTypeParameter).Append(':')
+                    .Append(parameter.Ordinal.ToString(CultureInfo.InvariantCulture)).Append(':');
+                AppendSegment(builder, "name", parameter.Name);
+                builder.Append(ContainingTypeName(parameter));
+                break;
+            case StructSymbol:
+            case InterfaceSymbol:
+            case DelegateTypeSymbol:
+            case EnumSymbol:
+                builder.Append(ContainingTypeName(type));
+                AppendNamedTypeSegment(builder, type);
+                break;
+            case ImportedTypeSymbol imported:
+                AppendClrKey(builder, imported.OpenDefinition ?? imported.ClrType);
+                AppendArguments(builder, imported.TypeArguments);
+                break;
+            default:
+                // Reuse the cache's shape walker, never its allocation-dependent
+                // identity leaves. This also retains every nested nullable/platform
+                // position without deriving nullability independently.
+                FunctionTypeSymbol.AppendStructuralKey(builder, type, AppendTypeKey, AppendLeafKey);
+                break;
+        }
+    }
+
+    private static void AppendLeafKey(StringBuilder builder, TypeSymbol? type)
+    {
+        if (type?.ClrType is { } clrType)
+        {
+            AppendClrKey(builder, clrType);
+        }
+        else
+        {
+            AppendSegment(builder, "builtin", type?.Name ?? string.Empty);
+        }
+    }
+
+    private static void AppendClrKey(StringBuilder builder, System.Type? type)
+    {
+        AppendSegment(builder, "assembly", type?.Assembly.FullName ?? string.Empty);
+        AppendSegment(builder, "clr", type?.FullName ?? type?.Name ?? string.Empty);
     }
 
     private static string FormatSignature(FunctionSymbol function)
