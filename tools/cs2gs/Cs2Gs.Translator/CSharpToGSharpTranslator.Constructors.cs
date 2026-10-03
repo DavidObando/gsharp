@@ -3417,6 +3417,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if ((pair.Symbol.IsAsync || IsIteratorBody(pair.Syntax))
                     && directCaptures[pair.Symbol].Any(this.IsCaptureWrittenInDeclaringScope))
                 {
+                    this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Add(pair.Symbol);
                     this.state.UnsupportedSuspendingRefCaptureLocalFunctions.UnionWith(
                         GetRecursiveComponent(pair.Symbol).Select(candidate => candidate.Symbol));
                 }

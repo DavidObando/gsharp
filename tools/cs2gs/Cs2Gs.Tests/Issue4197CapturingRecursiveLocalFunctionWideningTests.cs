@@ -676,6 +676,38 @@ namespace Demo
     }
 
     [Fact]
+    public void NonrecursiveIteratorDependency_WithWrittenCapture_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            using System.Collections.Generic;
+
+            namespace Demo {
+                public class C {
+                    public IEnumerable<int> Run() {
+                        int x = 1;
+                        x = 42;
+                        return First(1);
+
+                        IEnumerable<int> First(int n) =>
+                            n == 0 ? Leaf() : Second<int>(n - 1);
+                        IEnumerable<int> Second<T>(int n) =>
+                            n == 0 ? Leaf() : First(n - 1);
+
+                        IEnumerable<int> Leaf() {
+                            yield return x;
+                        }
+                    }
+                }
+            }
+            """, "suspending recursive dependencies cannot carry ref captures");
+
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'Leaf' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MixedRecursionGroup_NameofEnclosingTypeParameter_IsNotADependency()
     {
         // Issue #4302: `nameof(T)` translates to the literal "T", so the
