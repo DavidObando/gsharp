@@ -121,6 +121,7 @@ Before moving an application to a different compiler version, pin the intended S
   SDK attributes, explicit SDK elements, and SDK imports participate in pin
   rebinding and validation without dropping unrelated SDKs in translated or
   excluded projects. Global-json migration canonicalizes existing root pins.
+  Copied native `.gsproj` files use the same pin; template payloads remain untouched.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values

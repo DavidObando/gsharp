@@ -210,6 +210,31 @@ internal static class SdkPin
         return names;
     }
 
+    /// <summary>Enumerates buildable mirrored projects, excluding build outputs and template payloads.</summary>
+    /// <param name="root">The mirrored repository root.</param>
+    /// <returns>The C# and G# project paths.</returns>
+    internal static IReadOnlyList<string> BuildableProjectPaths(string root)
+    {
+        string fullRoot = Path.GetFullPath(root);
+        var projects = new List<string>();
+        foreach (string path in Directory.EnumerateFiles(fullRoot, "*", SearchOption.AllDirectories))
+        {
+            string extension = Path.GetExtension(path);
+            if (!(extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".gsproj", StringComparison.OrdinalIgnoreCase))
+                || RepositoryFileInventory.HasExcludedDirectory(Path.GetRelativePath(fullRoot, path))
+                || IsTemplateProject(path, fullRoot))
+            {
+                continue;
+            }
+
+            projects.Add(path);
+        }
+
+        projects.Sort(StringComparer.Ordinal);
+        return projects;
+    }
+
     /// <summary>Lists nested <c>global.json</c> paths in a repository file list.</summary>
     /// <param name="repositoryFiles">Repository-relative file paths.</param>
     /// <returns>The nested paths.</returns>
@@ -455,6 +480,49 @@ internal static class SdkPin
     }
 
     private static string SdkName(string sdk) => sdk.Trim().Split('/')[0].Trim();
+
+    private static bool IsTemplateProject(string projectPath, string root)
+    {
+        for (DirectoryInfo? directory = new FileInfo(projectPath).Directory;
+            directory is not null;
+            directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, ".template.config", "template.json")))
+            {
+                return true;
+            }
+
+            foreach (string templatePath in Directory.EnumerateFiles(directory.FullName, "*.vstemplate"))
+            {
+                foreach (XElement element in XDocument.Load(templatePath).Descendants())
+                {
+                    if (element.Name.LocalName != "Project")
+                    {
+                        continue;
+                    }
+
+                    string? file = element.Attribute("File")?.Value;
+                    if (file is not null
+                        && string.Equals(
+                            Path.GetFullPath(Path.Combine(
+                                directory.FullName,
+                                file.Replace('\\', Path.DirectorySeparatorChar))),
+                            projectPath,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (string.Equals(directory.FullName, root, StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+        }
+
+        return false;
+    }
 
     private static JsonObject ParseGlobalJson(string path)
     {

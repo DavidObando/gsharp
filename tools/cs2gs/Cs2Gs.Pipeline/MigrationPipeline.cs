@@ -315,6 +315,8 @@ public sealed class MigrationPipeline
                 this.options.RepositoryAdditionalFiles.Add(passthroughFile);
             }
 
+            RepositoryMirror.RebindMirroredSdkProjects(destinationRoot, sdkMoniker);
+
             // Issue #3862: the mirror must BE a repository before anything runs
             // inside it, not only after. Repository-anchored code — a test that
             // walks up from its output directory looking for `GSharp.sln`, an
@@ -747,12 +749,7 @@ public sealed class MigrationPipeline
             }
         }
 
-        string? projectPin = SdkPin.ReadProjectPin(
-            this.options.GeneratedProjectPaths.Values.Concat(
-                Directory.EnumerateFiles(migratedRoot, "*.csproj", SearchOption.AllDirectories)
-                    .Where(path =>
-                        !RepositoryFileInventory.HasExcludedDirectory(
-                            Path.GetRelativePath(migratedRoot, path)))));
+        string? projectPin = SdkPin.ReadProjectPin(SdkPin.BuildableProjectPaths(migratedRoot));
         if (treePin is not null && projectPin is not null)
         {
             throw new InvalidOperationException(

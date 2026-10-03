@@ -642,6 +642,68 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Equal("Sdk.targets", import.Attribute("Project").Value);
     }
 
+    /// <summary>Copied native projects use the run's pin while template payloads remain untouched.</summary>
+    /// <param name="location">The pin mode.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Theory]
+    [InlineData(SdkPinLocation.ProjectFile)]
+    [InlineData(SdkPinLocation.GlobalJson)]
+    public async Task Migrate_RebindsCopiedNativeProjectsWithoutChangingTemplates(SdkPinLocation location)
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        string nativeDirectory = Path.Combine(fixture.Source, "samples", "ConcurrencyPatterns", "gsharp");
+        Directory.CreateDirectory(nativeDirectory);
+        const string nativeXml = """<Project Sdk="Gsharp.NET.Sdk/0.4.591;Other.Sdk/1.2.3" />""";
+        File.WriteAllText(Path.Combine(nativeDirectory, "Patterns.gsproj"), nativeXml);
+        string templateDirectory = Path.Combine(fixture.Source, "templates", "dotnet");
+        Directory.CreateDirectory(Path.Combine(templateDirectory, ".template.config"));
+        File.WriteAllText(Path.Combine(templateDirectory, ".template.config", "template.json"), "{}");
+        const string templateXml = """<Project Sdk="Gsharp.NET.Sdk/$sdkVersion$" />""";
+        File.WriteAllText(Path.Combine(templateDirectory, "Template.gsproj"), templateXml);
+        string visualDirectory = Path.Combine(fixture.Source, "templates", "visual");
+        Directory.CreateDirectory(Path.Combine(visualDirectory, "child"));
+        File.WriteAllText(
+            Path.Combine(visualDirectory, "Template.vstemplate"),
+            """<VSTemplate><TemplateContent><Project File="child\Template.gsproj" /></TemplateContent></VSTemplate>""");
+        File.WriteAllText(Path.Combine(visualDirectory, "child", "Template.gsproj"), templateXml);
+        File.WriteAllText(
+            Path.Combine(visualDirectory, "NotTemplate.gsproj"),
+            """<Project Sdk="Gsharp.NET.Sdk/0.4.591" />""");
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+        options.SdkPinLocation = location;
+
+        RunResult migrated = await new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+
+        Assert.True(migrated.Succeeded);
+        string moniker = location == SdkPinLocation.GlobalJson ? "Gsharp.NET.Sdk" : "Gsharp.NET.Sdk/" + PinnedVersion;
+        string native = Path.Combine(fixture.Destination, "samples", "ConcurrencyPatterns", "gsharp", "Patterns.gsproj");
+        Assert.Equal(moniker + ";Other.Sdk/1.2.3", SdkAttribute(native));
+        Assert.Equal(
+            moniker,
+            SdkAttribute(Path.Combine(fixture.Destination, "templates", "visual", "NotTemplate.gsproj")));
+        Assert.Equal(
+            templateXml,
+            File.ReadAllText(Path.Combine(fixture.Destination, "templates", "dotnet", "Template.gsproj")));
+        Assert.Equal(
+            templateXml,
+            File.ReadAllText(Path.Combine(fixture.Destination, "templates", "visual", "child", "Template.gsproj")));
+        var probe = new PinProbeStage();
+        RunResult validated = await new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { probe })
+            .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(options.ArtifactRoot, migrated.RunId));
+        Assert.True(validated.Succeeded);
+        Assert.Equal(moniker, Assert.Single(probe.Observations).SdkMoniker);
+
+        File.WriteAllText(native, nativeXml);
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { new PinProbeStage() })
+                .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(options.ArtifactRoot, migrated.RunId)));
+        Assert.Contains("0.4.591", error.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// A source <c>global.json</c> that already pins the SDK cannot be mixed
     /// with versioned project attributes: that would build projects against
