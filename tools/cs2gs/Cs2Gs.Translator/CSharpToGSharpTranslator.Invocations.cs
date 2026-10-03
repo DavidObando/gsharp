@@ -4928,7 +4928,7 @@ public sealed partial class CSharpToGSharpTranslator
                     cast.Type.GetLocation());
             }
 
-            if (cast.Expression.IsKind(SyntaxKind.NullLiteralExpression)
+            if (StripParentheses(cast.Expression).IsKind(SyntaxKind.NullLiteralExpression)
                 && (targetSymbol is { IsReferenceType: true } || targetType.IsNullable))
             {
                 // Typed null keeps overload selection without an unparseable
