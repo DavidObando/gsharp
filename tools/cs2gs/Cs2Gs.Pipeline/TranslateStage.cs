@@ -631,7 +631,7 @@ public sealed class TranslateStage : IMigrationStage
                     // produced, so the app result and gap ledger are unchanged.
                     foreach (TranslationDiagnostic diagnostic in translationContext.Diagnostics
                         .Where(d => d.Severity == TranslationSeverity.Warning
-                            && IsForwardedTranslationWarning(d.DiagnosticId)))
+                            && IsForwardedTranslationWarning(d)))
                     {
                         string line = FormatForwardedTranslationWarning(diagnostic, document.FilePath);
                         Note(context, line);
@@ -919,11 +919,17 @@ public sealed class TranslateStage : IMigrationStage
         Console.Error.WriteLine(warning);
     }
 
-    private static bool IsForwardedTranslationWarning(string diagnosticId) =>
-        diagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId
-        || diagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
-        || diagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId
-        || diagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId;
+    // Issue #4704: takes the diagnostic, not its id. DiagnosticId is null for
+    // most warnings (null means "derived from the classification"), and the
+    // self-migrated G# types it `string?`. Passing it to a `string` parameter
+    // made cs2gs bridge the argument with a fail-fast `!!`, so the migrated
+    // Translate stage threw on the first warning without an id. Comparing the
+    // id here accepts null in both languages.
+    private static bool IsForwardedTranslationWarning(TranslationDiagnostic diagnostic) =>
+        diagnostic.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId
+        || diagnostic.DiagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
+        || diagnostic.DiagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId
+        || diagnostic.DiagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId;
 
     /// <summary>
     /// True for an ordinary C# compiler error (<c>CS####</c>). cs2gs's own
