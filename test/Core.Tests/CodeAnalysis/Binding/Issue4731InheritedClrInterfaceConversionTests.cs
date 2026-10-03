@@ -17,19 +17,29 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public sealed class Issue4731InheritedClrInterfaceConversionTests
 {
     [Theory]
-    [InlineData("sequence[List[Item]]", "sequence[List[object]]")]
-    [InlineData("sequence[List[Item]]", "IEnumerable[List[object]]")]
-    [InlineData("async sequence[List[Item]]", "async sequence[List[object]]")]
-    [InlineData("async sequence[List[Item]]", "IAsyncEnumerable[List[object]]")]
-    [InlineData("sequence[sequence[List[Item]]]", "sequence[sequence[List[object]]]")]
-    [InlineData("sequence[List[Item]?]", "sequence[List[object]?]")]
-    public void NestedInvariantSequenceElements_CannotUseErasedClrIdentity(string sourceType, string targetType)
+    [InlineData("sequence[List[Item]]", "sequence[List[object]]", "GS0155")]
+    [InlineData("sequence[List[Item]]", "IEnumerable[List[object]]", "GS0155")]
+    [InlineData("async sequence[List[Item]]", "async sequence[List[object]]", "GS0155")]
+    [InlineData("async sequence[List[Item]]", "IAsyncEnumerable[List[object]]", "GS0155")]
+    [InlineData("sequence[sequence[List[Item]]]", "sequence[sequence[List[object]]]", "GS0155")]
+    [InlineData("sequence[List[Item]?]", "sequence[List[object]?]", "GS0155")]
+    [InlineData("sequence[(Item, int32)]", "sequence[(object, int32)]", "GS0156")]
+    [InlineData("sequence[List[(Item, int32)]]", "sequence[List[(object, int32)]]", "GS0155")]
+    [InlineData("async sequence[(Item, int32)]", "async sequence[(object, int32)]", "GS0156")]
+    [InlineData("sequence[[3]int32]", "sequence[[4]int32]", "GS0155")]
+    [InlineData("async sequence[[3]int32]", "IAsyncEnumerable[[4]int32]", "GS0155")]
+    [InlineData("sequence[[]int32]", "sequence[[3]int32]", "GS0155")]
+    [InlineData("sequence[List[[]Item]]", "sequence[List[[]object]]", "GS0155")]
+    public void NestedInvariantSequenceElements_CannotUseErasedClrIdentity(
+        string sourceType,
+        string targetType,
+        string diagnostic)
     {
         var compilation = Bind("class Item {}", sourceType, targetType, "value");
         var error = Assert.Single(
             compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics),
             diagnostic => diagnostic.IsError);
-        Assert.Equal("GS0155", error.Id);
+        Assert.Equal(diagnostic, error.Id);
     }
 
     [Theory]
@@ -40,6 +50,9 @@ public sealed class Issue4731InheritedClrInterfaceConversionTests
     [InlineData("async sequence[Item]", "async sequence[object]")]
     [InlineData("sequence[List[Item]]", "IEnumerable[List[Item]]")]
     [InlineData("sequence[IEnumerable[Item]]", "IEnumerable[IEnumerable[object]]")]
+    [InlineData("sequence[(Item, int32)]", "IEnumerable[(Item, int32)]")]
+    [InlineData("sequence[[3]int32]", "IEnumerable[[3]int32]")]
+    [InlineData("sequence[List[(Item, int32)]]", "IEnumerable[List[(Item, int32)]]")]
     public void ReifiedSequenceSource_SharedImportedVarianceAcceptsReferenceElements(string sourceType, string targetType)
     {
         var compilation = Bind("class Item {}", sourceType, targetType, "value");

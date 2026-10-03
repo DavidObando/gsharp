@@ -48,6 +48,10 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
         }
 
         public class SequenceOwner<T> : System.Collections.Generic.List<T> { }
+        public static class Producer
+        {
+            public static (T entry, int number) Pair<T>(T value, int number) => (value, number);
+        }
         """;
 
     [Fact]
@@ -176,6 +180,31 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
             func AliasWiden[T class](value sequence[T]) IEnumerable[object] -> value
             func NestedWiden(value sequence[IEnumerable[Item]]) sequence[IEnumerable[object]] -> value
 
+            public func TupleValues() sequence[(entry Item, number int32)] {
+                let leaf = Leaf[(entry Item, number int32)]()
+                leaf.Add(Producer.Pair(Item("tuple"), 7))
+                let view = FromInterface(FromAlias(Exact(leaf)))
+                if !Object.ReferenceEquals(leaf, view) { throw InvalidOperationException() }
+                return view
+            }
+
+            public func ArrayValues() sequence[[3]int32] {
+                let leaf = Leaf[[3]int32]()
+                leaf.Add([3]int32{3, 5, 7})
+                let view = FromInterface(FromAlias(Exact(leaf)))
+                if !Object.ReferenceEquals(leaf, view) { throw InvalidOperationException() }
+                return view
+            }
+
+            public func TupleProbe() int32 {
+                var count = 0
+                for value in TupleValues() {
+                    if value.entry.Label != "tuple" || value.number != 7 { return -11 }
+                    count++
+                }
+                return count
+            }
+
             public func Probe() int32 {
                 let leaf = Leaf[string]()
                 leaf.Add("value")
@@ -233,6 +262,13 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
         IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
         var loaded = EmittedFixture.LoadTogether(fixture.AssemblyPath, result.AssemblyPath);
         Assert.Equal(1, FindMethod(loaded[1], "Probe").Invoke(null, null));
+        Assert.Equal(1, FindMethod(loaded[1], "TupleProbe").Invoke(null, null));
+        var item = Assert.Single(loaded[1].GetTypes(), type => type.Name == "Item");
+        var tuple = typeof(ValueTuple<,>).MakeGenericType(item, typeof(int));
+        Assert.Equal(typeof(IEnumerable<>).MakeGenericType(tuple), FindMethod(loaded[1], "TupleValues").ReturnType);
+        Assert.Equal(typeof(IEnumerable<int[]>), FindMethod(loaded[1], "ArrayValues").ReturnType);
+        var arrays = Assert.IsAssignableFrom<IEnumerable<int[]>>(FindMethod(loaded[1], "ArrayValues").Invoke(null, null));
+        Assert.Equal(new[] { 3, 5, 7 }, Assert.Single(arrays));
     }
 
     [Fact]
@@ -305,13 +341,23 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
     }
 
     [Theory]
-    [InlineData("sequence[List[Item]]", "sequence[List[object]]")]
-    [InlineData("sequence[List[Item]]", "IEnumerable[List[object]]")]
-    [InlineData("async sequence[List[Item]]", "async sequence[List[object]]")]
-    [InlineData("async sequence[List[Item]]", "IAsyncEnumerable[List[object]]")]
-    [InlineData("sequence[sequence[List[Item]]]", "sequence[sequence[List[object]]]")]
-    [InlineData("sequence[List[Item]?]", "sequence[List[object]?]")]
-    public void NestedInvariantSequenceElements_AreRejectedWithoutEmission(string sourceType, string targetType)
+    [InlineData("sequence[List[Item]]", "sequence[List[object]]", "GS0155")]
+    [InlineData("sequence[List[Item]]", "IEnumerable[List[object]]", "GS0155")]
+    [InlineData("async sequence[List[Item]]", "async sequence[List[object]]", "GS0155")]
+    [InlineData("async sequence[List[Item]]", "IAsyncEnumerable[List[object]]", "GS0155")]
+    [InlineData("sequence[sequence[List[Item]]]", "sequence[sequence[List[object]]]", "GS0155")]
+    [InlineData("sequence[List[Item]?]", "sequence[List[object]?]", "GS0155")]
+    [InlineData("sequence[(Item, int32)]", "sequence[(object, int32)]", "GS0156")]
+    [InlineData("sequence[List[(Item, int32)]]", "sequence[List[(object, int32)]]", "GS0155")]
+    [InlineData("async sequence[(Item, int32)]", "async sequence[(object, int32)]", "GS0156")]
+    [InlineData("sequence[[3]int32]", "sequence[[4]int32]", "GS0155")]
+    [InlineData("async sequence[[3]int32]", "IAsyncEnumerable[[4]int32]", "GS0155")]
+    [InlineData("sequence[[]int32]", "sequence[[3]int32]", "GS0155")]
+    [InlineData("sequence[List[[]Item]]", "sequence[List[[]object]]", "GS0155")]
+    public void NestedInvariantSequenceElements_AreRejectedWithoutEmission(
+        string sourceType,
+        string targetType,
+        string diagnostic)
     {
         using var fixture = new Fixture();
         var result = fixture.Compile($$"""
@@ -321,7 +367,7 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
             func Unsafe(value {{sourceType}}) {{targetType}} -> value
             """);
         Assert.Equal(1, result.ExitCode);
-        Assert.Contains("error GS0155:", result.Output, StringComparison.Ordinal);
+        Assert.Contains("error " + diagnostic + ":", result.Output, StringComparison.Ordinal);
         Assert.False(File.Exists(result.AssemblyPath));
     }
 
