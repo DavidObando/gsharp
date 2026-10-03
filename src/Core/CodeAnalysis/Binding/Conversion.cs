@@ -3198,7 +3198,7 @@ public sealed class Conversion
 
     /// <summary>
     /// Issue #1088: determines whether two constructed generic
-    /// <see cref="ImportedTypeSymbol"/> instances denote the same closed type
+    /// imported types or sequence aliases denote the same closed type
     /// by comparing their open definitions and SYMBOLIC type arguments, rather
     /// than their (possibly erased) <see cref="TypeSymbol.ClrType"/>. A
     /// same-compilation user type used as a CLR generic argument has a
@@ -3207,22 +3207,24 @@ public sealed class Conversion
     /// otherwise identical instantiations (e.g. the declared variable type
     /// <c>Channel[BufferEntry]</c> vs. a factory method's return type).
     /// </summary>
-    private static bool AreConstructedGenericsIdentical(ImportedTypeSymbol from, ImportedTypeSymbol to)
+    private static bool AreConstructedGenericsIdentical(TypeSymbol from, TypeSymbol to)
     {
-        if (!ClrTypeUtilities.IsSameAs(from.OpenDefinition, to.OpenDefinition))
+        if (!TryGetConstructedGenericShape(from, out var fromOpen, out var fromArguments)
+            || !TryGetConstructedGenericShape(to, out var toOpen, out var toArguments)
+            || !ClrTypeUtilities.IsSameAs(fromOpen, toOpen))
         {
             return false;
         }
 
-        if (from.TypeArguments.IsDefaultOrEmpty || to.TypeArguments.IsDefaultOrEmpty
-            || from.TypeArguments.Length != to.TypeArguments.Length)
+        if (fromArguments.IsDefaultOrEmpty || toArguments.IsDefaultOrEmpty
+            || fromArguments.Length != toArguments.Length)
         {
             return false;
         }
 
-        for (var i = 0; i < from.TypeArguments.Length; i++)
+        for (var i = 0; i < fromArguments.Length; i++)
         {
-            if (!AreTypeArgumentsEquivalent(from.TypeArguments[i], to.TypeArguments[i]))
+            if (!AreTypeArgumentsEquivalent(fromArguments[i], toArguments[i]))
             {
                 return false;
             }
@@ -4927,11 +4929,15 @@ public sealed class Conversion
             return false;
         }
 
-        // Nested constructed generics (e.g. List[List[MyGs]]) compare structurally.
-        if (a is ImportedTypeSymbol nestedA && b is ImportedTypeSymbol nestedB
-            && nestedA.OpenDefinition != null && nestedB.OpenDefinition != null)
+        a = a.StripToBareShape();
+        b = b.StripToBareShape();
+
+        // Nested generic arguments retain their symbolic shape through aliases
+        // and annotation carriers instead of comparing erased CLR envelopes.
+        if (TryGetConstructedGenericShape(a, out _, out _)
+            && TryGetConstructedGenericShape(b, out _, out _))
         {
-            return AreConstructedGenericsIdentical(nestedA, nestedB);
+            return AreConstructedGenericsIdentical(a, b);
         }
 
         // Issue #3962: a fixed-length array `[N]T` is backed by the plain
@@ -5574,6 +5580,13 @@ public sealed class Conversion
     // <see cref="TypeSymbol.ContainsFixedLengthArray"/>.
     private static bool RequiresSymbolicTypeArgumentIdentity(TypeSymbol? type)
     {
+        type = type?.StripToBareShape();
+        if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol
+            && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(type, out _, out var elementType))
+        {
+            return RequiresSymbolicTypeArgumentIdentity(elementType);
+        }
+
         if (type is not ImportedTypeSymbol { OpenDefinition: not null } imported)
         {
             return false;

@@ -174,6 +174,7 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
             func FromAlias[T](value sequence[T]) IEnumerable[T] -> value
             func FromInterface[T](value IEnumerable[T]) sequence[T] -> value
             func AliasWiden[T class](value sequence[T]) IEnumerable[object] -> value
+            func NestedWiden(value sequence[IEnumerable[Item]]) sequence[IEnumerable[object]] -> value
 
             public func Probe() int32 {
                 let leaf = Leaf[string]()
@@ -196,6 +197,30 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
                 for item in ownView {
                     if item.Label != "source" { return -4 }
                 }
+                let nested = Leaf[List[Item]]()
+                nested.Add(List[Item]{Item("nested")})
+                let nestedView = FromInterface(FromAlias(Exact(nested)))
+                if !Object.ReferenceEquals(nested, nestedView) { return -5 }
+                var nestedCount = 0
+                for list in nestedView {
+                    for item in list {
+                        if item.Label != "nested" { return -6 }
+                        nestedCount++
+                    }
+                }
+                if nestedCount != 1 { return -7 }
+                let covariant = Leaf[IEnumerable[Item]]()
+                covariant.Add(List[Item]{Item("covariant")})
+                let nestedWidened = NestedWiden(Exact(covariant))
+                if !Object.ReferenceEquals(covariant, nestedWidened) { return -8 }
+                var covariantCount = 0
+                for list in nestedWidened {
+                    for item in list {
+                        if cast[Item](item).Label != "covariant" { return -9 }
+                        covariantCount++
+                    }
+                }
+                if covariantCount != 1 { return -10 }
                 var count int32 = 0
                 for item in widened {
                     if item != "value" { return -2 }
@@ -277,6 +302,27 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
         }
 
         IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
+    }
+
+    [Theory]
+    [InlineData("sequence[List[Item]]", "sequence[List[object]]")]
+    [InlineData("sequence[List[Item]]", "IEnumerable[List[object]]")]
+    [InlineData("async sequence[List[Item]]", "async sequence[List[object]]")]
+    [InlineData("async sequence[List[Item]]", "IAsyncEnumerable[List[object]]")]
+    [InlineData("sequence[sequence[List[Item]]]", "sequence[sequence[List[object]]]")]
+    [InlineData("sequence[List[Item]?]", "sequence[List[object]?]")]
+    public void NestedInvariantSequenceElements_AreRejectedWithoutEmission(string sourceType, string targetType)
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile($$"""
+            package Issue4731.NestedInvariant
+            import System.Collections.Generic
+            class Item {}
+            func Unsafe(value {{sourceType}}) {{targetType}} -> value
+            """);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("error GS0155:", result.Output, StringComparison.Ordinal);
+        Assert.False(File.Exists(result.AssemblyPath));
     }
 
     [Theory]
