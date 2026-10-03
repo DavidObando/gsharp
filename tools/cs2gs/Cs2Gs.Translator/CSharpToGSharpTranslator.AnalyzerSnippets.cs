@@ -122,13 +122,19 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // Everything the snippet translator noticed — a dropped marker, a
-            // namespace collapse — is re-reported HERE, attributed to the call
-            // site, so it lands in the migration's own diagnostics rather than
-            // being swallowed inside a nested translation the run never sees.
+            // namespace collapse — is re-reported HERE so it lands in the
+            // migration's own diagnostics. Bridge sites retain their inner
+            // source positions; other notices are attributed to the call site.
             foreach (TranslationDiagnostic inner in result.Diagnostics)
             {
                 if (inner.Severity == TranslationSeverity.Info)
                 {
+                    continue;
+                }
+
+                if (inner.DiagnosticId == GenericStoreBridgeDiagnosticId)
+                {
+                    this.context.Report(inner);
                     continue;
                 }
 

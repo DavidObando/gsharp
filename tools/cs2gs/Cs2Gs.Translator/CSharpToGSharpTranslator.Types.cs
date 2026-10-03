@@ -8,7 +8,6 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
-using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -273,7 +272,11 @@ public sealed partial class CSharpToGSharpTranslator
                     expressionBody = this.TranslateExpression(bodyExpression);
                     if (this.IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(bodyExpression))
                     {
-                        expressionBody = new NonNullAssertionExpression(expressionBody);
+                        expressionBody = this.ReportStoreBridge(
+                            bodyExpression,
+                            expressionBody,
+                            new NonNullAssertionExpression(expressionBody),
+                            this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod);
                     }
                     else if (this.IsGSharpNullableAnalyzerExpression(bodyExpression)
                         && this.AnalyzerBridgeTargetIsNonNull(GetEffectiveReturnType(
@@ -285,7 +288,11 @@ public sealed partial class CSharpToGSharpTranslator
                         // the `T` of an async `Task<T>`, never the envelope — the
                         // same bridge a `return` statement takes. (gsc erases the
                         // reference `!!` inside an expression tree.)
-                        expressionBody = EnsureNonNullAssertion(expressionBody);
+                        expressionBody = this.ReportStoreBridge(
+                            bodyExpression,
+                            expressionBody,
+                            EnsureNonNullAssertion(expressionBody),
+                            this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod);
                     }
                 }
                 finally
@@ -1487,7 +1494,8 @@ public sealed partial class CSharpToGSharpTranslator
                         tupleLiteral.Elements[i],
                         tupleTarget.TupleElements[i].Type,
                         enclosingIterator,
-                        includePromotedValue: true));
+                        includePromotedValue: true,
+                        reportedSlotType: tupleTarget.TupleElements[i].Type));
                 }
 
                 value = new TupleLiteralExpression(bridged);
@@ -1502,7 +1510,76 @@ public sealed partial class CSharpToGSharpTranslator
                     includePromotedValue: true);
             }
 
+            // At statement position the parser reads `yield (` as a tuple
+            // yield, not as an arbitrary parenthesized expression. Keep the
+            // expression's target type and iterator-time evaluation by
+            // materializing it immediately before the yield.
+            if (value is not TupleLiteralExpression
+                && !IsUnambiguousYieldValue(value))
+            {
+                string name = this.FreshYieldedValueName(node);
+                GTypeReference type = null;
+                if (typeInfo.ConvertedType is { } yieldType)
+                {
+                    type = this.typeMapper.Map(yieldType, this.context, node.Expression.GetLocation());
+                    type = this.PromoteTupleDeclarationIfTainted(type, yieldType, enclosingIterator);
+                    type = this.PromoteAwaitedReturnIfTainted(type, yieldType, enclosingIterator);
+                }
+
+                return new GStatement[]
+                {
+                    new LocalDeclarationStatement(
+                        BindingKind.Let,
+                        name,
+                        type,
+                        initializer: value),
+                    new YieldStatement(new IdentifierExpression(name)),
+                };
+            }
+
             return new[] { (GStatement)new YieldStatement(value) };
+        }
+
+        // ponytail: only known grammar-safe heads stay inline. A binary
+        // expression can require grouping for G# precedence even without C#
+        // parentheses, and a string literal can become a spliced concatenation.
+        // Materialize them rather than duplicating printer rules.
+        private static bool IsUnambiguousYieldValue(GExpression value) => value switch
+        {
+            LiteralExpression { Kind: LiteralKind.Int or LiteralKind.Float or LiteralKind.Bool or LiteralKind.Char or LiteralKind.Null } => true,
+            IdentifierExpression or ThisExpression
+                or UnaryExpression or CheckedExpression or TypeOfExpression
+                or DefaultValueExpression => true,
+            ConversionExpression { TargetType: NamedTypeReference } => true,
+            MemberAccessExpression member => IsUnambiguousYieldValue(member.Target),
+            InvocationExpression invocation => IsUnambiguousYieldValue(invocation.Target),
+            IndexExpression index => IsUnambiguousYieldValue(index.Target),
+            NonNullAssertionExpression assertion => IsUnambiguousYieldValue(assertion.Operand),
+            _ => false,
+        };
+
+        private string FreshYieldedValueName(YieldStatementSyntax node)
+        {
+            if (!this.state.YieldedValueNamesByTree.TryGetValue(
+                node.SyntaxTree,
+                out HashSet<string> usedNames))
+            {
+                usedNames = new HashSet<string>(
+                    node.SyntaxTree.GetRoot().DescendantTokens()
+                        .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
+                        .Select(token => token.ValueText),
+                    StringComparer.Ordinal);
+                this.state.YieldedValueNamesByTree.Add(node.SyntaxTree, usedNames);
+            }
+
+            string name;
+            do
+            {
+                name = $"__yielded{this.state.YieldedValueCounter++}";
+            }
+            while (!usedNames.Add(name));
+
+            return name;
         }
 
         private static SyntaxNode GetBreakTarget(YieldStatementSyntax node)

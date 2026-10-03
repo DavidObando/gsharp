@@ -83,6 +83,8 @@ public sealed class CompileStage : IMigrationStage
                         context.Options.Config,
                         context.Options.GeneratedProjectPaths,
                         context.IsAnalyzerTestProject,
+                        context.Options.RepositorySdkMoniker,
+                        context.Options.RepositoryAnalyzerVerifierPackageVersion,
                         survey ? NullAssertionPolishPass.SurveyWarningsNotAsErrors : null)
                     : runner.Compile(
                         context.ProjectOutputDir,

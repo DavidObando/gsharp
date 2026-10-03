@@ -195,6 +195,80 @@ public sealed class StaticCacheAnalyzer : DiagnosticAnalyzer
         AssertBindsAgainstGsCore(printed);
     }
 
+    /// <summary>
+    /// Issue #4612: the analyzer bridge asserts an analyzer value that is
+    /// <c>T?</c> only in G# where a lambda result must be non-null. In a runtime
+    /// lambda that `!!` can throw and is reported; gsc erases it in an
+    /// expression tree, so there it is not.
+    /// </summary>
+    [Fact]
+    public void AnalyzerLambdaBridge_IsReportedOnlyOutsideExpressionTrees()
+    {
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Collections.Immutable;
+using System.Linq.Expressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class SyntaxAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST0009"", ""Title"", ""Message"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    private static readonly Func<IOperation, SyntaxNode> RuntimeSyntax = op => op.Syntax;
+
+    private static readonly Expression<Func<IOperation, SyntaxNode>> TreeSyntax = op => op.Syntax;
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+}
+");
+
+        List<TranslationDiagnostic> sites = diagnostics
+            .Where(d => d.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToList();
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(16, site.Location.GetLineSpan().StartLinePosition.Line + 1);
+        Assert.StartsWith("kind=delegate-result | target=Func<IOperation, SyntaxNode>.Invoke(IOperation)", site.Message, StringComparison.Ordinal);
+        Assert.Contains("RuntimeSyntax", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnalyzerTupleArrayBridge_ResolvesItsArrayStore()
+    {
+        string source = """
+            using System.Collections.Immutable;
+            using Microsoft.CodeAnalysis;
+            using Microsoft.CodeAnalysis.Diagnostics;
+
+            [DiagnosticAnalyzer(LanguageNames.CSharp)]
+            public sealed class SyntaxAnalyzer : DiagnosticAnalyzer
+            {
+                public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+                public override void Initialize(AnalysisContext context) { }
+                public static (SyntaxNode, int)[] Values(IOperation op) => new (SyntaxNode, int)[] { (op.Syntax, 1) };
+            }
+            """;
+        var (printed, diagnostics) = TranslateAnalyzer(source);
+
+        Assert.Contains("op.Syntax!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(
+            diagnostics,
+            diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+        Assert.Equal(source.IndexOf("op.Syntax", StringComparison.Ordinal), site.Location.SourceSpan.Start);
+        Assert.StartsWith(
+            "kind=array-element | target=(SyntaxNode, int)[] | slot-type=SyntaxNode",
+            site.Message,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void OperationActionAnalyzer_TranslatesToBoundNodeApi()
     {

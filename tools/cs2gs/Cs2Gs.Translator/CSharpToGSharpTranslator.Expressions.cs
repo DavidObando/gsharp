@@ -2669,7 +2669,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && !this.LambdaResultFeedsNullableObservedInvocation(value)
                 && this.ReceiverNeedsNullForgiveness(value))
             {
-                return EnsureNonNullAssertion(translated);
+                return this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol);
             }
 
             return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol);
@@ -2692,7 +2692,22 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression translated,
             ITypeSymbol targetType,
             ISymbol targetSymbol,
-            bool includePromotedValue = false)
+            bool includePromotedValue = false,
+            ISymbol reportedTarget = null,
+            ITypeSymbol reportedSlotType = null) =>
+            this.ReportStoreBridge(
+                value,
+                translated,
+                this.ForgiveNullableReferenceValueCore(value, translated, targetType, targetSymbol, includePromotedValue),
+                targetSymbol ?? reportedTarget,
+                reportedSlotType);
+
+        private GExpression ForgiveNullableReferenceValueCore(
+            ExpressionSyntax value,
+            GExpression translated,
+            ITypeSymbol targetType,
+            ISymbol targetSymbol,
+            bool includePromotedValue)
         {
             // ADR-0186 step 6 (PR 0): a `T!` value flowing into a non-null
             // target is checked by gsc at that coercion (§4).
@@ -4436,7 +4451,11 @@ public sealed partial class CSharpToGSharpTranslator
                 or ConditionalAccessExpressionSyntax
                     ? new ParenthesizedExpression(translated)
                     : translated;
-            return EnsureNonNullAssertion(assertionOperand);
+            return this.ReportStoreBridge(
+                argument.Expression,
+                translated,
+                EnsureNonNullAssertion(assertionOperand),
+                (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)?.Parameter);
         }
 
         private bool TryRebuildPromotedTupleIndexKey(
@@ -4496,7 +4515,15 @@ public sealed partial class CSharpToGSharpTranslator
                         new List<int> { i },
                         this.context.SiblingCompilations))
                 {
-                    element = new NonNullAssertionExpression(element);
+                    // The C# key supplies the location; the bound element
+                    // supplies the slot of this synthesized assertion.
+                    element = this.ReportStoreBridge(
+                        argument.Expression,
+                        element,
+                        new NonNullAssertionExpression(element),
+                        targetSymbol: null,
+                        knownSlotType: keyElement.Type,
+                        projection: $".Item{i + 1}");
                     anyAsserted = true;
                 }
 
