@@ -630,31 +630,6 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.AwaitedReturnIsTainted(enumerable.TypeArguments[0], method);
         }
 
-        // Issue #4578: a C# `!` on the collection (`Items(x)!`) only changes the
-        // collection's static flow state, never its element type, so the
-        // iterator call behind any mix of parentheses and suppressions still
-        // decides the binding's nullability.
-        private static ExpressionSyntax UnwrapParenthesesAndSuppressions(ExpressionSyntax expression)
-        {
-            while (true)
-            {
-                if (expression is ParenthesizedExpressionSyntax parenthesized)
-                {
-                    expression = parenthesized.Expression;
-                    continue;
-                }
-
-                if (expression is PostfixUnaryExpressionSyntax suppression
-                    && suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression))
-                {
-                    expression = suppression.Operand;
-                    continue;
-                }
-
-                return expression;
-            }
-        }
-
         // Issue #2423: mirrors PromoteAwaitedReturnIfTainted's decision for a
         // NON-async `Task<T>`/`ValueTask<T>`-returning declaration (a C#
         // interface member — interfaces cannot declare `async` members — or a
@@ -701,7 +676,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return mapped;
             }
 
-            return this.PromoteTupleTypeArguments(mapped, returnType, symbol, new List<int>());
+            var path = new List<int>();
+
+            // The analyzer keys iterator leaves under the declared envelope.
+            // A sequence element (including a synthesized yield local) is a
+            // projection of that position, not a new bare-tuple declaration.
+            if (ObliviousNullabilityAnalyzer.SymbolValueType(symbol)
+                    is INamedTypeSymbol { TypeArguments.Length: 1 } envelope
+                && SymbolEqualityComparer.Default.Equals(returnType, envelope.TypeArguments[0]))
+            {
+                path.Add(0);
+            }
+
+            return this.PromoteTupleTypeArguments(mapped, returnType, symbol, path);
         }
 
         // Issue #3641: `var prepared = new List<(string, byte[])>()` renders the
@@ -821,88 +808,8 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference mapped,
             ITypeSymbol declaredType,
             ISymbol symbol,
-            List<int> path)
-        {
-            if (mapped is TupleTypeReference tuple
-                && declaredType is INamedTypeSymbol { IsTupleType: true } tupleType
-                && tupleType.TupleElements.Length == tuple.ElementTypes.Count)
-            {
-                return this.PromoteTupleElements(tuple, tupleType, symbol, path);
-            }
-
-            if (mapped is not NamedTypeReference named
-                || declaredType is not INamedTypeSymbol declaredNamed
-                || named.TypeArguments.Count != declaredNamed.TypeArguments.Length)
-            {
-                return mapped;
-            }
-
-            var arguments = new List<GTypeReference>(named.TypeArguments.Count);
-            bool changed = false;
-            for (int i = 0; i < named.TypeArguments.Count; i++)
-            {
-                path.Add(i);
-                GTypeReference argument = this.PromoteTupleTypeArguments(
-                    named.TypeArguments[i],
-                    declaredNamed.TypeArguments[i],
-                    symbol,
-                    path);
-                path.RemoveAt(path.Count - 1);
-                changed |= !ReferenceEquals(argument, named.TypeArguments[i]);
-                arguments.Add(argument);
-            }
-
-            return changed
-                ? new NamedTypeReference(named.Name, arguments, named.ContainingType)
-                    { IsNullable = named.IsNullable }
-                : mapped;
-        }
-
-        private GTypeReference PromoteTupleElements(
-            TupleTypeReference tuple,
-            INamedTypeSymbol tupleType,
-            ISymbol symbol,
-            List<int> path)
-        {
-            var elements = new List<GTypeReference>(tuple.ElementTypes.Count);
-            bool changed = false;
-            for (int i = 0; i < tuple.ElementTypes.Count; i++)
-            {
-                GTypeReference element = tuple.ElementTypes[i];
-                IFieldSymbol elementField = tupleType.TupleElements[i];
-                path.Add(i);
-                if (element is TupleTypeReference nestedMapped
-                    && elementField.Type is INamedTypeSymbol { IsTupleType: true } nestedType)
-                {
-                    GTypeReference promotedNested = this.PromoteTupleElements(
-                        nestedMapped,
-                        nestedType,
-                        symbol,
-                        path);
-                    changed |= !ReferenceEquals(promotedNested, element);
-                    element = promotedNested;
-                }
-                else if (!element.IsNullable
-                    && elementField.Type is { IsReferenceType: true }
-                    && elementField.Type.NullableAnnotation != NullableAnnotation.Annotated
-                    && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
-                        this.context.Compilation,
-                        symbol,
-                        path,
-                        this.context.SiblingCompilations))
-                {
-                    element = MakeNullable(element);
-                    changed = true;
-                }
-
-                path.RemoveAt(path.Count - 1);
-                elements.Add(element);
-            }
-
-            return changed
-                ? new TupleTypeReference(elements, tuple.ElementNames) { IsNullable = tuple.IsNullable }
-                : tuple;
-        }
+            List<int> path) =>
+            this.typeMapper.PromoteTupleTypeArguments(mapped, declaredType, symbol, this.context, path);
 
         // Issue #914: whether <paramref name="expression"/> yields a
         // promoted-nullable value in an oblivious compilation — either a

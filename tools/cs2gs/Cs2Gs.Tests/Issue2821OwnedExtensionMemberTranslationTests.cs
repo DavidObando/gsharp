@@ -93,6 +93,54 @@ public static class MeterExtensions
     }
 
     [Fact]
+    public void OwnedExtensionLiftedHelpers_UseReceiverAggregateNameRegistry()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Target.cs", """
+                namespace Demo;
+
+                public partial class C
+                {
+                    public int Helper(int value) => -value;
+                }
+                """),
+            ("Extensions.cs", """
+                namespace Demo;
+
+                public static class Extensions
+                {
+                    public static int Extra(this C receiver, int value)
+                    {
+                        return Helper(value);
+                        static int Helper(int n) => n == 0 ? 0 : Other<int>(n - 1);
+                        static int Other<T>(int n) => Helper(n);
+                    }
+
+                    public static int Other(this C receiver, string value) => value.Length;
+
+                    public static int Count(this C receiver, int value)
+                    {
+                        int offset = 1;
+                        return First(value);
+                        int First(int n) => n == 0 ? offset : Second(n - 1);
+                        int Second(int n) => First(n);
+                    }
+                }
+                """));
+
+        string combined = string.Join(Environment.NewLine, printed.Values);
+        Assert.Contains("func Helper(value int32)", combined, StringComparison.Ordinal);
+        Assert.Contains("func Helper_2(", combined, StringComparison.Ordinal);
+        Assert.Contains("func Other_2[", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("Extensions.", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("class Extensions", combined, StringComparison.Ordinal);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
     public void ArityDisjointInstanceOverload_DoesNotBlockOwnedLowering()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(

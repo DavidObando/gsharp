@@ -1439,7 +1439,7 @@ public sealed class ManagedReferenceTranslationTests
         var document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
-        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain(context.Diagnostics, d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
         Assert.Contains("for word object? in words", text, StringComparison.Ordinal);
         Assert.Contains("[]object{reference!!}", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
@@ -4163,7 +4163,7 @@ public sealed class ManagedReferenceTranslationTests
         var document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
-        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain(context.Diagnostics, d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
         Assert.Contains("(await get())!!.Borrow()", text, StringComparison.Ordinal);
     }
 
@@ -7695,7 +7695,8 @@ public sealed class ManagedReferenceTranslationTests
                 }
             }
             """);
-        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain(context.Diagnostics, d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+        Assert.Single(context.Diagnostics, d => d.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId && d.Message.StartsWith("kind=constructed-generic-member | target=Holder<string>.Field", StringComparison.Ordinal));
         Assert.Contains("nullableString!!", text, StringComparison.Ordinal);
     }
 
@@ -7713,7 +7714,8 @@ public sealed class ManagedReferenceTranslationTests
                 }
             }
             """);
-        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain(context.Diagnostics, d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+        Assert.Single(context.Diagnostics, d => d.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId && d.Message.StartsWith("kind=constructed-generic-member | target=Holder<string>.Field", StringComparison.Ordinal));
         Assert.Contains("!!", text, StringComparison.Ordinal);
     }
 

@@ -102,6 +102,26 @@ public sealed class PipelineOptions
     public string Config { get; set; } = "Release";
 
     /// <summary>
+    /// Gets or sets the exact <c>Gsharp.NET.Sdk</c> version a repository
+    /// migration pins (<c>--sdk-version</c>). When <see langword="null"/> the
+    /// newest locally-built nupkg is pinned. An explicit version is never
+    /// displaced by a newer local build: it is how a migration is pinned to a
+    /// published release (for example the compiler's own cut-over translation,
+    /// which must build against the released bootstrap compiler).
+    /// </summary>
+    public string? SdkVersion { get; set; }
+
+    /// <summary>
+    /// Gets or sets where a repository migration writes the SDK pin
+    /// (<c>--sdk-pin</c>). <see cref="SdkPinLocation.GlobalJson"/> pins the
+    /// version once in the mirror's <c>global.json</c> and leaves every
+    /// generated project's <c>Sdk</c> attribute bare. <c>validate</c> ignores
+    /// this and follows the migrated tree: a tree whose <c>global.json</c>
+    /// pins <c>Gsharp.NET.Sdk</c> is validated in that mode.
+    /// </summary>
+    public SdkPinLocation SdkPinLocation { get; set; } = SdkPinLocation.ProjectFile;
+
+    /// <summary>
     /// Gets or sets a value indicating whether stage 2 compiles the emitted G#
     /// via <c>dotnet build</c> against the locally-built <c>Gsharp.NET.Sdk</c>
     /// instead of invoking <c>gsc</c> directly (issue #2261). The SDK build
@@ -148,6 +168,22 @@ public sealed class PipelineOptions
     public TestParityAllowList? TestParityAllowList { get; set; }
 
     /// <summary>
+    /// Gets or sets the directory holding one <see cref="CSharpTestOracle"/>
+    /// per mirrored test project (issue #4633). When set, a mirrored test
+    /// project must match its C# original NAME FOR NAME, and a missing oracle
+    /// file fails the app. When <see langword="null"/>, the stage keeps the
+    /// count-only check and records <c>count-only</c> in the run record;
+    /// <c>cs2gs validate</c> refuses to run that way unless explicitly told to.
+    /// </summary>
+    public string? CSharpTestOracleDirectory { get; set; }
+
+    /// <summary>
+    /// Gets or sets the justified per-test-name differences (issue #4633).
+    /// <see langword="null"/> is treated as <see cref="TestNameParityBaseline.Empty"/>.
+    /// </summary>
+    public TestNameParityBaseline? TestNameParityBaseline { get; set; }
+
+    /// <summary>
     /// Gets or sets the canonical source-project to generated-project mapping
     /// established before migration starts.
     /// </summary>
@@ -162,8 +198,16 @@ public sealed class PipelineOptions
     /// <summary>Gets or sets source projects loaded once for repository-wide analysis.</summary>
     internal IReadOnlyDictionary<string, LoadedCSharpProject>? RepositoryLoadedProjects { get; set; }
 
-    /// <summary>Gets or sets the pinned SDK moniker used by repository project transforms.</summary>
+    /// <summary>
+    /// Gets or sets the pinned SDK moniker (the generated projects' <c>Sdk</c>
+    /// attribute value) used by repository project transforms. Resolved once
+    /// per run by <see cref="MigrationPipeline"/> (migrate and validate alike)
+    /// and consumed unchanged by every stage.
+    /// </summary>
     internal string? RepositorySdkMoniker { get; set; }
+
+    /// <summary>Gets or sets the resolved repository SDK version used by isolated parity projects.</summary>
+    internal string? RepositorySdkVersion { get; set; }
 
     /// <summary>
     /// Gets or sets the resolved version of the locally-built

@@ -169,6 +169,8 @@ ALLOWED: tuple[Allowed, ...] = (
             "SDK and restores it on exit"),
     Allowed("tools/cs2gs/Cs2Gs.Tests/*", frozenset(),
             "synthetic versions in cs2gs project-transformer test data"),
+    Allowed("build/test-selfhost-pack-stage1.py", frozenset(),
+            "synthetic versions in the stage-1 SDK pack script's unit-test fixtures"),
 )
 
 SKIPPED_SUFFIXES = (".lock.json", "package-lock.json", ".zip", ".png", ".jpg", ".jpeg",

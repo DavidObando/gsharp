@@ -239,6 +239,15 @@ public sealed class StageExecutionContext
     /// the run over them.
     /// </summary>
     public List<string> StaleTestAllowListEntries { get; } = new List<string>();
+
+    /// <summary>
+    /// Gets or sets the per-test-name parity summary the test-parity stage
+    /// recorded for a completed mirrored test run (issue #4633), carried into
+    /// the run record PASS or FAIL. <see langword="null"/> when no completed
+    /// mirrored run happened (this file is nullable-oblivious, like the
+    /// sibling <see cref="EmittedAssemblyPath"/>).
+    /// </summary>
+    public TestNameParitySummary TestNameParity { get; set; }
 }
 
 /// <summary>

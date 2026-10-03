@@ -58,9 +58,13 @@ public sealed class SdkCompileRunner
     /// Issue #3501: the hard ceiling on a mirrored test budget, whatever the
     /// suite's size says it wants.
     /// <para>
-    /// This is the value issue #4045 already granted <c>Compiler.Tests</c> by
-    /// hand, kept deliberately: the sizing formula below REPLACES that hand-set
-    /// exception without raising the worst case anywhere in the corpus. The
+    /// It started as the 90 minutes issue #4045 granted <c>Compiler.Tests</c>
+    /// by hand. Issue #4633 raised it to 120: nightly 36906270739 measured the
+    /// migrated <c>Compiler.Tests</c> run at 4,941 s, 91% of 90 minutes, so
+    /// ordinary runner variance was enough to turn a healthy suite into a
+    /// <c>LIBRARY-TESTS-TIMED-OUT</c> with no parity verdict at all. 120
+    /// minutes plus that app's ~25 minutes of compile and ILVerify still fits
+    /// the 240-minute validation job with room for its shard-mates. The
     /// ceiling matters because a validation shard runs all of its apps under a
     /// single <c>cs2gs validate</c> process that writes <c>shard-run.json</c>
     /// only at the end (see <c>build/run-cs2gs-selfmig-validate.sh</c>), so a
@@ -70,7 +74,7 @@ public sealed class SdkCompileRunner
     /// app's missing parity count for a whole shard's.
     /// </para>
     /// </summary>
-    internal static readonly TimeSpan MirroredTestRunTimeoutCeiling = TimeSpan.FromMinutes(90);
+    internal static readonly TimeSpan MirroredTestRunTimeoutCeiling = TimeSpan.FromMinutes(120);
 
     /// <summary>
     /// Issue #3501: seconds of budget granted per <c>[Fact]</c> method declared
@@ -175,6 +179,15 @@ public sealed class SdkCompileRunner
     /// <param name="config">The build configuration.</param>
     /// <param name="generatedProjectPaths">The complete source-to-generated project map.</param>
     /// <param name="isAnalyzerTestProject">The translate-stage detector's analyzer-test-project verdict.</param>
+    /// <param name="sdkMoniker">
+    /// The run's pinned <c>Sdk</c> attribute value (<see cref="PipelineOptions.RepositorySdkMoniker"/>),
+    /// resolved once per run so every project in the mirror builds with the
+    /// same pin; <see langword="null"/> when no SDK package could be resolved.
+    /// </param>
+    /// <param name="analyzerVerifierPackageVersion">
+    /// The run's resolved verifier package version
+    /// (<see cref="PipelineOptions.RepositoryAnalyzerVerifierPackageVersion"/>).
+    /// </param>
     /// <param name="warningsNotAsErrors">
     /// Issue #3782: diagnostic ids to keep at warning severity for this build
     /// despite the mirror's <c>TreatWarningsAsErrors</c>. The redundant-<c>!!</c>
@@ -189,10 +202,11 @@ public sealed class SdkCompileRunner
         string config,
         IReadOnlyDictionary<string, string> generatedProjectPaths,
         bool isAnalyzerTestProject,
+        string sdkMoniker,
+        string analyzerVerifierPackageVersion,
         string warningsNotAsErrors = null)
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
-        string sdkMoniker = ResolveSdkMoniker(config);
         if (sdkMoniker is null)
         {
             return SdkCompileResult.Unavailable(
@@ -201,10 +215,8 @@ public sealed class SdkCompileRunner
 
         // Issue #3780: an analyzer test project's PackageReference to the
         // verifier needs a concrete, locally-resolvable version.
-        string analyzerVerifierPackageVersion = null;
         if (isAnalyzerTestProject)
         {
-            analyzerVerifierPackageVersion = ResolveAnalyzerVerifierPackageVersion(config);
             if (analyzerVerifierPackageVersion is null)
             {
                 return SdkCompileResult.Unavailable(
@@ -900,18 +912,24 @@ public sealed class SdkCompileRunner
 
     internal static string ResolveSdkMoniker(string config)
     {
-        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
-        (string NupkgPath, string Version)? sdk =
-            GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot, config) ??
-            ResolveFallbackSdkPackageFromLocalFeed(repoRoot);
-        if (sdk is null || sdk.Value.NupkgPath is null)
-        {
-            return null;
-        }
-
-        GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, sdk.Value.NupkgPath);
-        return SdkPackageId + "/" + sdk.Value.Version;
+        string version = ResolveSdkVersion(config, explicitVersion: null);
+        return version is null ? null : SdkPin.ProjectSdkAttribute(version, SdkPinLocation.ProjectFile);
     }
+
+    /// <summary>
+    /// Resolves the <c>Gsharp.NET.Sdk</c> version a repository migration pins.
+    /// With no <paramref name="explicitVersion"/> it is the newest locally-built
+    /// nupkg (the historical behaviour). With one, that exact version is used
+    /// and nothing newer can displace it: a matching local nupkg, if any, is
+    /// staged into the <c>.nugs</c> feed; otherwise the version must come from
+    /// nuget.org (the mirror's generated nuget.config lists only nuget.org and the local .nugs feed), and restore
+    /// fails loudly if it cannot.
+    /// </summary>
+    /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
+    /// <param name="explicitVersion">The requested version, or <see langword="null"/>.</param>
+    /// <returns>The version, or <see langword="null"/> when no local nupkg exists and none was requested.</returns>
+    internal static string ResolveSdkVersion(string config, string explicitVersion)
+        => ResolvePinnedPackageVersion(SdkPackageId, config, explicitVersion);
 
     /// <summary>
     /// Resolves the version of a locally-built
@@ -925,19 +943,18 @@ public sealed class SdkCompileRunner
     /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
     /// <returns>The resolved package version, or <see langword="null"/> when no local nupkg exists.</returns>
     internal static string ResolveAnalyzerVerifierPackageVersion(string config)
-    {
-        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
-        (string NupkgPath, string Version)? package =
-            GsharpTestProjectRunner.ResolveLocalPackage(repoRoot, AnalyzerTestingPackageId, config) ??
-            ResolveFallbackPackageFromLocalFeed(repoRoot, AnalyzerTestingPackageId);
-        if (package is null || package.Value.NupkgPath is null)
-        {
-            return null;
-        }
+        => ResolveAnalyzerVerifierPackageVersion(config, explicitVersion: null);
 
-        GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, package.Value.NupkgPath);
-        return package.Value.Version;
-    }
+    /// <summary>
+    /// Resolves the analyzer verifier package version. It ships on the same
+    /// version train as <c>Gsharp.NET.Sdk</c>, so an explicitly pinned SDK
+    /// version pins it too (see <see cref="ResolveSdkVersion"/>).
+    /// </summary>
+    /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
+    /// <param name="explicitVersion">The pinned SDK version, or <see langword="null"/>.</param>
+    /// <returns>The package version, or <see langword="null"/> when none is available.</returns>
+    internal static string ResolveAnalyzerVerifierPackageVersion(string config, string explicitVersion)
+        => ResolvePinnedPackageVersion(AnalyzerTestingPackageId, config, explicitVersion);
 
     /// <summary>
     /// Issue #3501: returns the bounded stage-4 budget for one mirrored test
@@ -1006,6 +1023,16 @@ public sealed class SdkCompileRunner
         return scaled > MirroredTestRunTimeoutCeiling ? MirroredTestRunTimeoutCeiling : scaled;
     }
 
+    /// <summary>
+    /// Issue #4633: the directory a mirrored test run writes its TRX files to,
+    /// derived from the app's artifact directory alone. A multi-targeted
+    /// project writes one TRX per framework; the parity stage reads them all.
+    /// </summary>
+    /// <param name="artifactDirectory">The app's artifact directory.</param>
+    /// <returns>The absolute results directory.</returns>
+    internal static string MirroredTestResultsDirectory(string artifactDirectory) =>
+        Path.Combine(Path.GetFullPath(artifactDirectory), "test-results");
+
     internal static ProcessRunResult TestMirroredProject(
         string generatedProjectPath,
         string artifactDirectory,
@@ -1029,6 +1056,17 @@ public sealed class SdkCompileRunner
         try
         {
             temporaryBuildProps = PrepareTemporaryBuildProps(generatedProjectPaths.Values);
+
+            // Issue #4633: a stale TRX from an earlier run in the same artifact
+            // directory must never stand in for this run's results. One that
+            // cannot be deleted throws here (an app-scoped pipeline crash).
+            string resultsDirectory = MirroredTestResultsDirectory(artifactDirectory);
+            Directory.CreateDirectory(resultsDirectory);
+            foreach (string stale in Directory.EnumerateFiles(resultsDirectory, "*.trx"))
+            {
+                File.Delete(stale);
+            }
+
             return ProcessRunner.Run(
                 "dotnet",
                 new[]
@@ -1039,6 +1077,18 @@ public sealed class SdkCompileRunner
                     "-c",
                     config ?? "Release",
                     "-p:Cs2GsArtifactRoot=" + artifactDirectory,
+
+                    // Issue #4633: per-case names and outcomes for the
+                    // per-test-name parity check, with display names forced to
+                    // the same fully qualified form the C# oracle was listed in.
+                    // LogFilePrefix (not LogFileName) gives each target
+                    // framework its own file instead of overwriting one.
+                    "--logger",
+                    "trx;LogFilePrefix=parity",
+                    "--results-directory",
+                    resultsDirectory,
+                    "--",
+                    CSharpTestOracle.RunSettingsArgument,
                 },
                 projectDirectory,
                 timeout,
@@ -1612,6 +1662,43 @@ public sealed class SdkCompileRunner
 
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".nuget", "packages");
+    }
+
+    private static string ResolvePinnedPackageVersion(string packageId, string config, string explicitVersion)
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        if (explicitVersion is not null)
+        {
+            if (!SdkPin.IsValidVersion(explicitVersion))
+            {
+                throw new ArgumentException(
+                    "'" + explicitVersion + "' is not a valid " + packageId + " version.",
+                    nameof(explicitVersion));
+            }
+
+            string exactNupkg = GsharpTestProjectRunner.FindLocalPackageVersion(
+                repoRoot,
+                packageId,
+                explicitVersion,
+                config);
+            if (exactNupkg is not null)
+            {
+                GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, exactNupkg);
+            }
+
+            return explicitVersion;
+        }
+
+        (string NupkgPath, string Version)? package =
+            GsharpTestProjectRunner.ResolveLocalPackage(repoRoot, packageId, config) ??
+            ResolveFallbackPackageFromLocalFeed(repoRoot, packageId);
+        if (package is null || package.Value.NupkgPath is null)
+        {
+            return null;
+        }
+
+        GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, package.Value.NupkgPath);
+        return package.Value.Version;
     }
 
     private static (string NupkgPath, string Version)? ResolveFallbackSdkPackageFromLocalFeed(string repoRoot)
