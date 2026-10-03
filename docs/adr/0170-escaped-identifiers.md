@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-28
-- **Related**: issue #3610, issue #3501 (self-migration fixture-policy), issue #3461 (keyword sanitizer), ADR-0047 (annotations), ADR-0096 (`@MarshalAs` parameter annotations), ADR-0115 (cs2gs).
+- **Related**: issue #3610, issue #3501 (self-migration fixture-policy), issue #3461 (keyword sanitizer), issue #4680 (parameter metadata names), ADR-0047 (annotations), ADR-0096 (`@MarshalAs` parameter annotations), ADR-0115 (cs2gs).
 
 ## Context
 
@@ -22,8 +22,9 @@ CLR interop:
   `tools/cs2gs/Cs2Gs.Tests/Issue3461ReservedMetadataFixtures.cs`).
 
 The #3461 keyword sanitizer (rename `params` → `params_`) remains
-correct for locals and parameters, where the metadata name does not
-matter; it is lossy for metadata-visible surface.
+correct for locals and other body-scoped names without a CLR metadata
+slot. Parameter names are emitted in CLR metadata, including on private
+members, so renaming a parameter is also lossy.
 
 ## Decision
 
@@ -118,11 +119,13 @@ lowering, emit) read names via `ValueText`; syntactic consumers
 
 ### cs2gs policy (#3501)
 
-The printer emits the escape **only for metadata-visible names** (public
-or internal surface and anything reflection-reachable) whose names are
-G# keywords; the #3461 sanitizer keeps renaming locals and parameters
-where readability wins and metadata does not care. The reserved-metadata
-fixtures re-enter the corpus once the translator side lands.
+The printer emits the escape for names with a CLR metadata slot—including
+value and generic parameter names, regardless of the containing member's
+visibility—when they are G# keywords. Locals, range variables, and other
+body-scoped names without metadata keep the #3461 rename where readability
+wins.
+The reserved-metadata fixtures re-enter the corpus once the translator
+side lands.
 
 ### Tooling
 
