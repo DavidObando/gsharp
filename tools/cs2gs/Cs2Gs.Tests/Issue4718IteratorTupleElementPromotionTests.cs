@@ -235,16 +235,20 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
-    [Fact]
-    public void RefAliasEscape_InvalidatesTupleYieldGuard()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RefAliasEscape_InvalidatesTupleYieldGuard(bool beforeGuard)
     {
-        string printed = Translate("""
+        string alias = "ref string alias = ref text;";
+        string printed = Translate($$"""
             using System.Collections.Generic;
             public static class Obj {
                 public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
                     string text = choose ? null : "x";
+                    {{(beforeGuard ? alias : string.Empty)}}
                     if (text != null) {
-                        ref string alias = ref text;
+                        {{(beforeGuard ? string.Empty : alias)}}
                         alias = null;
                         yield return (text, 1);
                     }
@@ -254,6 +258,51 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
 
         Assert.Contains("func Rows(choose bool) sequence[(Text string?, Code int32)]", printed);
         // #4726 tracks the independent ref-alias storage/smart-cast bind failure.
+    }
+
+    [Theory]
+    [InlineData("alias = null;")]
+    [InlineData("Reset(ref alias);")]
+    public void NullableRefAliasBeforeGuard_InvalidatesTupleYieldProof(string mutation)
+    {
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    ref string? alias = ref text;
+                    if (text != null) {
+                        {{mutation}}
+                        yield return (text, 1);
+                    }
+                }
+                private static void Reset(ref string? value) { value = null; }
+            }
+            """);
+
+        Assert.Contains("func Rows(choose bool) sequence[(Text string?, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void ReadOnlyRefAliasBeforeGuard_PreservesTupleYieldProof()
+    {
+        string printed = Translate("""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    ref readonly string? alias = ref text;
+                    if (text != null) {
+                        _ = alias;
+                        yield return (text, 1);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("func Rows(choose bool) sequence[(Text string, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     [Theory]

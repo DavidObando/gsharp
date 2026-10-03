@@ -5112,11 +5112,12 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
-        // Writable captures are not stable smart-cast values. Without an
-        // interprocedural proof, never trust a guard on their shared storage.
+        // Writable captures and escaped references are not stable smart-cast
+        // values. Without an interprocedural proof, never trust their storage.
         if (scope.DescendantNodes().Any(node =>
-            node is LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax
-                && node.DescendantNodes().Any(Writes)))
+            (node is RefExpressionSyntax && Writes(node))
+                || (node is LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax
+                    && node.DescendantNodes().Any(Writes))))
         {
             return false;
         }

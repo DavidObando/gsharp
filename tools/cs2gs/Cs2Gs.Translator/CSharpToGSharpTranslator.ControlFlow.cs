@@ -45,7 +45,9 @@ public sealed partial class CSharpToGSharpTranslator
                 when ExtensionReceiverWritesSymbol(invocation, member.Expression, symbol, model) => true,
             RefExpressionSyntax refOf
                 when refOf.Expression is IdentifierNameSyntax
-                    && BindsTo(refOf.Expression, symbol, model) => true,
+                    && BindsTo(refOf.Expression, symbol, model)
+                    && !(refOf.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator }
+                        && model.GetDeclaredSymbol(declarator) is ILocalSymbol { RefKind: RefKind.RefReadOnly }) => true,
             _ => false,
         };
 
