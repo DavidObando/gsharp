@@ -4544,18 +4544,13 @@ internal static class ObliviousNullabilityAnalyzer
                 continue;
             }
 
-            if (TryGetTupleType(invoke, out INamedTypeSymbol invokeTuple)
-                && TryGetTupleType(source, out INamedTypeSymbol sourceTuple))
-            {
-                AddTupleContractPair(
-                    invoke,
-                    invokeTuple,
-                    source,
-                    sourceTuple,
-                    tupleTainted,
-                    tupleEdges);
-                continue;
-            }
+            AddTupleContractPair(
+                invoke,
+                SymbolValueType(invoke),
+                source,
+                SymbolValueType(source),
+                tupleTainted,
+                tupleEdges);
 
             if (!IsEligibleScalarTarget(invoke))
             {

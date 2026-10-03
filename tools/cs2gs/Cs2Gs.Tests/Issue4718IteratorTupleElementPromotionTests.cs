@@ -96,6 +96,51 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
     }
 
     [Theory]
+    [InlineData("IEnumerable", "", "sequence", true)]
+    [InlineData("IEnumerable", "", "sequence", false)]
+    [InlineData("IEnumerator", "", "IEnumerator", true)]
+    [InlineData("IEnumerator", "", "IEnumerator", false)]
+    [InlineData("IAsyncEnumerable", "async ", "IAsyncEnumerable", true)]
+    [InlineData("IAsyncEnumerable", "async ", "IAsyncEnumerable", false)]
+    [InlineData("IAsyncEnumerator", "async ", "IAsyncEnumerator", true)]
+    [InlineData("IAsyncEnumerator", "async ", "IAsyncEnumerator", false)]
+    public void NominalDelegateIteratorContracts_SynchronizeNestedTupleSlots(
+        string envelope,
+        string modifier,
+        string mappedEnvelope,
+        bool nullBearing)
+    {
+        string body = nullBearing
+            ? "yield return (text, 1);"
+            : "if (text != null) { yield return (text, 1); }";
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public delegate {{envelope}}<T> Factory<T>();
+            public static class Obj {
+                public static Factory<(string Text, int Code)> Field = Rows;
+                public static event Factory<(string Text, int Code)> Produced;
+                public static {{modifier}}{{envelope}}<(string Text, int Code)> Rows() {
+                    string text = null;
+                    {{body}}
+                }
+                public static void Use() {
+                    Factory<(string Text, int Code)> local = Rows;
+                    Factory<(string Text, int Code)> converted = (Factory<(string Text, int Code)>)local;
+                    Produced += Rows;
+                }
+            }
+            """);
+
+        string tuple = $"(Text {(nullBearing ? "string?" : "string")}, Code int32)";
+        Assert.Contains("func Rows() " + mappedEnvelope + "[" + tuple + "]", printed);
+        Assert.Contains("Field Factory[" + tuple + "]", printed);
+        Assert.Contains("Produced Factory[" + tuple + "]", printed);
+        Assert.Contains("local Factory[" + tuple + "]", printed);
+        Assert.Contains("cast[Factory[" + tuple + "]](local)", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
     [InlineData("IEnumerable", "", "sequence")]
     [InlineData("IEnumerator", "", "IEnumerator")]
     [InlineData("IAsyncEnumerable", "async ", "IAsyncEnumerable")]
