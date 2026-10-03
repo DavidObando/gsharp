@@ -1276,6 +1276,85 @@ public class Issue4612GenericStoreBridgeTests
             sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
     }
 
+    [Theory]
+    [InlineData("=")]
+    [InlineData("??=")]
+    public void OrdinaryAssignmentResults_ResolveOuterGenericStoresAndPreserveConcreteControls(string assignment)
+    {
+        // Coalescing locals widen to nullable; a fixed CLR property keeps the inner bridge real.
+        string target = assignment == "=" ? "tmp" : "holder.Path";
+        string declaration = assignment == "=" ? "string tmp = \"\";" : "var holder = new System.UriBuilder();";
+        string Store(string target, string value) => assignment == "="
+            ? $"{target} = {value}"
+            : $"{target} ??= ({target} = {value})";
+        string source = $$"""
+            #nullable enable
+            public static class C
+            {
+                private static T Id<T>(T value) => value;
+                public static string Argument()
+                {
+                    {{declaration}}
+                    return Id<string>({{Store(target, "MaybeArgument()")}});
+                }
+
+                public static string?[] Array()
+                {
+                    {{declaration}}
+                    return new string?[] { {{Store(target, "MaybeArray()")}} };
+                }
+
+                public static System.Uri Intermediate(System.Collections.Generic.Dictionary<string, string> map) =>
+                    new System.Uri({{Store("map[\"key\"]", "MaybeIntermediate()")}});
+
+                public static System.Uri Concrete()
+                {
+                    {{declaration}}
+                    return new System.Uri({{Store(target, "MaybeNegative()")}});
+                }
+
+                public static string NonNull()
+                {
+                    {{declaration}}
+                    return Id<string>({{Store(target, "\"safe\"")}});
+                }
+
+                private static string? MaybeArgument() => null;
+                private static string? MaybeArray() => null;
+                private static string? MaybeIntermediate() => null;
+                private static string? MaybeNegative() => null;
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.True(printed.Contains("MaybeArgument()!!", StringComparison.Ordinal), printed);
+        Assert.Contains("MaybeArray()!!", printed, StringComparison.Ordinal);
+        Assert.Contains("MaybeIntermediate()!!", printed, StringComparison.Ordinal);
+        Assert.Contains("MaybeNegative()!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"safe\"!!", printed, StringComparison.Ordinal);
+        var expected = new List<string>
+        {
+            Expected(source, "MaybeArgument()") + " kind=explicit-type-argument | target=C.Id<string>(string) parameter 'value' | slot-type=string",
+        };
+        if (assignment == "??=")
+        {
+            expected.Add(Expected(source, "holder.Path ??=") + " kind=explicit-type-argument | target=C.Id<string>(string) parameter 'value' | slot-type=string");
+        }
+
+        expected.Add(Expected(source, "MaybeArray()") + " kind=array-element | target=string?[] | slot-type=string?");
+        expected.Add(Expected(source, "MaybeIntermediate()") + " kind=constructed-generic-member | target=Dictionary<string, string>.this[string] | slot-type=string");
+        Assert.Equal(
+            expected,
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
+        int argumentSites = assignment == "=" ? 1 : 2;
+        Assert.All(
+            sites.Take(argumentSites),
+            site => Assert.Contains("result-depends-on-slot=yes", site.Message, StringComparison.Ordinal));
+        Assert.All(
+            sites.Skip(argumentSites),
+            site => Assert.Contains("result-depends-on-slot=no", site.Message, StringComparison.Ordinal));
+    }
+
     [Fact]
     public void WholeParamsVariableAssignments_AreNotExpandedElementStores()
     {
