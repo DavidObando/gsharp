@@ -3028,12 +3028,8 @@ public sealed partial class CSharpToGSharpTranslator
             // TranslateExpression's FieldExpressionSyntax case) resolves to it.
             string fieldKeywordBackingName = this.TryRegisterFieldKeywordBackingField(
                 node, symbol, primaryCtorParamNames, out IFieldSymbol fieldKeywordBackingSymbol);
-            bool isInitializedRecordProperty = symbol?.ContainingType?.IsRecord == true
-                && symbol.SetMethod == null
-                && node.Initializer != null
-                && IsGetOnlyAutoProperty(node);
             bool lowersToBackingField = symbol != null
-                && (this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol) || isInitializedRecordProperty);
+                && this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol);
             if (fieldKeywordBackingName == null && lowersToBackingField)
             {
                 fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(

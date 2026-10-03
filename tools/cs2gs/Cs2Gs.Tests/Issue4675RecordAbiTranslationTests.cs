@@ -12,6 +12,7 @@ using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Xunit;
 using GSharpCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
@@ -28,7 +29,15 @@ public sealed class Issue4675RecordAbiTranslationTests
     private const string Source = @"
 namespace Corpus.Issue4675
 {
-    public record RecordBase(int BaseValue);
+    public record RecordBase(int BaseValue)
+    {
+        public string Render()
+        {
+            var builder = new System.Text.StringBuilder();
+            PrintMembers(builder);
+            return builder.ToString();
+        }
+    }
 
     public record RecordClass(int Value) : RecordBase(1)
     {
@@ -36,6 +45,8 @@ namespace Corpus.Issue4675
     }
 
     public sealed record SealedRecord(int Value);
+
+    public sealed record SealedDerivedRecord(int Other) : RecordBase(1);
 
     public readonly record struct RecordStruct(int Value);
 
@@ -151,9 +162,12 @@ namespace Corpus.Issue4675
         AssertRecordInterface(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RecordStruct");
         AssertPrintMembers(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RecordBase");
         AssertPrintMembers(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RecordClass");
+        AssertPrintMembers(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.SealedDerivedRecord");
         AssertCopyConstructor(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RecordBase", isProtected: true);
         AssertCopyConstructor(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RecordClass", isProtected: true);
         AssertCopyConstructor(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.SealedRecord", isProtected: false);
+        AssertCopyConstructor(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.SealedDerivedRecord", isProtected: false);
+        Assert.True(gsharpAssembly.GetType("Corpus.Issue4675.SealedDerivedRecord", throwOnError: true).IsSealed);
         AssertGetOnlyProperty(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RecordClass", "BodyHash");
         AssertInitProperty(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RecordClass", "Value");
         AssertPrintMembers(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.OverloadedPrintMembers");
@@ -167,10 +181,77 @@ namespace Corpus.Issue4675
             "Corpus.Issue4675.RecordBase",
             "Corpus.Issue4675.RecordClass",
             "Corpus.Issue4675.DerivedCustomPrintMembers",
+            "Corpus.Issue4675.SealedDerivedRecord",
         })
         {
             AssertPrintMembersOutput(csharpAssembly, gsharpAssembly, typeName);
         }
+
+        object baselineDerived = Activator.CreateInstance(
+            csharpAssembly.GetType("Corpus.Issue4675.SealedDerivedRecord", throwOnError: true), new object[] { 42 });
+        object translatedDerived = Activator.CreateInstance(
+            gsharpAssembly.GetType("Corpus.Issue4675.SealedDerivedRecord", throwOnError: true), new object[] { 42 });
+        object baselineRender = csharpAssembly.GetType("Corpus.Issue4675.RecordBase", throwOnError: true)
+            .GetMethod("Render").Invoke(baselineDerived, null);
+        object translatedRender = gsharpAssembly.GetType("Corpus.Issue4675.RecordBase", throwOnError: true)
+            .GetMethod("Render").Invoke(translatedDerived, null);
+        Assert.Equal(baselineRender, translatedRender);
+    }
+
+    [Theory]
+    [InlineData("P")]
+    [InlineData("this.P")]
+    public void InitializedGetOnlyRecordProperty_ConstructorWritesTargetBackingField(string target)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Record.cs", """
+                public record Item(int N) {
+                    public int P { get; } = 1;
+                    public Item() : this(0) { TARGET = 2; }
+                    public static int Run() => new Item().P;
+                }
+                """.Replace("TARGET", target, StringComparison.Ordinal)),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        var result = EmittedOracle.Evaluate(translated + "\nItem.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
+    public void CharArrayRecordPrinting_MatchesCSharpBaseline()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("ArrayRecord.cs", """
+                public record Item(char[] Value) {
+                    public static string Run() {
+                        var builder = new System.Text.StringBuilder();
+                        new Item(new[] { 'a', 'b' }).PrintMembers(builder);
+                        return builder.ToString();
+                    }
+                }
+                """),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        using var baselineImage = new MemoryStream();
+        Assert.True(project.Compilation.Emit(baselineImage).Success);
+        Assembly baseline = Assembly.Load(baselineImage.ToArray());
+        object expected = baseline.GetType("Item", throwOnError: true).GetMethod("Run").Invoke(null, null);
+        Assert.Equal("Value = System.Char[]", expected);
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        var result = EmittedOracle.Evaluate(translated + "\nItem.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(expected, result.Value);
     }
 
     [Fact]

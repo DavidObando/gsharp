@@ -1909,6 +1909,15 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
+                if (replacesPositionalProperty && propType != propertiesBuilder[positionalPropertyIndex].Type)
+                {
+                    Diagnostics.ReportCannotConvert(
+                        propSyntax.Identifier.Location,
+                        propertiesBuilder[positionalPropertyIndex].Type,
+                        propType);
+                    continue;
+                }
+
                 var propAccessibility = resolveAccessibility(propSyntax.AccessibilityModifier);
 
                 // Determine accessor presence

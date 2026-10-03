@@ -479,7 +479,8 @@ internal sealed class ConstructorBodyEmitter
     /// <returns>The method-body stream offset.</returns>
     internal int EmitValueStructDefaultConstructorBodyBytes(StructSymbol structSym)
     {
-        if (!structSym.HasPrimaryConstructor
+        var initializersRunInPrimaryConstructor = structSym.IsData && structSym.HasPrimaryConstructor;
+        if (!initializersRunInPrimaryConstructor
             && TryEmitInitialization(structSym, false, default, default, out var planned))
         {
             return planned;
@@ -488,9 +489,9 @@ internal sealed class ConstructorBodyEmitter
         // Synthesize a `this` parameter for the field-initializer receiver.
         var thisParam = new ParameterSymbol("this", structSym);
 
-        // A primary-constructor struct's initializers can read its parameters;
+        // A data primary-constructor struct's initializers can read its parameters;
         // they run in the primary constructor, not this parameterless one.
-        var statements = structSym.HasPrimaryConstructor
+        var statements = initializersRunInPrimaryConstructor
             ? ImmutableArray<BoundStatement>.Empty
             : BuildInstanceFieldInitializerStatements(structSym, thisParam);
         var body = new BoundBlockStatement(null, statements);
