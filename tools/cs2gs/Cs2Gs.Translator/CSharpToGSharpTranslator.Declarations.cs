@@ -1847,7 +1847,9 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (symbol?.IsRecord == true
                 && kind == TypeDeclarationKind.DataClass
+                && !this.emitGeneratedImplementingParts
                 && !symbol.IsSealed
+                && this.ShouldAttachOwnedExtensions(node, symbol)
                 && !HasExplicitRecordPrintMembers(symbol))
             {
                 members.Add(this.CreateRecordPrintMembers(symbol, node));
@@ -2009,46 +2011,63 @@ public sealed partial class CSharpToGSharpTranslator
             INamedTypeSymbol stringBuilderType = this.context.Compilation.GetTypeByMetadataName("System.Text.StringBuilder");
             var statements = new List<GStatement>();
             bool first = true;
-            var recordTypes = new Stack<INamedTypeSymbol>();
-            for (INamedTypeSymbol current = symbol; current?.IsRecord == true; current = current.BaseType)
+            bool overridesRecordBase = symbol.BaseType?.IsRecord == true;
+            if (overridesRecordBase)
             {
-                recordTypes.Push(current);
+                statements.Add(new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    "basePrinted",
+                    initializer: new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression("base"), "PrintMembers"),
+                        new GExpression[] { new IdentifierExpression("builder") })));
             }
 
-            while (recordTypes.Count > 0)
+            foreach (ISymbol member in symbol.GetMembers())
             {
-                foreach (ISymbol member in recordTypes.Pop().GetMembers())
+                string memberName = member switch
                 {
-                    string memberName = member switch
-                    {
-                        IPropertySymbol property when !property.IsStatic && !property.IsIndexer && property.GetMethod != null => property.Name,
-                        IFieldSymbol field when !field.IsStatic && !field.IsImplicitlyDeclared => field.Name,
-                        _ => null,
-                    };
-                    if (memberName == null || member.DeclaredAccessibility != Accessibility.Public)
-                    {
-                        continue;
-                    }
-
-                    statements.Add(new ExpressionStatement(
-                        new InvocationExpression(
-                            new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
-                            new GExpression[] { LiteralExpression.String((first ? string.Empty : ", ") + memberName + " = ") })));
-                    statements.Add(new ExpressionStatement(
-                        new InvocationExpression(
-                            new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
-                            new GExpression[]
-                            {
-                                new MemberAccessExpression(
-                                    new ThisExpression(),
-                                    this.EmittedName(member, memberName)),
-                            })));
-                    first = false;
+                    IPropertySymbol property when !property.IsStatic && !property.IsIndexer
+                        && property.GetMethod?.DeclaredAccessibility == Accessibility.Public => property.Name,
+                    IFieldSymbol field when !field.IsStatic && !field.IsImplicitlyDeclared => field.Name,
+                    _ => null,
+                };
+                if (memberName == null || member.DeclaredAccessibility != Accessibility.Public)
+                {
+                    continue;
                 }
+
+                if (first && overridesRecordBase)
+                {
+                    statements.Add(new IfStatement(
+                        new IdentifierExpression("basePrinted"),
+                        new BlockStatement(new GStatement[]
+                        {
+                            new ExpressionStatement(new InvocationExpression(
+                                new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
+                                new GExpression[] { LiteralExpression.String(", ") })),
+                        })));
+                }
+
+                statements.Add(new ExpressionStatement(
+                    new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
+                        new GExpression[] { LiteralExpression.String((first ? string.Empty : ", ") + memberName + " = ") })));
+                statements.Add(new ExpressionStatement(
+                    new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
+                        new GExpression[]
+                        {
+                            new MemberAccessExpression(
+                                new ThisExpression(),
+                                this.EmittedName(member, memberName)),
+                        })));
+                first = false;
             }
 
-            INamedTypeSymbol baseType = symbol.BaseType;
-            bool overridesRecordBase = baseType?.IsRecord == true;
+            GExpression result = first && overridesRecordBase
+                ? new IdentifierExpression("basePrinted")
+                : LiteralExpression.Bool(!first);
+            statements.Add(new ReturnStatement(result));
             return new MethodDeclaration(
                 "PrintMembers",
                 new[]
@@ -2058,7 +2077,7 @@ public sealed partial class CSharpToGSharpTranslator
                         this.typeMapper.Map(stringBuilderType, this.context, node.GetLocation())),
                 },
                 this.typeMapper.Map(this.context.Compilation.GetSpecialType(SpecialType.System_Boolean), this.context, node.GetLocation()),
-                new BlockStatement(statements.Concat(new GStatement[] { new ReturnStatement(LiteralExpression.Bool(!first)) }).ToList()),
+                new BlockStatement(statements),
                 visibility: Visibility.Protected,
                 isOpen: true,
                 isOverride: overridesRecordBase);
@@ -2071,9 +2090,12 @@ public sealed partial class CSharpToGSharpTranslator
                 !method.IsImplicitlyDeclared
                 && method.MethodKind == MethodKind.Ordinary
                 && !method.IsStatic
+                && method.DeclaredAccessibility == Accessibility.Protected
+                && (method.IsVirtual || method.IsOverride)
                 && method.Arity == 0
                 && method.ReturnType.SpecialType == SpecialType.System_Boolean
                 && method.Parameters.Length == 1
+                && method.Parameters[0].RefKind == Microsoft.CodeAnalysis.RefKind.None
                 && SymbolEqualityComparer.Default.Equals(method.Parameters[0].Type, stringBuilderType));
         }
 

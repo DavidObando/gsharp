@@ -409,7 +409,7 @@ internal sealed class ConstructorBodyEmitter
             var param = parameters[i];
             if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(classSym, param.Name, out var field))
             {
-                throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+                continue;
             }
 
             var fieldHandle = this.outer.userTokens.ResolveFieldToken(classSym, field);
@@ -697,7 +697,7 @@ internal sealed class ConstructorBodyEmitter
             var param = parameters[i];
             if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(classSym, param.Name, out var field))
             {
-                throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+                continue;
             }
 
             var fieldHandle = this.outer.userTokens.ResolveFieldToken(classSym, field);
