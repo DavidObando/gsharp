@@ -1509,9 +1509,14 @@ public sealed partial class CSharpToGSharpTranslator
                 && !IsUnambiguousYieldValue(value))
             {
                 string name = this.FreshYieldedValueName(node);
-                GTypeReference type = typeInfo.ConvertedType is { } yieldType
-                    ? this.typeMapper.Map(yieldType, this.context, node.Expression.GetLocation())
-                    : null;
+                GTypeReference type = null;
+                if (typeInfo.ConvertedType is { } yieldType)
+                {
+                    type = this.typeMapper.Map(yieldType, this.context, node.Expression.GetLocation());
+                    type = this.PromoteTupleDeclarationIfTainted(type, yieldType, enclosingIterator);
+                    type = this.PromoteAwaitedReturnIfTainted(type, yieldType, enclosingIterator);
+                }
+
                 return new GStatement[]
                 {
                     new LocalDeclarationStatement(
@@ -1528,10 +1533,12 @@ public sealed partial class CSharpToGSharpTranslator
 
         // ponytail: only known grammar-safe heads stay inline. A binary
         // expression can require grouping for G# precedence even without C#
-        // parentheses; materialize it rather than duplicating printer rules.
+        // parentheses, and a string literal can become a spliced concatenation.
+        // Materialize them rather than duplicating printer rules.
         private static bool IsUnambiguousYieldValue(GExpression value) => value switch
         {
-            LiteralExpression or IdentifierExpression or ThisExpression
+            LiteralExpression { Kind: LiteralKind.Int or LiteralKind.Float or LiteralKind.Bool or LiteralKind.Char or LiteralKind.Null } => true,
+            IdentifierExpression or ThisExpression
                 or UnaryExpression or CheckedExpression or TypeOfExpression
                 or DefaultValueExpression => true,
             ConversionExpression { TargetType: NamedTypeReference } => true,

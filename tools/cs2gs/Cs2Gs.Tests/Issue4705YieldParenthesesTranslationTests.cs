@@ -123,6 +123,79 @@ public sealed class Issue4705YieldParenthesesTranslationTests
         Assert.Contains("yield int32(value)", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void HoistedNullableReferenceYield_PreservesIteratorElementPromotion()
+    {
+        string printed = Translate("""
+            using System.Collections.Generic;
+
+            public static class Obj
+            {
+                public static IEnumerable<string> Rows(bool choose)
+                {
+                    yield return choose ? null : "x";
+                }
+
+                public static int Run()
+                {
+                    int total = 0;
+                    foreach (string value in Rows(true))
+                    {
+                        if (value != null) { return -1; }
+                        total += 1;
+                    }
+
+                    foreach (string value in Rows(false))
+                    {
+                        if (value != "x") { return -2; }
+                        total += 2;
+                    }
+
+                    return total;
+                }
+            }
+            """);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Obj.Run()");
+        Assert.False(
+            result.Diagnostics.Any(diagnostic => diagnostic.IsError),
+            string.Join(Environment.NewLine, result.Diagnostics) + Environment.NewLine + printed);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void SplicedStringYield_PreservesTheExactStringValue()
+    {
+        string printed = Translate("""
+            using System.Collections.Generic;
+
+            public static class Obj
+            {
+                public static IEnumerable<string> Rows()
+                {
+                    yield return "alpha\n`beta\nomega";
+                }
+
+                public static string Run()
+                {
+                    string result = "";
+                    foreach (string value in Rows())
+                    {
+                        result += value;
+                    }
+
+                    return result;
+                }
+            }
+            """);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Obj.Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("alpha\n`beta\nomega", result.Value);
+    }
+
     private static string Translate(
         string source,
         params MetadataReference[] additionalReferences)
