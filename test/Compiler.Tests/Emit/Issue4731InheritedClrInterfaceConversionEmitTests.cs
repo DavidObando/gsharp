@@ -44,6 +44,8 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
         {
             public int ReadCode() => 37;
         }
+
+        public class SequenceOwner<T> : System.Collections.Generic.List<T> { }
         """;
 
     [Fact]
@@ -150,6 +152,62 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
 
         var loaded = EmittedFixture.LoadTogether(fixture.AssemblyPath, result.AssemblyPath);
         Assert.Equal(221, FindMethod(loaded[1], "Probe").Invoke(null, null));
+    }
+
+    [Fact]
+    public void SequenceAlias_ExactAndReferenceVariance_PreserveIdentityAndDispatch()
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile("""
+            package Issue4731.Sequences
+            import System
+            import Issue4731.Contracts
+
+            class Leaf[T] : SequenceOwner[T] {}
+            func Exact[T](value Leaf[T]) sequence[T] -> value
+            func Checked[T](value Leaf[T]) sequence[T] -> cast[sequence[T]](value)
+            func Widen[T class](value Leaf[T]) sequence[object] -> value
+
+            public func Probe() int32 {
+                let leaf = Leaf[string]()
+                leaf.Add("value")
+                let exact = Exact(leaf)
+                let checkedView = Checked(leaf)
+                let widened = Widen(leaf)
+                if !Object.ReferenceEquals(leaf, exact)
+                    || !Object.ReferenceEquals(leaf, checkedView)
+                    || !Object.ReferenceEquals(leaf, widened) {
+                    return -1
+                }
+                var count int32 = 0
+                for item in widened {
+                    if item != "value" { return -2 }
+                    count++
+                }
+                return count
+            }
+            """);
+        Assert.True(result.ExitCode == 0, result.Output);
+        IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
+        var loaded = EmittedFixture.LoadTogether(fixture.AssemblyPath, result.AssemblyPath);
+        Assert.Equal(1, FindMethod(loaded[1], "Probe").Invoke(null, null));
+    }
+
+    [Theory]
+    [InlineData("IEnumerable[object]")]
+    [InlineData("sequence[object]")]
+    public void UnconstrainedSequenceVariance_IsRejectedWithoutEmission(string targetType)
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile($$"""
+            package Issue4731.RejectedSequence
+            import System.Collections.Generic
+            class Leaf[T] : List[T] {}
+            func Widen[T](value Leaf[T]) {{targetType}} -> value
+            """);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("error GS0155:", result.Output, StringComparison.Ordinal);
+        Assert.False(File.Exists(result.AssemblyPath));
     }
 
     [Theory]

@@ -992,7 +992,7 @@ internal sealed partial class MethodBodyEmitter
             && (importedReference.OpenDefinition?.IsValueType == false
                 || (importedReference.OpenDefinition == null
                     && importedReference.ClrType is { IsValueType: false, IsArray: false }))
-            && b is ImportedTypeSymbol
+            && b is ImportedTypeSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol
             && Conversion.ClassifyNonStructural(a, b) is
             {
                 Exists: true,

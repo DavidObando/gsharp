@@ -23,7 +23,10 @@ public sealed class Issue4731InheritedClrInterfaceConversionTests
     [InlineData("open class Mid : ArrayList {}\nclass Leaf : Mid {}", "Leaf", "IEnumerable", "cast[IEnumerable](value)")]
     [InlineData("class Leaf : List[string] {}", "Leaf", "IEnumerable[object]", "value")]
     [InlineData("class Leaf : List[string] {}", "Leaf", "IEnumerable[object]", "cast[IEnumerable[object]](value)")]
+    [InlineData("class Leaf : List[string] {}", "Leaf", "sequence[object]", "value")]
+    [InlineData("class Leaf : List[string] {}", "Leaf", "sequence[object]", "cast[sequence[object]](value)")]
     [InlineData("class Leaf : List[int32?] {}", "Leaf", "IEnumerable[int32?]", "value")]
+    [InlineData("class Leaf : List[int32?] {}", "Leaf", "sequence[int32?]", "value")]
     [InlineData("class Leaf : ArrayList {}", "Leaf?", "IEnumerable?", "value")]
     [InlineData("class Leaf : ArrayList {}", "Leaf?", "IEnumerable", "cast[IEnumerable](value)")]
     [InlineData("class Leaf : ArrayList {}", "Leaf", "ArrayList", "value")]
@@ -66,12 +69,41 @@ public sealed class Issue4731InheritedClrInterfaceConversionTests
     }
 
     [Theory]
+    [InlineData("value")]
+    [InlineData("cast[sequence[T]](value)")]
+    public void GenericSequenceAlias_PreservesTheInScopeElement(string expression)
+    {
+        var compilation = Bind(
+            "open class Mid[T] : List[T] {}\nclass Leaf[T] : Mid[T] {}",
+            "Leaf[T]",
+            "sequence[T]",
+            expression,
+            "[T]");
+        Assert.Empty(compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics));
+    }
+
+    [Theory]
+    [InlineData("IEnumerable[object]", "value")]
+    [InlineData("sequence[object]", "value")]
+    [InlineData("sequence[object]", "cast[sequence[object]](value)")]
+    public void UnconstrainedSequenceElement_CannotUseReferenceVariance(string targetType, string expression)
+    {
+        var compilation = Bind("class Leaf[T] : List[T] {}", "Leaf[T]", targetType, expression, "[T]");
+        var error = Assert.Single(
+            compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics),
+            diagnostic => diagnostic.IsError);
+        Assert.Equal("GS0155", error.Id);
+    }
+
+    [Theory]
     [InlineData("class Leaf {}", "Leaf", "IEnumerable", "value")]
     [InlineData("class Leaf {}", "Leaf", "IEnumerable", "cast[IEnumerable](value)")]
     [InlineData("class Leaf : ArrayList {}", "Leaf?", "IEnumerable", "value")]
     [InlineData("class Leaf : List[int32] {}", "Leaf", "IEnumerable[object]", "value")]
     [InlineData("class Leaf : List[object] {}", "Leaf", "IList[string]", "value")]
     [InlineData("class Item {}\nclass Other {}\nclass Leaf : List[Item] {}", "Leaf", "IEnumerable[Other]", "value")]
+    [InlineData("class Item {}\nclass Other {}\nclass Leaf : List[Item] {}", "Leaf", "sequence[Other]", "value")]
+    [InlineData("class Leaf : List[int32] {}", "Leaf", "sequence[object]", "value")]
     public void InvalidImplicitConversions_RemainRejected(
         string declarations,
         string sourceType,
@@ -89,6 +121,8 @@ public sealed class Issue4731InheritedClrInterfaceConversionTests
     [Theory]
     [InlineData("IEnumerable[string]", false)]
     [InlineData("IEnumerable[string?]", true)]
+    [InlineData("sequence[string]", false)]
+    [InlineData("sequence[string?]", true)]
     public void SubstitutedPlatformElement_ReusesContainerNullabilityRules(string targetType, bool isImplicit)
     {
         var compilation = Bind("class Leaf[T] : List[T] {}", "Leaf[string]", targetType, "value");
