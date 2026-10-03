@@ -1044,6 +1044,8 @@ internal static class ObliviousNullabilityAnalyzer
         _ => null,
     };
 
+    internal static bool HasNestedTupleSlots(ITypeSymbol type) => NestedTupleSlots(type).Count != 0;
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,

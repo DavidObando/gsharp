@@ -22,6 +22,48 @@ namespace Cs2Gs.Tests;
 public sealed class Issue4718IteratorTupleElementPromotionTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NonTupleGenericMapping_DoesNotComputeTupleGraph(bool explicitType)
+    {
+        LoadedCSharpProject loaded = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Types.cs", """
+                using System.Collections.Generic;
+                public class Types {
+                    public List<string> Plain;
+                    public List<(string Text, int Code)> Tuple;
+                }
+                """),
+        });
+        SemanticModel model = loaded.Compilation.GetSemanticModel(Assert.Single(loaded.Compilation.SyntaxTrees));
+        var context = new TranslationContext(loaded.Compilation, model, "Types.cs");
+        INamedTypeSymbol owner = Assert.IsAssignableFrom<INamedTypeSymbol>(
+            loaded.Compilation.GetTypeByMetadataName("Types"));
+        Type analyzer = Assert.IsAssignableFrom<Type>(
+            typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer"));
+        FieldInfo field = Assert.IsAssignableFrom<FieldInfo>(
+            analyzer.GetField("Cache", BindingFlags.Static | BindingFlags.NonPublic));
+        object cache = Assert.IsAssignableFrom<object>(field.GetValue(null));
+        MethodInfo tryGet = Assert.IsAssignableFrom<MethodInfo>(cache.GetType().GetMethod("TryGetValue"));
+        Assert.Equal(false, tryGet.Invoke(cache, new object[] { loaded.Compilation, null }));
+
+        var mapper = new CSharpTypeMapper();
+        ITypeSymbol plain = Assert.IsAssignableFrom<IFieldSymbol>(Assert.Single(owner.GetMembers("Plain"))).Type;
+        GTypeReference mapped = explicitType
+            ? mapper.MapExplicitType(plain, context, Location.None)
+            : mapper.Map(plain, context, Location.None);
+        Assert.Single(Assert.IsType<NamedTypeReference>(mapped).TypeArguments);
+        Assert.Equal(false, tryGet.Invoke(cache, new object[] { loaded.Compilation, null }));
+
+        ITypeSymbol tuple = Assert.IsAssignableFrom<IFieldSymbol>(Assert.Single(owner.GetMembers("Tuple"))).Type;
+        _ = explicitType
+            ? mapper.MapExplicitType(tuple, context, Location.None)
+            : mapper.Map(tuple, context, Location.None);
+        Assert.Equal(true, tryGet.Invoke(cache, new object[] { loaded.Compilation, null }));
+    }
+
+    [Theory]
     [InlineData("IEnumerable", "", "sequence")]
     [InlineData("IEnumerator", "", "IEnumerator")]
     [InlineData("IAsyncEnumerable", "async ", "IAsyncEnumerable")]

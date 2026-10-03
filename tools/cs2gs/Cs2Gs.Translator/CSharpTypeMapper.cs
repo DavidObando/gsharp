@@ -1414,6 +1414,13 @@ public sealed class CSharpTypeMapper
             return mapped;
         }
 
+        if (path.Count == 0
+            && declaredType is not INamedTypeSymbol { IsTupleType: true }
+            && !ObliviousNullabilityAnalyzer.HasNestedTupleSlots(declaredType))
+        {
+            return mapped;
+        }
+
         if (mapped is TupleTypeReference tuple
             && declaredType is INamedTypeSymbol { IsTupleType: true } tupleType
             && tuple.ElementTypes.Count == tupleType.TupleElements.Length)
