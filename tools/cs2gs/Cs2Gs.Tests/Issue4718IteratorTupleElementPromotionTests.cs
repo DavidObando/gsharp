@@ -3,11 +3,15 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Xunit;
@@ -125,6 +129,47 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
             signatures,
             signature => Assert.Contains($"(Names (Text {textType}, Keep string), Code int32)", signature));
         Assert.DoesNotContain("Keep string?", printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedTupleReturnContracts_OnlyEquivalentShapesSharePositionalTaint(bool reordered)
+    {
+        LoadedCSharpProject library = CSharpProjectLoader.LoadInMemory(new[] { ("Library.cs", """
+            #nullable enable
+            namespace Contract4718;
+            public class Carrier<X, Y> { }
+            public class Reordered<X, Y> : Carrier<Y, X> { }
+            public abstract class RowsBase {
+                public abstract Carrier<(string? Text, int Code), (string Keep, int Code)> Rows();
+            }
+            """) }, assemblyName: "Contract4718");
+        using var image = new MemoryStream();
+        var emitted = library.Compilation.Emit(image);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        byte[] bytes = image.ToArray();
+        string returnType = reordered
+            ? "Reordered<(string Keep, int Code), (string Text, int Code)>"
+            : "Carrier<(string Text, int Code), (string Keep, int Code)>";
+        string printed = Translate(
+            $$"""
+            using Contract4718;
+            public sealed class Producer : RowsBase {
+                public override {{returnType}} Rows() {
+                    return new {{returnType}}();
+                }
+            }
+            """,
+            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(bytes)).ToArray());
+
+        string expected = reordered
+            ? "Reordered[(Keep string, Code int32), (Text string, Code int32)]"
+            : "Carrier[(Text string?, Code int32), (Keep string, Code int32)]";
+        Assert.Contains("override func Rows() " + expected, printed);
+        Assembly.Load(bytes);
+        using var resolver = ReferenceResolver.WithRuntimeReferences(Array.Empty<string>());
+        TranslationTestValidation.AssertBinds(resolver, printed);
     }
 
     [Fact]
@@ -267,9 +312,9 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         Assert.Equal(3, result.Value);
     }
 
-    private static string Translate(string source)
+    private static string Translate(string source, IReadOnlyList<MetadataReference> references = null)
     {
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) }, references);
         Assert.True(
             project.BoundWithoutErrors,
             string.Join(Environment.NewLine, project.ErrorDiagnostics));

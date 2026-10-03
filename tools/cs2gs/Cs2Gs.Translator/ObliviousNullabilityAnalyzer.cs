@@ -4373,6 +4373,15 @@ internal static class ObliviousNullabilityAnalyzer
         HashSet<TupleElementKey> tupleTainted,
         List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
     {
+        // Covariant envelopes can reorder type arguments. Bare tuple
+        // conversions still pair their elements directly, as before.
+        if ((firstType is not INamedTypeSymbol { IsTupleType: true }
+                || secondType is not INamedTypeSymbol { IsTupleType: true })
+            && !SymbolEqualityComparer.Default.Equals(firstType, secondType))
+        {
+            return;
+        }
+
         List<(string Path, INamedTypeSymbol Tuple)> firstSlots = NestedTupleSlots(firstType);
         List<(string Path, INamedTypeSymbol Tuple)> secondSlots = NestedTupleSlots(secondType);
         if (firstType is INamedTypeSymbol { IsTupleType: true } firstTuple)
