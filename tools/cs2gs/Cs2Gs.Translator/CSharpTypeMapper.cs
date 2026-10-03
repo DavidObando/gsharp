@@ -134,12 +134,11 @@ public sealed class CSharpTypeMapper
     private readonly HashSet<string> reservedInvokedLocalNames =
         new(System.StringComparer.Ordinal);
 
-    // Issue #3471: static member simple names declared by source aggregates in
-    // the contributing trees. Sibling static references print bare inside
-    // their declaring aggregate, and a file-scope import alias shadows class
-    // members in gsc scope resolution, so a synthesized readable alias must
-    // never take one of these names.
-    private readonly HashSet<string> reservedSiblingStaticMemberNames =
+    // Issue #3471/#4302: source static members and allocated lifted helpers
+    // can print bare inside their declaring aggregate. A file-scope import
+    // alias shadows class members in gsc scope resolution, so a synthesized
+    // readable alias must never take one of these names.
+    private readonly HashSet<string> reservedSiblingMemberNames =
         new(System.StringComparer.Ordinal);
 
     /// <summary>
@@ -938,7 +937,7 @@ public sealed class CSharpTypeMapper
                                 || (member is IMethodSymbol method
                                     && method.MethodKind == MethodKind.Ordinary)))
                         {
-                            this.reservedSiblingStaticMemberNames.Add(names.GetName(member));
+                            this.reservedSiblingMemberNames.Add(names.GetName(member));
                         }
                     }
                 }
@@ -1074,6 +1073,9 @@ public sealed class CSharpTypeMapper
             || this.synthesizedTypeAliases.ContainsKey(name)
             || this.sourceDeclaredTypeNames.Contains(name);
     }
+
+    internal void ReserveSiblingMemberName(string name) =>
+        this.reservedSiblingMemberNames.Add(name);
 
     /// <summary>
     /// Maps an exact inferred contract while qualifying metadata homonyms
@@ -1216,18 +1218,16 @@ public sealed class CSharpTypeMapper
         reserved.UnionWith(this.reservedTypeParameterNames);
         reserved.UnionWith(this.reservedInvokedLocalNames);
         reserved.UnionWith(this.sourceDeclaredTypeNames);
-        reserved.UnionWith(this.reservedSiblingStaticMemberNames);
+        reserved.UnionWith(this.reservedSiblingMemberNames);
 
         string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
-        string baseAlias = $"{namespaceQualifier}{simpleName}";
-        string alias = baseAlias;
-        for (var suffix = 2;
-            reserved.Contains(alias)
-                || HasVisibleCallableName(alias, context, location, names);
-            suffix++)
-        {
-            alias = $"{baseAlias}_{suffix}";
-        }
+        string alias = LiftedLocalFunctionNameAllocator
+            .For(context.Compilation)
+            .ClaimAlias(
+                target,
+                $"{namespaceQualifier}{simpleName}",
+                candidate => reserved.Contains(candidate)
+                    || HasVisibleCallableName(candidate, context, location, names));
 
         this.synthesizedTypeAliases.Add(alias, target);
         return alias;

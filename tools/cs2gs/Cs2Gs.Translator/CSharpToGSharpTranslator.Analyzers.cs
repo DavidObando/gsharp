@@ -1630,7 +1630,10 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (guardedKinds.Count > 0 && handlerIndex >= 0)
             {
-                arguments[handlerIndex] = GuardOperationHandler(arguments[handlerIndex], guardedKinds);
+                arguments[handlerIndex] = this.GuardOperationHandler(
+                    arguments[handlerIndex],
+                    guardedKinds,
+                    invocation);
                 const string GuardNote =
                     "'RegisterOperationAction' registered as a wrapper lambda that drops the nodes G# shares with another Roslyn "
                     + "operation: a pattern 'is' (Roslyn's IsPattern) for IsType, an imported field read (Roslyn's "
@@ -1674,10 +1677,16 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         /// <param name="handler">The translated handler.</param>
         /// <param name="guardedKinds">The guarded Roslyn kinds the registration names.</param>
+        /// <param name="site">The registration site that owns the synthesized wrapper parameter.</param>
         /// <returns>The guarded wrapper lambda.</returns>
-        private static GExpression GuardOperationHandler(GExpression handler, List<string> guardedKinds)
+        private GExpression GuardOperationHandler(
+            GExpression handler,
+            List<string> guardedKinds,
+            SyntaxNode site)
         {
-            GExpression ctxNode = new MemberAccessExpression(new IdentifierExpression("ctx"), "BoundNode", isArrow: false);
+            string contextName = this.AllocateSynthesizedLocalName("ctx", site);
+            GExpression context = new IdentifierExpression(contextName);
+            GExpression ctxNode = new MemberAccessExpression(context, "BoundNode", isArrow: false);
             GExpression rejected = null;
             foreach (string kind in guardedKinds)
             {
@@ -1700,7 +1709,7 @@ public sealed partial class CSharpToGSharpTranslator
                 rejected = rejected == null ? test : new BinaryExpression(rejected, "||", test);
             }
 
-            GExpression handlerCall = new InvocationExpression(handler, new List<GExpression> { new IdentifierExpression("ctx") });
+            GExpression handlerCall = new InvocationExpression(handler, new List<GExpression> { context });
             var body = new BlockStatement(new List<GStatement>
             {
                 new IfStatement(
@@ -1708,7 +1717,7 @@ public sealed partial class CSharpToGSharpTranslator
                     new BlockStatement(new List<GStatement> { new ExpressionStatement(handlerCall) })),
             });
             return new LambdaExpression(
-                new List<Parameter> { new Parameter("ctx", new NamedTypeReference("BoundNodeAnalysisContext")) },
+                new List<Parameter> { new Parameter(contextName, new NamedTypeReference("BoundNodeAnalysisContext")) },
                 blockBody: body);
         }
 
@@ -1812,8 +1821,10 @@ public sealed partial class CSharpToGSharpTranslator
                 DiagnosticId = "CS2GS-ANALYZER-SHAPE",
             });
 
-            var contextParameter = new Parameter("ctx", new NamedTypeReference("SyntaxNodeAnalysisContext"));
-            GExpression ctxNode = new MemberAccessExpression(new IdentifierExpression("ctx"), "Node", isArrow: false);
+            string contextName = this.AllocateSynthesizedLocalName("ctx", invocation);
+            var contextParameter = new Parameter(contextName, new NamedTypeReference("SyntaxNodeAnalysisContext"));
+            GExpression context = new IdentifierExpression(contextName);
+            GExpression ctxNode = new MemberAccessExpression(context, "Node", isArrow: false);
             GExpression guardTest = guardsNullConditional
                 ? this.InvokeNullConditionalChain("IsNullConditionalHop", ctxNode)
                 : new PatternTestExpression(
@@ -1828,7 +1839,7 @@ public sealed partial class CSharpToGSharpTranslator
                         designationAfterType: true));
             GExpression handlerCall = new InvocationExpression(
                 this.TranslateExpression(handlerArgument.Expression),
-                new List<GExpression> { new IdentifierExpression("ctx") });
+                new List<GExpression> { context });
             var guardedBody = new BlockStatement(new List<GStatement>
             {
                 new IfStatement(guardTest, new BlockStatement(new List<GStatement> { new ExpressionStatement(handlerCall) })),

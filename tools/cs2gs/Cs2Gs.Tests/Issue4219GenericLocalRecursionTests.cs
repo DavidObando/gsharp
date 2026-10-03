@@ -28,9 +28,10 @@ public class Issue4219GenericLocalRecursionTests
                 }
             }
             """);
-        Assert.Contains("__local_Run_First", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Run_Second", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Run_Third", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let First[T, U] = func", printed, StringComparison.Ordinal);
+        Assert.Contains("let Second[X, Y] = func", printed, StringComparison.Ordinal);
+        Assert.Contains("let Third[A, B] = func", printed, StringComparison.Ordinal);
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "x:42|y:7");
     }
 
@@ -51,7 +52,10 @@ public class Issue4219GenericLocalRecursionTests
             """);
         Assert.DoesNotContain("var First", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("var Second", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Run_Third", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("func First(", printed, StringComparison.Ordinal);
+        Assert.Contains("func Second(", printed, StringComparison.Ordinal);
+        Assert.Contains("func Third[", printed, StringComparison.Ordinal);
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "0");
     }
 
@@ -73,6 +77,41 @@ public class Issue4219GenericLocalRecursionTests
             }
             """);
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "2719");
+    }
+
+    [Fact]
+    public void CycleUsedAsDelegateValue_KeepsMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public delegate int RefFunc(ref int value);
+                public class C {
+                    public int Run() {
+                        int value = 3;
+                        RefFunc callback = First;
+                        return callback(ref value);
+                        static int First(ref int value) {
+                            if (value == 0) return 0;
+                            value--;
+                            return Second(ref value);
+                        }
+                        static int Second(ref int value) {
+                            if (value == 0) return 0;
+                            value--;
+                            return First(ref value);
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("let First = func", printed, StringComparison.Ordinal);
+        Assert.True(printed.Contains("func First(", StringComparison.Ordinal), printed);
+        Assert.True(printed.Contains("func Second(", StringComparison.Ordinal), printed);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run())",
+            "0");
     }
 
     [Fact]
