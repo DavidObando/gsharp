@@ -758,6 +758,32 @@ public class Issue4612GenericStoreBridgeTests
         Assert.DoesNotContain(sites, site => site.Message.Contains("params-element", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("T[]", "string[]")]
+    [InlineData("System.Collections.Generic.List<T>", "System.Collections.Generic.List<string>")]
+    public void DirectParamsIndexerCarriers_AreNotReportedAsExpandedElements(string parameterType, string carrierType)
+    {
+        string source = $$"""
+            #nullable enable
+            public class Bag<T>
+            {
+                public int this[params {{parameterType}} items] => 0;
+            }
+
+            public static class C
+            {
+                public static int Direct(Bag<string> bag, {{carrierType}}? items) => bag[items!];
+                public static int Conditional(Bag<string> bag, bool flag, {{carrierType}}? items, {{carrierType}} other) =>
+                    bag[flag ? items! : other];
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("bag[items!!]", printed, StringComparison.Ordinal);
+        Assert.Equal(2, printed.Split("items!!", StringSplitOptions.None).Length - 1);
+        Assert.Empty(sites);
+    }
+
     [Fact]
     public void RankThreeArrayInitializerElements_AreArrayElements()
     {
