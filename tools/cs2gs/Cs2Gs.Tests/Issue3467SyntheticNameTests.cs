@@ -772,6 +772,40 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void DeconstructionCarrier_ReservesAgainstNestedLiftedHelper()
+        {
+            string printed = Translate("""
+                using System;
+
+                public class C
+                {
+                    public int Run()
+                    {
+                        Func<int, int> x = null!;
+                        int a = 0;
+                        int b = 0;
+                        (x, (a, b)) = (n => 100 + n, (1, 2));
+                        return Container();
+
+                        int Container()
+                        {
+                            return xValue(0);
+                            static int xValue(int n) =>
+                                n == 0 ? 7 : Other<int>(n - 1);
+                            static int Other<T>(int n) => xValue(n);
+                        }
+                    }
+                }
+                """);
+
+            Assert.Contains("xValue2", printed, StringComparison.Ordinal);
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "Console.WriteLine(C().Run())",
+                "7");
+        }
+
+        [Fact]
         public void LoopScrutinee_ReservesAgainstLiftedHelper()
         {
             string printed = Translate("""
