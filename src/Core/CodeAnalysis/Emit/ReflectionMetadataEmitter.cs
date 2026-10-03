@@ -4112,7 +4112,10 @@ internal sealed class ReflectionMetadataEmitter
                             body = this.lambdaBodies[m];
                         }
 
-                        var emittedHandle = this.functions.EmitFunction(m, body, isEntryPoint: false);
+                        // Iterator interfaces are attached directly to metadata, not
+                        // to the receiver symbol. Every synthesized method here
+                        // implements one of those slots and must remain virtual.
+                        var emittedHandle = this.functions.EmitFunction(m, body, isEntryPoint: false, isInterfaceImplementation: true);
                         this.cache.MethodHandles[m] = emittedHandle;
                     }
                 }

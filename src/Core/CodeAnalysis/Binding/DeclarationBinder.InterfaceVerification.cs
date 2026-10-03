@@ -413,31 +413,7 @@ internal sealed partial class DeclarationBinder
             // ADR-0063 §8: implementing class may have multiple methods
             // with the same name; pick the one whose signature matches
             // this specific interface overload exactly.
-            var implCandidates = structSymbol.GetMethodsIncludingInherited(imethod.Name);
-            FunctionSymbol? impl = null;
-            FunctionSymbol? signatureMatch = null;
-            foreach (var candidate in implCandidates)
-            {
-                if (!MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate))
-                {
-                    continue;
-                }
-
-                impl ??= candidate;
-                var methodTypeParamMap = TryBuildMethodTypeParameterMap(imethod, candidate);
-                if (methodTypeParamMap == null)
-                {
-                    // Generic-arity mismatch: not a viable implementor
-                    // of this interface method overload (issue #1007).
-                    continue;
-                }
-
-                if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, methodTypeParamMap, candidate.IsAsync, candidate.IsAsyncVoid))
-                {
-                    signatureMatch = candidate;
-                    break;
-                }
-            }
+            var signatureMatch = FindImplicitInterfaceMethodImplementation(structSymbol, imethod, out var impl);
 
             if (signatureMatch != null)
             {
@@ -863,6 +839,60 @@ internal sealed partial class DeclarationBinder
             ? substituted
             : GetInterfacePropertySlotType(interfaceType, typeParameterMap);
     }
+
+    /// <summary>Finds the source method selected for an interface slot.</summary>
+    /// <param name="structSymbol">The implementing type.</param>
+    /// <param name="iface">The interface containing the slot.</param>
+    /// <param name="interfaceMethod">The interface method.</param>
+    /// <returns>The explicit or implicit implementation, if present.</returns>
+    internal static FunctionSymbol? FindInterfaceMethodImplementation(
+        StructSymbol structSymbol,
+        InterfaceSymbol iface,
+        FunctionSymbol interfaceMethod)
+        => TryResolveExplicitInterfaceImplementation(structSymbol, iface, interfaceMethod)
+            ?? FindImplicitInterfaceMethodImplementation(structSymbol, interfaceMethod, out _);
+
+    private static FunctionSymbol? FindImplicitInterfaceMethodImplementation(
+        StructSymbol structSymbol,
+        FunctionSymbol interfaceMethod,
+        out FunctionSymbol? firstCandidate)
+    {
+        firstCandidate = null;
+        foreach (var candidate in structSymbol.GetMethodsIncludingInherited(interfaceMethod.Name))
+        {
+            if (!MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate))
+            {
+                continue;
+            }
+
+            firstCandidate ??= candidate;
+            var methodTypeParamMap = TryBuildMethodTypeParameterMap(interfaceMethod, candidate);
+            if (methodTypeParamMap != null
+                && SignaturesMatch(interfaceMethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, methodTypeParamMap, candidate.IsAsync, candidate.IsAsyncVoid))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Finds the source property selected for an interface slot.</summary>
+    /// <param name="structSymbol">The implementing type.</param>
+    /// <param name="iface">The interface containing the slot.</param>
+    /// <param name="interfaceProperty">The interface property.</param>
+    /// <returns>The explicit or implicit implementation, if present.</returns>
+    internal static PropertySymbol? FindInterfacePropertyImplementation(
+        StructSymbol structSymbol,
+        InterfaceSymbol iface,
+        PropertySymbol interfaceProperty)
+        => TryResolveExplicitInterfacePropertyImplementation(structSymbol, iface, interfaceProperty, out _)
+            ?? (TryGetConstructedInterfacePropertyImplementation(
+                structSymbol,
+                interfaceProperty,
+                BuildInterfaceTypeParameterMap(iface),
+                out var implementation,
+                out _) ? implementation : null);
 
     private static bool TryGetConstructedInterfacePropertyImplementation(
         StructSymbol structSymbol,
@@ -2048,7 +2078,11 @@ internal sealed partial class DeclarationBinder
         }
     }
 
-    private static FunctionSymbol? FindClrInterfaceMethodImplementation(
+    /// <summary>Finds the source method selected for an imported interface slot.</summary>
+    /// <param name="structSymbol">The implementing type.</param>
+    /// <param name="slot">The imported interface slot, including its constructed owner.</param>
+    /// <returns>The explicit or implicit implementation, if present.</returns>
+    internal static FunctionSymbol? FindClrInterfaceMethodImplementation(
         StructSymbol structSymbol,
         MemberLookup.ClrInterfaceSlot slot)
         => FindClrInterfaceImplementation(
@@ -2338,6 +2372,53 @@ internal sealed partial class DeclarationBinder
         bool requiresSetter,
         bool isRequired)
     {
+        var implementation = FindClrInterfacePropertyImplementation(
+            structSymbol, interfaceType, clrProperty, explicitGetter, explicitSetter, symbolicArgs);
+        if (implementation != null || !isRequired)
+        {
+            return implementation;
+        }
+
+        var matchingField = MemberLookup.FindMatchingFieldForPropertyContract(structSymbol, clrProperty);
+        if (matchingField == null)
+        {
+            return null;
+        }
+
+        bool contractIsInitOnly = requiresSetter
+            && ImportedTypeSymbol.IsInitOnlySetter(
+                Invariant.Required(clrProperty.SetMethod, "a property requiring a setter exposes its setter"));
+        var synthesized = new PropertySymbol(
+            name: clrProperty.Name,
+            type: matchingField.Type,
+            accessibility: Accessibility.Public,
+            hasGetter: true,
+            hasSetter: requiresSetter,
+            isAutoProperty: true,
+            isVirtual: true,
+            isOverride: false,
+            isInitOnly: contractIsInitOnly);
+        synthesized.BackingField = matchingField;
+        structSymbol.SetProperties(structSymbol.Properties.Add(synthesized));
+        return synthesized;
+    }
+
+    /// <summary>Finds an existing source property selected for an imported interface slot.</summary>
+    /// <param name="structSymbol">The implementing type.</param>
+    /// <param name="interfaceType">The imported interface containing the slot.</param>
+    /// <param name="clrProperty">The CLR property contract.</param>
+    /// <param name="explicitGetter">The getter slot for explicit implementation lookup.</param>
+    /// <param name="explicitSetter">The setter slot for explicit implementation lookup.</param>
+    /// <param name="symbolicArgs">The symbolic interface type arguments, if present.</param>
+    /// <returns>The explicit or implicit implementation, without synthesizing a field adapter.</returns>
+    internal static PropertySymbol? FindClrInterfacePropertyImplementation(
+        StructSymbol structSymbol,
+        TypeSymbol interfaceType,
+        PropertyInfo clrProperty,
+        MethodInfo? explicitGetter,
+        MethodInfo? explicitSetter,
+        ImmutableArray<TypeSymbol> symbolicArgs)
+    {
         PropertySymbol? implementation = null;
         foreach (var property in GetMembersIncludingInherited(structSymbol, type => type.Properties))
         {
@@ -2367,33 +2448,7 @@ internal sealed partial class DeclarationBinder
             }
         }
 
-        if (implementation != null || !isRequired)
-        {
-            return implementation;
-        }
-
-        var matchingField = MemberLookup.FindMatchingFieldForPropertyContract(structSymbol, clrProperty);
-        if (matchingField == null)
-        {
-            return null;
-        }
-
-        bool contractIsInitOnly = requiresSetter
-            && ImportedTypeSymbol.IsInitOnlySetter(
-                Invariant.Required(clrProperty.SetMethod, "a property requiring a setter exposes its setter"));
-        var synthesized = new PropertySymbol(
-            name: clrProperty.Name,
-            type: matchingField.Type,
-            accessibility: Accessibility.Public,
-            hasGetter: true,
-            hasSetter: requiresSetter,
-            isAutoProperty: true,
-            isVirtual: true,
-            isOverride: false,
-            isInitOnly: contractIsInitOnly);
-        synthesized.BackingField = matchingField;
-        structSymbol.SetProperties(structSymbol.Properties.Add(synthesized));
-        return synthesized;
+        return implementation;
     }
 
     private static bool SameClrSlot(MethodInfo? first, MethodInfo? second)
