@@ -517,7 +517,6 @@ internal sealed class DataStructSynthesizer
         }
 
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
-        this.cache.MethodHandles[structSym.DataEqualsSelf] = equalsTypedHandle;
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
         if (structSym.DataEqualsBase is { } baseEquals)
         {
@@ -1091,7 +1090,7 @@ internal sealed class DataStructSynthesizer
                 il.Branch(ILOpCode.Brfalse, retFalse);
 
                 if (structSym.BaseClass is { IsData: true } baseClass
-                    && this.dataClassEqualsTypedMethods.TryGetValue(baseClass.Definition ?? baseClass, out var baseEqualsTyped))
+                    && this.cache.DataClassEqualsTypedHandles.TryGetValue(baseClass.Definition ?? baseClass, out var baseEqualsTyped))
                 {
                     il.LoadArgument(0);
                     il.LoadArgument(1);
@@ -1140,7 +1139,7 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
 
-        var attributes = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig;
+        var attributes = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot;
         if (IsDataObjectOverrideFinal(structSym))
         {
             attributes |= MethodAttributes.Final;

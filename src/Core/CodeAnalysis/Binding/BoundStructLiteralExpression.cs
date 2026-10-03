@@ -18,7 +18,12 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundStructLiteralExpression : BoundExpression
 {
-    public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers, BoundExpression? copySource = null)
+    public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers)
+        : this(syntax, structType, initializers, null)
+    {
+    }
+
+    public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers, BoundExpression? copySource)
         : base(syntax)
     {
         if (copySource != null && (!structType.IsData || !initializers.IsEmpty))
@@ -45,26 +50,26 @@ public sealed class BoundStructLiteralExpression : BoundExpression
 
     public override BoundNodeKind Kind => BoundNodeKind.StructLiteralExpression;
 
-    internal ImmutableArray<(FieldSymbol Field, BoundExpression Value, bool IsSupplied)> GetPrimaryConstructorArguments()
+    internal static bool IsStagedConstruction(BoundBlockExpression block)
     {
-        // Imported positional literals already carry their CLR constructor's
-        // property arguments; they do not have compiler-owned storage fields.
-        if (StructType.ClrType != null)
+        if (block.Expression is not BoundStructLiteralExpression { CopySource: null } literal
+            || literal.StructType.ClrType != null
+            || !literal.StructType.IsData || !literal.StructType.HasPrimaryConstructor
+            || block.Statements.Length != literal.Initializers.Length)
         {
-            return ImmutableArray<(FieldSymbol Field, BoundExpression Value, bool IsSupplied)>.Empty;
+            return false;
         }
 
-        var arguments = ImmutableArray.CreateBuilder<(FieldSymbol Field, BoundExpression Value, bool IsSupplied)>(
-            StructType.PrimaryConstructorParameters.Length);
-        foreach (var parameter in StructType.PrimaryConstructorParameters)
+        for (int i = 0; i < block.Statements.Length; i++)
         {
-            ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(StructType, parameter.Name, out var field);
-            var storage = Invariant.Required(field, "primary constructor parameters have corresponding fields");
-            var initializer = Initializers.FirstOrDefault(
-                candidate => candidate.Field == storage || candidate.Property?.BackingField == storage);
-            arguments.Add((storage, initializer?.Value ?? new BoundDefaultExpression(Syntax, storage.Type), initializer != null));
+            if (block.Statements[i] is not BoundVariableDeclaration { Initializer: not null } declaration
+                || literal.Initializers[i].Value is not BoundVariableExpression value
+                || value.Variable != declaration.Variable)
+            {
+                return false;
+            }
         }
 
-        return arguments.MoveToImmutable();
+        return true;
     }
 }

@@ -141,6 +141,14 @@ referenced value. Derived data classes forward the nearest
 record base's typed `Equals` slot through virtual object equality, so inherited
 `IEquatable<Base>` includes derived state; constructed generic base comparisons
 resolve the base definition's typed method through an instantiated MemberRef.
+Typed equality handles are planned before any class bodies are emitted, so
+forward-declared bases participate in equality too. Self-typed equality starts a
+new virtual slot; only the base-typed forwarding method overrides an inherited
+slot. Primary constructors own declared initializers: positional literals do not
+inject those entries into later rewriting. Expression-tree construction retains
+scalar preparation in a generated variable/assignment block, then invokes the
+primary constructor in parameter order and binds remaining members; this does
+not enable user-written statement-body expression trees.
 Printing uses object formatting except
 for ref-like values, which call `ToString` without boxing; structural function
 values widen through `System.Delegate` before object formatting.

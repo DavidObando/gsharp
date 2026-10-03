@@ -2239,15 +2239,7 @@ internal sealed class ReflectionMetadataEmitter
                 // this row; their clone is abstract and has no body.
                 this.cache.DataClassCopyConstructorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 1);
                 this.cache.DataClassCloneHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 2);
-                this.cache.MethodHandles[c.DataClassCloneMethod] = this.cache.DataClassCloneHandles[c];
-                this.cache.MethodHandles[c.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow + 3);
-                this.cache.MethodHandles[c.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 4);
-                if (c.DataEqualsBase is { } baseEquals)
-                {
-                    this.cache.MethodHandles[baseEquals] = MetadataTokens.MethodDefinitionHandle(methodRow + 5);
-                }
-
-                this.cache.MethodHandles[c.DataClassCloneMethod] = this.cache.DataClassCloneHandles[c];
+                this.cache.DataClassEqualsTypedHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 3);
                 methodRow += 10
                     + (c.DataEqualsBase != null ? 1 : 0)
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
