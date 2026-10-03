@@ -4877,12 +4877,13 @@ internal static class ObliviousNullabilityAnalyzer
                 return;
 
             case CastExpressionSyntax cast:
-                if (model.GetOperation(cast) is IConversionOperation conversion
-                    && CanForwardCastOperandNullability(conversion))
+                IConversionOperation conversion = model.GetOperation(cast) as IConversionOperation;
+                if (conversion != null && CanForwardCastOperandNullability(conversion))
                 {
                     CollectScalarValueFlow(target, cast.Expression, model, tainted, edges, scalarTupleEdges, scope);
                 }
-                else
+
+                if (conversion?.OperatorMethod != null || conversion == null)
                 {
                     AddEdges(target, cast, model, edges, scope);
                 }
@@ -5005,16 +5006,17 @@ internal static class ObliviousNullabilityAnalyzer
             case CastExpressionSyntax cast:
                 if (model.GetOperation(cast) is IConversionOperation conversion)
                 {
-                    if (conversion.OperatorMethod != null)
-                    {
-                        yield return Canonical(conversion.OperatorMethod);
-                    }
-                    else if (CanForwardCastOperandNullability(conversion))
+                    if (CanForwardCastOperandNullability(conversion))
                     {
                         foreach (ISymbol source in ResolveSources(cast.Expression, model, scope, respectNullGuards))
                         {
                             yield return source;
                         }
+                    }
+
+                    if (conversion.OperatorMethod != null && !IsNonNullableValueType(conversion.Type))
+                    {
+                        yield return Canonical(conversion.OperatorMethod);
                     }
                 }
 
@@ -5361,8 +5363,8 @@ internal static class ObliviousNullabilityAnalyzer
         }
     }
 
-    // Whether a reference expression is directly (syntactically or by declared
-    // BCL annotation) nullable, independent of any other declaration's taint.
+    // Whether an expression is directly (syntactically or by its declared
+    // result contract) nullable, independent of any other declaration's taint.
     // Mirrors the translator's IsNullableInitializer, plus the `null`/`default`
     // literal forms used in initializer/return positions.
     private static bool IsDirectlyNullable(
@@ -5375,6 +5377,7 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        ISymbol resultSymbol = null;
         switch (expression)
         {
             case null:
@@ -5383,23 +5386,23 @@ internal static class ObliviousNullabilityAnalyzer
             case ParenthesizedExpressionSyntax paren:
                 return IsDirectlyNullable(paren.Expression, model, respectNullGuards);
 
-            // Null must be representable by both sides of a built-in cast.
-            // User-defined conversions keep their own result contracts.
+            // Lifted operators can bypass their body for a null operand.
+            // Otherwise, only the operator's own result contract contributes.
             case CastExpressionSyntax cast
-                when model.GetOperation(cast) is IConversionOperation { OperatorMethod: null } conversion
-                    && (IsReferenceLike(conversion.Type) || IsNullableValueType(conversion.Type)):
-                if (!CanForwardCastOperandNullability(conversion))
+                when model.GetOperation(cast) is IConversionOperation conversion:
+                if (CanForwardCastOperandNullability(conversion)
+                    && IsDirectlyNullable(cast.Expression, model, respectNullGuards))
+                {
+                    return true;
+                }
+
+                if (conversion.OperatorMethod == null || IsNonNullableValueType(conversion.Type))
                 {
                     return false;
                 }
 
-                if (conversion.Operand.Type is { IsValueType: true }
-                    && conversion.Operand is not IConversionOperation { OperatorMethod: null })
-                {
-                    return !respectNullGuards || !IsNullGuardDominatedRead(cast.Expression, model);
-                }
-
-                return IsDirectlyNullable(cast.Expression, model, respectNullGuards);
+                resultSymbol = conversion.OperatorMethod;
+                break;
 
             // `await expr`: an awaited `Task<T>`'s own nullability is that of
             // T, which is exactly what the UNWRAPPED awaited expression's own
@@ -5419,10 +5422,12 @@ internal static class ObliviousNullabilityAnalyzer
             case LiteralExpressionSyntax literal:
                 return literal.IsKind(SyntaxKind.NullLiteralExpression)
                     || (literal.IsKind(SyntaxKind.DefaultLiteralExpression)
-                        && IsReferenceLike(model.GetTypeInfo(literal).ConvertedType));
+                        && (IsReferenceLike(model.GetTypeInfo(literal).ConvertedType)
+                            || IsNullableValueType(model.GetTypeInfo(literal).ConvertedType)));
 
             case DefaultExpressionSyntax defaultExpression:
-                return IsReferenceLike(model.GetTypeInfo(defaultExpression).Type);
+                return IsReferenceLike(model.GetTypeInfo(defaultExpression).Type)
+                    || IsNullableValueType(model.GetTypeInfo(defaultExpression).Type);
 
             // `a?.b` / `a?[i]`.
             case ConditionalAccessExpressionSyntax:
@@ -5495,7 +5500,7 @@ internal static class ObliviousNullabilityAnalyzer
         // survives in BCL/source metadata regardless of the consuming context
         // (e.g. `AssemblyName.Name` and `Path.GetFileNameWithoutExtension(...)`
         // are declared `string?`).
-        ISymbol symbol = model.GetSymbolInfo(expression).Symbol;
+        ISymbol symbol = resultSymbol ?? model.GetSymbolInfo(expression).Symbol;
         ITypeSymbol symbolType = symbol switch
         {
             IMethodSymbol m => m.ReturnType,
@@ -5506,8 +5511,9 @@ internal static class ObliviousNullabilityAnalyzer
             _ => null,
         };
 
-        return symbolType is { IsReferenceType: true }
-            && symbolType.NullableAnnotation == NullableAnnotation.Annotated;
+        return IsNullableValueType(symbolType ?? info.Type)
+            || (symbolType is { IsReferenceType: true }
+                && symbolType.NullableAnnotation == NullableAnnotation.Annotated);
     }
 
     private static bool IsReferenceLike(ITypeSymbol type) =>
@@ -5520,9 +5526,12 @@ internal static class ObliviousNullabilityAnalyzer
         type is { IsValueType: true } && !IsNullableValueType(type);
 
     private static bool CanForwardCastOperandNullability(IConversionOperation conversion) =>
-        conversion.OperatorMethod == null
-            && !IsNonNullableValueType(conversion.Type)
-            && !IsNonNullableValueType(conversion.Operand.Type);
+        !IsNonNullableValueType(conversion.Type)
+            && !IsNonNullableValueType(conversion.Operand.Type)
+            && (conversion.OperatorMethod == null
+                || (IsNullableValueType(conversion.Operand.Type)
+                    && conversion.OperatorMethod.Parameters.Length == 1
+                    && IsNonNullableValueType(conversion.OperatorMethod.Parameters[0].Type)));
 
     // The declaration kinds whose emitted reference type this analysis governs.
     private static bool IsValueDeclarationSymbol(ISymbol symbol) =>
