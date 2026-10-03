@@ -118,8 +118,7 @@ public sealed partial class CSharpToGSharpTranslator
             // containing type's): `Append<T>` -> IEnumerable<T>,
             // `delegate T Echo<T>(T)`, `Box<T>.Store(T): T`.
             IMethodSymbol method = parameter.ContainingSymbol as IMethodSymbol;
-            resultDependsOnSlot = method != null
-                && MentionsTypeParameter(method.OriginalDefinition.ReturnType, typeParameter);
+            resultDependsOnSlot = CallResultMentionsTypeParameter(method, typeParameter);
             if (method?.MethodKind == MethodKind.DelegateInvoke)
             {
                 return "delegate-invoke";
@@ -534,7 +533,7 @@ public sealed partial class CSharpToGSharpTranslator
             slotType = GetTupleSlot(GetStoreType(targetSymbol, asyncLambda), tupleIndices);
             resultDependsOnSlot = parameterArgument
                 && targetSymbol is IParameterSymbol { ContainingSymbol: IMethodSymbol method }
-                && MentionsTypeParameter(method.OriginalDefinition.ReturnType, typeParameter);
+                && CallResultMentionsTypeParameter(method, typeParameter);
             return slotType == null ? null : "type-parameter-tuple-element";
 
             static ITypeSymbol GetStoreType(ISymbol symbol, bool asyncLambda) => symbol switch
@@ -710,6 +709,21 @@ public sealed partial class CSharpToGSharpTranslator
                 || GetEffectiveReturnType(declared, isAsync) is ITypeParameterSymbol
                     ? "delegate-result"
                     : null;
+        }
+
+        private static bool CallResultMentionsTypeParameter(IMethodSymbol method, ITypeParameterSymbol typeParameter)
+        {
+            if (method == null)
+            {
+                return false;
+            }
+
+            IMethodSymbol contract = method.OriginalDefinition;
+
+            // Constructor calls produce their containing type, not the CLR void return.
+            return MentionsTypeParameter(
+                contract.MethodKind == MethodKind.Constructor ? contract.ContainingType : contract.ReturnType,
+                typeParameter);
         }
 
         private static bool MentionsTypeParameter(ITypeSymbol type, ITypeParameterSymbol typeParameter)

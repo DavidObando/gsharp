@@ -27,8 +27,8 @@ public sealed class TranslationContext
 
     // Keyed by the syntax tree instance, so two in-memory trees without a file
     // path never collide.
-    private readonly HashSet<(string Id, SyntaxTree Tree, int Start, int Length, string Discriminator)> reportedOnce =
-        new HashSet<(string Id, SyntaxTree Tree, int Start, int Length, string Discriminator)>();
+    private readonly HashSet<(string Id, SyntaxTree Tree, int Start, int Length, string Discriminator, string Message)> reportedOnce =
+        new HashSet<(string Id, SyntaxTree Tree, int Start, int Length, string Discriminator, string Message)>();
 
     // Issue #1910: a partial type's other declarations live in different
     // `SyntaxTree`s than the one this context was created for, so resolving a
@@ -186,8 +186,8 @@ public sealed class TranslationContext
     public TypeInfo GetTypeInfo(SyntaxNode node) => this.SemanticModel.GetTypeInfo(node);
 
     /// <summary>
-    /// Records <paramref name="diagnostic"/> unless one with the same id was
-    /// already recorded at the same source span. A node that is translated
+    /// Records <paramref name="diagnostic"/> unless one with the same id and
+    /// generic-store metadata was already recorded at the same source span. A node that is translated
     /// more than once in one context (a speculative translation) then reports
     /// once. A diagnostic without a source location or a diagnostic id is
     /// always recorded.
@@ -198,6 +198,7 @@ public sealed class TranslationContext
     /// <summary>
     /// Records a diagnostic once per source span and distinct synthesized site.
     /// Repeated translations of the same site still collapse to one report.
+    /// Generic-store reports also preserve distinct store metadata at that span.
     /// </summary>
     /// <param name="diagnostic">The diagnostic to record.</param>
     /// <param name="discriminator">A stable synthesized-site identity, or null for the source span itself.</param>
@@ -220,7 +221,10 @@ public sealed class TranslationContext
             location.SourceTree,
             location.SourceSpan.Start,
             location.SourceSpan.Length,
-            discriminator);
+            discriminator,
+            diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId
+                ? diagnostic.Message
+                : string.Empty);
         if (this.reportedOnce.Add(key))
         {
             this.diagnostics.Add(diagnostic);
