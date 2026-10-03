@@ -122,7 +122,9 @@ Before moving an application to a different compiler version, pin the intended S
   rebinding and validation without dropping unrelated SDKs in translated or
   excluded projects. Global-json migration canonicalizes existing root pins.
   Copied native `.gsproj` files use the same pin; template payloads, including
-  template-local `global.json` files, remain untouched.
+  project/item templates and their `global.json` files, remain untouched.
+  Per-project validation rejects bare G# SDK declarations instead of silently
+  resolving a different SDK.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values

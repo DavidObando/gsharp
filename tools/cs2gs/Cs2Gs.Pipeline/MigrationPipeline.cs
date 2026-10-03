@@ -745,7 +745,9 @@ public sealed class MigrationPipeline
             }
         }
 
-        string projectPin = SdkPin.ReadProjectPin(SdkPin.BuildableProjectPaths(migratedRoot));
+        string projectPin = SdkPin.ReadProjectPin(
+            SdkPin.BuildableProjectPaths(migratedRoot),
+            treePin is null ? SdkPinLocation.ProjectFile : SdkPinLocation.GlobalJson);
         if (treePin is not null && projectPin is not null)
         {
             throw new InvalidOperationException(

@@ -261,9 +261,12 @@ internal static class SdkPin
     /// <paramref name="projectPaths"/>.
     /// </summary>
     /// <param name="projectPaths">The generated project files (missing files are skipped).</param>
+    /// <param name="location">The pin mode; only global-json mode permits unversioned G# declarations.</param>
     /// <returns>The recorded version, or <see langword="null"/> when no project carries one.</returns>
-    /// <exception cref="InvalidOperationException">The projects record more than one version.</exception>
-    internal static string ReadProjectPin(IEnumerable<string> projectPaths)
+    /// <exception cref="InvalidOperationException">The declarations do not consistently record the required pin.</exception>
+    internal static string ReadProjectPin(
+        IEnumerable<string> projectPaths,
+        SdkPinLocation location = SdkPinLocation.ProjectFile)
     {
         var versions = new SortedSet<string>(StringComparer.Ordinal);
         foreach (string path in projectPaths)
@@ -307,6 +310,13 @@ internal static class SdkPin
                     string version = inlineVersion ?? elementVersion;
                     if (version is null)
                     {
+                        if (location != SdkPinLocation.GlobalJson)
+                        {
+                            throw new InvalidOperationException(
+                                "'" + path + "' has an unversioned " + PackageId +
+                                " declaration; project-file mode requires every declaration to record its SDK pin.");
+                        }
+
                         continue;
                     }
 
@@ -496,52 +506,17 @@ internal static class SdkPin
 
             foreach (string templatePath in Directory.EnumerateFiles(directory.FullName, "*.vstemplate"))
             {
-                foreach (XElement element in XDocument.Load(templatePath).Descendants())
+                XElement template = XDocument.Load(templatePath).Root;
+                if (template is null)
                 {
-                    if (element.Name.LocalName != "Project")
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    string file = element.Attribute("File")?.Value;
-                    if (file is null)
-                    {
-                        continue;
-                    }
-
-                    string templateProjectPath = Path.GetFullPath(Path.Combine(
-                        directory.FullName,
-                        file.Replace('\\', Path.DirectorySeparatorChar)));
-                    if (string.Equals(templateProjectPath, path, StringComparison.OrdinalIgnoreCase))
+                foreach (string payloadPath in TemplatePayloadPaths(template, directory.FullName))
+                {
+                    if (string.Equals(payloadPath, path, StringComparison.OrdinalIgnoreCase))
                     {
                         return true;
-                    }
-
-                    foreach (XElement item in element.Descendants())
-                    {
-                        if (item.Name.LocalName != "ProjectItem")
-                        {
-                            continue;
-                        }
-
-                        string itemPath = item.Value.Replace('\\', Path.DirectorySeparatorChar);
-                        for (XElement parent = item.Parent; parent is not null && parent != element; parent = parent.Parent)
-                        {
-                            if (parent.Name.LocalName == "Folder" && parent.Attribute("Name") is XAttribute folderName)
-                            {
-                                itemPath = Path.Combine(
-                                    folderName.Value.Replace('\\', Path.DirectorySeparatorChar),
-                                    itemPath);
-                            }
-                        }
-
-                        if (string.Equals(
-                            Path.GetFullPath(Path.Combine(Path.GetDirectoryName(templateProjectPath), itemPath)),
-                            path,
-                            StringComparison.OrdinalIgnoreCase))
-                        {
-                            return true;
-                        }
                     }
                 }
             }
@@ -553,6 +528,36 @@ internal static class SdkPin
         }
 
         return false;
+    }
+
+    private static IEnumerable<string> TemplatePayloadPaths(XElement element, string directory)
+    {
+        if (element.Name.LocalName == "Project" && element.Attribute("File") is XAttribute projectFile)
+        {
+            string projectPath = Path.GetFullPath(Path.Combine(
+                directory,
+                projectFile.Value.Replace('\\', Path.DirectorySeparatorChar)));
+            yield return projectPath;
+            directory = Path.GetDirectoryName(projectPath);
+        }
+        else if (element.Name.LocalName == "Folder" && element.Attribute("Name") is XAttribute folderName)
+        {
+            directory = Path.Combine(directory, folderName.Value.Replace('\\', Path.DirectorySeparatorChar));
+        }
+        else if (element.Name.LocalName == "ProjectItem")
+        {
+            yield return Path.GetFullPath(Path.Combine(
+                directory,
+                element.Value.Replace('\\', Path.DirectorySeparatorChar)));
+        }
+
+        foreach (XElement child in element.Elements())
+        {
+            foreach (string path in TemplatePayloadPaths(child, directory))
+            {
+                yield return path;
+            }
+        }
     }
 
     private static JsonObject ParseGlobalJson(string path)

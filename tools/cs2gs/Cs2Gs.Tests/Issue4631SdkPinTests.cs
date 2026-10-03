@@ -673,6 +673,13 @@ public sealed class Issue4631SdkPinTests : IDisposable
         File.WriteAllText(
             Path.Combine(visualDirectory, "NotTemplate.gsproj"),
             """<Project Sdk="Gsharp.NET.Sdk/0.4.591" />""");
+        string itemDirectory = Path.Combine(fixture.Source, "templates", "item");
+        Directory.CreateDirectory(itemDirectory);
+        File.WriteAllText(
+            Path.Combine(itemDirectory, "Template.vstemplate"),
+            """<VSTemplate xmlns="http://schemas.microsoft.com/developer/vstemplate/2005" Type="Item"><TemplateContent><ProjectItem>Item.gsproj</ProjectItem><ProjectItem>global.json</ProjectItem></TemplateContent></VSTemplate>""");
+        File.WriteAllText(Path.Combine(itemDirectory, "Item.gsproj"), templateXml);
+        File.WriteAllText(Path.Combine(itemDirectory, "global.json"), templateGlobalJson);
         PipelineOptions options = this.RepositoryOptions(compiler, fixture);
         options.SdkVersion = PinnedVersion;
         options.SdkPinLocation = location;
@@ -699,6 +706,12 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Equal(
             templateGlobalJson,
             File.ReadAllText(Path.Combine(fixture.Destination, "templates", "visual", "child", "settings", "global.json")));
+        Assert.Equal(
+            templateXml,
+            File.ReadAllText(Path.Combine(fixture.Destination, "templates", "item", "Item.gsproj")));
+        Assert.Equal(
+            templateGlobalJson,
+            File.ReadAllText(Path.Combine(fixture.Destination, "templates", "item", "global.json")));
         var probe = new PinProbeStage();
         RunResult validated = await new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { probe })
             .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(options.ArtifactRoot, migrated.RunId));
@@ -805,6 +818,36 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Contains("Nested global.json", error.Message, StringComparison.Ordinal);
         Assert.Contains("src/Widget/global.json", error.Message, StringComparison.Ordinal);
         Assert.Contains(actualPin, error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Every G# SDK declaration in project mode must carry the recorded pin.</summary>
+    /// <param name="projectXml">The bare SDK declaration.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Theory]
+    [InlineData("""<Project Sdk="Gsharp.NET.Sdk;Other.Sdk/1.2.3" />""")]
+    [InlineData("""<Project><Sdk Name="Gsharp.NET.Sdk" /></Project>""")]
+    [InlineData("""<Project><Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk" /></Project>""")]
+    public async Task Validate_ProjectPinRejectsBareSdkDeclarations(string projectXml)
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        PipelineOptions migrate = this.RepositoryOptions(compiler, fixture);
+        migrate.SdkVersion = PinnedVersion;
+        RunResult migrated = await new MigrationPipeline(migrate, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+        Assert.True(migrated.Succeeded);
+        File.WriteAllText(fixture.MirroredWidget, projectXml);
+        File.WriteAllText(
+            Path.Combine(fixture.Destination, "src", "Widget", "global.json"),
+            """{ "msbuild-sdks": { "Gsharp.NET.Sdk": "0.3.356" } }""");
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { new PinProbeStage() })
+                .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(migrate.ArtifactRoot, migrated.RunId)));
+
+        Assert.Contains(fixture.MirroredWidget, error.Message, StringComparison.Ordinal);
+        Assert.Contains("unversioned", error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Validation checks pins in excluded mirrored projects, not just translated projects.</summary>
