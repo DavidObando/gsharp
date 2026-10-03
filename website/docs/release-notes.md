@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **cs2gs preserves C# value and generic parameter metadata names** (issue #4680, ADR-0170). Reserved names use `$name` in declarations, references, and named arguments instead of the lossy `name_` rename, regardless of member visibility. Named-argument binding compares semantic names, so `$scope:` binds the CLR parameter `scope`; escaped spelling preserves argument slots, optional defaults, and lexical evaluation order. Documentation tags use the original unescaped names. Locals and other names without metadata retain collision-safe sanitization.
+
 ### Reader's overview
 
 For changes after the published snapshot, pay particular attention to stricter generic-constraint and nullable-argument diagnostics. Code previously accepted with an invalid CLR contract may now be rejected at compile time; the detailed entries below identify the diagnostic and remedy.

@@ -421,7 +421,7 @@ internal sealed partial class OverloadResolver
             if (argument is NamedArgumentExpressionSyntax namedArgument)
             {
                 hasNamedArguments = true;
-                firstNamedArgumentName = namedArgument.NameToken.Text;
+                firstNamedArgumentName = namedArgument.NameToken.ValueText;
                 break;
             }
         }
