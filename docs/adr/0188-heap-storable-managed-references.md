@@ -360,6 +360,10 @@ recursively synthesized values are checked even when the literal omits all
 field entries. A nested ordinary initializer is credited only when that actual
 helper value invokes its validated constructor, not merely because an initializer
 was declared.
+Storage checks retain backing-field identity but classify a constructed
+auto-property using its substituted property type, not its definition's open
+backing-field type. The same storage reader is used for direct zero construction
+and recursive aggregate required-handle detection.
 
 Handle assignment copies the handle value; it does not copy the referent.
 `var copy = *p` copies `T` normally. Promoting `copy` later identifies that

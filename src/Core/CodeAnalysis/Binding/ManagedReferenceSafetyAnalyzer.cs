@@ -439,19 +439,18 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
             var supplied = zeroValue.Initializers.Select(initializer => initializer.Field ?? initializer.Property?.BackingField)
                 .OfType<FieldSymbol>().ToHashSet();
-            var storage = type.Fields.Concat(type.Properties.Select(property => property.BackingField).OfType<FieldSymbol>()).Distinct();
-            foreach (var field in storage)
+            foreach (var storage in InstanceStorageTypes(type))
             {
-                if (!supplied.Contains(field) && this.RequiredHandle(field.Type) != null)
+                if (!supplied.Contains(storage.Key) && this.RequiredHandle(storage.Value) != null)
                 {
                     if (type.ValueStructDefaultCtorIsZeroInitialization
-                        && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, field.Type) is { } helperValue)
+                        && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, storage.Value) is { } helperValue)
                     {
                         this.VisitExpression(helperValue);
                     }
                     else
                     {
-                        this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{field.Name}'; explicitly construct the aggregate");
+                        this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{storage.Key.Name}'; explicitly construct the aggregate");
                     }
                 }
             }
@@ -555,6 +554,20 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         }
     }
 
+    private static Dictionary<FieldSymbol, TypeSymbol> InstanceStorageTypes(StructSymbol type)
+    {
+        var storage = type.Fields.ToDictionary(field => field, field => field.Type);
+        foreach (var property in type.Properties)
+        {
+            if (property.BackingField is { } backingField)
+            {
+                storage[backingField] = property.Type;
+            }
+        }
+
+        return storage;
+    }
+
     private TypeSymbol? RequiredHandle(TypeSymbol type)
     {
         if (this.required.TryGetValue(type, out var found))
@@ -572,8 +585,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         IEnumerable<TypeSymbol> fields;
         if (type is StructSymbol { IsClass: false } source)
         {
-            fields = source.Fields.Select(f => f.Type)
-                .Concat(source.Properties.Select(p => p.BackingField).OfType<FieldSymbol>().Select(f => f.Type));
+            fields = InstanceStorageTypes(source).Values;
         }
         else if (type is TupleTypeSymbol tuple)
         {

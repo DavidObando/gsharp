@@ -318,6 +318,58 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
             """, "var outer Outer");
     }
 
+    [Theory]
+    [InlineData("direct", false)]
+    [InlineData("nested", false)]
+    [InlineData("global", false)]
+    [InlineData("direct", true)]
+    public void ConstructedPropertyStorage_RejectsActualRequiredHandleZeros(string scope, bool ordinaryProperty)
+    {
+        var declaration = scope == "nested"
+            ? "var box Outer"
+            : "var box Box[readonly managed[int32]]";
+        var source = """
+            package ConstructedRequiredZero
+            data struct Box[T](PRIMARY) {
+                PROPERTY
+                private var Items []int32
+            }
+            struct Outer { public var Inner Box[readonly managed[int32]] }
+            GLOBAL
+            func Main() { LOCAL }
+            """.Replace("PRIMARY", ordinaryProperty ? "Value int32" : "Handle T", StringComparison.Ordinal)
+                .Replace("PROPERTY", ordinaryProperty ? "public prop Handle T { get; init; }" : string.Empty, StringComparison.Ordinal)
+                .Replace("GLOBAL", scope == "global" ? declaration : string.Empty, StringComparison.Ordinal)
+                .Replace("LOCAL", scope == "global" ? string.Empty : declaration, StringComparison.Ordinal);
+        Reject(source, declaration);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstructedPropertyStorage_RetainsZeroAndExplicitArgumentControls(bool managed)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package ConstructedRequiredControl
+            import System
+            data struct Box[T](Handle T) {
+                private var Items []int32
+                public func Length() int32 -> Items.Length
+            }
+            func Main() {
+                CONSTRUCT
+                Console.WriteLine(READ)
+                Console.WriteLine(box.Length())
+            }
+            """.Replace("CONSTRUCT", managed
+                    ? "var value = 7\nlet box = Box[readonly managed[int32]]{Handle: readonly managed(value)}"
+                    : "var box Box[int32]", StringComparison.Ordinal)
+                .Replace("READ", managed ? "*box.Handle" : "box.Handle", StringComparison.Ordinal), "ConstructedRequiredControl", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal(managed ? "7\n0\n" : "0\n0\n", fixture.Run(dll));
+    }
+
     private static void Reject(string source, string anchor)
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
