@@ -4329,6 +4329,18 @@ internal static class ObliviousNullabilityAnalyzer
 
             foreach (IPropertySymbol property in type.GetMembers().OfType<IPropertySymbol>())
             {
+                IParameterSymbol positionalParameter = FindPositionalRecordParameter(compilation, property);
+                if (positionalParameter != null)
+                {
+                    AddTupleContractPair(
+                        property,
+                        SymbolValueType(property),
+                        positionalParameter,
+                        SymbolValueType(positionalParameter),
+                        tupleTainted,
+                        tupleEdges);
+                }
+
                 if (property.OverriddenProperty is IPropertySymbol overridden)
                 {
                     AddTupleContractPair(

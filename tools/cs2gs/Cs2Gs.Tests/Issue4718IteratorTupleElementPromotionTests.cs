@@ -525,6 +525,44 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void PositionalRecordTupleContracts_UsePrimaryParameterEvidence(bool envelope, bool nullable)
+    {
+        string valueType = envelope
+            ? "IEnumerable<(string Text, int Code)>"
+            : "(string Text, int Code)";
+        string initializer = nullable ? "null" : "\"x\"";
+        string argument = envelope ? "Rows()" : "(text, 1)";
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public interface IRow { {{valueType}} Value { get; } }
+            public record Row({{valueType}} Value) : IRow;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows() {
+                    string text = {{initializer}};
+                    yield return true ? (text, 1) : ("x", 2);
+                }
+                public static IRow Create() {
+                    string text = {{initializer}};
+                    return new Row({{argument}});
+                }
+            }
+            """);
+
+        string[] declarations = printed.Split(Environment.NewLine)
+            .Where(line => line.Contains("Value", StringComparison.Ordinal)
+                && line.Contains("(Text ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, declarations.Length);
+        string textType = nullable ? "string?" : "string";
+        Assert.All(declarations, declaration => Assert.Contains($"(Text {textType}, Code int32)", declaration));
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
     [InlineData("void Reset() { text = null; }", "Reset();", true)]
     [InlineData("System.Action reset = () => text = null;", "reset();", true)]
     [InlineData("void Clear() { text = null; } void Reset() { Clear(); }", "Reset();", true)]
