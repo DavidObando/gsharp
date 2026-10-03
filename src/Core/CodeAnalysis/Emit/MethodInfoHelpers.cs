@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -11,7 +12,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 
 /// <summary>
 /// PR-E-12: small grouping of static method-info utilities lifted from
-/// <see cref="ReflectionMetadataEmitter"/>. These four helpers form a
+/// <see cref="ReflectionMetadataEmitter"/>. These helpers form a
 /// tight cluster around method-vs-interface comparison and signature
 /// matching:
 /// <list type="bullet">
@@ -31,6 +32,122 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </summary>
 internal static class MethodInfoHelpers
 {
+    /// <summary>Finds inherited source members selected for interfaces introduced by descendants.</summary>
+    /// <param name="program">The program whose source members are being emitted.</param>
+    /// <returns>The methods and property accessors requiring interface dispatch slots.</returns>
+    public static (
+        HashSet<FunctionSymbol> Methods,
+        HashSet<(PropertySymbol Property, bool IsGetter)> PropertyAccessors)
+        GetInheritedInterfaceImplementations(BoundProgram program)
+    {
+        var methods = new HashSet<FunctionSymbol>();
+        var propertyAccessors = new HashSet<(PropertySymbol Property, bool IsGetter)>();
+        foreach (var implementer in program.Structs)
+        {
+            if (!implementer.IsClass || implementer.BaseClass == null)
+            {
+                continue;
+            }
+
+            foreach (var iface in implementer.Interfaces)
+            {
+                foreach (var slot in iface.Methods)
+                {
+                    AddMethod(DeclarationBinder.FindInterfaceMethodImplementation(implementer, iface, slot));
+                }
+
+                foreach (var slot in (iface.Definition ?? iface).Properties)
+                {
+                    if (!slot.IsStatic)
+                    {
+                        AddProperty(
+                            DeclarationBinder.FindInterfacePropertyImplementation(implementer, iface, slot),
+                            slot.HasGetter,
+                            slot.HasSetter);
+                    }
+                }
+            }
+
+            foreach (var iface in implementer.ImplementedClrInterfaces)
+            {
+                foreach (var slot in MemberLookup.EnumerateClrInterfaceSlots(iface, includeDefaultMethods: true))
+                {
+                    AddMethod(DeclarationBinder.FindClrInterfaceMethodImplementation(implementer, slot));
+                }
+
+                foreach (var slot in MemberLookup.EnumerateClrInterfacePropertySlots(iface))
+                {
+                    AddProperty(
+                        DeclarationBinder.FindClrInterfacePropertyImplementation(
+                            implementer,
+                            slot.SlotOwner,
+                            slot.Property,
+                            slot.Property.GetMethod,
+                            slot.Property.SetMethod,
+                            slot.SymbolicArgs),
+                        slot.Property.GetMethod != null,
+                        slot.Property.SetMethod != null);
+                }
+            }
+
+            void AddMethod(FunctionSymbol? method)
+            {
+                if (method?.ReceiverType is StructSymbol owner
+                    && !ReferenceEquals(owner.Definition ?? owner, implementer.Definition ?? implementer))
+                {
+                    methods.Add(method);
+                }
+            }
+
+            void AddProperty(PropertySymbol? property, bool needsGetter, bool needsSetter)
+            {
+                if (property == null)
+                {
+                    return;
+                }
+
+                foreach (var owner in implementer.GetHierarchy())
+                {
+                    var index = owner.Properties.IndexOf(property);
+                    if (index < 0)
+                    {
+                        continue;
+                    }
+
+                    if (ReferenceEquals(owner, implementer))
+                    {
+                        return;
+                    }
+
+                    // Constructed properties preserve declaration order and their
+                    // accessor symbols; promote the emitted definition, not its projection.
+                    var definition = (owner.Definition ?? owner).Properties[index];
+                    if (needsGetter && definition.HasGetter)
+                    {
+                        propertyAccessors.Add((definition, true));
+                        if (definition.GetterSymbol is { } getter)
+                        {
+                            methods.Add(getter);
+                        }
+                    }
+
+                    if (needsSetter && definition.HasSetter)
+                    {
+                        propertyAccessors.Add((definition, false));
+                        if (definition.SetterSymbol is { } setter)
+                        {
+                            methods.Add(setter);
+                        }
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        return (methods, propertyAccessors);
+    }
+
     public static bool IsCovariantSourcePropertyGetter(FunctionSymbol function)
         => function.AssociatedSymbol is PropertySymbol property
             && ReferenceEquals(property.GetterSymbol, function)

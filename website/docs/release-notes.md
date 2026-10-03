@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **Ordinary class methods now emit non-virtual CLR metadata as specified by ADR-0017** (issue [#4677](https://github.com/DavidObando/gsharp/issues/4677)). `open` methods, overrides, and interface implementations retain their virtual slots, including synthesized sync/async iterators and symbolic generic event accessors.
+- **Ordinary class methods now emit non-virtual CLR metadata as specified by ADR-0017** (issue [#4677](https://github.com/DavidObando/gsharp/issues/4677)). `open` methods, overrides, and interface implementations retain their virtual slots, including members inherited by a descendant introducing an interface, synthesized sync/async iterators, and symbolic generic event accessors. Unrelated inherited members remain non-virtual.
 
 ### Reader's overview
 

@@ -241,7 +241,11 @@ internal sealed class FunctionEmitter
         var bodyEmission = this.EmitFunctionBody(function, bodySelection.Body, bodySelection.AsyncPlan, isEntryPoint);
         var signature = this.EncodeFunctionSignature(function, bodySelection.AsyncPlan, isEntryPoint);
         var methodName = GetMethodMetadataName(function, isEntryPoint, isSynthesizedEntryPointStub);
-        var methodAttributes = GetMethodAttributes(function, isEntryPoint, isSynthesizedEntryPointStub, isInterfaceImplementation);
+        var methodAttributes = GetMethodAttributes(
+            function,
+            isEntryPoint,
+            isSynthesizedEntryPointStub,
+            isInterfaceImplementation || this.emitCtx.InheritedInterfaceMethods.Contains(function));
         var parameterMetadata = this.EmitParameterMetadata(function, bodySelection.AsyncPlan, isEntryPoint);
         var handle = this.EmitMethodDefinition(
             function,
