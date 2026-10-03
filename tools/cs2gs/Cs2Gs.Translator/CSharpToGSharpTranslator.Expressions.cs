@@ -4522,7 +4522,8 @@ public sealed partial class CSharpToGSharpTranslator
                         element,
                         new NonNullAssertionExpression(element),
                         targetSymbol: null,
-                        knownSlotType: keyElement.Type);
+                        knownSlotType: keyElement.Type,
+                        projection: $".Item{i + 1}");
                     anyAsserted = true;
                 }
 

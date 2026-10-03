@@ -1510,6 +1510,46 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void RebuiltTupleIndexKey_ReportsEachDistinctAssertedLeaf()
+    {
+        string source = """
+            using System.Collections.Generic;
+            public static class C
+            {
+                private static string Branch() => null;
+                public static bool Lookup()
+                {
+                    var key = (Branch(), Branch());
+                    return new Dictionary<(string, string), bool>()[key];
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source);
+
+        Assert.Contains("key.Item1!!", printed, StringComparison.Ordinal);
+        Assert.Contains("key.Item2!!", printed, StringComparison.Ordinal);
+        Assert.Equal(2, sites.Count);
+        Assert.All(sites, site => Assert.Equal(Expected(source, "key];"), Position(site)));
+        Assert.Equal(new[] { "key.Item1", "key.Item2" }, sites.Select(
+            site => site.Message.Substring(site.Message.IndexOf(" | value=", StringComparison.Ordinal) + " | value=".Length)));
+    }
+
+    [Fact]
+    public void ReportOnce_DistinguishesSyntheticLeavesAndCollapsesRepeatedLeaves()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        Location location = document.GetRoot().GetLocation();
+
+        context.ReportOnce(new TranslationDiagnostic("k", "first", location, TranslationSeverity.Warning) { DiagnosticId = "X" }, ".Item1");
+        context.ReportOnce(new TranslationDiagnostic("k", "repeat", location, TranslationSeverity.Warning) { DiagnosticId = "X" }, ".Item1");
+        context.ReportOnce(new TranslationDiagnostic("k", "second", location, TranslationSeverity.Warning) { DiagnosticId = "X" }, ".Item2");
+
+        Assert.Equal(new[] { "first", "second" }, context.Diagnostics.Select(diagnostic => diagnostic.Message));
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });

@@ -27,8 +27,8 @@ public sealed class TranslationContext
 
     // Keyed by the syntax tree instance, so two in-memory trees without a file
     // path never collide.
-    private readonly HashSet<(string Id, SyntaxTree Tree, int Start, int Length)> reportedOnce =
-        new HashSet<(string Id, SyntaxTree Tree, int Start, int Length)>();
+    private readonly HashSet<(string Id, SyntaxTree Tree, int Start, int Length, string Discriminator)> reportedOnce =
+        new HashSet<(string Id, SyntaxTree Tree, int Start, int Length, string Discriminator)>();
 
     // Issue #1910: a partial type's other declarations live in different
     // `SyntaxTree`s than the one this context was created for, so resolving a
@@ -193,7 +193,15 @@ public sealed class TranslationContext
     /// always recorded.
     /// </summary>
     /// <param name="diagnostic">The diagnostic to record.</param>
-    public void ReportOnce(TranslationDiagnostic diagnostic)
+    public void ReportOnce(TranslationDiagnostic diagnostic) => this.ReportOnce(diagnostic, null);
+
+    /// <summary>
+    /// Records a diagnostic once per source span and distinct synthesized site.
+    /// Repeated translations of the same site still collapse to one report.
+    /// </summary>
+    /// <param name="diagnostic">The diagnostic to record.</param>
+    /// <param name="discriminator">A stable synthesized-site identity, or null for the source span itself.</param>
+    public void ReportOnce(TranslationDiagnostic diagnostic, string discriminator)
     {
         if (diagnostic is null)
         {
@@ -211,7 +219,8 @@ public sealed class TranslationContext
             diagnostic.DiagnosticId,
             location.SourceTree,
             location.SourceSpan.Start,
-            location.SourceSpan.Length);
+            location.SourceSpan.Length,
+            discriminator);
         if (this.reportedOnce.Add(key))
         {
             this.diagnostics.Add(diagnostic);
