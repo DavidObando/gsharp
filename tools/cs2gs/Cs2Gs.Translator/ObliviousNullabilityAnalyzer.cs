@@ -5104,11 +5104,17 @@ internal static class ObliviousNullabilityAnalyzer
             node is AccessorDeclarationSyntax
                 or BaseMethodDeclarationSyntax
                 or LocalFunctionStatementSyntax
-                or AnonymousFunctionExpressionSyntax);
+                or AnonymousFunctionExpressionSyntax
+                or CompilationUnitSyntax);
+
+        if (scope == null)
+        {
+            return false;
+        }
 
         // Writable captures are not stable smart-cast values. Without an
         // interprocedural proof, never trust a guard on their shared storage.
-        if (scope != null && scope.DescendantNodes().Any(node =>
+        if (scope.DescendantNodes().Any(node =>
             node is LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax
                 && node.DescendantNodes().Any(Writes)))
         {

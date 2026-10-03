@@ -310,6 +310,35 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Theory]
+    [InlineData("void Reset() { text = null; }", "Reset();", true)]
+    [InlineData("System.Action reset = () => text = null;", "reset();", true)]
+    [InlineData("void Observe() { }", "Observe();", false)]
+    public void TopLevelCapturedStorage_UsesTheWholeDeclaringScope(
+        string declaration,
+        string invocation,
+        bool nullable)
+    {
+        string printed = Translate(
+            $$"""
+            using System.Collections.Generic;
+            string text = args.Length == 0 ? null : "x";
+            {{declaration}}
+            IEnumerable<(string Text, int Code)> Rows() {
+                if (text != null) {
+                    {{invocation}}
+                    yield return (text, 1);
+                }
+            }
+            foreach (var row in Rows()) { }
+            """,
+            outputKind: OutputKind.ConsoleApplication);
+
+        string textType = nullable ? "string?" : "string";
+        Assert.Contains($"let Rows = func () IEnumerable[(Text {textType}, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     [Fact]
     public void NestedSwitchTupleYield_UsesTheSameElementPathsAsForwardedCollection()
     {
@@ -450,9 +479,15 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         Assert.Equal(3, result.Value);
     }
 
-    private static string Translate(string source, IReadOnlyList<MetadataReference> references = null)
+    private static string Translate(
+        string source,
+        IReadOnlyList<MetadataReference> references = null,
+        OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary)
     {
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) }, references);
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) },
+            references,
+            outputKind: outputKind);
         Assert.True(
             project.BoundWithoutErrors,
             string.Join(Environment.NewLine, project.ErrorDiagnostics));
