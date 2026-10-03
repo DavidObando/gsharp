@@ -2251,7 +2251,8 @@ internal sealed class ReflectionMetadataEmitter
                 methodRow += 10
                     + (c.DataEqualsBase != null ? 1 : 0)
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
-                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
+                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0)
+                    + (DataStructSynthesizer.GetDataEqualityBase(c) != null ? 1 : 0);
             }
 
             if (!c.Methods.IsDefaultOrEmpty)

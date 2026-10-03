@@ -54,8 +54,9 @@ internal sealed partial class ExpressionBinder
         // platform receiver is a coercion to non-null (checked and unwrapped).
         receiver = binderCtx.InsertPlatformCheck(receiver, diagnosticLocation, "a copy/with receiver");
 
-        // Copy existing storage before applying updates; fresh construction
-        // would rerun initializers or lose base/private state.
+        // Native copies preserve the whole value or dispatch through the
+        // record clone; reconstructing visible members loses private state
+        // and incorrectly reruns construction initializers.
         var normalizedReceiverType = ImportedTypeSymbol.NormalizeSemanticAggregate(
             receiver.Type,
             receiver.Type.ClrType,
@@ -109,6 +110,7 @@ internal sealed partial class ExpressionBinder
         scope.TryDeclareVariable(copiedValue);
         statements.Add(new BoundVariableDeclaration(null, copiedValue, copy));
         var seen = new HashSet<string>();
+        var explicitValues = new Dictionary<string, (FieldSymbol? Field, PropertySymbol? Property, BoundExpression Value, StructSymbol? Owner)>();
         foreach (var initSyntax in overrides)
         {
             var memberName = initSyntax.FieldIdentifier.ValueText;
@@ -130,7 +132,7 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var fieldValueExpr = BindExpression(initSyntax.Value, field.Type);
-                statements.Add(new BoundExpressionStatement(initSyntax, new BoundFieldAssignmentExpression(initSyntax, copiedValue, fieldDeclaringType, field, fieldValueExpr)));
+                explicitValues[memberName] = (field, null, fieldValueExpr, fieldDeclaringType);
                 continue;
             }
 
@@ -149,14 +151,80 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propertyValueExpr = BindExpression(initSyntax.Value, property.Type);
-                statements.Add(new BoundExpressionStatement(initSyntax, new BoundPropertyAssignmentExpression(initSyntax, new BoundVariableExpression(null, copiedValue), propertyDeclaringType, property, propertyValueExpr)));
+                explicitValues[memberName] = (null, property, propertyValueExpr, propertyDeclaringType);
                 continue;
             }
 
             Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName);
         }
 
-        return new BoundBlockExpression(null, statements.ToImmutable(), new BoundVariableExpression(null, copiedValue));
+        if (structType.ClrType == null)
+        {
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            var copy = new BoundStructLiteralExpression(
+                null,
+                structType,
+                ImmutableArray<BoundFieldInitializer>.Empty,
+                receiver);
+            statements.Add(new BoundVariableDeclaration(null, tempVar, copy));
+            foreach (var value in explicitValues.Values)
+            {
+                BoundExpression assignment = value.Field != null
+                    ? new BoundFieldAssignmentExpression(null, tempVar, value.Owner ?? structType, value.Field, value.Value)
+                    : new BoundPropertyAssignmentExpression(
+                        null,
+                        new BoundVariableExpression(null, tempVar),
+                        value.Owner ?? structType,
+                        Invariant.Required(value.Property, "a copy update targets a field or property"),
+                        value.Value);
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
+
+            return new BoundBlockExpression(
+                null,
+                statements.ToImmutable(),
+                new BoundVariableExpression(null, tempVar));
+        }
+
+        var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        var handledMembers = new HashSet<string>();
+        foreach (var field in structType.Fields)
+        {
+            handledMembers.Add(field.Name);
+            if (explicitValues.TryGetValue(field.Name, out var explicitValue))
+            {
+                initializers.Add(new BoundFieldInitializer(field, explicitValue.Value));
+            }
+            else
+            {
+                var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, field);
+                initializers.Add(new BoundFieldInitializer(field, access));
+            }
+        }
+
+        // Imported records may be positional or property-only. Copy every
+        // writable property that is not already represented by a visible field.
+        foreach (var property in structType.Properties)
+        {
+            if (!property.HasSetter || !handledMembers.Add(property.Name))
+            {
+                continue;
+            }
+
+            if (explicitValues.TryGetValue(property.Name, out var explicitValue))
+            {
+                initializers.Add(new BoundFieldInitializer(property, explicitValue.Value));
+            }
+            else
+            {
+                var access = new BoundPropertyAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, property);
+                initializers.Add(new BoundFieldInitializer(property, access));
+            }
+        }
+
+        var declaration = new BoundVariableDeclaration(null, tempVar, receiver);
+        var literal = new BoundStructLiteralExpression(null, structType, initializers.ToImmutable());
+        return new BoundBlockExpression(null, ImmutableArray.Create<BoundStatement>(declaration), literal);
     }
 
     private BoundExpression BindObjectCreationExpression(ObjectCreationExpressionSyntax syntax)
@@ -291,7 +359,7 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            target = new BoundStructLiteralExpression(literal.Syntax, literal.StructType, initializers.ToImmutable());
+            target = new BoundStructLiteralExpression(literal.Syntax, literal.StructType, initializers.ToImmutable(), literal.CopySource);
         }
 
         var resultType = target.Type;

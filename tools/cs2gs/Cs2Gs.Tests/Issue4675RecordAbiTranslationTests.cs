@@ -196,6 +196,23 @@ namespace Corpus.Issue4675
         object translatedRender = gsharpAssembly.GetType("Corpus.Issue4675.RecordBase", throwOnError: true)
             .GetMethod("Render").Invoke(translatedDerived, null);
         Assert.Equal(baselineRender, translatedRender);
+        Type baselineBase = csharpAssembly.GetType("Corpus.Issue4675.RecordBase", throwOnError: true);
+        Type translatedBase = gsharpAssembly.GetType("Corpus.Issue4675.RecordBase", throwOnError: true);
+        Type baselineRecordClass = csharpAssembly.GetType("Corpus.Issue4675.RecordClass", throwOnError: true);
+        Type translatedClassType = gsharpAssembly.GetType("Corpus.Issue4675.RecordClass", throwOnError: true);
+        MethodInfo baselineEquals = typeof(IEquatable<>).MakeGenericType(baselineBase).GetMethod("Equals");
+        MethodInfo translatedEquals = typeof(IEquatable<>).MakeGenericType(translatedBase).GetMethod("Equals");
+        foreach (int value in new[] { 42, 43 })
+        {
+            object expected = baselineEquals.Invoke(
+                Activator.CreateInstance(baselineRecordClass, new object[] { 42 }),
+                new[] { Activator.CreateInstance(baselineRecordClass, new object[] { value }) });
+            Assert.Equal(value == 42, expected);
+            object actual = translatedEquals.Invoke(
+                Activator.CreateInstance(translatedClassType, new object[] { 42 }),
+                new[] { Activator.CreateInstance(translatedClassType, new object[] { value }) });
+            Assert.Equal(expected, actual);
+        }
     }
 
     [Theory]
@@ -245,6 +262,71 @@ namespace Corpus.Issue4675
         object expected = baseline.GetType("Item", throwOnError: true).GetMethod("Run").Invoke(null, null);
         Assert.Equal("Value = System.Char[]", expected);
 
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        var result = EmittedOracle.Evaluate(translated + "\nItem.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(expected, result.Value);
+    }
+
+    [Fact]
+    public void DelegateRecordPrinting_MatchesCSharpBaseline()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("CallbackRecord.cs", """
+                namespace Corpus.Issue4675 {
+                public interface IKey { }
+                public record Item(System.Func<IKey, bool> Callback) {
+                    public System.Func<int, bool>? Optional => null;
+                    public static string Run() {
+                        var builder = new System.Text.StringBuilder();
+                        new Item(x => true).PrintMembers(builder);
+                        return builder.ToString();
+                    }
+                    }
+                }
+                """),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        using var baselineImage = new MemoryStream();
+        Assert.True(project.Compilation.Emit(baselineImage).Success);
+        object expected = Assembly.Load(baselineImage.ToArray()).GetType("Corpus.Issue4675.Item", throwOnError: true)
+            .GetMethod("Run").Invoke(null, null);
+        Assert.NotNull(expected);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        var result = EmittedOracle.Evaluate(translated + "\nCorpus.Issue4675.Item.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(expected, result.Value);
+    }
+
+    [Fact]
+    public void RefLikeRecordPrinting_MatchesCSharpBaseline()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("SpanRecord.cs", """
+                public record Item(int N) {
+                    public System.ReadOnlySpan<int> Values => new[] { N };
+                    public static string Run() {
+                        var builder = new System.Text.StringBuilder();
+                        new Item(1).PrintMembers(builder);
+                        return builder.ToString();
+                    }
+                }
+                """),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        using var baselineImage = new MemoryStream();
+        Assert.True(project.Compilation.Emit(baselineImage).Success);
+        object expected = Assembly.Load(baselineImage.ToArray()).GetType("Item", throwOnError: true)
+            .GetMethod("Run").Invoke(null, null);
+        Assert.NotNull(expected);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));

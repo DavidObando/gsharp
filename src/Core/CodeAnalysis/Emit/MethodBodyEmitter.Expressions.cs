@@ -1178,6 +1178,42 @@ internal sealed partial class MethodBodyEmitter
         }
     }
 
+    private void EmitStructLiteralPrimaryArguments(BoundStructLiteralExpression literal, HashSet<BoundFieldInitializer> consumed)
+    {
+        var definition = literal.StructType.Definition ?? literal.StructType;
+        foreach (var parameter in definition.PrimaryConstructorParameters)
+        {
+            BoundFieldInitializer? value = null;
+            foreach (var initializer in literal.Initializers)
+            {
+                if (initializer.MemberName == parameter.Name)
+                {
+                    value = initializer;
+                    break;
+                }
+            }
+
+            if (value != null)
+            {
+                consumed.Add(value);
+                this.EmitExpression(value.Value);
+                continue;
+            }
+
+            var type = parameter.Type;
+            foreach (var property in literal.StructType.Properties)
+            {
+                if (property.Name == parameter.Name)
+                {
+                    type = property.Type;
+                    break;
+                }
+            }
+
+            this.EmitExpression(new BoundDefaultExpression(null, type));
+        }
+    }
+
     private void EmitStructLiteral(BoundStructLiteralExpression literal)
     {
         if (literal.CopySource != null)
@@ -1200,6 +1236,10 @@ internal sealed partial class MethodBodyEmitter
         // concrete type at the construction site.
         var typeDef = this.outer.userTokens.ResolveUserTypeToken(literal.StructType);
         bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(literal.StructType);
+        var structDefinition = literal.StructType.Definition ?? literal.StructType;
+        var callsPrimary = literal.CopySource == null && literal.StructType.ClrType == null
+            && structDefinition.IsData && structDefinition.HasPrimaryConstructor;
+        var primaryValues = new HashSet<BoundFieldInitializer>();
 
         // Class literal: newobj <ctor>; (dup; <value>; stfld) per init.
         if (literal.StructType.IsClass)
@@ -1223,7 +1263,31 @@ internal sealed partial class MethodBodyEmitter
             }
 
             EntityHandle ctorHandle;
-            if (isGeneric)
+            if (literal.CopySource != null)
+            {
+                this.EmitExpression(literal.CopySource);
+                var definition = literal.StructType.Definition ?? literal.StructType;
+                var clone = this.outer.cache.DataClassCloneHandles[definition];
+                EntityHandle cloneToken = clone;
+                if (isGeneric)
+                {
+                    var signature = new BlobBuilder();
+                    new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+                        .Parameters(0, result => this.outer.userTokens.EncodeTypeSymbolIntoSignature(result.Type(), definition), _ => { });
+                    cloneToken = this.outer.userTokens.GetUserStructMethodRef(literal.StructType, clone, "<Clone>$", signature);
+                }
+
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(cloneToken);
+                goto ApplyClassInitializers;
+            }
+
+            if (callsPrimary)
+            {
+                this.EmitStructLiteralPrimaryArguments(literal, primaryValues);
+                ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType);
+            }
+            else if (isGeneric)
             {
                 ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType);
             }
@@ -1252,8 +1316,14 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(ctorHandle);
 
+        ApplyClassInitializers:
             foreach (var init in literal.Initializers)
             {
+                if (primaryValues.Contains(init))
+                {
+                    continue;
+                }
+
                 // Issue #1211: a `prop` member is set through its setter/init
                 // accessor (`dup; <value>; callvirt set_X`) rather than a stfld.
                 if (init.Property != null)
@@ -1311,35 +1381,68 @@ internal sealed partial class MethodBodyEmitter
         // ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor) that
         // zero-initializes and runs ALL declared initializers in-type;
         // construct through it and skip the literal's injected
-        // declaration-origin entries, whose provenance survives lowering,
-        // so initializer side effects run once while authored overrides remain.
-        var structDefinition = literal.StructType.Definition ?? literal.StructType;
-        var usesOwningInitializerConstructor = this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
-            && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition);
+        // declared-initializer entries (identified below by reference to the
+        // symbol's InstanceFieldInitializers expressions — the binder injects
+        // exactly those instances), so initializer side effects run once.
+        if (literal.CopySource != null)
+        {
+            this.EmitExpression(literal.CopySource);
+            this.il.StoreLocal(slot);
+        }
+        else if (callsPrimary)
+        {
+            this.il.LoadLocalAddress(slot);
+            this.il.OpCode(ILOpCode.Initobj);
+            this.il.Token(typeDef);
+            this.il.LoadLocalAddress(slot);
+            this.EmitStructLiteralPrimaryArguments(literal, primaryValues);
+
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType));
+        }
+
+        HashSet<BoundExpression>? declaredInitializerValues = null;
+        if (callsPrimary || (literal.CopySource == null && this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
+            && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition)))
+        {
+            declaredInitializerValues = new HashSet<BoundExpression>(ReferenceEqualityComparer.Instance);
+            foreach (var declared in literal.StructType.InstanceFieldInitializers)
+            {
+                declaredInitializerValues.Add(declared.Value);
+            }
+
+            foreach (var declared in structDefinition.InstanceFieldInitializers)
+            {
+                declaredInitializerValues.Add(declared.Value);
+            }
+        }
 
         // ldloca slot; initobj typedef — zero-initializes the value type —
         // or, for a #3219 struct, ldloca slot; call .ctor() (which zeroes and
         // runs the declared initializers in-type).
-        this.il.LoadLocalAddress(slot);
-        if (usesOwningInitializerConstructor)
+        if (literal.CopySource == null && !callsPrimary)
         {
-            for (var marker = 0; marker < structDefinition.LiteralInitializerMarkerCount; marker++)
+            this.il.LoadLocalAddress(slot);
+            if (declaredInitializerValues != null)
             {
-                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType));
             }
-
-            this.il.OpCode(ILOpCode.Call);
-            this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType));
-        }
-        else
-        {
-            this.il.OpCode(ILOpCode.Initobj);
-            this.il.Token(typeDef);
+            else
+            {
+                this.il.OpCode(ILOpCode.Initobj);
+                this.il.Token(typeDef);
+            }
         }
 
         // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
         foreach (var init in literal.Initializers)
         {
+            if (primaryValues.Contains(init))
+            {
+                continue;
+            }
+
             // Issue #3219: the synthesized ctor already ran this declared
             // initializer in-type.
             if (usesOwningInitializerConstructor && init.IsDeclarationInitializer)

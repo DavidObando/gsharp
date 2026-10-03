@@ -550,6 +550,11 @@ internal sealed class DataStructSynthesizer
             this.EmitDataStructDeconstruct(structSym);
         }
 
+        if (GetDataEqualityBase(structSym) is { } equalityBase)
+        {
+            this.EmitDataClassBaseEquals(equalityBase);
+        }
+
         // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
         // synthesized type has no plain fields (only get-only auto-properties
         // — see Binding.AnonymousTypeCache), so its primary-ctor "call" sugar
@@ -1503,12 +1508,68 @@ internal sealed class DataStructSynthesizer
     }
 
     /// <summary>
-    /// Issue #410 / ADR-0029: emits
-    /// <c>public void Deconstruct(out T1 F1, out T2 F2, …)</c> assigning each
-    /// field to the corresponding out parameter. Field names match the
-    /// declaration order so C# users get meaningful tooling hints when
-    /// destructuring positionally.
+    /// Finds the record base whose typed equality slot needs forwarding.
     /// </summary>
+    /// <param name="type">The record being synthesized.</param>
+    /// <returns>The nearest record base, or null when no bridge is needed.</returns>
+    internal static StructSymbol? GetDataEqualityBase(StructSymbol type)
+    {
+        if (!type.IsClass || !type.IsData)
+        {
+            return null;
+        }
+
+        foreach (var parent in type.GetHierarchy())
+        {
+            if (parent != type && parent.IsData)
+            {
+                foreach (var method in type.Methods)
+                {
+                    if (method.Name == "Equals" && method.IsOverride
+                        && method.Parameters.Length == 2 && method.Parameters[1].Type == parent)
+                    {
+                        return null;
+                    }
+                }
+
+                return parent;
+            }
+        }
+
+        return null;
+    }
+
+    private void EmitDataClassBaseEquals(StructSymbol baseType)
+    {
+        var objectSignature = new BlobBuilder();
+        new BlobEncoder(objectSignature).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, result => result.Type().Boolean(), parameters => parameters.AddParameter().Type().Object());
+        var objectEquals = this.emitCtx.Metadata.AddMemberReference(
+            this.wellKnown.ObjectTypeRef,
+            this.emitCtx.Metadata.GetOrAddString("Equals"),
+            this.emitCtx.Metadata.GetOrAddBlob(objectSignature));
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.emitCtx.MetadataOnly)
+        {
+            il.LoadArgument(0);
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Callvirt);
+            il.Token(objectEquals);
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, result => result.Type().Boolean(), parameters => this.encodeTypeSymbol(parameters.AddParameter().Type(), baseType));
+        this.emitCtx.Metadata.AddMethodDefinition(
+            MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Final,
+            MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            this.emitCtx.Metadata.GetOrAddString("Equals"),
+            this.emitCtx.Metadata.GetOrAddBlob(signature),
+            this.FinishInlineBody(il),
+            this.nextParameterHandle());
+    }
+
     private void EmitDataStructDeconstruct(StructSymbol structSym)
     {
         var members = TypeMemberModel.GetDataDeconstructionMembers(structSym);
@@ -1517,28 +1578,41 @@ internal sealed class DataStructSynthesizer
         {
             for (int i = 0; i < members.Length; i++)
             {
-                var field = Invariant.Required(
-                    GetDeconstructionBackingField(members[i]),
-                    "a deconstruction member is either a field or an auto-property, and both carry a backing field");
-                var fieldHandle = this.resolveUserFieldToken(structSym, field);
+                var memberType = GetDeconstructionMemberType(members[i]);
+                var field = GetDeconstructionBackingField(members[i]);
                 il.LoadArgument(i + 1);
                 il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
+                if (field != null)
+                {
+                    il.OpCode(ILOpCode.Ldfld);
+                    il.Token(this.resolveUserFieldToken(structSym, field));
+                }
+                else
+                {
+                    var signature = new BlobBuilder();
+                    new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+                        .Parameters(0, result => this.encodeTypeSymbol(result.Type(), memberType), _ => { });
+                    var getter = this.emitCtx.Metadata.AddMemberReference(
+                        this.resolveUserTypeToken(structSym),
+                        this.emitCtx.Metadata.GetOrAddString("get_" + members[i].Name),
+                        this.emitCtx.Metadata.GetOrAddBlob(signature));
+                    il.OpCode(structSym.IsClass ? ILOpCode.Callvirt : ILOpCode.Call);
+                    il.Token(getter);
+                }
 
                 // ADR-0087 §3 R3: TypeParameterSymbol fields are now
                 // encoded as VAR(idx) (not erased to Object); the
                 // indirect store must use `Stobj` against the VAR
                 // TypeSpec, not `Stind_ref`.
-                if (field.Type is TypeParameterSymbol)
+                if (memberType is TypeParameterSymbol)
                 {
                     il.OpCode(ILOpCode.Stobj);
-                    il.Token(this.getElementTypeToken(field.Type));
+                    il.Token(this.getElementTypeToken(memberType));
                 }
-                else if (ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type))
+                else if (ReflectionMetadataEmitter.IsValueTypeSymbol(memberType))
                 {
                     il.OpCode(ILOpCode.Stobj);
-                    il.Token(this.getElementTypeToken(field.Type));
+                    il.Token(this.getElementTypeToken(memberType));
                 }
                 else
                 {

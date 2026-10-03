@@ -501,7 +501,8 @@ internal static class ExpressionTreeRestrictionValidator
             case BoundStructLiteralExpression structLiteral:
                 if (structLiteral.CopySource != null)
                 {
-                    ValidateExpression(structLiteral.CopySource, diagnostics);
+                    diagnostics.ReportExpressionTreeUnsupported(LocationOf(expression.Syntax), "a data copy");
+                    return;
                 }
 
                 // User-declared struct/class composite literals (`Point{X:
