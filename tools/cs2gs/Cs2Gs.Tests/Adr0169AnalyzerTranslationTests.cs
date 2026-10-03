@@ -384,6 +384,74 @@ public sealed class BlockSurfaceAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void OperationRegistrationWrapper_ReservesCtxAgainstLiftedHandler()
+    {
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class CtxAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TESTCTX1"", ""Title"", ""Message"", ""Testing"", DiagnosticSeverity.Warning, true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterOperationAction(ctx, OperationKind.IsType);
+        static void ctx(OperationAnalysisContext value) => Other<int>(value);
+        static void Other<T>(OperationAnalysisContext value) => ctx(value);
+    }
+}");
+
+        Assert.Contains("func ctx(", printed, StringComparison.Ordinal);
+        Assert.Contains("ctx_2 BoundNodeAnalysisContext", printed, StringComparison.Ordinal);
+        Assert.Contains("ctx(ctx_2)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void SyntaxRegistrationWrapper_ReservesCtxAgainstLiftedHandler()
+    {
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class CtxAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TESTCTX2"", ""Title"", ""Message"", ""Testing"", DiagnosticSeverity.Warning, true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(ctx, SyntaxKind.ConditionalAccessExpression);
+        static void ctx(SyntaxNodeAnalysisContext value) => Other<int>(value);
+        static void Other<T>(SyntaxNodeAnalysisContext value) => ctx(value);
+    }
+}");
+
+        Assert.Contains("func ctx(", printed, StringComparison.Ordinal);
+        Assert.Contains("ctx_2 SyntaxNodeAnalysisContext", printed, StringComparison.Ordinal);
+        Assert.Contains("ctx(ctx_2)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void SpecialTypeComparison_AssertsTheNilableContainingTypeReceiver()
     {
         // Issue #4287: `x.SpecialType != SpecialType.System_Object` is

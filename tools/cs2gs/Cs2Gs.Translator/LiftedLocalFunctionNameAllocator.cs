@@ -26,6 +26,8 @@ internal sealed class LiftedLocalFunctionNameAllocator
     // other's name, whichever document is translated first.
     private readonly HashSet<string> helperNames = new(StringComparer.Ordinal);
     private readonly HashSet<string> aliasNames = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<string>> aliasesByTarget =
+        new(StringComparer.Ordinal);
 
     // Issue #4302: synthesized locals can print beside bare helper references
     // in the same emitted type, so the two reserve against each other
@@ -88,6 +90,70 @@ internal sealed class LiftedLocalFunctionNameAllocator
             }
 
             return localNames.Add(name);
+        }
+    }
+
+    public bool ReserveLocalName(INamedTypeSymbol emittedOwner, string name)
+    {
+        lock (this.gate)
+        {
+            ISymbol owner = emittedOwner?.OriginalDefinition;
+            if (owner == null)
+            {
+                return true;
+            }
+
+            if (this.usedByType.TryGetValue(owner, out HashSet<string> helpers)
+                && helpers.Contains(name))
+            {
+                return false;
+            }
+
+            if (!this.localNamesByType.TryGetValue(owner, out HashSet<string> localNames))
+            {
+                localNames = new HashSet<string>(StringComparer.Ordinal);
+                this.localNamesByType.Add(owner, localNames);
+            }
+
+            localNames.Add(name);
+            return true;
+        }
+    }
+
+    public string ClaimAlias(string target, string baseAlias, Func<string, bool> reserved)
+    {
+        lock (this.gate)
+        {
+            if (this.aliasesByTarget.TryGetValue(target, out List<string> existing))
+            {
+                foreach (string existingAlias in existing)
+                {
+                    if (!reserved(existingAlias))
+                    {
+                        return existingAlias;
+                    }
+                }
+            }
+
+            string alias = baseAlias;
+            for (int suffix = 2;
+                reserved(alias)
+                    || this.helperNames.Contains(alias)
+                    || this.aliasNames.Contains(alias);
+                suffix++)
+            {
+                alias = $"{baseAlias}_{suffix}";
+            }
+
+            this.aliasNames.Add(alias);
+            if (existing == null)
+            {
+                existing = new List<string>();
+                this.aliasesByTarget.Add(target, existing);
+            }
+
+            existing.Add(alias);
+            return alias;
         }
     }
 

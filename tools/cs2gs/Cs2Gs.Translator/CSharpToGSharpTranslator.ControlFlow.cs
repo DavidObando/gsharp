@@ -2270,12 +2270,12 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ITypeSymbol receiverType = this.context.GetTypeInfo(member.Expression).Type;
-            bool mutableValueReceiver = receiverType switch
-            {
-                ITypeParameterSymbol typeParameter => !typeParameter.IsReferenceType,
-                INamedTypeSymbol { TypeKind: TypeKind.Struct } named => !named.IsReadOnly,
-                _ => false,
-            };
+            bool mutableValueReceiver =
+                receiverType is ITypeParameterSymbol typeParameter
+                    ? !typeParameter.IsReferenceType
+                    : receiverType is INamedTypeSymbol named
+                        && named.TypeKind == TypeKind.Struct
+                        && !named.IsReadOnly;
             return mutableValueReceiver && this.WritesStorageOf(member.Expression, symbol);
         }
 
@@ -2286,18 +2286,19 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (this.context.GetSymbolInfo(access).Symbol is not IPropertySymbol property
                 || property.GetMethod is not { IsReadOnly: false }
-                || property.ContainingType is { IsReferenceType: true, TypeKind: not TypeKind.Interface })
+                || (property.ContainingType is { IsReferenceType: true } container
+                    && container.TypeKind != TypeKind.Interface))
             {
                 return false;
             }
 
             ITypeSymbol receiverType = this.context.GetTypeInfo(receiver).Type;
-            bool mutableValueReceiver = receiverType switch
-            {
-                ITypeParameterSymbol typeParameter => !typeParameter.IsReferenceType,
-                INamedTypeSymbol { TypeKind: TypeKind.Struct } named => !named.IsReadOnly,
-                _ => false,
-            };
+            bool mutableValueReceiver =
+                receiverType is ITypeParameterSymbol typeParameter
+                    ? !typeParameter.IsReferenceType
+                    : receiverType is INamedTypeSymbol named
+                        && named.TypeKind == TypeKind.Struct
+                        && !named.IsReadOnly;
             return mutableValueReceiver && this.WritesStorageOf(receiver, symbol);
         }
 

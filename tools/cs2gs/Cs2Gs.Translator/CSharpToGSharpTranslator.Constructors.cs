@@ -2026,6 +2026,27 @@ public sealed partial class CSharpToGSharpTranslator
                 .TryClaimLocalName(owner, name);
         }
 
+        private bool ReserveSynthesizedLocalName(string name, SyntaxNode site = null)
+        {
+            INamedTypeSymbol owner = this.state.CurrentEmittedAggregate
+                ?? this.context.SemanticModel.GetEnclosingSymbol(
+                    site?.SpanStart ?? this.state.CurrentBodyScope?.SpanStart ?? 0)?.ContainingType;
+            return LiftedLocalFunctionNameAllocator
+                .For(this.context.Compilation)
+                .ReserveLocalName(owner, name);
+        }
+
+        private string AllocateSynthesizedLocalName(string stem, SyntaxNode site)
+        {
+            string candidate = stem;
+            for (int suffix = 2; !this.TryClaimSynthesizedLocalName(candidate, site); suffix++)
+            {
+                candidate = $"{stem}_{suffix}";
+            }
+
+            return candidate;
+        }
+
         // Issue #4302: the names a lifted helper emitted into `aggregate`
         // could collide with that are not visible as source identifiers:
         // metadata members of the aggregate's (and the Roslyn containing

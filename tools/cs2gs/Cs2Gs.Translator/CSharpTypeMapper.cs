@@ -1226,6 +1226,7 @@ public sealed class CSharpTypeMapper
         string alias = LiftedLocalFunctionNameAllocator
             .For(context.Compilation)
             .ClaimAlias(
+                target,
                 $"{namespaceQualifier}{simpleName}",
                 candidate => reserved.Contains(candidate)
                     || HasVisibleCallableName(candidate, context, location, names));

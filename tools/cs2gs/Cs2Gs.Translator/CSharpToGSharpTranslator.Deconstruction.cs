@@ -1168,7 +1168,7 @@ public sealed partial class CSharpToGSharpTranslator
             for (int suffix = 2;
                 occupied.Contains(candidate)
                     || allocated.Contains(candidate)
-                    || !this.TryClaimSynthesizedLocalName(candidate, anchor);
+                    || !this.ReserveSynthesizedLocalName(candidate, anchor);
                 suffix++)
             {
                 candidate = stem + suffix.ToString(CultureInfo.InvariantCulture);
