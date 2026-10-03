@@ -1961,6 +1961,115 @@ public class Issue4612GenericStoreBridgeTests
         }
     }
 
+    [Fact]
+    public async Task TranslateStage_AppSummaryAggregatesOwnDocumentsWithoutChargingReferencedProjects()
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "loader-tests", "generic-store-app-summary", Guid.NewGuid().ToString("N"));
+        string projectDir = Path.Combine(root, "App");
+        string siblingDir = Path.Combine(root, "Sibling");
+        string outRoot = Path.Combine(root, "migration");
+        try
+        {
+            Directory.CreateDirectory(projectDir);
+            Directory.CreateDirectory(siblingDir);
+            File.WriteAllText(Path.Combine(root, "Directory.Build.props"), "<Project />");
+            string projectPath = Path.Combine(projectDir, "App.csproj");
+            File.WriteAllText(projectPath, """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><ProjectReference Include="../Sibling/Sibling.csproj" /></ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(siblingDir, "Sibling.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDir, "AppProbe.cs"), """
+                #nullable enable
+                using System.Collections.Generic;
+                public static class AppBridge
+                {
+                    public static void Add(List<string> values)
+                    {
+                        values.Add(Maybe());
+                        SiblingBridge.Add(values);
+                        values.Add("safe");
+                    }
+                    private static string? Maybe() => null;
+                }
+                """);
+            File.WriteAllText(Path.Combine(siblingDir, "SiblingProbe.cs"), """
+                #nullable enable
+                using System.Collections.Generic;
+                public static class SiblingBridge
+                {
+                    public static void Add(List<string> values)
+                    {
+                        values.Add(Maybe());
+                        values.Add(Maybe());
+                        values.Add("safe");
+                    }
+                    private static string? Maybe() => null;
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectDir, "ExtraProbe.cs"), """
+                #nullable enable
+                using System.Collections.Generic;
+                public static class ExtraBridge
+                {
+                    public static void Add(List<string> values)
+                    {
+                        values.Add(Maybe());
+                        values.Add(Maybe());
+                        values.Add("safe");
+                    }
+                    private static string? Maybe() => null;
+                }
+                """);
+            var pipeline = new MigrationPipeline(
+                new PipelineOptions { OutputRoot = outRoot, CompileViaSdk = false },
+                new IMigrationStage[] { new TranslateStage() });
+            TextWriter originalError = Console.Error;
+            using var capturedError = new StringWriter();
+            RunResult result;
+            Console.SetError(capturedError);
+            try
+            {
+                result = await pipeline.RunAsync(new[] { new CorpusApp("test/AppWideBridges", projectPath, TargetKind.Library) });
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+
+            AppResult app = Assert.Single(result.Apps);
+            Assert.True(app.Succeeded, app.FailureCategory);
+            string[] emitted = Directory.GetFiles(outRoot, "*.gs", SearchOption.AllDirectories);
+            Assert.Equal(3, emitted.Length);
+            Assert.Equal(5, emitted.Sum(path =>
+                System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(path), @"Maybe\(\)!!").Count));
+            string log = File.ReadAllText(Assert.Single(Directory.GetFiles(outRoot, "translate.log", SearchOption.AllDirectories)));
+            string id = CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId;
+            string[] sites = log.Split('\n')
+                .Where(line => line.StartsWith(id + " (non-fatal): ", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Equal(3, sites.Length);
+            Assert.Equal(3, sites.Distinct(StringComparer.Ordinal).Count());
+            Assert.Single(sites, site => site.Contains("AppProbe.cs(", StringComparison.Ordinal));
+            Assert.Equal(2, sites.Count(site => site.Contains("ExtraProbe.cs(", StringComparison.Ordinal)));
+            Assert.DoesNotContain(sites, site => site.Contains("SiblingProbe.cs(", StringComparison.Ordinal));
+            string summary = Assert.Single(
+                capturedError.ToString().Split('\n'),
+                line => line.Contains(id, StringComparison.Ordinal));
+            Assert.Contains("test/AppWideBridges: 3 " + id + " site(s):", summary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
     private static (string Printed, List<TranslationDiagnostic> Sites) Translate(
         string source,
         IReadOnlyList<MetadataReference> references = null,
