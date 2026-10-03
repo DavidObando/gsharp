@@ -479,7 +479,7 @@ internal sealed class ConstructorBodyEmitter
     /// <returns>The method-body stream offset.</returns>
     internal int EmitValueStructDefaultConstructorBodyBytes(StructSymbol structSym)
     {
-        var initializersRunInPrimaryConstructor = structSym.IsData && structSym.HasPrimaryConstructor;
+        var initializersRunInPrimaryConstructor = structSym.ValueStructDefaultCtorIsZeroInitialization;
         if (!initializersRunInPrimaryConstructor
             && TryEmitInitialization(structSym, false, default, default, out var planned))
         {

@@ -2682,7 +2682,7 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        var structLiteral = new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
+        var structLiteral = new BoundStructLiteralExpression(syntax, structSymbol, inits.ToImmutable());
         if (orderedInitializers == null)
         {
             return argumentStatements == null

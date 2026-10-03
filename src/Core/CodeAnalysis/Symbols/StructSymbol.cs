@@ -714,6 +714,9 @@ public sealed class StructSymbol : TypeSymbol
         }
     }
 
+    /// <summary>Gets a value indicating whether the compiler-owned value-struct default constructor initializes only sound zero values.</summary>
+    internal bool ValueStructDefaultCtorIsZeroInitialization => !IsClass && IsData && HasPrimaryConstructor;
+
     /// <summary>
     /// Gets a value indicating whether the class was declared with the
     /// <c>abstract</c> modifier (ADR-0195 / issue #4674). Unlike the

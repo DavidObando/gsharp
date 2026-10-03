@@ -131,6 +131,15 @@ primary constructor's parameter scope. Scalar literal inputs are prepared in
 written order; omitted primary arguments are retained as bound default children
 before rewriting and scratch-local planning, including struct-valued and open-generic
 defaults. Emission and expression trees consume those same prepared arguments.
+Named data-class and data-struct constructor expression trees use ordinary
+`NewExpression` constructor/argument semantics, without anonymous member metadata
+or inherited property-name lookup. Property-based anonymous literals retain
+their ordered `NewExpression.Members` contract, recorded by their synthesizer.
+Remaining property bindings and reads resolve the bound member's actual
+declaring construction by symbol/accessor identity and use declared-only
+reflection, preserving hidden and truly inherited generic properties.
+Ordered literals pass their original syntax to retained omitted arguments;
+required managed-reference defaults remain source-anchored diagnostics.
 Collection-initializer forms prepare constructor inputs and the
 leading scalar prefix before construction, then retain the order of remaining
 member/collection operations. Native copying is a distinct bound

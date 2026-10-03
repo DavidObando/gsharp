@@ -349,6 +349,12 @@ throws `NullReferenceException`; it never treats null as a zero-valued target.
 Generic and foreign initialization do not prove non-nullness automatically.
 An implementation must reject a compiler-owned aggregate initialization that
 would silently synthesize a null non-null-handle field.
+Positional data-struct collection-zero helpers do not run ordinary primary
+initializers. Their actual zero-valued uses are checked without crediting those
+initializers, including nested/generic storage and auto-property backing fields.
+Explicit primary construction still runs its initializers once; ordinary
+structs retain their validated in-type initializer constructors. Recursive
+supplied zero children are checked by their own actual construction path.
 
 Handle assignment copies the handle value; it does not copy the referent.
 `var copy = *p` copies `T` normally. Promoting `copy` later identifies that

@@ -397,8 +397,11 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             }
         }
 
+        // A positional value-type default constructor is a zero-storage helper,
+        // not the primary initialization path. Its uses are checked below with
+        // zero provenance, without crediting ordinary declared initializers.
         if ((type.ExplicitConstructors.IsDefaultOrEmpty && type.IsClass)
-            || (type.NeedsSynthesizedValueStructDefaultCtor && type.LiteralInitializerMarkerCount == 0))
+            || (type.NeedsSynthesizedValueStructDefaultCtor && !type.ValueStructDefaultCtorIsZeroInitialization))
         {
             this.CheckImplicitConstructorPath(type, fields);
         }
@@ -423,8 +426,31 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             this.diagnostics);
     }
 
-    private void CheckImplicitConstructorPath(StructSymbol type, ImmutableArray<FieldSymbol> fields)
+    private void CheckImplicitConstructorPath(StructSymbol type, ImmutableArray<FieldSymbol> fields, BoundStructLiteralExpression? zeroValue = null)
     {
+        if (zeroValue != null)
+        {
+            if (type.NeedsSynthesizedValueStructDefaultCtor && !type.ValueStructDefaultCtorIsZeroInitialization)
+            {
+                // Ordinary structs retain their validated in-type initializer
+                // constructor. Positional data zero helpers do not run it.
+                return;
+            }
+
+            var supplied = zeroValue.Initializers.Select(initializer => initializer.Field ?? initializer.Property?.BackingField)
+                .OfType<FieldSymbol>().ToHashSet();
+            var storage = type.Fields.Concat(type.Properties.Select(property => property.BackingField).OfType<FieldSymbol>()).Distinct();
+            foreach (var field in storage)
+            {
+                if (!supplied.Contains(field) && this.RequiredHandle(field.Type) != null)
+                {
+                    this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{field.Name}'; explicitly construct the aggregate");
+                }
+            }
+
+            return;
+        }
+
         var initialized = type.InstanceFieldInitializers.Keys.Select(field => field.Name)
             .Concat(type.PrimaryConstructorParameters.Select(parameter => parameter.Name))
             .ToHashSet();
@@ -486,24 +512,13 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void CheckConstruction(StructSymbol type, BoundExpression node, IEnumerable<FieldSymbol?> initialized, bool explicitConstructor)
     {
-        type = this.initializerOwner?.SubstituteMemberType(type) as StructSymbol ?? type;
-
-        // Declaration expressions also execute in authored constructors.
-        // Check their defaults in the actual constructed owning scope first.
-        if (!ReferenceEquals(type, type.Definition) && this.analyzedInitializerConstructions.Add(type))
+        if (node is BoundStructLiteralExpression { IsZeroInitialization: true } zeroValue)
         {
-            var previousOwner = this.initializerOwner;
-            this.initializerOwner = type;
-            foreach (var initializer in type.Definition.InstanceFieldInitializers.Values)
-            {
-                this.VisitExpression(initializer);
-            }
-
-            this.initializerOwner = previousOwner;
+            this.CheckImplicitConstructorPath(type, ImmutableArray<FieldSymbol>.Empty, zeroValue);
+            return;
         }
 
-        if (explicitConstructor || (type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty)
-            && node is not BoundStructLiteralExpression { StructType.NeedsSynthesizedValueStructDefaultCtor: true }))
+        if (explicitConstructor || type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty))
         {
             return;
         }
@@ -549,7 +564,8 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         IEnumerable<TypeSymbol> fields;
         if (type is StructSymbol { IsClass: false } source)
         {
-            fields = source.Fields.Select(f => f.Type);
+            fields = source.Fields.Select(f => f.Type)
+                .Concat(source.Properties.Select(p => p.BackingField).OfType<FieldSymbol>().Select(f => f.Type));
         }
         else if (type is TupleTypeSymbol tuple)
         {

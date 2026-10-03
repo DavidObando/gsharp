@@ -429,6 +429,59 @@ public static class TypeMemberModel
         return false;
     }
 
+    /// <summary>Finds the effective declaring construction of an already-bound property by member/accessor identity.</summary>
+    /// <param name="type">The receiver or declaring construction.</param>
+    /// <param name="boundProperty">The selected property, not another member with the same name.</param>
+    /// <param name="property">The property in the effective construction.</param>
+    /// <param name="declaringType">The effective declaring construction.</param>
+    /// <returns>Whether the bound property was found.</returns>
+    public static bool TryGetPropertyWithOwner(
+        TypeSymbol type,
+        PropertySymbol boundProperty,
+        [NotNullWhen(true)] out PropertySymbol? property,
+        [NotNullWhen(true)] out TypeSymbol? declaringType)
+    {
+        IEnumerable<TypeSymbol> owners = type switch
+        {
+            StructSymbol aggregate => aggregate.GetHierarchy(),
+            InterfaceSymbol contract => contract.SelfAndAllBaseInterfaces(),
+            _ => ImmutableArray<TypeSymbol>.Empty,
+        };
+        foreach (var owner in owners)
+        {
+            IEnumerable<PropertySymbol> candidates;
+            if (owner is StructSymbol aggregate)
+            {
+                candidates = boundProperty.IsStatic ? aggregate.StaticProperties : aggregate.Properties;
+            }
+            else if (owner is InterfaceSymbol contract)
+            {
+                contract.EnsureMembersResolved();
+                candidates = (contract.Definition ?? contract).Properties;
+            }
+            else
+            {
+                continue;
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (ReferenceEquals(candidate, boundProperty)
+                    || (boundProperty.GetterSymbol != null && ReferenceEquals(candidate.GetterSymbol, boundProperty.GetterSymbol))
+                    || (boundProperty.SetterSymbol != null && ReferenceEquals(candidate.SetterSymbol, boundProperty.SetterSymbol)))
+                {
+                    property = candidate;
+                    declaringType = owner;
+                    return true;
+                }
+            }
+        }
+
+        property = null;
+        declaringType = null;
+        return false;
+    }
+
     /// <summary>
     /// Issue #2150: tries to find a data-class positional (primary-constructor)
     /// parameter named <paramref name="name"/> on <paramref name="type"/> or any
