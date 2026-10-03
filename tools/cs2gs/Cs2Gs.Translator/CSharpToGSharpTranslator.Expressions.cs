@@ -43,20 +43,82 @@ public sealed partial class CSharpToGSharpTranslator
             return new IdentifierExpression("nil");
         }
 
-        private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
+        // Issue #4302: the single place a non-invocation reference to a lifted
+        // local function (an identifier or a generic method group used as a
+        // value) is rewritten to its lifted helper name. Every simple-name
+        // path routes through here so no reference keeps the source name
+        // after a collision suffix (`First_2`).
+        private bool TryTranslateLiftedLocalFunctionReference(SimpleNameSyntax name, out GExpression translated)
         {
-            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol localFunction
+            if (this.context.GetSymbolInfo(name).Symbol is IMethodSymbol recursiveLiftedLocal
+                && recursiveLiftedLocal.MethodKind == MethodKind.LocalFunction
+                && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
+                    recursiveLiftedLocal.OriginalDefinition,
+                    out LiftedRecursiveLocalFunction recursiveLift))
+            {
+                // Mirrors the invocation path: a static lift lands in the
+                // emitted aggregate's `shared` block, so only a site outside
+                // that aggregate's sibling-static scope qualifies it.
+                INamedTypeSymbol recursiveOwner =
+                    this.state.CurrentEmittedAggregate ?? recursiveLiftedLocal.ContainingType;
+                translated = this.LiftedLocalFunctionReference(
+                    recursiveOwner,
+                    recursiveLift.Name,
+                    recursiveLift.IsStatic,
+                    name);
+                return true;
+            }
+
+            if (this.context.GetSymbolInfo(name).Symbol is IMethodSymbol localFunction
                 && localFunction.MethodKind == MethodKind.LocalFunction
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction.OriginalDefinition, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
-                // Issue #3471: the lifted helper lands in the containing
-                // aggregate's `shared` block, so a same-type site names it bare.
-                return this.IsBareSiblingStaticScope(containingType, liftedName, identifier)
-                    ? new IdentifierExpression(liftedName)
-                    : new MemberAccessExpression(
-                        this.StaticQualifierReceiver(containingType, identifier.GetLocation()),
-                        liftedName);
+                INamedTypeSymbol emittedOwner = this.state.CurrentEmittedAggregate ?? containingType;
+
+                translated = this.LiftedLocalFunctionReference(
+                    emittedOwner,
+                    liftedName,
+                    isStatic: true,
+                    name);
+                return true;
+            }
+
+            translated = null;
+            return false;
+        }
+
+        // Issue #4302: every reference to a lifted helper sits inside the local
+        // function's enclosing member, so a same-aggregate static reference
+        // stays bare. A type qualifier there could itself be captured (by a
+        // local named like the owner, or by a method type parameter shadowing
+        // the owner's `T`). Bare is safe because the allocator rejects every
+        // source name visible in that member, and synthesized locals and
+        // aliases reserve helper names (SynthesizePatternDesignator,
+        // LiftedLocalFunctionNameAllocator.ClaimAlias).
+        private GExpression LiftedLocalFunctionReference(
+            INamedTypeSymbol owner,
+            string name,
+            bool isStatic,
+            SyntaxNode site)
+        {
+            if (!isStatic)
+            {
+                return new MemberAccessExpression(new ThisExpression(), name);
+            }
+
+            return owner == null || this.IsBareSiblingStaticScope(owner, name, site)
+                ? new IdentifierExpression(name)
+                : new MemberAccessExpression(
+                    this.StaticQualifierReceiver(owner, site.GetLocation()),
+                    name);
+        }
+
+        private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
+        {
+            if (this.TryTranslateLiftedLocalFunctionReference(identifier, out GExpression liftedReference))
+            {
+                return liftedReference;
             }
 
             // Issue #3399: a member of a recursive/mutually recursive SCC of
@@ -250,9 +312,15 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (node is MethodDeclarationSyntax method
                     && this.context.GetDeclaredSymbol(method) is IMethodSymbol
-                        { IsExtensionMethod: true })
+                        { IsExtensionMethod: true } extensionMethod)
                 {
-                    return false;
+                    return this.state.CurrentEmittedAggregate is { } emittedAggregate
+                        && SymbolEqualityComparer.Default.Equals(
+                            emittedAggregate.OriginalDefinition,
+                            owner.OriginalDefinition)
+                        && !SymbolEqualityComparer.Default.Equals(
+                            extensionMethod.ContainingType.OriginalDefinition,
+                            owner.OriginalDefinition);
                 }
 
                 if (node is TypeDeclarationSyntax typeDeclaration)

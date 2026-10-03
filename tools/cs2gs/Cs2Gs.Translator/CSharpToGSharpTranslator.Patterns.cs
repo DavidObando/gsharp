@@ -78,6 +78,23 @@ public sealed partial class CSharpToGSharpTranslator
                         return new TypeExpression(typeRef);
                     }
 
+                    if (this.TryTranslateLiftedLocalFunctionReference(generic, out GExpression liftedGeneric))
+                    {
+                        IMethodSymbol invoke = GetDelegateInvokeMethod(
+                            this.context.GetTypeInfo(generic).ConvertedType);
+                        if (invoke != null
+                            && this.context.GetSymbolInfo(generic).Symbol is IMethodSymbol localFunction)
+                        {
+                            return this.typeMapper.WithMetadataImportCollisionQualification(
+                                () => this.TranslateExactMethodGroupArgument(
+                                    generic,
+                                    localFunction,
+                                    invoke));
+                        }
+
+                        return liftedGeneric;
+                    }
+
                     return new IdentifierExpression(this.EmittedName(
                         this.context.GetSymbolInfo(generic).Symbol,
                         generic.Identifier.ValueText));
@@ -1408,7 +1425,7 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns><c>{ let t = member; test(t) }</c>.</returns>
         private GExpression BindPatternMemberOnce(GExpression member, Func<GExpression, GExpression> test)
         {
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             var local = new IdentifierExpression(temp);
             if (this.IsGSharpNullablePatternReceiver(member))
             {
@@ -1445,7 +1462,7 @@ public sealed partial class CSharpToGSharpTranslator
                 storageType = MakeNullable(storageType);
             }
 
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             var local = new IdentifierExpression(temp);
             this.state.StoredPatternCaptures.Add(local);
             if (gsharpNullable)
