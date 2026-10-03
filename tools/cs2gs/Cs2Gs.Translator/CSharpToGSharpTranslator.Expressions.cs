@@ -4515,13 +4515,14 @@ public sealed partial class CSharpToGSharpTranslator
                         new List<int> { i },
                         this.context.SiblingCompilations))
                 {
-                    // The key tuple's element slot has no symbol: reported as
-                    // an unknown target.
+                    // The C# key supplies the location; the bound element
+                    // supplies the slot of this synthesized assertion.
                     element = this.ReportStoreBridge(
                         argument.Expression,
                         element,
                         new NonNullAssertionExpression(element),
-                        targetSymbol: null);
+                        targetSymbol: null,
+                        knownSlotType: keyElement.Type);
                     anyAsserted = true;
                 }
 
