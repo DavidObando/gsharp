@@ -1488,6 +1488,28 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void BoxedNestedTupleBridge_RetainsTheResolvedObjectDestination()
+    {
+        string source = """
+            #nullable enable
+            public static class C
+            {
+                private static T Id<T>(T value) => value;
+                public static object Result(string? maybe) => Id<(object, object)>(((maybe!, "nested"), "tail"));
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("maybe!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "maybe!"), Position(site));
+        Assert.StartsWith(
+            "kind=forgiven,explicit-type-argument | target=C.Id<(object, object)>((object, object)) parameter 'value' | slot-type=object (NotAnnotated)",
+            site.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });

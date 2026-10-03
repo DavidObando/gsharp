@@ -650,8 +650,12 @@ public sealed partial class CSharpToGSharpTranslator
         {
             for (int i = tupleIndices.Count - 1; i >= 0; i--)
             {
-                if (slotType is not INamedTypeSymbol { IsTupleType: true } tupleType
-                    || tupleIndices[i] >= tupleType.TupleElements.Length)
+                if (slotType is not INamedTypeSymbol { IsTupleType: true } tupleType)
+                {
+                    return slotType;
+                }
+
+                if (tupleIndices[i] >= tupleType.TupleElements.Length)
                 {
                     return null;
                 }
