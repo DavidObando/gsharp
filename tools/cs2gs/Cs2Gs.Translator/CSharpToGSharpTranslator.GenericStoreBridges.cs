@@ -213,12 +213,12 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else
             {
-                // Element stores own the value, not the surrounding local or
-                // method that receives the initialized collection.
-                (ISymbol elementStore, ITypeSymbol knownSlotType) = this.ResolveElementStore(forgiving);
-                if (elementStore != null)
+                // A value-producing write may feed another store. Prefer a
+                // resolved generic store over the immediate concrete sink.
+                (ISymbol finalStore, ITypeSymbol knownSlotType) = this.ResolveFinalStore(forgiving);
+                if (finalStore != null)
                 {
-                    targetSymbol = elementStore;
+                    targetSymbol = finalStore;
                 }
 
                 kind = this.ClassifyGenericStoreSlot(forgiving, targetSymbol, knownSlotType, out slotType, out resultDependsOnSlot);
@@ -271,19 +271,35 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// The array or collection a value is stored into as an element, seen
-        /// through parentheses and conditional arms: an array initializer
-        /// element, a collection-expression element, or the right-hand side of
-        /// an array element assignment, a collection initializer's Add argument,
-        /// or an iterator yield.
+        /// The final argument or element store a value feeds through the shared
+        /// transparent traversal, including value-producing assignments.
         /// </summary>
         /// <param name="value">The stored value.</param>
-        /// <returns>The store (an array or collection type) and, for a collection, its element type; nulls when the value is not an element store.</returns>
-        private (ISymbol Store, ITypeSymbol ElementType) ResolveElementStore(ExpressionSyntax value)
+        /// <returns>The store and its known slot type; nulls when no final store resolves.</returns>
+        private (ISymbol Store, ITypeSymbol SlotType) ResolveFinalStore(ExpressionSyntax value)
         {
-            SyntaxNode node = OutermostTransparentNode(value);
+            var storeNodes = new List<SyntaxNode>();
+            storeNodes.Insert(0, OutermostTransparentNode(value, storeNodes: storeNodes));
+            foreach (SyntaxNode node in storeNodes)
+            {
+                (ISymbol store, ITypeSymbol slotType) = this.ResolveStoreAtNode(node, value);
+                string kind = this.ClassifyGenericStoreSlot(value, store, slotType, out _, out _);
+                if (kind != null && kind != "unknown-target")
+                {
+                    return (store, slotType);
+                }
+            }
+
+            return (null, null);
+        }
+
+        private (ISymbol Store, ITypeSymbol SlotType) ResolveStoreAtNode(SyntaxNode node, ExpressionSyntax value)
+        {
             switch (node.Parent)
             {
+                case ArgumentSyntax argument when argument.Parent is BaseArgumentListSyntax:
+                    return (this.GetArgumentParameter(argument), null);
+
                 case InitializerExpressionSyntax initializer when initializer.IsKind(SyntaxKind.ArrayInitializerExpression):
                     return (this.ArrayTypeOfInitializer(initializer), null);
 
@@ -319,8 +335,13 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 case AssignmentExpressionSyntax assignment
-                    when assignment.Right == node && assignment.Left is ElementAccessExpressionSyntax elementAccess:
-                    return (this.context.GetTypeInfo(elementAccess.Expression).Type as IArrayTypeSymbol, null);
+                    when assignment.Right == node:
+                    return (
+                        this.context.GetSymbolInfo(assignment.Left).Symbol
+                            ?? (assignment.Left is ElementAccessExpressionSyntax elementAccess
+                                ? this.context.GetTypeInfo(elementAccess.Expression).Type as IArrayTypeSymbol
+                                : null),
+                        null);
 
                 case YieldStatementSyntax yielded:
                 {
@@ -484,7 +505,10 @@ public sealed partial class CSharpToGSharpTranslator
         // `!`, null-preserving operators, conditional/switch arms, and tuple
         // elements. Every classification that needs
         // the enclosing store or argument starts here.
-        private static SyntaxNode OutermostTransparentNode(ExpressionSyntax value, List<int> tupleIndices = null)
+        private static SyntaxNode OutermostTransparentNode(
+            ExpressionSyntax value,
+            List<int> tupleIndices = null,
+            List<SyntaxNode> storeNodes = null)
         {
             SyntaxNode node = value;
             while (true)
@@ -503,6 +527,13 @@ public sealed partial class CSharpToGSharpTranslator
                     case BinaryExpressionSyntax binary
                         when binary.IsKind(SyntaxKind.CoalesceExpression)
                             || (binary.IsKind(SyntaxKind.AsExpression) && binary.Left == node):
+                        node = parent;
+                        break;
+                    case AssignmentExpressionSyntax assignment
+                        when assignment.Right == node
+                            && (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                                || assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression)):
+                        storeNodes?.Add(node);
                         node = parent;
                         break;
                     case ConditionalExpressionSyntax conditional when conditional.Condition != node:

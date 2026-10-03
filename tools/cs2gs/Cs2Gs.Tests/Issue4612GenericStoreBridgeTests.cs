@@ -1148,6 +1148,56 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void ForgivenAssignmentResults_ResolveTheirFinalGenericStores()
+    {
+        string source = """
+            #nullable enable
+            public static class C
+            {
+                private static T Id<T>(T value) => value;
+                public static string Argument(string? x)
+                {
+                    string tmp;
+                    return Id<string>(tmp = x!);
+                }
+
+                public static string?[] Array(string? y)
+                {
+                    string tmp;
+                    return new string?[] { tmp = y! };
+                }
+
+                public static string Coalesced(string tmp, string? z) => Id<string>(tmp ??= z!);
+
+                public static System.Uri Intermediate(System.Collections.Generic.Dictionary<string, string> map, string? inner) =>
+                    new System.Uri(map["key"] = inner!);
+
+                public static System.Uri Concrete(string? negative)
+                {
+                    string tmp;
+                    return new System.Uri(tmp = negative!);
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("x!!", printed, StringComparison.Ordinal);
+        Assert.Contains("y!!", printed, StringComparison.Ordinal);
+        Assert.Contains("z!!", printed, StringComparison.Ordinal);
+        Assert.Contains("inner!!", printed, StringComparison.Ordinal);
+        Assert.Contains("negative!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "x!") + " kind=forgiven,explicit-type-argument | target=C.Id<string>(string) parameter 'value' | slot-type=string",
+                Expected(source, "y!") + " kind=forgiven,array-element | target=string?[] | slot-type=string?",
+                Expected(source, "z!") + " kind=forgiven,explicit-type-argument | target=C.Id<string>(string) parameter 'value' | slot-type=string",
+                Expected(source, "inner!") + " kind=forgiven,constructed-generic-member | target=Dictionary<string, string>.this[string] | slot-type=string",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
