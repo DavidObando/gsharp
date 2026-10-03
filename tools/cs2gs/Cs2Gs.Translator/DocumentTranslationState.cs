@@ -224,8 +224,8 @@ internal sealed class DocumentTranslationState
         new Dictionary<SyntaxNode, HashSet<string>>();
 
     // Emitted spellings occupied by source identifiers in each body. Building
-    // this once avoids rescanning every token for every structural carrier.
-    public Dictionary<SyntaxNode, HashSet<string>> DeconstructionOccupiedNamesByBody { get; } =
+    // this once avoids rescanning every token for every synthesized local.
+    public Dictionary<SyntaxNode, HashSet<string>> SynthesizedLocalOccupiedNamesByBody { get; } =
         new Dictionary<SyntaxNode, HashSet<string>>();
 
     // Monotonic counter for synthesizing the hoist local when a loop condition
@@ -360,8 +360,13 @@ internal sealed class DocumentTranslationState
     // Shared helpers synthesized from capture-free static local functions.
     public List<MethodDeclaration> PendingStaticSynthHelpers { get; set; }
 
+    public INamedTypeSymbol CurrentEmittedAggregate { get; set; }
+
     public Dictionary<IMethodSymbol, string> LiftedStaticLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> EmittedLiftedStaticLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
 
     // Issue #3467: synthesized control-flow label names, allocated per
     // enclosing function body in first-use order instead of embedding the
@@ -374,15 +379,20 @@ internal sealed class DocumentTranslationState
     public Dictionary<(SyntaxNode Scope, string Prefix), int> SyntheticLabelCounters { get; } =
         new Dictionary<(SyntaxNode Scope, string Prefix), int>();
 
-    // Issue #3467: lifted local-function helper names already allocated in
-    // this document, so a name collision (same enclosing member name + same
-    // local-function name) takes an ordinal suffix instead of embedding
-    // SpanStart.
-    public HashSet<string> UsedLiftedLocalFunctionNames { get; } =
-        new HashSet<string>(StringComparer.Ordinal);
-
     public Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction> LiftedRecursiveLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> EmittedLiftedRecursiveLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> UnsupportedTopLevelRecursiveLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> UnsupportedRecursiveEnclosingTypeParameterLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> UnsupportedSuspendingRefCaptureLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
 
     // Issue #3399: local functions participating (directly or transitively) in
     // recursion/mutual recursion that cannot be lifted as static helpers
