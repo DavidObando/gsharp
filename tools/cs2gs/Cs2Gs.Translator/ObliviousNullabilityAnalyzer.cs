@@ -1004,6 +1004,23 @@ internal static class ObliviousNullabilityAnalyzer
         return true;
     }
 
+    /// <summary>
+    /// The type of the value a declaration symbol denotes — a method's
+    /// (awaited) return type, otherwise the declared type. Returns
+    /// <see langword="null"/> for symbols that are not value declarations.
+    /// </summary>
+    /// <param name="symbol">The candidate declaration symbol.</param>
+    /// <returns>The denoted value type, or <see langword="null"/>.</returns>
+    internal static ITypeSymbol SymbolValueType(ISymbol symbol) => symbol switch
+    {
+        IMethodSymbol method => UnwrapAwaitedType(method.ReturnType),
+        IPropertySymbol property => property.Type,
+        IFieldSymbol field => field.Type,
+        ILocalSymbol local => local.Type,
+        IParameterSymbol parameter => parameter.Type,
+        _ => null,
+    };
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,
@@ -2665,6 +2682,26 @@ internal static class ObliviousNullabilityAnalyzer
                     tupleScalarEdges);
             }
         }
+
+        // A yield flows into the envelope's element, not the envelope itself.
+        // Keep its type-argument prefix so forwarding collections and projected
+        // iterator signatures consult the same tuple-element keys.
+        if (returnType is INamedTypeSymbol { TypeArguments.Length: 1 } envelope
+            && envelope.TypeArguments[0] is INamedTypeSymbol { IsTupleType: true } elementTuple)
+        {
+            foreach (YieldStatementSyntax statement in EnumerateOwnYields(body))
+            {
+                CollectTupleValueFlow(
+                    target,
+                    elementTuple,
+                    statement.Expression,
+                    model,
+                    AppendTuplePath(string.Empty, 0),
+                    tupleTainted,
+                    tupleEdges,
+                    tupleScalarEdges);
+            }
+        }
     }
 
     private static void CollectTupleGetterFlows(
@@ -3586,23 +3623,6 @@ internal static class ObliviousNullabilityAnalyzer
     }
 
     /// <summary>
-    /// The type of the value a declaration symbol denotes — a method's
-    /// (awaited) return type, otherwise the declared type. Returns
-    /// <see langword="null"/> for symbols that are not value declarations.
-    /// </summary>
-    /// <param name="symbol">The candidate declaration symbol.</param>
-    /// <returns>The denoted value type, or <see langword="null"/>.</returns>
-    private static ITypeSymbol SymbolValueType(ISymbol symbol) => symbol switch
-    {
-        IMethodSymbol method => UnwrapAwaitedType(method.ReturnType),
-        IPropertySymbol property => property.Type,
-        IFieldSymbol field => field.Type,
-        ILocalSymbol local => local.Type,
-        IParameterSymbol parameter => parameter.Type,
-        _ => null,
-    };
-
-    /// <summary>
     /// Issue #3641: the tuple positions reachable from <paramref name="type"/>
     /// through generic type ARGUMENTS (`List&lt;(string, byte[])&gt;`), keyed by the
     /// very path the type mapper walks when it renders the declaration
@@ -3914,39 +3934,35 @@ internal static class ObliviousNullabilityAnalyzer
         // renders as `sequence[T?]`. Without this, the signature stayed
         // `sequence[T]` while the yield-seam bridge stood down (the method
         // looked promoted), leaving a bare `T? -> T` at every guarded yield.
-        foreach (SyntaxNode descendant in body?.DescendantNodes(
-            n => n is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax))
-            ?? System.Linq.Enumerable.Empty<SyntaxNode>())
+        foreach (YieldStatementSyntax statement in EnumerateOwnYields(body))
         {
-            if (descendant is YieldStatementSyntax { Expression: { } yielded }
-                && descendant.IsKind(SyntaxKind.YieldReturnStatement))
-            {
-                // Issue #3700: a yield that a syntactic null-check guard proves
-                // non-null yields no evidence about the ELEMENT. The canonical
-                // shape is `var child = (T)p.GetValue(o); if (child != null) {
-                // yield return child; }` — the local is nullable because the
-                // reflective read lowers to `as`, but the element never is.
-                // Promoting it anyway widens the iterator's element to `T?`,
-                // and that `T?` then escapes through every `foreach` variable
-                // and recursive call the sequence feeds (gsc GS0154). The
-                // repair belongs at the DECLARATION, exactly as it does for a
-                // guarded constructor argument above: gsc's own smart-cast
-                // narrows the same guarded read at the yield seam, so standing
-                // the promotion down reintroduces no `T? -> T`.
-                if (IsNullGuardDominatedRead(yielded, model))
-                {
-                    continue;
-                }
+            ExpressionSyntax yielded = statement.Expression;
 
-                ApplyReturnValue(
-                    canonicalReturn,
-                    yielded,
-                    model,
-                    tainted,
-                    edges,
-                    scalarTupleEdges,
-                    transitive: true);
+            // Issue #3700: a yield that a syntactic null-check guard proves
+            // non-null yields no evidence about the ELEMENT. The canonical
+            // shape is `var child = (T)p.GetValue(o); if (child != null) {
+            // yield return child; }` — the local is nullable because the
+            // reflective read lowers to `as`, but the element never is.
+            // Promoting it anyway widens the iterator's element to `T?`,
+            // and that `T?` then escapes through every `foreach` variable
+            // and recursive call the sequence feeds (gsc GS0154). The
+            // repair belongs at the DECLARATION, exactly as it does for a
+            // guarded constructor argument above: gsc's own smart-cast
+            // narrows the same guarded read at the yield seam, so standing
+            // the promotion down reintroduces no `T? -> T`.
+            if (IsNullGuardDominatedRead(yielded, model))
+            {
+                continue;
             }
+
+            ApplyReturnValue(
+                canonicalReturn,
+                yielded,
+                model,
+                tainted,
+                edges,
+                scalarTupleEdges,
+                transitive: true);
         }
     }
 
@@ -4617,6 +4633,24 @@ internal static class ObliviousNullabilityAnalyzer
             n => n is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax)))
         {
             if (descendant is ReturnStatementSyntax statement)
+            {
+                yield return statement;
+            }
+        }
+    }
+
+    private static IEnumerable<YieldStatementSyntax> EnumerateOwnYields(BlockSyntax body)
+    {
+        if (body == null)
+        {
+            yield break;
+        }
+
+        foreach (SyntaxNode descendant in body.DescendantNodes(
+            n => n is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax)))
+        {
+            if (descendant is YieldStatementSyntax { Expression: not null } statement
+                && statement.IsKind(SyntaxKind.YieldReturnStatement))
             {
                 yield return statement;
             }

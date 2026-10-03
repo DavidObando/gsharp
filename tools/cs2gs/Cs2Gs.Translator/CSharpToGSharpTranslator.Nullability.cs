@@ -701,7 +701,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return mapped;
             }
 
-            return this.PromoteTupleTypeArguments(mapped, returnType, symbol, new List<int>());
+            var path = new List<int>();
+
+            // The analyzer keys iterator leaves under the declared envelope.
+            // A sequence element (including a synthesized yield local) is a
+            // projection of that position, not a new bare-tuple declaration.
+            if (ObliviousNullabilityAnalyzer.SymbolValueType(symbol)
+                    is INamedTypeSymbol { TypeArguments.Length: 1 } envelope
+                && SymbolEqualityComparer.Default.Equals(returnType, envelope.TypeArguments[0]))
+            {
+                path.Add(0);
+            }
+
+            return this.PromoteTupleTypeArguments(mapped, returnType, symbol, path);
         }
 
         // Issue #3641: `var prepared = new List<(string, byte[])>()` renders the
