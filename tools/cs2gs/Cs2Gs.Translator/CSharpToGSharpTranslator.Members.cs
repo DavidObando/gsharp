@@ -890,6 +890,29 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                 }
 
+                // Issue #4684: gsc gives a bare, non-nullable `[]T` instance field of a
+                // class a synthesized zero value (ADR-0159): a fresh zero-length array
+                // allocated in every constructor prologue, BEFORE the constructor body
+                // assigns the real value. C# leaves such a field null, so the migrated
+                // type allocated 24 extra bytes per instance (the redundant array made
+                // `ManagedLocationKey` 64 bytes instead of 40, tripping the array-location
+                // allocation bound under self-host stage 2). An explicit
+                // `Array.Empty[T]()` initializer is the same sound empty value without an
+                // allocation, and the constructor's assignment still overrides it.
+                if (initializer == null
+                    && binding != BindingKind.Const
+                    && symbol is { IsStatic: false }
+                    && symbol.ContainingType?.TypeKind == TypeKind.Class
+                    && type is ArrayTypeReference { Rank: 1, IsNullable: false } emptyArrayType)
+                {
+                    initializer = new InvocationExpression(
+                        new MemberAccessExpression(
+                            new MemberAccessExpression(new IdentifierExpression("System"), "Array"),
+                            "Empty"),
+                        new List<GExpression>(),
+                        new List<GTypeReference> { emptyArrayType.ElementType });
+                }
+
                 var declaration = new FieldDeclaration(
                     binding,
                     this.EmittedName(symbol, declarator.Identifier.ValueText),
