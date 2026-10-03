@@ -92,6 +92,60 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         Assert.Contains("let Missing = func () IEnumerable[(Text string?, Code int32)]", printed);
     }
 
+    [Theory]
+    [InlineData("(text, 1)", "string")]
+    [InlineData("choose ? (text, 1) : (\"x\", 2)", "string")]
+    [InlineData("choose switch { true => (text, 1), false => (\"x\", 2) }", "string")]
+    [InlineData("(choose ? text : \"x\", 1)", "string")]
+    [InlineData("(choose switch { true => text, false => \"x\" }, 1)", "string?")]
+    public void GuardedTupleYield_DoesNotPromoteItsProvenNonNullLeaf(string yielded, string declaredType)
+    {
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    {{declaredType}} text = choose ? null : "x";
+                    if (text != null) {
+                        yield return {{yielded}};
+                    }
+                }
+
+                public static int Lengths(bool choose) {
+                    int total = 0;
+                    foreach (var row in Rows(choose)) {
+                        total += row.Text.Length;
+                    }
+                    return total;
+                }
+            }
+            """);
+
+        Assert.Contains("func Rows(choose bool) sequence[(Text string, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void GuardedNestedConditionalTupleYield_StillPromotesTheUnguardedSibling()
+    {
+        string printed = Translate("""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<((string Text, string Missing) Names, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    string missing = null;
+                    if (text != null) {
+                        yield return choose ? ((text, missing), 1) : (("x", "keep"), 2);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "func Rows(choose bool) sequence[(Names (Text string, Missing string?), Code int32)]",
+            printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     [Fact]
     public void ConditionalTupleYield_PreservesNullAndNonNullRuntimeValues()
     {

@@ -2699,7 +2699,8 @@ internal static class ObliviousNullabilityAnalyzer
                     AppendTuplePath(string.Empty, 0),
                     tupleTainted,
                     tupleEdges,
-                    tupleScalarEdges);
+                    tupleScalarEdges,
+                    respectNullGuards: true);
             }
         }
     }
@@ -3002,7 +3003,8 @@ internal static class ObliviousNullabilityAnalyzer
         string prefix,
         HashSet<TupleElementKey> tupleTainted,
         List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
-        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges,
+        bool respectNullGuards = false)
     {
         value = UnwrapTupleValue(value);
         switch (value)
@@ -3011,14 +3013,14 @@ internal static class ObliviousNullabilityAnalyzer
                 return;
 
             case ConditionalExpressionSyntax conditional:
-                CollectTupleValueFlow(target, targetTuple, conditional.WhenTrue, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges);
-                CollectTupleValueFlow(target, targetTuple, conditional.WhenFalse, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges);
+                CollectTupleValueFlow(target, targetTuple, conditional.WhenTrue, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges, respectNullGuards);
+                CollectTupleValueFlow(target, targetTuple, conditional.WhenFalse, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges, respectNullGuards);
                 return;
 
             case SwitchExpressionSyntax switchExpression:
                 foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
                 {
-                    CollectTupleValueFlow(target, targetTuple, arm.Expression, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges);
+                    CollectTupleValueFlow(target, targetTuple, arm.Expression, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges, respectNullGuards);
                 }
 
                 return;
@@ -3041,12 +3043,20 @@ internal static class ObliviousNullabilityAnalyzer
                             path,
                             tupleTainted,
                             tupleEdges,
-                            tupleScalarEdges);
+                            tupleScalarEdges,
+                            respectNullGuards);
                     }
                     else if (IsEligibleTupleLeaf(targetType))
                     {
+                        // An iterator's guarded yield is evidence about each
+                        // leaf at this use, just as for its scalar element.
+                        if (respectNullGuards && IsNullGuardDominatedRead(elementValue, model))
+                        {
+                            continue;
+                        }
+
                         var targetKey = new TupleElementKey(target, path);
-                        if (IsDirectlyNullable(elementValue, model))
+                        if (IsDirectlyNullable(elementValue, model, respectNullGuards))
                         {
                             tupleTainted.Add(targetKey);
                         }
@@ -3056,7 +3066,8 @@ internal static class ObliviousNullabilityAnalyzer
                         }
                         else
                         {
-                            foreach (ISymbol scalarSource in ResolveSources(elementValue, model))
+                            foreach (ISymbol scalarSource in ResolveSources(
+                                elementValue, model, respectNullGuards: respectNullGuards))
                             {
                                 // Issue #3615 (2026-08-28 nightly, Cs2Gs.Translator
                                 // wall): only SOURCE-declared symbols propagate
@@ -4793,15 +4804,21 @@ internal static class ObliviousNullabilityAnalyzer
     private static IEnumerable<ISymbol> ResolveSources(
         ExpressionSyntax expression,
         SemanticModel model,
-        SourceScope scope = SourceScope.AllSources)
+        SourceScope scope = SourceScope.AllSources,
+        bool respectNullGuards = false)
     {
+        if (respectNullGuards && IsNullGuardDominatedRead(expression, model))
+        {
+            yield break;
+        }
+
         switch (expression)
         {
             case null:
                 yield break;
 
             case ParenthesizedExpressionSyntax paren:
-                foreach (ISymbol source in ResolveSources(paren.Expression, model, scope))
+                foreach (ISymbol source in ResolveSources(paren.Expression, model, scope, respectNullGuards))
                 {
                     yield return source;
                 }
@@ -4815,7 +4832,7 @@ internal static class ObliviousNullabilityAnalyzer
             // awaited result (mirrors the identical unwrap in
             // IsDirectlyNullable above).
             case AwaitExpressionSyntax awaitExpression:
-                foreach (ISymbol source in ResolveSources(awaitExpression.Expression, model, scope))
+                foreach (ISymbol source in ResolveSources(awaitExpression.Expression, model, scope, respectNullGuards))
                 {
                     yield return source;
                 }
@@ -4829,7 +4846,7 @@ internal static class ObliviousNullabilityAnalyzer
             // `a ?? b`: the result is `b`'s value when `a` is null.
             case BinaryExpressionSyntax coalesce
                 when coalesce.IsKind(SyntaxKind.CoalesceExpression):
-                foreach (ISymbol source in ResolveSources(coalesce.Right, model, scope))
+                foreach (ISymbol source in ResolveSources(coalesce.Right, model, scope, respectNullGuards))
                 {
                     yield return source;
                 }
@@ -4838,8 +4855,8 @@ internal static class ObliviousNullabilityAnalyzer
 
             // `cond ? a : b`: either branch may flow through.
             case ConditionalExpressionSyntax ternary:
-                foreach (ISymbol source in ResolveSources(ternary.WhenTrue, model, scope)
-                    .Concat(ResolveSources(ternary.WhenFalse, model, scope)))
+                foreach (ISymbol source in ResolveSources(ternary.WhenTrue, model, scope, respectNullGuards)
+                    .Concat(ResolveSources(ternary.WhenFalse, model, scope, respectNullGuards)))
                 {
                     yield return source;
                 }
@@ -4850,7 +4867,7 @@ internal static class ObliviousNullabilityAnalyzer
             case SwitchExpressionSyntax switchExpression:
                 foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
                 {
-                    foreach (ISymbol source in ResolveSources(arm.Expression, model, scope))
+                    foreach (ISymbol source in ResolveSources(arm.Expression, model, scope, respectNullGuards))
                     {
                         yield return source;
                     }
@@ -4859,7 +4876,7 @@ internal static class ObliviousNullabilityAnalyzer
                 break;
 
             case CastExpressionSyntax cast:
-                foreach (ISymbol source in ResolveSources(cast.Expression, model, scope))
+                foreach (ISymbol source in ResolveSources(cast.Expression, model, scope, respectNullGuards))
                 {
                     yield return source;
                 }
@@ -5116,15 +5133,23 @@ internal static class ObliviousNullabilityAnalyzer
     // BCL annotation) nullable, independent of any other declaration's taint.
     // Mirrors the translator's IsNullableInitializer, plus the `null`/`default`
     // literal forms used in initializer/return positions.
-    private static bool IsDirectlyNullable(ExpressionSyntax expression, SemanticModel model)
+    private static bool IsDirectlyNullable(
+        ExpressionSyntax expression,
+        SemanticModel model,
+        bool respectNullGuards = false)
     {
+        if (respectNullGuards && IsNullGuardDominatedRead(expression, model))
+        {
+            return false;
+        }
+
         switch (expression)
         {
             case null:
                 return false;
 
             case ParenthesizedExpressionSyntax paren:
-                return IsDirectlyNullable(paren.Expression, model);
+                return IsDirectlyNullable(paren.Expression, model, respectNullGuards);
 
             // `await expr`: an awaited `Task<T>`'s own nullability is that of
             // T, which is exactly what the UNWRAPPED awaited expression's own
@@ -5135,7 +5160,7 @@ internal static class ObliviousNullabilityAnalyzer
             // #2421). Without this, `return await x?.M();` inside an async
             // method would be treated as NOT directly nullable at all.
             case AwaitExpressionSyntax awaitExpression:
-                return IsDirectlyNullable(awaitExpression.Expression, model);
+                return IsDirectlyNullable(awaitExpression.Expression, model, respectNullGuards);
 
             case PostfixUnaryExpressionSyntax suppress
                 when suppress.IsKind(SyntaxKind.SuppressNullableWarningExpression):
@@ -5169,12 +5194,12 @@ internal static class ObliviousNullabilityAnalyzer
             // `a ?? b`: nullable iff the `b` fallback is nullable.
             case BinaryExpressionSyntax coalesce
                 when coalesce.IsKind(SyntaxKind.CoalesceExpression):
-                return IsDirectlyNullable(coalesce.Right, model);
+                return IsDirectlyNullable(coalesce.Right, model, respectNullGuards);
 
             // `cond ? a : b`: nullable iff either branch is.
             case ConditionalExpressionSyntax ternary:
-                return IsDirectlyNullable(ternary.WhenTrue, model)
-                    || IsDirectlyNullable(ternary.WhenFalse, model);
+                return IsDirectlyNullable(ternary.WhenTrue, model, respectNullGuards)
+                    || IsDirectlyNullable(ternary.WhenFalse, model, respectNullGuards);
 
             // `x switch { ... }`: nullable iff any arm's result is (e.g. a
             // `_ => null` / `_ => default` fallback arm, or an arm forwarding
@@ -5182,7 +5207,7 @@ internal static class ObliviousNullabilityAnalyzer
             case SwitchExpressionSyntax switchExpression:
                 foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
                 {
-                    if (IsDirectlyNullable(arm.Expression, model))
+                    if (IsDirectlyNullable(arm.Expression, model, respectNullGuards))
                     {
                         return true;
                     }
@@ -5213,7 +5238,7 @@ internal static class ObliviousNullabilityAnalyzer
             node => model.GetSymbolInfo(node).Symbol,
             out ExpressionSyntax conditionalSource))
         {
-            return IsDirectlyNullable(conditionalSource, model);
+            return IsDirectlyNullable(conditionalSource, model, respectNullGuards);
         }
 
         // Otherwise consult the bound symbol's DECLARED annotation, which
