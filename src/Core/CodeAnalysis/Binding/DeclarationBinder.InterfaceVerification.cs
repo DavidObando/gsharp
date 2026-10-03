@@ -2117,6 +2117,24 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
+            // C# records implement IEquatable<Self> with the typed Equals
+            // overload synthesized by data-type emission.
+            if (structSymbol.IsData
+                && ClrTypeUtilities.AreSame(openDefinition, typeof(System.IEquatable<>))
+                && symbolicArgs.Length == 1
+                && symbolicArgs[0] is StructSymbol equatableSelf
+                && (equatableSelf.EnclosingTypeArguments.IsDefaultOrEmpty
+                    || equatableSelf.EnclosingTypeArguments.SequenceEqual<TypeSymbol>(
+                        StructSymbol.CollectEnclosingTypeParameters(structSymbol)))
+                && ConformanceSignaturesEquivalent(
+                    equatableSelf,
+                    StructSymbol.Construct(structSymbol, structSymbol.TypeParameters.Cast<TypeSymbol>().ToImmutableArray()))
+                && openMethod.Name == nameof(System.IEquatable<object>.Equals)
+                && openMethod.GetParameters().Length == 1)
+            {
+                continue;
+            }
+
             var erasedSlot = interfaceType.ClrType == null
                 ? null
                 : FindErasedSlotForOpenMethod(interfaceType.ClrType, openMethod);

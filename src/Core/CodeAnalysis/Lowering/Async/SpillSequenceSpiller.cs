@@ -2672,6 +2672,11 @@ public static class SpillSequenceSpiller
         private BoundSpillSequenceExpression SpillStructLiteral(BoundStructLiteralExpression structLiteral)
         {
             var values = ImmutableArray.CreateBuilder<BoundExpression>(structLiteral.Initializers.Length);
+            if (structLiteral.CopySource != null)
+            {
+                values.Add(structLiteral.CopySource);
+            }
+
             foreach (var init in structLiteral.Initializers)
             {
                 values.Add(init.Value);
@@ -2688,15 +2693,19 @@ public static class SpillSequenceSpiller
             {
                 var original = structLiteral.Initializers[i];
                 initializers.Add(original.Field != null
-                    ? new BoundFieldInitializer(original.Field, spilledValues[i], original.FieldDeclaringType)
+                    ? new BoundFieldInitializer(original.Field, spilledValues[i + (structLiteral.CopySource == null ? 0 : 1)], original.FieldDeclaringType)
                     : new BoundFieldInitializer(
                         Invariant.Required(
                             original.Property,
                             "a field initializer targets either a field or a property, and Field was null"),
-                        spilledValues[i]));
+                        spilledValues[i + (structLiteral.CopySource == null ? 0 : 1)]));
             }
 
-            var value = new BoundStructLiteralExpression(null, structLiteral.StructType, initializers.ToImmutable());
+            var value = new BoundStructLiteralExpression(
+                null,
+                structLiteral.StructType,
+                initializers.ToImmutable(),
+                structLiteral.CopySource == null ? null : spilledValues[0]);
             return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
         }
 

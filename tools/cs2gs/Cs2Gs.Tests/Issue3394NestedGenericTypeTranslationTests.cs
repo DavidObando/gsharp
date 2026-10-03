@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -166,6 +167,8 @@ namespace Demo
     public readonly record struct Key(string Name)
     {
         public string Name { get; } = Name ?? string.Empty;
+
+        public static string Run() => new Key(""hello"").Name;
     }
 }
 ";
@@ -179,11 +182,19 @@ namespace Demo
             project.Compilation,
             document.SemanticModel,
             document.FilePath);
-        string rendered = GSharpPrinter.Print(
-            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string rendered = GSharpPrinter.Print(unit);
 
-        Assert.Equal(1, rendered.Split("Name string", StringSplitOptions.None).Length - 1);
+        TypeDeclaration type = Assert.Single(unit.Members.OfType<TypeDeclaration>());
+        PropertyDeclaration property = Assert.Single(type.Members.OfType<PropertyDeclaration>());
+        Assert.Equal("Name", property.Name);
+        Assert.NotNull(property.ExpressionBody);
+        Assert.Empty(property.Accessors);
         TranslationTestValidation.AssertBinds(rendered);
+        var result = EmittedOracle.Evaluate(rendered + "\nKey.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("hello", result.Value);
     }
 
     [Fact]

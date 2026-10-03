@@ -133,7 +133,11 @@ internal static class InitializationPlanner
         {
             foreach (var parameter in function.Parameters)
             {
-                ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(owner, parameter.Name, out var field);
+                if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(owner, parameter.Name, out var field))
+                {
+                    continue;
+                }
+
                 statements.Add(new BoundExpressionStatement(null, new BoundFieldAssignmentExpression(
                     null,
                     receiver,

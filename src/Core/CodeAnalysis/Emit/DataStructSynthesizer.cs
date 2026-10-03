@@ -93,6 +93,7 @@ internal sealed class DataStructSynthesizer
     private readonly MetadataTokenCache cache;
     private readonly WellKnownReferences wellKnown;
     private readonly ConversionEmitter conversionEmitter;
+    private readonly Func<StructSymbol, int> emitPrimaryConstructorBody;
     private readonly Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol;
     private readonly Func<TypeSymbol, EntityHandle> getElementTypeToken;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
@@ -102,7 +103,6 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
     private readonly Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef;
 
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassEqualsTypedMethods = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
 
     // Per-emit standalone signature cache for the >8-field GetHashCode fold
@@ -116,6 +116,7 @@ internal sealed class DataStructSynthesizer
         MetadataTokenCache cache,
         WellKnownReferences wellKnown,
         ConversionEmitter conversionEmitter,
+        Func<StructSymbol, int> emitPrimaryConstructorBody,
         Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
         Func<TypeSymbol, EntityHandle> getElementTypeToken,
         Func<Type, TypeReferenceHandle> getTypeReference,
@@ -129,6 +130,7 @@ internal sealed class DataStructSynthesizer
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.wellKnown = wellKnown ?? throw new ArgumentNullException(nameof(wellKnown));
         this.conversionEmitter = conversionEmitter ?? throw new ArgumentNullException(nameof(conversionEmitter));
+        this.emitPrimaryConstructorBody = emitPrimaryConstructorBody ?? throw new ArgumentNullException(nameof(emitPrimaryConstructorBody));
         this.encodeTypeSymbol = encodeTypeSymbol ?? throw new ArgumentNullException(nameof(encodeTypeSymbol));
         this.getElementTypeToken = getElementTypeToken ?? throw new ArgumentNullException(nameof(getElementTypeToken));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
@@ -503,7 +505,6 @@ internal sealed class DataStructSynthesizer
         }
 
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
-        this.dataClassEqualsTypedMethods[structSym] = equalsTypedHandle;
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
         this.EmitDataStructGetHashCode(structSym);
 
@@ -529,6 +530,11 @@ internal sealed class DataStructSynthesizer
         if (!HasZeroDeconstructionMembers(structSym))
         {
             this.EmitDataStructDeconstruct(structSym);
+        }
+
+        if (GetDataEqualityBase(structSym) is { } equalityBase)
+        {
+            this.EmitDataClassBaseEquals(equalityBase);
         }
 
         // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
@@ -852,23 +858,28 @@ internal sealed class DataStructSynthesizer
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {
-            var il = new InstructionEncoder(new BlobBuilder());
-            for (var i = 0; i < parameters.Length; i++)
+            if (!structSym.InstanceFieldInitializers.IsEmpty)
             {
-                if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(structSym, parameters[i].Name, out var field))
+                bodyOffset = this.emitPrimaryConstructorBody(structSym);
+            }
+            else
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                for (var i = 0; i < parameters.Length; i++)
                 {
-                    throw new InvalidOperationException($"Data struct '{structSym.Name}' has no field for primary ctor parameter '{parameters[i].Name}'.");
+                    if (ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(structSym, parameters[i].Name, out var field))
+                    {
+                        var fieldHandle = this.resolveUserFieldToken(structSym, field);
+                        il.LoadArgument(0);
+                        il.LoadArgument(i + 1);
+                        il.OpCode(ILOpCode.Stfld);
+                        il.Token(fieldHandle);
+                    }
                 }
 
-                var fieldHandle = this.resolveUserFieldToken(structSym, field);
-                il.LoadArgument(0);
-                il.LoadArgument(i + 1);
-                il.OpCode(ILOpCode.Stfld);
-                il.Token(fieldHandle);
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
-
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
         }
 
         var sig = new BlobBuilder();
@@ -1025,13 +1036,13 @@ internal sealed class DataStructSynthesizer
                 il.OpCode(ILOpCode.Ceq);
                 il.Branch(ILOpCode.Brfalse, retFalse);
 
-                if (structSym.BaseClass?.IsData == true
-                    && this.dataClassEqualsTypedMethods.TryGetValue(structSym.BaseClass, out var baseEqualsTyped))
+                if (structSym.GetDataCloneAncestor() is { } baseClass
+                    && this.cache.DataClassEqualsTypedHandles.TryGetValue(baseClass.Definition ?? baseClass, out var baseEqualsTyped))
                 {
                     il.LoadArgument(0);
                     il.LoadArgument(1);
                     il.OpCode(ILOpCode.Call);
-                    il.Token(baseEqualsTyped);
+                    il.Token(this.ResolveEqualsTypedToken(baseClass, baseEqualsTyped));
                     il.Branch(ILOpCode.Brfalse, retFalse);
                 }
             }
@@ -1075,8 +1086,14 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
 
+        var attributes = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot;
+        if (IsDataObjectOverrideFinal(structSym))
+        {
+            attributes |= MethodAttributes.Final;
+        }
+
         return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
+            attributes: attributes,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
@@ -1374,12 +1391,68 @@ internal sealed class DataStructSynthesizer
     }
 
     /// <summary>
-    /// Issue #410 / ADR-0029: emits
-    /// <c>public void Deconstruct(out T1 F1, out T2 F2, …)</c> assigning each
-    /// field to the corresponding out parameter. Field names match the
-    /// declaration order so C# users get meaningful tooling hints when
-    /// destructuring positionally.
+    /// Finds the record base whose typed equality slot needs forwarding.
     /// </summary>
+    /// <param name="type">The record being synthesized.</param>
+    /// <returns>The nearest record base, or null when no bridge is needed.</returns>
+    internal static StructSymbol? GetDataEqualityBase(StructSymbol type)
+    {
+        if (!type.IsClass || !type.IsData)
+        {
+            return null;
+        }
+
+        foreach (var parent in type.GetHierarchy())
+        {
+            if (parent != type && parent.IsData)
+            {
+                foreach (var method in type.Methods)
+                {
+                    if (method.Name == "Equals" && method.IsOverride
+                        && method.Parameters.Length == 2 && method.Parameters[1].Type == parent)
+                    {
+                        return null;
+                    }
+                }
+
+                return parent;
+            }
+        }
+
+        return null;
+    }
+
+    private void EmitDataClassBaseEquals(StructSymbol baseType)
+    {
+        var objectSignature = new BlobBuilder();
+        new BlobEncoder(objectSignature).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, result => result.Type().Boolean(), parameters => parameters.AddParameter().Type().Object());
+        var objectEquals = this.emitCtx.Metadata.AddMemberReference(
+            this.wellKnown.ObjectTypeRef,
+            this.emitCtx.Metadata.GetOrAddString("Equals"),
+            this.emitCtx.Metadata.GetOrAddBlob(objectSignature));
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.emitCtx.MetadataOnly)
+        {
+            il.LoadArgument(0);
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Callvirt);
+            il.Token(objectEquals);
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, result => result.Type().Boolean(), parameters => this.encodeTypeSymbol(parameters.AddParameter().Type(), baseType));
+        this.emitCtx.Metadata.AddMethodDefinition(
+            MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Final,
+            MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            this.emitCtx.Metadata.GetOrAddString("Equals"),
+            this.emitCtx.Metadata.GetOrAddBlob(signature),
+            this.FinishInlineBody(il),
+            this.nextParameterHandle());
+    }
+
     private void EmitDataStructDeconstruct(StructSymbol structSym)
     {
         var members = TypeMemberModel.GetDataDeconstructionMembers(structSym);
@@ -1388,28 +1461,59 @@ internal sealed class DataStructSynthesizer
         {
             for (int i = 0; i < members.Length; i++)
             {
-                var field = Invariant.Required(
-                    GetDeconstructionBackingField(members[i]),
-                    "a deconstruction member is either a field or an auto-property, and both carry a backing field");
-                var fieldHandle = this.resolveUserFieldToken(structSym, field);
+                var memberType = GetDeconstructionMemberType(members[i]);
+                var field = GetDeconstructionBackingField(members[i]);
                 il.LoadArgument(i + 1);
                 il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
+                if (field != null && members[i] is not PropertySymbol { IsVirtual: true }
+                    && members[i] is not PropertySymbol { IsOverride: true })
+                {
+                    il.OpCode(ILOpCode.Ldfld);
+                    il.Token(this.resolveUserFieldToken(structSym, field));
+                }
+                else
+                {
+                    var signature = new BlobBuilder();
+                    new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+                        .Parameters(
+                            0,
+                            result =>
+                            {
+                                var property = (PropertySymbol)members[i];
+                                if (property.ReturnRefKind == RefKind.RefReadOnly)
+                                {
+                                    result.CustomModifiers().AddModifier(this.wellKnown.GetInAttributeTypeRef(), isOptional: false);
+                                }
+
+                                this.encodeTypeSymbol(result.Type(isByRef: property.ReturnRefKind != RefKind.None), memberType);
+                            },
+                            _ => { });
+                    var getter = this.emitCtx.Metadata.AddMemberReference(
+                        this.resolveUserTypeToken(structSym),
+                        this.emitCtx.Metadata.GetOrAddString("get_" + members[i].Name),
+                        this.emitCtx.Metadata.GetOrAddBlob(signature));
+                    il.OpCode(structSym.IsClass ? ILOpCode.Callvirt : ILOpCode.Call);
+                    il.Token(getter);
+                    if (members[i] is PropertySymbol { ReturnRefKind: not RefKind.None })
+                    {
+                        il.OpCode(ILOpCode.Ldobj);
+                        il.Token(this.getElementTypeToken(memberType));
+                    }
+                }
 
                 // ADR-0087 §3 R3: TypeParameterSymbol fields are now
                 // encoded as VAR(idx) (not erased to Object); the
                 // indirect store must use `Stobj` against the VAR
                 // TypeSpec, not `Stind_ref`.
-                if (field.Type is TypeParameterSymbol)
+                if (memberType is TypeParameterSymbol)
                 {
                     il.OpCode(ILOpCode.Stobj);
-                    il.Token(this.getElementTypeToken(field.Type));
+                    il.Token(this.getElementTypeToken(memberType));
                 }
-                else if (ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type))
+                else if (ReflectionMetadataEmitter.IsValueTypeSymbol(memberType))
                 {
                     il.OpCode(ILOpCode.Stobj);
-                    il.Token(this.getElementTypeToken(field.Type));
+                    il.Token(this.getElementTypeToken(memberType));
                 }
                 else
                 {
@@ -1482,7 +1586,7 @@ internal sealed class DataStructSynthesizer
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
-            .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
+            .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym.Definition ?? structSym));
         return this.resolveUserMethodRef(structSym, equalsTypedHandle, "Equals", sig);
     }
 

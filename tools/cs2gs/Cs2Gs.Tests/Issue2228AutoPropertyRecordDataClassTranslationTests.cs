@@ -54,7 +54,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class OahuConfig {", printed);
+        Assert.Contains("data class OahuConfig", printed);
         Assert.DoesNotContain($"{Environment.NewLine}class OahuConfig {{", printed);
         Assert.Contains("private var _downloadDirectory string = CliPaths.DefaultDownloadDir", printed);
         Assert.Contains("private var _defaultQuality DownloadQuality = DownloadQuality.High", printed);
@@ -83,7 +83,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data struct Point3 {", printed);
+        Assert.Contains("data struct Point3", printed);
         Assert.DoesNotContain($"{Environment.NewLine}struct Point3 {{", printed);
         Assert.Contains("prop X float64 {", printed);
         Assert.Contains("init;", printed);

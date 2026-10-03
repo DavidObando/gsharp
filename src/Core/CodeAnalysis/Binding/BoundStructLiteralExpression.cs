@@ -17,17 +17,83 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundStructLiteralExpression : BoundExpression
 {
     public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers)
+        : this(syntax, structType, initializers, null)
+    {
+    }
+
+    public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers, BoundExpression? copySource)
         : base(syntax)
     {
         StructType = structType;
         Initializers = initializers;
+        CopySource = copySource;
     }
 
     public StructSymbol StructType { get; }
 
     public ImmutableArray<BoundFieldInitializer> Initializers { get; }
 
+    /// <summary>
+    /// Gets the whole-value copy or class-clone source, when this expression
+    /// materializes a native data copy rather than constructing a new value.
+    /// </summary>
+    public BoundExpression? CopySource { get; }
+
     public override TypeSymbol Type => StructType;
 
     public override BoundNodeKind Kind => BoundNodeKind.StructLiteralExpression;
+
+    internal BoundFieldInitializer? GetPrimaryArgument(string name)
+    {
+        var member = GetPrimaryMember(StructType, name);
+        foreach (var initializer in Initializers)
+        {
+            if ((initializer.Property != null && initializer.Property == member)
+                || (initializer.Field != null && initializer.Field == member))
+            {
+                return initializer;
+            }
+        }
+
+        return null;
+    }
+
+    internal static Symbol? GetPrimaryMember(StructSymbol type, string name)
+    {
+        foreach (var parameter in type.PrimaryConstructorParameters)
+        {
+            if (parameter.Name == name)
+            {
+                return TypeMemberModel.LookupMember(
+                    type,
+                    name,
+                    new MemberQuery(includeInstance: true, includeStatic: false, includeInherited: false, MemberKinds.Property | MemberKinds.Field));
+            }
+        }
+
+        return null;
+    }
+
+    internal static bool IsStagedConstruction(BoundBlockExpression block)
+    {
+        if (block.Expression is not BoundStructLiteralExpression { CopySource: null } literal
+            || literal.StructType.ClrType != null
+            || !literal.StructType.IsData || !literal.StructType.HasPrimaryConstructor
+            || block.Statements.Length != literal.Initializers.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < block.Statements.Length; i++)
+        {
+            if (block.Statements[i] is not BoundVariableDeclaration { Initializer: not null } declaration
+                || literal.Initializers[i].Value is not BoundVariableExpression value
+                || value.Variable != declaration.Variable)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }

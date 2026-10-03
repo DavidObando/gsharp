@@ -2564,10 +2564,14 @@ internal sealed partial class ExpressionBinder
         // zero-initializes the storage and then assigns the listed fields. For
         // a value type there is no constructor that could run inline field
         // initializers, so apply each declared `= expr` initializer here for any
-        // field the literal omitted. (For class/data-class literals the
+        // field the literal omitted. Positional data literals instead let
+        // their primary constructor own these initializers before rewriting.
+        // (For class/data-class literals the
         // synthesized default constructor — invoked by `newobj` — already runs
         // the instance field initializers, so this only applies to value types.)
-        if (!structSymbol.IsClass)
+        var definition = structSymbol.Definition ?? structSymbol;
+        bool callsPrimary = structSymbol.ClrType == null && definition.IsData && definition.HasPrimaryConstructor;
+        if (!structSymbol.IsClass && !callsPrimary)
         {
             foreach (var field in structSymbol.Fields)
             {
@@ -2597,10 +2601,74 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        ImmutableArray<BoundStatement>.Builder? argumentStatements = null;
+        var stagedMemberNames = new HashSet<string>(StringComparer.Ordinal);
+        if (orderedInitializers == null && callsPrimary)
+        {
+            for (int i = 0; i < inits.Count; i++)
+            {
+                var initializer = inits[i];
+                argumentStatements ??= ImmutableArray.CreateBuilder<BoundStatement>();
+                var argumentName = "$literalarg" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var argument = new LocalVariableSymbol(argumentName, isReadOnly: true, initializer.Value.Type);
+                scope.TryDeclareVariable(argument);
+                argumentStatements.Add(new BoundVariableDeclaration(null, argument, initializer.Value));
+                var value = new BoundVariableExpression(null, argument);
+                inits[i] = initializer.Field != null
+                    ? new BoundFieldInitializer(initializer.Field, value, initializer.FieldDeclaringType)
+                    : new BoundFieldInitializer(
+                        Invariant.Required(initializer.Property, "a positional initializer targets a field or property"),
+                        value);
+            }
+        }
+
+        if (orderedInitializers != null && callsPrimary)
+        {
+            bool scalarPrefix = true;
+            foreach (var step in orderedInitializers)
+            {
+                if (step.Content != null || step.Braced != null)
+                {
+                    scalarPrefix = false;
+                    continue;
+                }
+
+                if (step.MemberSyntax is not { } member)
+                {
+                    continue;
+                }
+
+                if (!scalarPrefix)
+                {
+                    var primaryMember = BoundStructLiteralExpression.GetPrimaryMember(structSymbol, member.FieldIdentifier.ValueText);
+                    if (primaryMember == null || (step.Field != primaryMember && step.Property != primaryMember))
+                    {
+                        continue;
+                    }
+                }
+
+                var expression = BindExpression(member.Value, Invariant.Required(step.MemberType, "a positional member has a type"));
+                var name = "$literalarg" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var argument = new LocalVariableSymbol(name, isReadOnly: true, expression.Type);
+                scope.TryDeclareVariable(argument);
+                argumentStatements ??= ImmutableArray.CreateBuilder<BoundStatement>();
+                argumentStatements.Add(new BoundVariableDeclaration(null, argument, expression));
+                var value = new BoundVariableExpression(null, argument);
+                inits.Add(step.Field != null
+                    ? new BoundFieldInitializer(step.Field, value, step.FieldDeclaringType)
+                    : new BoundFieldInitializer(Invariant.Required(step.Property, "a positional member is a field or property"), value));
+                stagedMemberNames.Add(member.FieldIdentifier.ValueText);
+            }
+        }
+
         var structLiteral = new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
         if (orderedInitializers == null)
         {
-            return structLiteral;
+            return argumentStatements == null
+                ? structLiteral
+                : new BoundBlockExpression(null, argumentStatements.ToImmutable(), structLiteral);
         }
 
         // A braced member, or an ADR-0180 content element/spread, forces
@@ -2619,6 +2687,11 @@ internal sealed partial class ExpressionBinder
         scope.TryDeclareVariable(litTemp);
 
         var bracedStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (argumentStatements != null)
+        {
+            bracedStatements.AddRange(argumentStatements);
+        }
+
         bracedStatements.Add(new BoundVariableDeclaration(syntax, litTemp, structLiteral));
         foreach (var initializer in orderedInitializers)
         {
@@ -2640,6 +2713,11 @@ internal sealed partial class ExpressionBinder
 
             var memberSyntax = Invariant.Required(initializer.MemberSyntax, "a member step has member syntax");
             var memberType = Invariant.Required(initializer.MemberType, "a member step has a member type");
+            if (stagedMemberNames.Contains(memberSyntax.FieldIdentifier.ValueText))
+            {
+                continue;
+            }
+
             if (initializer.Braced != null)
             {
                 var litReceiver = new BoundVariableExpression(memberSyntax, litTemp);
