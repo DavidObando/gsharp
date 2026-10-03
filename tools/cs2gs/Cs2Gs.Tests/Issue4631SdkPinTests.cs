@@ -771,6 +771,77 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Contains("0.4.591", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Imported MSBuild files share the project pin and template exclusions.</summary>
+    /// <param name="location">The pin mode.</param>
+    /// <param name="extension">The imported MSBuild file extension.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Theory]
+    [InlineData(SdkPinLocation.ProjectFile, ".props")]
+    [InlineData(SdkPinLocation.ProjectFile, ".targets")]
+    [InlineData(SdkPinLocation.ProjectFile, ".proj")]
+    [InlineData(SdkPinLocation.GlobalJson, ".props")]
+    [InlineData(SdkPinLocation.GlobalJson, ".targets")]
+    [InlineData(SdkPinLocation.GlobalJson, ".proj")]
+    public async Task Migrate_ImportedBuildFilesShareThePin_AndValidateRejectsTampering(
+        SdkPinLocation location,
+        string extension)
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+        Fixture fixture = this.CreateFixture(sourceGlobalJson: null);
+        string nativeDirectory = Path.Combine(fixture.Source, "native");
+        Directory.CreateDirectory(nativeDirectory);
+        File.WriteAllText(
+            Path.Combine(nativeDirectory, "Native.gsproj"),
+            "<Project Sdk=\"Gsharp.NET.Sdk/0.4.591\"><Import Project=\"custom" + extension + "\" /></Project>");
+        const string importedXml = """
+            <Project>
+              <Import Sdk="Other.Sdk" Version="1.2.3" Project="Other.targets" />
+              <Import Sdk="Gsharp.NET.Sdk" Version="0.4.591" Project="Sdk.targets" Condition="'$(UseGsharp)' == 'true'" />
+            </Project>
+            """;
+        File.WriteAllText(Path.Combine(nativeDirectory, "custom" + extension), importedXml);
+        string templateDirectory = Path.Combine(fixture.Source, "templates", "imported");
+        Directory.CreateDirectory(Path.Combine(templateDirectory, ".template.config"));
+        File.WriteAllText(Path.Combine(templateDirectory, ".template.config", "template.json"), "{}");
+        string templateXml = importedXml.Replace("0.4.591", "$sdkVersion$", StringComparison.Ordinal);
+        File.WriteAllText(Path.Combine(templateDirectory, "custom" + extension), templateXml);
+        PipelineOptions options = this.RepositoryOptions(compiler, fixture);
+        options.SdkVersion = PinnedVersion;
+        options.SdkPinLocation = location;
+
+        RunResult migrated = await new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            .RunAsync(fixture.Apps);
+
+        Assert.True(migrated.Succeeded);
+        string importedPath = Path.Combine(fixture.Destination, "native", "custom" + extension);
+        XDocument imported = XDocument.Load(importedPath);
+        XElement[] imports = imported.Root.Elements("Import").ToArray();
+        Assert.Equal(2, imports.Length);
+        Assert.Equal("Other.Sdk", imports[0].Attribute("Sdk").Value);
+        Assert.Equal("1.2.3", imports[0].Attribute("Version").Value);
+        Assert.Equal("Gsharp.NET.Sdk", imports[1].Attribute("Sdk").Value);
+        Assert.Equal(
+            location == SdkPinLocation.GlobalJson ? null : PinnedVersion,
+            imports[1].Attribute("Version")?.Value);
+        Assert.Equal("'$(UseGsharp)' == 'true'", imports[1].Attribute("Condition").Value);
+        Assert.Equal(
+            templateXml,
+            File.ReadAllText(Path.Combine(fixture.Destination, "templates", "imported", "custom" + extension)));
+        var probe = new PinProbeStage();
+        RunResult validated = await new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { probe })
+            .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(options.ArtifactRoot, migrated.RunId));
+        Assert.True(validated.Succeeded);
+        Assert.Equal(PinnedVersion, Assert.Single(probe.Observations).SdkVersion);
+
+        imports[1].SetAttributeValue("Version", "0.0.2-tampered");
+        imported.Save(importedPath);
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationPipeline(this.ValidateOptions(compiler, fixture), new IMigrationStage[] { new PinProbeStage() })
+                .ValidateAsync(fixture.Apps, fixture.Apps, Path.Combine(options.ArtifactRoot, migrated.RunId)));
+        Assert.Contains("0.0.2-tampered", error.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// A source <c>global.json</c> that already pins the SDK cannot be mixed
     /// with versioned project attributes: that would build projects against

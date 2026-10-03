@@ -192,12 +192,12 @@ internal static class RepositoryMirror
         return written;
     }
 
-    /// <summary>Rebinds every buildable mirrored G# SDK project, including copied native projects.</summary>
+    /// <summary>Rebinds mirrored G# SDK declarations in projects and shared MSBuild files.</summary>
     /// <param name="destinationRoot">The mirrored repository root.</param>
     /// <param name="sdkMoniker">The run's SDK moniker.</param>
-    internal static void RebindMirroredSdkProjects(string destinationRoot, string sdkMoniker)
+    internal static void RebindMirroredSdkFiles(string destinationRoot, string sdkMoniker)
     {
-        foreach (string path in SdkPin.BuildableProjectPaths(destinationRoot))
+        foreach (string path in SdkPin.BuildableSdkFilePaths(destinationRoot))
         {
             XDocument project = XDocument.Load(path, LoadOptions.PreserveWhitespace);
             if (project.Root is null || !SdkPin.ProjectSdkNames(project.Root)

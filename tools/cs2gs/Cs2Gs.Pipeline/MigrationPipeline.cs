@@ -314,7 +314,7 @@ public sealed class MigrationPipeline
                 this.options.RepositoryAdditionalFiles.Add(passthroughFile);
             }
 
-            RepositoryMirror.RebindMirroredSdkProjects(destinationRoot, sdkMoniker);
+            RepositoryMirror.RebindMirroredSdkFiles(destinationRoot, sdkMoniker);
 
             // Issue #3862: the mirror must BE a repository before anything runs
             // inside it, not only after. Repository-anchored code — a test that
@@ -729,7 +729,7 @@ public sealed class MigrationPipeline
         string treePin = SdkPin.ReadGlobalJsonScopePin(migratedRoot);
 
         string projectPin = SdkPin.ReadProjectPin(
-            SdkPin.BuildableProjectPaths(migratedRoot),
+            SdkPin.BuildableSdkFilePaths(migratedRoot),
             treePin is null ? SdkPinLocation.ProjectFile : SdkPinLocation.GlobalJson);
         if (treePin is not null && projectPin is not null)
         {

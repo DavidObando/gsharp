@@ -108,15 +108,16 @@ file; all other settings in each file are preserved. A source
 nested scope, is an error in `project` mode during migration or validation.
 Rebinding and validation recognize each entry in a multi-SDK `Sdk` attribute,
 top-level `<Sdk Name="..." Version="...">` elements, and SDK `<Import>` elements.
-Translated, excluded, and copied native `.gsproj` projects use the same pin and
-retain unrelated SDK declarations and their order. .NET template payloads and
+Translated, excluded, and copied native projects, plus shared `.props`,
+`.targets`, and other MSBuild `*proj` files, use the same pin and retain
+unrelated SDK declarations and their order. .NET template payloads and
 project- and item-template payloads referenced by Visual Studio `.vstemplate` files remain unchanged,
 including their `global.json` files, and are excluded from pin writing and validation.
 Explicit SDK elements and imports keep their declaration style rather than gaining
 a second implicit SDK import. Global-json migration replaces an old root G# pin,
 including malformed versions or case-variant duplicates, just as it does for nested files.
 `validate` takes the pin from the migrated tree: the `global.json` pin, or
-else the one version its buildable projects record. Project mode rejects every
+else the one version its buildable MSBuild files record. Project mode rejects every
 unversioned G# SDK declaration, including explicit SDK elements and imports;
 only global-json mode permits bare declarations. A tree that pins in both
 places, or a disagreeing `validate --sdk-version`, is an error rather than a

@@ -208,29 +208,30 @@ internal static class SdkPin
         return names;
     }
 
-    /// <summary>Enumerates buildable mirrored projects, excluding build outputs and template payloads.</summary>
+    /// <summary>Enumerates mirrored MSBuild SDK files, excluding build outputs and template payloads.</summary>
     /// <param name="root">The mirrored repository root.</param>
-    /// <returns>The C# and G# project paths.</returns>
-    internal static IReadOnlyList<string> BuildableProjectPaths(string root)
+    /// <returns>Project, props, and targets file paths.</returns>
+    internal static IReadOnlyList<string> BuildableSdkFilePaths(string root)
     {
         string fullRoot = Path.GetFullPath(root);
-        var projects = new List<string>();
+        var files = new List<string>();
         foreach (string path in Directory.EnumerateFiles(fullRoot, "*", SearchOption.AllDirectories))
         {
             string extension = Path.GetExtension(path);
-            if (!(extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".gsproj", StringComparison.OrdinalIgnoreCase))
+            if (!(extension.EndsWith("proj", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".props", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase))
                 || RepositoryFileInventory.HasExcludedDirectory(Path.GetRelativePath(fullRoot, path))
                 || IsTemplatePayload(path, fullRoot))
             {
                 continue;
             }
 
-            projects.Add(path);
+            files.Add(path);
         }
 
-        projects.Sort(StringComparer.Ordinal);
-        return projects;
+        files.Sort(StringComparer.Ordinal);
+        return files;
     }
 
     /// <summary>Lists nested <c>global.json</c> paths in a repository file list.</summary>
@@ -260,7 +261,7 @@ internal static class SdkPin
     /// carried by G# SDK attributes, SDK elements, and SDK imports among
     /// <paramref name="projectPaths"/>.
     /// </summary>
-    /// <param name="projectPaths">The generated project files (missing files are skipped).</param>
+    /// <param name="projectPaths">The mirrored MSBuild SDK files (missing files are skipped).</param>
     /// <param name="location">The pin mode; only global-json mode permits unversioned G# declarations.</param>
     /// <returns>The recorded version, or <see langword="null"/> when no project carries one.</returns>
     /// <exception cref="InvalidOperationException">The declarations do not consistently record the required pin.</exception>
