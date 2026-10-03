@@ -139,11 +139,9 @@ public sealed partial class CSharpToGSharpTranslator
                 : lines;
         }
 
-        // Issue #3501 (GS0229): rewrites `@param` names in the node's
-        // attached doc comments to the parameters' EMITTED spellings
-        // (`package` → `package_` when the name collides with a G# keyword)
-        // and drops the receiver's `@param` for a C# extension method — its
-        // receiver is a G# receiver clause (or `this`), not a parameter.
+        // Parameter docs use semantic names, not `$`-escaped source spellings.
+        // Drop an extension receiver's @param: it becomes a receiver clause,
+        // not an ordinary G# parameter.
         private void SanitizeDocParamComments(GNode node, SyntaxNode source)
         {
             if (node?.AttachedComments is not { Count: > 0 } comments
@@ -188,17 +186,7 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                IParameterSymbol parameter = parameters.FirstOrDefault(p => p.Name == documented);
-                if (parameter == null)
-                {
-                    updated.Add(line);
-                    continue;
-                }
-
-                string emitted = this.EmittedName(parameter, parameter.Name);
-                updated.Add(emitted == documented
-                    ? line
-                    : line.Substring(0, nameStart) + emitted + line.Substring(nameEnd));
+                updated.Add(line);
             }
 
             node.AttachedComments = updated;

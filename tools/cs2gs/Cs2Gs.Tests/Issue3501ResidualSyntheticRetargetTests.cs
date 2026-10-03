@@ -11,6 +11,7 @@ using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -360,10 +361,10 @@ public class Issue3501ResidualSyntheticRetargetTests
     }
 
     [Fact]
-    public void DocComments_SanitizedParamNames_AndDocAdjacency()
+    public void DocComments_SemanticParamNames_AndDocAdjacency()
     {
-        // GS0229: the @param spelling follows the parameter's EMITTED name
-        // (keyword collisions gain the underscore); an extension receiver's
+        // GS0229: @param names match unescaped parameter metadata names;
+        // an extension receiver's
         // @param is dropped. GS0227: a regular comment between the doc block
         // and its declaration detaches it in G#, so docs print last.
         string printed = Translate("""
@@ -386,8 +387,10 @@ public class Issue3501ResidualSyntheticRetargetTests
             }
             """);
 
-        Assert.Contains("@param package_ The declaring package.", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("@param package ", printed, StringComparison.Ordinal);
+        Assert.Contains("@param package The declaring package.", printed, StringComparison.Ordinal);
+        Assert.Contains("Render($package string, count int32)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("@param $package ", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("package_", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("@param widget", printed, StringComparison.Ordinal);
         Assert.Contains("@param suffix", printed, StringComparison.Ordinal);
 
@@ -395,6 +398,11 @@ public class Issue3501ResidualSyntheticRetargetTests
         int doc = printed.IndexOf("/// Renders a widget.", StringComparison.Ordinal);
         Assert.True(note >= 0 && doc >= 0 && note < doc, printed);
         TranslationTestValidation.AssertBinds(printed);
+        EmittedOracleResult emitted = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + """Widget().Render("p", 2)""");
+        Assert.DoesNotContain(emitted.Diagnostics, diagnostic => diagnostic.IsError || diagnostic.Id is "GS0227" or "GS0229");
+        Assert.Null(emitted.UnhandledException);
+        Assert.Equal("p2", emitted.Value);
     }
 
     [Fact]

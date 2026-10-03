@@ -127,6 +127,11 @@ wins.
 The reserved-metadata fixtures re-enter the corpus once the translator
 side lands.
 
+Named arguments compare the token's `ValueText` with the parameter's semantic
+name, including imported CLR parameters. Their `$` spelling does not alter
+argument slots or evaluation order. Documentation tags (`@param`, `@typeparam`)
+likewise name the unescaped metadata identifier rather than its source spelling.
+
 ### Tooling
 
 The language server's completion inserts the `$` escape automatically

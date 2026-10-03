@@ -114,7 +114,14 @@ public sealed class Issue3461IdentifierSanitizationTests
             {
                 public @in Identity(@in value) => value;
 
+                /// <summary>Uses <typeparamref name="scope"/>.</summary>
+                /// <typeparam name="scope">The first type.</typeparam>
+                /// <typeparam name="U">The result type.</typeparam>
+                /// <param name="first">The first value.</param>
+                /// <param name="value">The result value.</param>
                 public U Echo<@scope, U>(@scope first, U value) => value;
+
+                public string Name<@scope>() => nameof(@scope);
             }
             """);
 
@@ -123,6 +130,9 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.True(
             rendered.Contains("Echo[$scope, U](first $scope, value U) U -> value", StringComparison.Ordinal),
             rendered);
+        Assert.Contains("/// Uses `scope`.", rendered, StringComparison.Ordinal);
+        Assert.Contains("@typeparam scope The first type.", rendered, StringComparison.Ordinal);
+        Assert.Contains("@param first The first value.", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         EmittedOracleResult emitted = EmittedOracle.Evaluate(rendered + Environment.NewLine + "1");
@@ -136,6 +146,16 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.Equal(
             new[] { "scope", "U" },
             echo.GetGenericArguments().Select(parameter => parameter.Name));
+        Type closedType = genericType.MakeGenericType(typeof(int));
+        object instance = Activator.CreateInstance(closedType);
+        Assert.Equal(7, closedType.GetMethod("Identity").Invoke(instance, new object[] { 7 }));
+        Assert.Equal(
+            "ok",
+            closedType.GetMethod("Echo").MakeGenericMethod(typeof(int), typeof(string))
+                .Invoke(instance, new object[] { 3, "ok" }));
+        Assert.Equal(
+            "scope",
+            closedType.GetMethod("Name").MakeGenericMethod(typeof(int)).Invoke(instance, null));
     }
 
     [Fact]
