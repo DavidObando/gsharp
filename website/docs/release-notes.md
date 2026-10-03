@@ -16,6 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **An inherited non-virtual property accessor can satisfy a G# interface across assemblies** (issue [#4717](https://github.com/DavidObando/gsharp/issues/4717)). The derived class now emits a private forwarding slot that calls the exact imported accessor selected by binding, including setters, init accessors, indexers and constructed generic bases. Previously the two compilations succeeded but the derived type failed IL verification and runtime loading. Ordinary base accessors stay non-virtual; existing virtual and inherited interface mappings are preserved, and reference assemblies carry the same forwarding-slot metadata.
 - **Ordinary class methods now emit non-virtual CLR metadata as specified by ADR-0017** (issue [#4677](https://github.com/DavidObando/gsharp/issues/4677)). `open` methods, overrides, and interface implementations retain their virtual slots, including members inherited by a descendant introducing an interface, synthesized sync/async iterators, and symbolic generic event accessors. Unrelated inherited members remain non-virtual.
 
 ### Reader's overview

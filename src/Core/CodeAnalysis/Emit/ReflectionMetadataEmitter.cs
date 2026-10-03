@@ -2235,6 +2235,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             methodRow += this.interfaceImpls.PlanInheritedEventBridges(c, methodRow);
+            methodRow += this.interfaceImpls.PlanImportedAccessorBridges(c, methodRow);
 
             // ADR-0053: plan method rows for static methods on classes.
             if (!c.StaticMethods.IsDefaultOrEmpty)
@@ -3768,6 +3769,7 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0052: emit event accessor methods for classes.
             this.memberDefEmitter.EmitEventAccessors(c);
             this.interfaceImpls.EmitInheritedEventBridges(c);
+            this.interfaceImpls.EmitImportedAccessorBridges(c);
 
             // ADR-0053: emit static methods for classes.
             if (!c.StaticMethods.IsDefaultOrEmpty)

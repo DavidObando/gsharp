@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -672,6 +673,9 @@ public sealed class StructSymbol : TypeSymbol
     /// CLR <c>Finalize</c> override.
     /// </summary>
     public DeinitSymbol? Deinitializer { get; private set; }
+
+    /// <summary>Gets imported accessors selected by interface conformance binding.</summary>
+    internal List<(InterfaceSymbol Interface, PropertySymbol Property, MethodInfo Accessor, TypeSymbol ContainingType, bool IsSetter)> ImportedInterfaceAccessors { get; } = new();
 
     /// <summary>
     /// Gets a value indicating whether non-public value-struct field initializers require an

@@ -603,12 +603,25 @@ internal sealed partial class DeclarationBinder
                 out var implProp,
                 out var typeMismatch);
             if (!found
-                && HasMatchingImportedBaseProperty(
+                && TryFindMatchingImportedBaseProperty(
                     structSymbol,
                     iprop,
-                    typeParameterMap))
+                    typeParameterMap,
+                    out var importedProperty,
+                    out var importedOwner))
             {
                 found = true;
+                if (iprop.HasGetter)
+                {
+                    var getter = Invariant.Required(importedProperty.GetGetMethod(), "a matching property has its required getter");
+                    structSymbol.ImportedInterfaceAccessors.Add((iface, iprop, getter, importedOwner, false));
+                }
+
+                if (iprop.HasSetter)
+                {
+                    var setter = Invariant.Required(importedProperty.GetSetMethod(), "a matching property has its required setter");
+                    structSymbol.ImportedInterfaceAccessors.Add((iface, iprop, setter, importedOwner, true));
+                }
             }
 
             if (found && implProp != null)
@@ -952,11 +965,15 @@ internal sealed partial class DeclarationBinder
         return false;
     }
 
-    private static bool HasMatchingImportedBaseProperty(
+    private static bool TryFindMatchingImportedBaseProperty(
         StructSymbol structSymbol,
         PropertySymbol interfaceProperty,
-        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PropertyInfo? implementation,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TypeSymbol? containingType)
     {
+        implementation = null;
+        containingType = null;
         var importedBase = TypeMemberModel.GetNearestImportedBase(structSymbol);
         if (importedBase?.ClrType == null)
         {
@@ -967,8 +984,10 @@ internal sealed partial class DeclarationBinder
             importedBase.ClrType,
             BindingFlags.Public | BindingFlags.Instance))
         {
+            var candidateParameters = candidate.GetIndexParameters();
             if (candidate.Name != interfaceProperty.Name
-                || candidate.GetIndexParameters().Length != interfaceProperty.Parameters.Length
+                || RefCapabilities.GetReturnRefKind(candidate) != interfaceProperty.ReturnRefKind
+                || candidateParameters.Length != interfaceProperty.Parameters.Length
                 || (interfaceProperty.HasGetter && candidate.GetGetMethod(nonPublic: false) == null)
                 || (interfaceProperty.HasSetter && candidate.GetSetMethod(nonPublic: false) == null)
                 || (interfaceProperty.HasSetter
@@ -984,10 +1003,11 @@ internal sealed partial class DeclarationBinder
             var parametersMatch = true;
             for (var i = 0; i < interfaceProperty.Parameters.Length; i++)
             {
-                if (!ConformanceSignaturesEquivalent(
-                    interfaceProperty.Parameters[i].Type,
-                    MemberLookup.GetIndexerParameterTypeSymbol(importedBase, candidate, i),
-                    typeParameterMap))
+                if (RefCapabilities.GetParameterRefKind(candidateParameters[i]) != interfaceProperty.Parameters[i].RefKind
+                    || !ConformanceSignaturesEquivalent(
+                        interfaceProperty.Parameters[i].Type,
+                        MemberLookup.GetIndexerParameterTypeSymbol(importedBase, candidate, i),
+                        typeParameterMap))
                 {
                     parametersMatch = false;
                     break;
@@ -1001,6 +1021,8 @@ internal sealed partial class DeclarationBinder
                     interfaceProperty.HasSetter,
                     typeParameterMap))
             {
+                implementation = candidate;
+                containingType = MemberLookup.GetClrMemberDeclaringTypeSymbol(importedBase, candidate);
                 return true;
             }
         }
