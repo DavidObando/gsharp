@@ -5360,7 +5360,7 @@ internal static class ObliviousNullabilityAnalyzer
             case CastExpressionSyntax cast
                 when model.GetOperation(cast) is IConversionOperation { OperatorMethod: null } conversion
                     && IsReferenceLike(conversion.Type):
-                return IsDirectlyNullable(cast.Expression, model);
+                return IsDirectlyNullable(cast.Expression, model, respectNullGuards);
 
             // `await expr`: an awaited `Task<T>`'s own nullability is that of
             // T, which is exactly what the UNWRAPPED awaited expression's own
