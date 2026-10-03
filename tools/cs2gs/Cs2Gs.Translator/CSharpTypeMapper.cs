@@ -447,6 +447,11 @@ public sealed class CSharpTypeMapper
         bool analyzerNamespaceString = this.AnalyzerApiMode
             && Analyzers.RoslynAnalyzerApiMap.IsNamespaceSymbolType(type);
         GTypeReference mapped = this.MapCore(type, context, location);
+        if (type is INamedTypeSymbol { IsGenericType: true } constructed && !constructed.IsTupleType)
+        {
+            mapped = this.PromoteTupleTypeArguments(mapped, type, constructed, context, new List<int>());
+        }
+
         return nullableReference || analyzerNamespaceString ? WithNullable(mapped, true) : mapped;
     }
 
@@ -650,9 +655,10 @@ public sealed class CSharpTypeMapper
             List<GTypeReference> explicitArgs = genericNamed.TypeArguments
                 .Select(a => this.MapExplicitType(a, context, location))
                 .ToList();
-            return explicitArgs.SequenceEqual(structural.TypeArguments)
+            GTypeReference mapped = explicitArgs.SequenceEqual(structural.TypeArguments)
                 ? structural
                 : new NamedTypeReference(structural.Name, explicitArgs, structural.ContainingType) { IsNullable = structural.IsNullable };
+            return this.PromoteTupleTypeArguments(mapped, type, genericNamed, context, new List<int>());
         }
 
         return this.Map(type, context, location);
@@ -1393,6 +1399,74 @@ public sealed class CSharpTypeMapper
                 this.DelegateTypeName(type, context, location),
                 type.TypeArguments.Select(argument => this.Map(argument, context, location)).ToList())
             : new NamedTypeReference(this.DelegateTypeName(type, context, location));
+    }
+
+    internal GTypeReference PromoteTupleTypeArguments(
+        GTypeReference mapped,
+        ITypeSymbol declaredType,
+        ISymbol symbol,
+        TranslationContext context,
+        List<int> path)
+    {
+        if (context.Compilation.Options.NullableContextOptions != NullableContextOptions.Disable
+            && symbol is not INamedTypeSymbol)
+        {
+            return mapped;
+        }
+
+        if (mapped is TupleTypeReference tuple
+            && declaredType is INamedTypeSymbol { IsTupleType: true } tupleType
+            && tuple.ElementTypes.Count == tupleType.TupleElements.Length)
+        {
+            var elements = new List<GTypeReference>(tuple.ElementTypes.Count);
+            bool changed = false;
+            for (int i = 0; i < tuple.ElementTypes.Count; i++)
+            {
+                path.Add(i);
+                GTypeReference element = this.PromoteTupleTypeArguments(
+                    tuple.ElementTypes[i], tupleType.TupleElements[i].Type, symbol, context, path);
+                path.RemoveAt(path.Count - 1);
+                changed |= !ReferenceEquals(element, tuple.ElementTypes[i]);
+                elements.Add(element);
+            }
+
+            return changed
+                ? new TupleTypeReference(elements, tuple.ElementNames) { IsNullable = tuple.IsNullable }
+                : mapped;
+        }
+
+        if (mapped is NamedTypeReference named
+            && declaredType is INamedTypeSymbol declaredNamed
+            && named.TypeArguments.Count > 0
+            && named.TypeArguments.Count == declaredNamed.TypeArguments.Length)
+        {
+            var arguments = new List<GTypeReference>(named.TypeArguments.Count);
+            bool changed = false;
+            for (int i = 0; i < named.TypeArguments.Count; i++)
+            {
+                path.Add(i);
+                GTypeReference argument = this.PromoteTupleTypeArguments(
+                    named.TypeArguments[i], declaredNamed.TypeArguments[i], symbol, context, path);
+                path.RemoveAt(path.Count - 1);
+                changed |= !ReferenceEquals(argument, named.TypeArguments[i]);
+                arguments.Add(argument);
+            }
+
+            if (changed)
+            {
+                mapped = new NamedTypeReference(named.Name, arguments, named.ContainingType)
+                    { IsNullable = named.IsNullable };
+            }
+        }
+
+        return path.Count > 0
+            && !mapped.IsNullable
+            && declaredType.IsReferenceType
+            && declaredType.NullableAnnotation != NullableAnnotation.Annotated
+            && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                context.Compilation, symbol, path, context.SiblingCompilations)
+                ? WithNullable(mapped, true)
+                : mapped;
     }
 
     private static INamespaceSymbol GetExtensionMethodNamespace(IMethodSymbol method)

@@ -14,6 +14,7 @@ using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -522,6 +523,150 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
             string.Join(Environment.NewLine, execution.Diagnostics) + Environment.NewLine + printed);
         Assert.Null(execution.UnhandledException);
         Assert.Equal(1, execution.Value);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ConstructedIteratorContracts_SynchronizeTypeArgumentsAndUses(bool interfaceContract, bool guarded)
+    {
+        string declaration = interfaceContract
+            ? "public interface IRows<T> { IEnumerable<T> Rows(); }"
+            : "public abstract class IRows<T> { public abstract IEnumerable<T> Rows(); }";
+        string modifier = interfaceContract ? string.Empty : "override ";
+        string yield = guarded
+            ? "if (text != null) { yield return (text, 1); }"
+            : "yield return (text, 1);";
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            {{declaration}}
+            public sealed class MissingRows : IRows<(string Text, int Code)> {
+                public {{modifier}}IEnumerable<(string Text, int Code)> Rows() {
+                    string text = null;
+                    {{yield}}
+                }
+            }
+            public sealed class PresentRows : IRows<(string Text, int Code)> {
+                public {{modifier}}IEnumerable<(string Text, int Code)> Rows() {
+                    yield return ("x", 1);
+                }
+            }
+            public sealed class OtherRows : IRows<(string Text, long Code)> {
+                public {{modifier}}IEnumerable<(string Text, long Code)> Rows() {
+                    yield return ("x", 1L);
+                }
+            }
+            public static class Consumer {
+                public static IRows<(string Text, int Code)> Carry(IRows<(string Text, int Code)> value) {
+                    IRows<(string Text, int Code)> rows = Identity<IRows<(string Text, int Code)>>(
+                        (IRows<(string Text, int Code)>)value);
+                    return rows;
+                }
+                public static IRows<(string Label, int Number)> Alias(IRows<(string Label, int Number)> value) {
+                    return value;
+                }
+                private static T Identity<T>(T value) { return value; }
+            }
+            """);
+
+        string textType = guarded ? "string" : "string?";
+        Assert.Equal(6, printed.Split($"IRows[(Text {textType}, Code int32)]").Length - 1);
+        Assert.Equal(2, printed.Split($"IRows[(Label {textType}, Number int32)]").Length - 1);
+        Assert.Contains("IRows[(Text string, Code int64)]", printed);
+        Assert.Contains("sequence[(Text string, Code int64)]", printed);
+        Assert.Equal(2, printed.Split($"sequence[(Text {textType}, Code int32)]").Length - 1);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstructedInheritedContracts_ProjectReorderedNestedTupleArguments(bool interfaceContract)
+    {
+        string declaration = interfaceContract
+            ? "public interface IAlias<X, Y> : IRows<Y, X> { }"
+            : "public abstract class IAlias<X, Y> : IRows<Y, X> { public abstract IEnumerable<(X Value, int Code)> Rows(); }";
+        string modifier = interfaceContract ? string.Empty : "override ";
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public interface IRows<A, T> { IEnumerable<(T Value, int Code)> Rows(); }
+            {{declaration}}
+            public sealed class MissingRows : IAlias<(string Text, int Id), int> {
+                public {{modifier}}IEnumerable<((string Text, int Id) Value, int Code)> Rows() {
+                    string text = null;
+                    yield return ((text, 1), 2);
+                }
+            }
+            public static class Consumer {
+                public static IEnumerable<((string Text, int Id) Value, int Code)> Copy(
+                    IAlias<(string Text, int Id), int> source) {
+                    var values = source.Rows();
+                    return values;
+                }
+            }
+            """);
+
+        Assert.Equal(2, printed.Split("IAlias[(Text string?, Id int32), int32]").Length - 1);
+        Assert.Contains("IEnumerable[(Value (Text string?, Id int32), Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstructedContractReferences_UseSiblingTupleEvidence(bool nullableConsumer)
+    {
+        var producer = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Producer.cs", """
+                using System.Collections.Generic;
+                public interface IRows<T> { IEnumerable<T> Rows(); }
+                public sealed class MissingRows : IRows<(string Text, int Code)> {
+                    public IEnumerable<(string Text, int Code)> Rows() {
+                        string text = null;
+                        yield return (text, 1);
+                    }
+                }
+                """),
+        }).Compilation.WithAssemblyName("ConstructedProducer");
+        using var image = new MemoryStream();
+        var emitted = producer.Emit(image);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        LoadedCSharpProject loaded = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("Consumer.cs", """
+                    public static class Consumer {
+                        public static IRows<(string Label, int Number)> Carry(IRows<(string Label, int Number)> value) {
+                            return value;
+                        }
+                    }
+                    """),
+            },
+            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(image.ToArray())).ToArray());
+        var consumer = loaded.Compilation.WithAssemblyName("ConstructedConsumer").WithOptions(
+            loaded.Compilation.Options.WithNullableContextOptions(
+                nullableConsumer ? NullableContextOptions.Enable : NullableContextOptions.Disable));
+        var printed = new List<string>();
+        foreach (CSharpCompilation compilation in new[] { producer, consumer })
+        {
+            Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+            SyntaxTree tree = Assert.Single(compilation.SyntaxTrees);
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            var document = new LoadedDocument(tree.FilePath, tree, model);
+            var context = new TranslationContext(
+                compilation, model, tree.FilePath, new[] { producer, consumer });
+            CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+            Assert.DoesNotContain(context.Diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+            printed.Add(GSharpPrinter.Print(unit));
+        }
+
+        Assert.True(
+            printed[1].Split("IRows[(Label string?, Number int32)]").Length - 1 == 2,
+            string.Join(Environment.NewLine, printed));
+        TranslationTestValidation.AssertBinds(string.Join(Environment.NewLine, printed));
     }
 
     [Theory]

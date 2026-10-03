@@ -857,15 +857,38 @@ internal static class ObliviousNullabilityAnalyzer
             || elementPath == null
             || elementPath.Count == 0
             || compilation == null
-            || compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
+            || (compilation.Options.NullableContextOptions != NullableContextOptions.Disable
+                && symbol is not INamedTypeSymbol))
         {
             return false;
         }
 
         RegisterSourceAssemblies(compilation, siblingCompilations);
+        if (compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
+        {
+            foreach (CSharpCompilation sibling in siblingCompilations ?? Array.Empty<CSharpCompilation>())
+            {
+                if (sibling != null
+                    && sibling.Options.NullableContextOptions == NullableContextOptions.Disable
+                    && RemapToCompilation(sibling, symbol) is ISymbol remapped
+                    && IsTupleElementTaintedCore(
+                        sibling,
+                        remapped,
+                        EncodeTuplePath(elementPath),
+                        siblingCompilations,
+                        new HashSet<ScalarQuery>(ScalarQueryComparer.Instance),
+                        new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         return IsTupleElementTaintedCore(
             compilation,
-            Canonical(symbol),
+            symbol,
             EncodeTuplePath(elementPath),
             siblingCompilations,
             new HashSet<ScalarQuery>(ScalarQueryComparer.Instance),
@@ -1211,6 +1234,14 @@ internal static class ObliviousNullabilityAnalyzer
     /// </summary>
     private static ISymbol RemapToCompilation(Compilation targetCompilation, ISymbol symbol)
     {
+        if (symbol is INamedTypeSymbol)
+        {
+            string reference = DocumentationCommentId.CreateReferenceId(symbol);
+            return reference == null
+                ? null
+                : DocumentationCommentId.GetFirstSymbolForReferenceId(reference, targetCompilation);
+        }
+
         if (symbol is IParameterSymbol parameter)
         {
             ISymbol remappedOwner = RemapMemberOwner(targetCompilation, parameter.ContainingSymbol);
@@ -1961,6 +1992,7 @@ internal static class ObliviousNullabilityAnalyzer
         var delegateReturnEdges = new List<(ISymbol Target, ISymbol Source)>();
         var paramsElementTainted = new HashSet<string>(System.StringComparer.Ordinal);
         var paramsElementEdges = new List<(string Target, ISymbol Source)>();
+        var constructedTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
 
         foreach (SyntaxTree tree in compilation.SyntaxTrees)
         {
@@ -1969,6 +2001,12 @@ internal static class ObliviousNullabilityAnalyzer
 
             foreach (SyntaxNode node in root.DescendantNodes())
             {
+                if (node is GenericNameSyntax generic
+                    && model.GetTypeInfo(generic).Type is INamedTypeSymbol constructed)
+                {
+                    constructedTypes.Add(constructed);
+                }
+
                 SeedDirectTaint(node, model, tainted);
                 CollectEdges(
                     node,
@@ -2019,6 +2057,7 @@ internal static class ObliviousNullabilityAnalyzer
         CollectInterfaceImplementationEdges(compilation, edges);
         CollectOverrideContractEdges(compilation, edges);
         CollectTupleContractEdges(compilation, tupleTainted, tupleEdges);
+        CollectConstructedTupleContractEdges(compilation, constructedTypes, tupleTainted, tupleEdges);
 
         // Fixpoint: propagate taint along the edge set until it stabilizes.
         bool changed = true;
@@ -2942,14 +2981,13 @@ internal static class ObliviousNullabilityAnalyzer
             }
         }
 
-        ISymbol canonicalSource = Canonical(source);
         for (int i = 0; i < targetSlots.Count; i++)
         {
             AddTupleShapeEdges(
                 target,
                 targetSlots[i].Tuple,
                 targetSlots[i].Path,
-                canonicalSource,
+                source,
                 sourceSlots[i].Tuple,
                 sourceSlots[i].Path,
                 tupleTainted,
@@ -3432,7 +3470,6 @@ internal static class ObliviousNullabilityAnalyzer
 
         if (TryGetTupleType(symbol, out tupleType))
         {
-            symbol = Canonical(symbol);
             return true;
         }
 
@@ -4355,6 +4392,42 @@ internal static class ObliviousNullabilityAnalyzer
         }
     }
 
+    private static void CollectConstructedTupleContractEdges(
+        Compilation compilation,
+        HashSet<INamedTypeSymbol> constructedTypes,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
+    {
+        var pending = new Queue<INamedTypeSymbol>(
+            EnumerateSourceNamedTypes(compilation).Concat(constructedTypes));
+        var visited = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        while (pending.Count > 0)
+        {
+            INamedTypeSymbol type = pending.Dequeue();
+            if (!visited.Add(type))
+            {
+                continue;
+            }
+
+            foreach ((INamedTypeSymbol inherited, INamedTypeSymbol template) in EnumerateDirectReceiverTypes(type))
+            {
+                pending.Enqueue(inherited);
+                foreach ((string path, INamedTypeSymbol tuple) in NestedTupleSlots(inherited))
+                {
+                    (ISymbol owner, string sourcePath) = ProjectTupleContractPosition(
+                        inherited, path, template, type);
+                    if (SymbolEqualityComparer.Default.Equals(owner, inherited))
+                    {
+                        continue;
+                    }
+
+                    AddTupleShapeEdges(inherited, tuple, path, owner, tuple, sourcePath, tupleTainted, tupleEdges);
+                    AddTupleShapeEdges(owner, tuple, sourcePath, inherited, tuple, path, tupleTainted, tupleEdges);
+                }
+            }
+        }
+    }
+
     private static void AddTupleContractPair(
         ISymbol first,
         ITypeSymbol firstType,
@@ -4406,24 +4479,22 @@ internal static class ObliviousNullabilityAnalyzer
             }
         }
 
-        ISymbol firstCanonical = Canonical(first);
-        ISymbol secondCanonical = Canonical(second);
         for (int i = 0; i < firstSlots.Count; i++)
         {
             AddTupleShapeEdges(
-                firstCanonical,
+                first,
                 firstSlots[i].Tuple,
                 firstSlots[i].Path,
-                secondCanonical,
+                second,
                 secondSlots[i].Tuple,
                 secondSlots[i].Path,
                 tupleTainted,
                 tupleEdges);
             AddTupleShapeEdges(
-                secondCanonical,
+                second,
                 secondSlots[i].Tuple,
                 secondSlots[i].Path,
-                firstCanonical,
+                first,
                 firstSlots[i].Tuple,
                 firstSlots[i].Path,
                 tupleTainted,
@@ -5396,6 +5467,12 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static ISymbol Canonical(ISymbol symbol)
     {
+        // Constructed type-argument sinks must not merge unrelated instantiations.
+        if (symbol is INamedTypeSymbol)
+        {
+            return symbol;
+        }
+
         // A reduced extension-method invocation (`value.Ext(...)`) binds to the
         // REDUCED method symbol, whereas the extension's own declaration node
         // binds to the UNREDUCED static method; normalize to the unreduced
@@ -5437,12 +5514,82 @@ internal static class ObliviousNullabilityAnalyzer
         return IsNullLiteral(expression);
     }
 
+    private static (ISymbol Owner, string Path) ProjectTupleContractPosition(
+        ISymbol symbol,
+        string path,
+        ITypeSymbol template = null,
+        INamedTypeSymbol receiver = null)
+    {
+        template ??= SymbolValueType(Canonical(symbol));
+        string[] indexes = path.Split('.');
+        for (int offset = 0; offset <= indexes.Length; offset++)
+        {
+            if (template is ITypeParameterSymbol parameter
+                && parameter.TypeParameterKind == TypeParameterKind.Type)
+            {
+                INamedTypeSymbol owner = receiver ?? symbol.ContainingType;
+                while (owner != null
+                    && !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, parameter.ContainingType))
+                {
+                    owner = owner.ContainingType;
+                }
+
+                if (owner != null)
+                {
+                    string suffix = string.Join(".", indexes.Skip(offset));
+                    string prefix = parameter.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    return (owner, suffix.Length == 0 ? prefix : prefix + "." + suffix);
+                }
+            }
+
+            if (offset == indexes.Length
+                || template is not INamedTypeSymbol named
+                || !int.TryParse(indexes[offset], out int index))
+            {
+                break;
+            }
+
+            if (named.IsTupleType && index < named.TupleElements.Length)
+            {
+                template = named.TupleElements[index].Type;
+            }
+            else if (!named.IsTupleType && index < named.TypeArguments.Length)
+            {
+                template = named.TypeArguments[index];
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return (symbol, path);
+    }
+
+    private static ITypeSymbol NormalizeContractTupleNames(ITypeSymbol type)
+    {
+        if (type is not INamedTypeSymbol named)
+        {
+            return type;
+        }
+
+        // Tuple labels are rendered at each use, not part of contract identity.
+        named = named.TupleUnderlyingType ?? named;
+        ITypeSymbol[] arguments = named.TypeArguments.Select(NormalizeContractTupleNames).ToArray();
+        return arguments.SequenceEqual(named.TypeArguments, SymbolEqualityComparer.Default)
+            ? named
+            : named.ConstructedFrom.Construct(arguments);
+    }
+
     private readonly struct TupleElementKey
     {
         public TupleElementKey(ISymbol symbol, string path)
         {
-            this.Symbol = Canonical(symbol);
-            this.Path = path;
+            (ISymbol owner, string projectedPath) = ProjectTupleContractPosition(symbol, path);
+            this.Symbol = owner is INamedTypeSymbol named
+                ? NormalizeContractTupleNames(named)
+                : Canonical(owner);
+            this.Path = projectedPath;
         }
 
         public ISymbol Symbol { get; }
