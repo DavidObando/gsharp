@@ -178,6 +178,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return bridged;
             }
 
+            slotType = GetBridgedSlotType(value, knownSlotType) ?? slotType;
             this.ReportGenericStore(value, value.ToString(), kind, targetSymbol, slotType, resultDependsOnSlot);
             return bridged;
         }

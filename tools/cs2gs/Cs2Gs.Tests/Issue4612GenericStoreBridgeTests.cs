@@ -1461,6 +1461,33 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void RebuiltTupleIndexKey_ReportsTheBoundSyntheticLeafSlot()
+    {
+        string source = """
+            using System.Collections.Generic;
+            public class Node { }
+            public static class C
+            {
+                private static string Branch() => null;
+                public static bool Lookup(Node node)
+                {
+                    var key = (Branch(), node);
+                    return new Dictionary<(string, Node), bool>()[key];
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source);
+
+        Assert.Contains("key.Item1!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "key];"), Position(site));
+        Assert.StartsWith(
+            "kind=constructed-generic-member | target=Dictionary<(string, Node), bool>.this[(string, Node)] parameter 'key' | slot-type=string",
+            site.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
