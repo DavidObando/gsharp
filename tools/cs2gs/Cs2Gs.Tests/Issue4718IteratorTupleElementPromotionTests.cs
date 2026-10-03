@@ -64,6 +64,38 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstructedGenericDelegateTupleContracts_SynchronizeNominalMappingPaths(bool nullBearing)
+    {
+        string body = nullBearing ? "return (text, 1);" : "return (\"present\", 2);";
+        string printed = Translate($$"""
+            public delegate T Factory<T>();
+            public static class Obj {
+                public static Factory<(string Text, int Code)> Field = Missing;
+                public static event Factory<(string Text, int Code)> Produced;
+                public static (string Text, int Code) Missing() {
+                    string text = null;
+                    {{body}}
+                }
+                public static void Use() {
+                    Factory<(string Text, int Code)> local = Missing;
+                    Factory<(string Text, int Code)> converted = (Factory<(string Text, int Code)>)local;
+                    Produced += Missing;
+                }
+            }
+            """);
+
+        string tuple = $"(Text {(nullBearing ? "string?" : "string")}, Code int32)";
+        Assert.Contains("func Missing() " + tuple, printed);
+        Assert.Contains("Field Factory[" + tuple + "]", printed);
+        Assert.Contains("Produced Factory[" + tuple + "]", printed);
+        Assert.Contains("local Factory[" + tuple + "]", printed);
+        Assert.True(printed.Contains("cast[Factory[" + tuple + "]](local)", StringComparison.Ordinal), printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
     [InlineData("IEnumerable", "", "sequence")]
     [InlineData("IEnumerator", "", "IEnumerator")]
     [InlineData("IAsyncEnumerable", "async ", "IAsyncEnumerable")]
@@ -195,12 +227,13 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         string returnType = reordered
             ? "Reordered<(string Keep, int Code), (string Text, int Code)>"
             : "Carrier<(string Text, int Code), (string Keep, int Code)>";
+        // #4729 tracks imported constructors; isolate the contract-shape oracle.
         string printed = Translate(
             $$"""
             using Contract4718;
             public sealed class Producer : RowsBase {
                 public override {{returnType}} Rows() {
-                    return new {{returnType}}();
+                    throw new System.NotImplementedException();
                 }
             }
             """,
@@ -210,9 +243,19 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
             ? "Reordered[(Keep string, Code int32), (Text string, Code int32)]"
             : "Carrier[(Text string?, Code int32), (Keep string, Code int32)]";
         Assert.Contains("override func Rows() " + expected, printed);
-        Assembly.Load(bytes);
-        using var resolver = ReferenceResolver.WithRuntimeReferences(Array.Empty<string>());
-        TranslationTestValidation.AssertBinds(resolver, printed);
+        string directory = Path.Combine(".local", "issue4718-import-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string referencePath = Path.Combine(directory, "Contract4718.dll");
+            File.WriteAllBytes(referencePath, bytes);
+            using var resolver = ReferenceResolver.WithRuntimeReferences(new[] { referencePath });
+            TranslationTestValidation.AssertBinds(resolver, printed);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Theory]

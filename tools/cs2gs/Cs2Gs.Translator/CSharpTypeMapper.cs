@@ -549,15 +549,7 @@ public sealed class CSharpTypeMapper
             && named.TypeKind == TypeKind.Delegate
             && named.DelegateInvokeMethod != null)
         {
-            if (named.IsGenericType)
-            {
-                List<GTypeReference> delegateArgs = named.TypeArguments
-                    .Select(a => this.Map(a, context, location))
-                    .ToList();
-                return new NamedTypeReference(this.DelegateTypeName(named, context, location), delegateArgs);
-            }
-
-            return new NamedTypeReference(this.DelegateTypeName(named, context, location));
+            return this.MapNominalDelegate(named, context, location);
         }
 
         return this.Map(type, context, location);
@@ -1394,11 +1386,12 @@ public sealed class CSharpTypeMapper
         TranslationContext context,
         Location location)
     {
-        return type.IsGenericType
+        GTypeReference mapped = type.IsGenericType
             ? new NamedTypeReference(
                 this.DelegateTypeName(type, context, location),
                 type.TypeArguments.Select(argument => this.Map(argument, context, location)).ToList())
             : new NamedTypeReference(this.DelegateTypeName(type, context, location));
+        return this.PromoteTupleTypeArguments(mapped, type, type, context, new List<int>());
     }
 
     internal GTypeReference PromoteTupleTypeArguments(
@@ -1859,11 +1852,7 @@ public sealed class CSharpTypeMapper
             {
                 if (IsSourceDeclaredDelegate(named) || this.IsIdentityCriticalDelegate(named, context))
                 {
-                    return named.IsGenericType
-                        ? new NamedTypeReference(
-                            this.DelegateTypeName(named, context, location),
-                            named.TypeArguments.Select(a => this.Map(a, context, location)).ToList())
-                        : new NamedTypeReference(this.DelegateTypeName(named, context, location));
+                    return this.MapNominalDelegate(named, context, location);
                 }
 
                 return this.MapDelegate(named.DelegateInvokeMethod, context, location);
