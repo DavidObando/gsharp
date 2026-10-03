@@ -39,6 +39,28 @@ namespace Corpus.Issue4675
 
     public readonly record struct RecordStruct(int Value);
 
+    public record GenericRecord<T>(T Value);
+
+    public record GenericDerivedRecord<T>(T Value) : RecordBase(1);
+
+    public readonly record struct GenericRecordStruct<T>(T Value);
+
+    public record RefOverloadedPrintMembers(int Value)
+    {
+        public bool PrintMembers(ref System.Text.StringBuilder builder) => false;
+    }
+
+    public record CustomPrintMembers(int Value)
+    {
+        protected virtual bool PrintMembers(System.Text.StringBuilder builder)
+        {
+            builder.Append(""custom"");
+            return true;
+        }
+    }
+
+    public record DerivedCustomPrintMembers(int Other) : CustomPrintMembers(1);
+
     public record OverloadedPrintMembers(int Value)
     {
         public bool PrintMembers(int ignored) => false;
@@ -135,6 +157,52 @@ namespace Corpus.Issue4675
         AssertGetOnlyProperty(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RecordClass", "BodyHash");
         AssertInitProperty(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RecordClass", "Value");
         AssertPrintMembers(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.OverloadedPrintMembers");
+        AssertPrintMembers(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.RefOverloadedPrintMembers");
+        AssertPrintMembers(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.CustomPrintMembers");
+        AssertRecordInterface(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.GenericRecord`1");
+        AssertRecordInterface(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.GenericDerivedRecord`1");
+        AssertRecordInterface(csharpAssembly, gsharpAssembly, "Corpus.Issue4675.GenericRecordStruct`1");
+        foreach (string typeName in new[]
+        {
+            "Corpus.Issue4675.RecordBase",
+            "Corpus.Issue4675.RecordClass",
+            "Corpus.Issue4675.DerivedCustomPrintMembers",
+        })
+        {
+            AssertPrintMembersOutput(csharpAssembly, gsharpAssembly, typeName);
+        }
+    }
+
+    [Fact]
+    public void PartialRecordPrintMembers_IsEmittedOnce()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("First.cs", "namespace Corpus; public partial record Item(int Value);"),
+            ("Second.cs", "namespace Corpus; public partial record Item { public int Extra => 7; }"),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        string[] translated = project.Documents.Select(document =>
+        {
+            var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+            return GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        }).ToArray();
+        Assert.Equal(1, translated.Sum(text => text.Split("func PrintMembers(", StringSplitOptions.None).Length - 1));
+        TranslationTestValidation.AssertBinds(translated);
+    }
+
+    [Theory]
+    [InlineData("public virtual", "CS8875")]
+    [InlineData("private", "CS8875")]
+    [InlineData("protected", "CS8872")]
+    public void InvalidRecordPrintMembersShape_IsRejectedByCSharp(string modifiers, string diagnosticId)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Invalid.cs", $"public record Item {{ {modifiers} bool PrintMembers(System.Text.StringBuilder builder) => false; }}"),
+        });
+        Assert.False(project.BoundWithoutErrors);
+        Assert.Contains(project.ErrorDiagnostics, diagnostic => diagnostic.Id == diagnosticId);
     }
 
     [Fact]
@@ -265,6 +333,12 @@ namespace Corpus.Issue4675
     {
         Type baselineType = baseline.GetType(typeName, throwOnError: true);
         Type translatedType = translated.GetType(typeName, throwOnError: true);
+        if (baselineType.IsGenericTypeDefinition)
+        {
+            baselineType = baselineType.MakeGenericType(typeof(int));
+            translatedType = translatedType.MakeGenericType(typeof(int));
+        }
+
         Assert.Contains(typeof(IEquatable<>).MakeGenericType(baselineType), baselineType.GetInterfaces());
         Assert.Contains(typeof(IEquatable<>).MakeGenericType(translatedType), translatedType.GetInterfaces());
 
@@ -275,6 +349,20 @@ namespace Corpus.Issue4675
         Assert.Equal(baselineEquals.Attributes & MethodAttributes.MemberAccessMask, translatedEquals.Attributes & MethodAttributes.MemberAccessMask);
         Assert.Equal(baselineEquals.IsVirtual, translatedEquals.IsVirtual);
         Assert.Equal(baselineEquals.IsFinal, translatedEquals.IsFinal);
+        if (!baseline.GetType(typeName, throwOnError: true).IsGenericTypeDefinition)
+        {
+            return;
+        }
+
+        ConstructorInfo constructor = Assert.Single(
+            translatedType.GetConstructors(),
+            candidate => candidate.GetParameters() is [{ ParameterType: var parameterType }] && parameterType == typeof(int));
+        object left = constructor.Invoke(new object[] { 42 });
+        object equal = constructor.Invoke(new object[] { 42 });
+        object different = constructor.Invoke(new object[] { 43 });
+        MethodInfo interfaceEquals = typeof(IEquatable<>).MakeGenericType(translatedType).GetMethod("Equals");
+        Assert.Equal(true, interfaceEquals.Invoke(left, new[] { equal }));
+        Assert.Equal(false, interfaceEquals.Invoke(left, new[] { different }));
     }
 
     private static void AssertPrintMembers(Assembly baseline, Assembly translated, string typeName)
@@ -313,6 +401,23 @@ namespace Corpus.Issue4675
         Assert.Equal(isProtected, baselineCopy.IsFamily);
         Assert.Equal(isProtected, translatedCopy.IsFamily);
         Assert.Equal(baselineCopy.IsPrivate, translatedCopy.IsPrivate);
+    }
+
+    private static void AssertPrintMembersOutput(Assembly baseline, Assembly translated, string typeName)
+    {
+        Type baselineType = baseline.GetType(typeName, throwOnError: true);
+        Type translatedType = translated.GetType(typeName, throwOnError: true);
+        var baselineBuilder = new System.Text.StringBuilder();
+        var translatedBuilder = new System.Text.StringBuilder();
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        object baselineResult = baselineType.GetMethod("PrintMembers", flags).Invoke(
+            Activator.CreateInstance(baselineType, new object[] { 42 }),
+            new object[] { baselineBuilder });
+        object translatedResult = translatedType.GetMethod("PrintMembers", flags).Invoke(
+            Activator.CreateInstance(translatedType, new object[] { 42 }),
+            new object[] { translatedBuilder });
+        Assert.Equal(baselineResult, translatedResult);
+        Assert.Equal(baselineBuilder.ToString(), translatedBuilder.ToString());
     }
 
     private static void AssertGetOnlyProperty(Assembly baseline, Assembly translated, string typeName, string propertyName, string message = null)

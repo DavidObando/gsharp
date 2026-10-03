@@ -5177,11 +5177,14 @@ internal sealed class ReflectionMetadataEmitter
     /// (<see cref="Binding.AnonymousTypeCache"/>) has no plain fields at all —
     /// only get-only auto-properties — so its primary-ctor parameters instead
     /// resolve to the same-named property's <see cref="PropertySymbol.BackingField"/>.
+    /// A data type may replace a positional property with a computed getter;
+    /// only that case intentionally has no parameter store.
     /// </summary>
     /// <param name="type">The declaring type.</param>
     /// <param name="name">The primary-ctor parameter (and target member) name.</param>
     /// <param name="field">The resolved backing field on success.</param>
-    /// <returns><see langword="true"/> if a field or auto-property backing field was found.</returns>
+    /// <returns><see langword="true"/> if storage was found; <see langword="false"/> for a computed positional property.</returns>
+    /// <exception cref="InvalidOperationException">A primary parameter has neither storage nor a computed positional property.</exception>
     internal static bool TryGetPrimaryCtorTargetField(StructSymbol type, string name, [NotNullWhen(true)] out FieldSymbol? field)
     {
         if (type.TryGetField(name, out field))
@@ -5196,7 +5199,13 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         field = null;
-        return false;
+        if (type.IsData
+            && property is { IsAutoProperty: false, HasGetter: true, IsStatic: false })
+        {
+            return false;
+        }
+
+        throw new InvalidOperationException($"Type '{type.Name}' has no field for primary ctor parameter '{name}'.");
     }
 
     /// <summary>

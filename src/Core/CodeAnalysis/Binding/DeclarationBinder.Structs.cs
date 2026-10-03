@@ -2259,6 +2259,7 @@ internal sealed partial class DeclarationBinder
                     }
 
                     propertiesBuilder[positionalPropertyIndex] = propertySymbol;
+                    positionalPropertyIndices.Remove(propName);
                 }
                 else
                 {

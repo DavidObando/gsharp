@@ -112,6 +112,18 @@ Since issue #948, the inline field initializers the translator emits here — `p
 
 **T4 — fieldless record → zero-field `data` type.** Zero-field data types are supported (issue #2363), so a C# **fieldless record** — typically the `abstract record Shape;` base of a closed `record` hierarchy — maps to a `data class` (or `data struct`), marked `open` when any case derives from it (§B.6). G# has **no `abstract` class modifier** (the keyword is not recognized by the parser; `abstract class` → `GS0125`), so C# `abstract` is **dropped** (the `open class` is subclassable but not non-instantiable). The record-synthesized `IEquatable<Self>` is preserved in the base list for CLR ABI parity and is implemented by the data type's synthesized typed `Equals`. The loss of `abstract` is recorded as an Info diagnostic. The case records (`sealed record Circle(double Radius) : Shape`) keep the `data class Circle(Radius float64) : Shape` mapping.
 
+**Record ABI (issue #4675).** The `IEquatable<Self>` contract also applies to
+generic records, using the self-instantiation rather than the open definition,
+including enclosing generic arguments.
+Non-sealed record classes retain their protected virtual `PrintMembers` hook
+once per partial type; derived hooks call the base hook, including user-authored
+implementations. Generator implementing parts do not introduce C# record hooks
+into an existing G# data type: its inheritance shape belongs to the user part.
+Get-only properties retain both their getter-only metadata and initializer
+values. A computed positional property may consume its constructor parameter
+through field initializers instead of a synthesized positional store; missing
+storage in any other primary-constructor shape is an internal error.
+
 **T1 — C# tuples → native G# positional tuples.** *Amended by ADR-0172 (2026-08-28): G# now supports named tuple elements (`(name string, price int32)` types, `(name: e)` literal labels), so the name-dropping described below is superseded — cs2gs preserves element names once its ADR-0172 Phase C lands. The remainder of this section records the original positional-only mapping.* A C# value/named tuple (`(string Name, int Price, int Quantity)`) maps to the **native G# positional tuple type** `(string, int32, int32)` (spec §Type syntax), *not* to a synthesized `data struct`. G# tuples were **positional only** — the named-element spelling `(Name string, …)` did not parse — so C# element **names were dropped** at the type, and a named-element **access** `item.Price` lowered to the positional field `item.Item2` (resolved via Roslyn's `IFieldSymbol.CorrespondingTupleField`); positional `item.Item1` passes through. Tuple **construction** `(a, b, c)` maps to the G# tuple literal `(a, b, c)`. The mapping is recorded as an Info diagnostic. This was chosen over synthesizing a `data struct` per tuple shape because a `data struct` element type triggers a real compiler gap (below) and because native tuples are the genuinely canonical, round-trippable G# form.
 
 > **`for … in List[ownedType]` element-type erasure — discovered compiler gap.**
