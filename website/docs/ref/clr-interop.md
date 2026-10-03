@@ -133,6 +133,14 @@ Event accessors on user types are declared with the G# `event` member form; impo
 
 Imported CLR operator overloads and conversion operators participate in binding. User-defined G# operator declarations use receiver or in-body syntax and map to CLR `op_*` names for emit and interop. Compound-assignment operators (`operator +=`, `-=`, `*=`, and related forms) are void instance members with exactly one parameter; they mutate the receiver in place and interoperate with the corresponding C# operator metadata.
 
+An applicable conversion from a non-nullable value `Token` to a reference
+`Box` also accepts `Token?` by lifting: a nil operand produces `Box?` nil
+without calling the operator, and a present operand calls it once. This
+applies to explicit `Box(value)` / `Box?(value)` casts and contextual implicit
+conversions. The operand is evaluated once. An operator declared to accept
+`Token?` itself is an ordinary conversion, not this lift; it receives nil and
+controls its own result.
+
 ```gsharp
 class Vec {
     X int32

@@ -1549,11 +1549,9 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitClrConversionCall(BoundClrConversionCallExpression conv)
     {
-        if (conv.Source.Type is NullableTypeSymbol sourceNullable
-            && NullableLifting.IsAnyValueTypeNullable(sourceNullable)
-            && conv.Type is NullableTypeSymbol liftedTargetNullable
-            && NullableLifting.IsAnyValueTypeNullable(liftedTargetNullable)
-            && IsLiftedNullableConversionCall(conv, sourceNullable, liftedTargetNullable))
+        if (conv.IsLifted
+            && conv.Source.Type is NullableTypeSymbol sourceNullable
+            && conv.Type is NullableTypeSymbol liftedTargetNullable)
         {
             this.EmitLiftedNullableClrConversion(conv, sourceNullable, liftedTargetNullable);
             return;
@@ -1614,49 +1612,6 @@ internal sealed partial class MethodBodyEmitter
         }
     }
 
-    private static bool IsLiftedNullableConversionCall(
-        BoundClrConversionCallExpression conversion,
-        NullableTypeSymbol sourceNullable,
-        NullableTypeSymbol targetNullable)
-    {
-        if (conversion.Function != null)
-        {
-            if (conversion.Function.Parameters.Length != 1
-                || conversion.Function.Parameters[0].RefKind != RefKind.None
-                || conversion.Function.ReturnRefKind != RefKind.None)
-            {
-                return false;
-            }
-
-            var parameterType = conversion.FunctionOwnerType?.SubstituteMemberType(
-                conversion.Function.Parameters[0].Type)
-                ?? conversion.Function.Parameters[0].Type;
-            var resultType = conversion.FunctionOwnerType?.SubstituteMemberType(
-                conversion.Function.Type)
-                ?? conversion.Function.Type;
-            return Conversion.ClassifyNonStructural(
-                    sourceNullable.UnderlyingType,
-                    parameterType).IsIdentity
-                && Conversion.ClassifyNonStructural(
-                    resultType,
-                    targetNullable.UnderlyingType).IsIdentity;
-        }
-
-        var method = Invariant.Required(
-            conversion.Method,
-            "an imported lifted conversion carries a CLR method");
-        var parameters = method.GetParameters();
-        return parameters.Length == 1
-            && !parameters[0].ParameterType.IsByRef
-            && !method.ReturnType.IsByRef
-            && ClrTypeUtilities.AreSame(
-                parameters[0].ParameterType,
-                sourceNullable.UnderlyingType.ClrType)
-            && ClrTypeUtilities.AreSame(
-                method.ReturnType,
-                targetNullable.UnderlyingType.ClrType);
-    }
-
     private void EmitLiftedNullableClrConversion(
         BoundClrConversionCallExpression conv,
         NullableTypeSymbol sourceNullable,
@@ -1681,15 +1636,26 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitUnwrappedNullableValue(sourceSlot, sourceNullable);
         this.EmitCallResolvedConversion(conv);
-        this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.GetNullableResultConstructor(targetNullable));
+        if (NullableLifting.IsAnyValueTypeNullable(targetNullable))
+        {
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.GetNullableResultConstructor(targetNullable));
+        }
+
         this.il.Branch(ILOpCode.Br, end);
 
         this.il.MarkLabel(nullBranch);
-        this.il.LoadLocalAddress(resultSlot);
-        this.il.OpCode(ILOpCode.Initobj);
-        this.il.Token(this.outer.memberRefs.GetElementTypeToken(targetNullable));
-        this.il.LoadLocal(resultSlot);
+        if (NullableLifting.IsAnyValueTypeNullable(targetNullable))
+        {
+            this.il.LoadLocalAddress(resultSlot);
+            this.il.OpCode(ILOpCode.Initobj);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(targetNullable));
+            this.il.LoadLocal(resultSlot);
+        }
+        else
+        {
+            this.il.OpCode(ILOpCode.Ldnull);
+        }
 
         this.il.MarkLabel(end);
     }

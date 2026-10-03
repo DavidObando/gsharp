@@ -350,10 +350,9 @@ internal sealed class ConversionClassifier
     public static bool HasUserDefinedImplicitConversionForTypes(TypeSymbol sourceType, TypeSymbol targetType)
     {
         if (sourceType is NullableTypeSymbol liftedSource
-            && targetType is NullableTypeSymbol liftedTarget
             && TryResolveLiftedUserDefinedSymbolConversion(
                 liftedSource,
-                liftedTarget,
+                targetType,
                 allowExplicit: false,
                 out _,
                 out _))
@@ -778,14 +777,13 @@ internal sealed class ConversionClassifier
             }
         }
 
-        // Issue #3518: lift a same-compilation user conversion S -> T to
-        // S? -> T?. The emit-side conversion node owns the HasValue branch,
-        // unwrap, call, and target re-wrap/default construction.
+        // Issues #3518/#4741: lift a same-compilation value conversion S -> T
+        // to S? -> T?, including reference results. The conversion node owns
+        // the effective result type and the shared null-bypass decision.
         if (expression.Type is NullableTypeSymbol liftedSource
-            && type is NullableTypeSymbol liftedTarget
             && TryResolveLiftedUserDefinedSymbolConversion(
                 liftedSource,
-                liftedTarget,
+                type,
                 allowExplicit,
                 out var liftedMethod,
                 out var liftedOwner))
@@ -1812,6 +1810,18 @@ internal sealed class ConversionClassifier
     /// <returns>Whether a user-defined implicit conversion was applied.</returns>
     public bool TryApplyUserDefinedImplicitArgumentConversion(BoundExpression argument, TypeSymbol expectedType, out BoundExpression converted)
     {
+        if (argument.Type is NullableTypeSymbol sourceNullable
+            && TryResolveLiftedUserDefinedSymbolConversion(
+                sourceNullable,
+                expectedType,
+                allowExplicit: false,
+                out var liftedMethod,
+                out var liftedOwner))
+        {
+            converted = new BoundClrConversionCallExpression(null, argument, liftedMethod, liftedOwner, expectedType);
+            return true;
+        }
+
         // Issue #4350: resolve symbolic generic pairs before the erased CLR
         // branch can bind the `<object>` operator.
         if (argument.Type != TypeSymbol.Error
@@ -4006,20 +4016,21 @@ internal sealed class ConversionClassifier
 
     private static bool TryResolveLiftedUserDefinedSymbolConversion(
         NullableTypeSymbol source,
-        NullableTypeSymbol target,
+        TypeSymbol target,
         bool allowExplicit,
         [NotNullWhen(true)] out FunctionSymbol? method,
         [NotNullWhen(true)] out StructSymbol? methodOwner)
     {
         method = null;
         methodOwner = null;
+        var targetUnderlying = target is NullableTypeSymbol nullable ? nullable.UnderlyingType : target;
         return NullableLifting.IsAnyValueTypeNullable(source)
-            && NullableLifting.IsAnyValueTypeNullable(target)
+            && (target is NullableTypeSymbol || !target.IsValueType)
             && !TypeSymbol.IsByRefLike(source)
             && !TypeSymbol.IsByRefLike(target)
             && TryResolveUserDefinedSymbolConversion(
                 source.UnderlyingType,
-                target.UnderlyingType,
+                targetUnderlying,
                 allowExplicit,
                 out method,
                 out methodOwner)
@@ -4030,9 +4041,9 @@ internal sealed class ConversionClassifier
             && Conversion.ClassifyNonStructural(
                 source.UnderlyingType,
                 methodOwner.SubstituteMemberType(method.Parameters[0].Type)).IsIdentity
-            && Conversion.ClassifyNonStructural(
+            && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                 methodOwner.SubstituteMemberType(method.Type),
-                target.UnderlyingType).IsIdentity;
+                targetUnderlying);
     }
 
     private static bool TryResolveUserDefinedSymbolConversion(
