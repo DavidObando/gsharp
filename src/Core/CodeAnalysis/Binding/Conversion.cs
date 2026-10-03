@@ -340,6 +340,34 @@ public sealed class Conversion
     internal static bool ContainsPlatformTypeInStructure(TypeSymbol? type)
         => ContainsPlatformType(type);
 
+    /// <summary>Recognizes source and imported interfaces, including symbolic constructed owners.</summary>
+    /// <param name="type">The candidate interface type.</param>
+    /// <returns>Whether the type denotes an interface.</returns>
+    internal static bool IsInterfaceLikeType(TypeSymbol? type)
+    {
+        if (type is InterfaceSymbol or ImportedTypeSymbol { OpenDefinition.IsInterface: true })
+        {
+            return true;
+        }
+
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        // Issue #1100: querying IsInterface on a TypeBuilderInstantiation
+        // throws NotSupportedException. A constructed delegate is not an interface.
+        try
+        {
+            return clr.IsInterface;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Classifies only pre-ADR-0148 conversions. Projection planning uses this
     /// to keep member conversion non-recursive.
@@ -1555,10 +1583,23 @@ public sealed class Conversion
             // CLR's IsAssignableFrom to cover interface inheritance from the
             // imported side (e.g. implementing `IList<T>` also satisfies
             // `IEnumerable<T>`).
-            if (to?.ClrType != null && to.ClrType.IsInterface)
+            if (to is not null and not InterfaceSymbol && IsInterfaceLikeType(to))
             {
                 foreach (var c in GetStructHierarchy(fromClass))
                 {
+                    // #4731: imported bases supply nominal interface implementations
+                    // too. Classify their substituted symbols, not erased CLR probes;
+                    // neither structural adapters nor unrelated cross-casts are upcasts.
+                    if (c.ImportedBaseType is { } importedBase
+                        && ClassifyCore(
+                            importedBase,
+                            to,
+                            allowStructuralProjection: false,
+                            allowExplicitReference: false).IsImplicit)
+                    {
+                        return Conversion.Implicit;
+                    }
+
                     foreach (var iface in c.ImplementedClrInterfaces)
                     {
                         var ifaceClr = iface?.ClrType;
@@ -6181,32 +6222,6 @@ public sealed class Conversion
     private static bool IsReferenceConstrainedTypeParameter(TypeSymbol? type)
         => type is TypeParameterSymbol tp
             && (tp.HasReferenceTypeConstraint || tp.ClassConstraint != null);
-
-    private static bool IsInterfaceLikeType(TypeSymbol? type)
-    {
-        if (type is InterfaceSymbol)
-        {
-            return true;
-        }
-
-        var clr = type?.ClrType;
-        if (clr == null)
-        {
-            return false;
-        }
-
-        // Issue #1100: as with IsEnumLikeType, querying IsInterface on a
-        // TypeBuilderInstantiation throws NotSupportedException. A constructed
-        // generic delegate is never an interface.
-        try
-        {
-            return clr.IsInterface;
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
-    }
 
     private static bool HasExplicitUnboxingConversion(TypeSymbol? from, TypeSymbol? to)
     {
