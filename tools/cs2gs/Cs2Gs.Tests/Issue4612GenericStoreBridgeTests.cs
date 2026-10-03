@@ -1559,6 +1559,82 @@ public class Issue4612GenericStoreBridgeTests
             StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NullableTupleDestinations_ProjectEachDeclaredAndConstructedLeaf(bool nested)
+    {
+        string declaredTuple = nested ? "((T, int)?, string)?" : "(T, string)?";
+        string closedTuple = declaredTuple.Replace("T", "string", StringComparison.Ordinal);
+        string source = $$"""
+            #nullable enable
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            public class Box<T>
+            {
+                public {{declaredTuple}} Field;
+                public {{declaredTuple}} Property { get; set; }
+            }
+            public delegate {{declaredTuple}} Factory<T>();
+            public delegate Task<{{declaredTuple}}> AsyncFactory<T>();
+            public delegate {{closedTuple}} ConcreteFactory();
+            public static class C
+            {
+                private static T Echo<T>({{declaredTuple}} pair, T fallback) => fallback;
+                private static T Pick<T>(T fallback, params {{declaredTuple}}[] values) => fallback;
+                public static void Stores(
+                    string? field, string? property, string? argument, string? expanded, string? array,
+                    string? expression, string? block, string? asynchronous, string? concrete,
+                    string safe)
+                {
+                    var box = new Box<string>();
+                    box.Field = {{Tuple("field")}};
+                    box.Property = {{Tuple("property")}};
+                    Echo<string>({{Tuple("argument")}}, "");
+                    Pick<string>("", {{Tuple("expanded")}});
+                    var values = new {{closedTuple}}[] { {{Tuple("array")}} };
+                    Factory<string> callback = () => {{Tuple("expression")}};
+                    Factory<string> blocked = () => { return {{Tuple("block")}}; };
+                    AsyncFactory<string> awaited = async () =>
+                    {
+                        await Task.Yield();
+                        return {{Tuple("asynchronous")}};
+                    };
+                    ConcreteFactory ignored = () => {{Tuple("concrete")}};
+                    box.Field = {{(nested ? "((safe, 1), \"\")" : "(safe, \"\")")}};
+                }
+                public static IEnumerable<{{closedTuple}}> Values(string? iterator)
+                {
+                    yield return {{Tuple("iterator")}};
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        string[] reported = { "argument", "expanded", "array", "expression", "block", "asynchronous", "iterator" };
+        foreach (string name in reported.Append("concrete"))
+        {
+            Assert.Contains(name + "!!", printed, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("field!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("property!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("safe!!", printed, StringComparison.Ordinal);
+        Assert.Equal(reported.Select(name => Expected(source, name + "!")), sites.Select(Position));
+        Assert.All(sites, site => Assert.Contains(" | slot-type=string (NotAnnotated) | ", site.Message, StringComparison.Ordinal));
+        Assert.All(sites.Take(1).Concat(sites.Skip(3).Take(3)), site =>
+            Assert.StartsWith("kind=forgiven,type-parameter-tuple-element | ", site.Message, StringComparison.Ordinal));
+        Assert.StartsWith("kind=forgiven,explicit-type-argument,params-element | ", sites[1].Message, StringComparison.Ordinal);
+        Assert.StartsWith("kind=forgiven,array-element | ", sites[2].Message, StringComparison.Ordinal);
+        Assert.StartsWith("kind=forgiven,iterator-element | ", sites[6].Message, StringComparison.Ordinal);
+        Assert.All(sites.Take(2), site => Assert.Contains(" | result-depends-on-slot=yes | ", site.Message, StringComparison.Ordinal));
+        Assert.All(sites.Skip(2), site =>
+            Assert.Contains(" | result-depends-on-slot=no | ", site.Message, StringComparison.Ordinal));
+        Assert.DoesNotContain(sites, site => site.Message.Contains("value=concrete!", StringComparison.Ordinal));
+
+        string Tuple(string name) => nested ? $"(({name}!, 1), \"\")" : $"({name}!, \"\")";
+    }
+
     [Fact]
     public void TupleLeaves_InSubstitutedParameterFieldAndDelegateSlots_ReportLeafMetadata()
     {

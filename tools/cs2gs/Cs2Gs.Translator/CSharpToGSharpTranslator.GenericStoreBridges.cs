@@ -659,6 +659,14 @@ public sealed partial class CSharpToGSharpTranslator
         {
             for (int i = tupleIndices.Count - 1; i >= 0; i--)
             {
+                if (slotType is INamedTypeSymbol nullable
+                    && nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                    && nullable.TypeArguments.Length == 1
+                    && nullable.TypeArguments[0] is INamedTypeSymbol { IsTupleType: true } underlyingTuple)
+                {
+                    slotType = underlyingTuple;
+                }
+
                 if (slotType is not INamedTypeSymbol { IsTupleType: true } tupleType)
                 {
                     return slotType;
@@ -677,7 +685,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         private static ITypeSymbol GetBridgedSlotType(ExpressionSyntax value, ITypeSymbol slotType)
         {
-            if (value == null || slotType is not INamedTypeSymbol { IsTupleType: true })
+            if (value == null || slotType is not INamedTypeSymbol)
             {
                 return slotType;
             }
