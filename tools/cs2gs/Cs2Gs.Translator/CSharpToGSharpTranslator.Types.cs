@@ -8,7 +8,6 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
-using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -1507,7 +1506,7 @@ public sealed partial class CSharpToGSharpTranslator
             // expression's target type and iterator-time evaluation by
             // materializing it immediately before the yield.
             if (value is not TupleLiteralExpression
-                && GSharpPrinter.RenderExpression(value).StartsWith('('))
+                && !IsUnambiguousYieldValue(value))
             {
                 string name = this.FreshYieldedValueName(node);
                 GTypeReference type = typeInfo.ConvertedType is { } yieldType
@@ -1527,20 +1526,42 @@ public sealed partial class CSharpToGSharpTranslator
             return new[] { (GStatement)new YieldStatement(value) };
         }
 
+        // ponytail: only known grammar-safe heads stay inline. A binary
+        // expression can require grouping for G# precedence even without C#
+        // parentheses; materialize it rather than duplicating printer rules.
+        private static bool IsUnambiguousYieldValue(GExpression value) => value switch
+        {
+            LiteralExpression or IdentifierExpression or ThisExpression
+                or UnaryExpression or CheckedExpression or TypeOfExpression
+                or DefaultValueExpression => true,
+            ConversionExpression { TargetType: NamedTypeReference } => true,
+            MemberAccessExpression member => IsUnambiguousYieldValue(member.Target),
+            InvocationExpression invocation => IsUnambiguousYieldValue(invocation.Target),
+            IndexExpression index => IsUnambiguousYieldValue(index.Target),
+            NonNullAssertionExpression assertion => IsUnambiguousYieldValue(assertion.Operand),
+            _ => false,
+        };
+
         private string FreshYieldedValueName(YieldStatementSyntax node)
         {
-            var usedNames = new HashSet<string>(
-                node.SyntaxTree.GetRoot().DescendantTokens()
-                    .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
-                    .Select(token => token.ValueText),
-                StringComparer.Ordinal);
+            if (!this.state.YieldedValueNamesByTree.TryGetValue(
+                node.SyntaxTree,
+                out HashSet<string> usedNames))
+            {
+                usedNames = new HashSet<string>(
+                    node.SyntaxTree.GetRoot().DescendantTokens()
+                        .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
+                        .Select(token => token.ValueText),
+                    StringComparer.Ordinal);
+                this.state.YieldedValueNamesByTree.Add(node.SyntaxTree, usedNames);
+            }
 
             string name;
             do
             {
                 name = $"__yielded{this.state.YieldedValueCounter++}";
             }
-            while (usedNames.Contains(name));
+            while (!usedNames.Add(name));
 
             return name;
         }

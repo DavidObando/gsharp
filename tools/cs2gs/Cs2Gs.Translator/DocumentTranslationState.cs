@@ -310,6 +310,10 @@ internal sealed class DocumentTranslationState
     // Monotonic counter for locals that keep parenthesized yield values parseable.
     public int YieldedValueCounter { get; set; }
 
+    // Partial-type merging can visit more than one syntax tree in a document.
+    public Dictionary<SyntaxTree, HashSet<string>> YieldedValueNamesByTree { get; } =
+        new Dictionary<SyntaxTree, HashSet<string>>();
+
     // Monotonic counter for immutable pattern captures that seed mutable C#
     // switch-arm pattern locals.
     public int SwitchPatternCounter { get; set; }

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -36,6 +37,8 @@ public sealed class Issue4705YieldParenthesesTranslationTests
                 public static IEnumerable<int> Arithmetic(int __yielded0, int x, int y, int z)
                 {
                     yield return (x + y) * z;
+                    yield return (__yielded0 + x) << y;
+                    yield return x + y << z;
                 }
 
                 public static IEnumerable<int> Conditional(bool choose, int x, int y, int z)
@@ -61,7 +64,7 @@ public sealed class Issue4705YieldParenthesesTranslationTests
                 public static int Run()
                 {
                     int total = 0;
-                    foreach (int value in Arithmetic(0, 2, 3, 4))
+                    foreach (int value in Arithmetic(1, 2, 3, 4))
                     {
                         total += value;
                     }
@@ -107,8 +110,15 @@ public sealed class Issue4705YieldParenthesesTranslationTests
         EmittedOracleResult result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Obj.Run()");
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
         Assert.Null(result.UnhandledException);
-        Assert.Equal(45, result.Value);
-        Assert.Contains("let __yielded1 int32", printed, StringComparison.Ordinal);
+        Assert.Equal(149, result.Value);
+        Assert.DoesNotContain("let __yielded0 ", printed, StringComparison.Ordinal);
+        MatchCollection hoistedValues = Regex.Matches(printed, @"let (?<name>__yielded\d+) int32 =");
+        Assert.NotEmpty(hoistedValues);
+        Assert.All(
+            hoistedValues.Cast<Match>(),
+            local => Assert.Matches(
+                @"\byield " + Regex.Escape(local.Groups["name"].Value) + @"\b",
+                printed));
         Assert.Contains("yield (1, 2)", printed, StringComparison.Ordinal);
         Assert.Contains("yield int32(value)", printed, StringComparison.Ordinal);
     }
