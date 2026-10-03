@@ -306,6 +306,31 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
     }
 
     [Theory]
+    [InlineData("Borrow(ref text)")]
+    [InlineData("Forward(ref text)")]
+    public void RefReturningCallBeforeGuard_InvalidatesTupleYieldProof(string borrow)
+    {
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    ref string? alias = ref {{borrow}};
+                    if (text != null) {
+                        alias = null;
+                        yield return (text, 1);
+                    }
+                }
+                private static ref string? Borrow(ref string? value) { return ref value; }
+                private static ref string? Forward(ref string? value) { return ref Borrow(ref value); }
+            }
+            """);
+
+        Assert.Contains("func Rows(choose bool) sequence[(Text string?, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
     [InlineData("void Reset() { text = null; }", "Reset();", true)]
     [InlineData("System.Action reset = () => text = null;", "reset();", true)]
     [InlineData("void Clear() { text = null; } void Reset() { Clear(); }", "Reset();", true)]

@@ -5115,7 +5115,7 @@ internal static class ObliviousNullabilityAnalyzer
         // Writable captures and escaped references are not stable smart-cast
         // values. Without an interprocedural proof, never trust their storage.
         if (scope.DescendantNodes().Any(node =>
-            (node is RefExpressionSyntax && Writes(node))
+            (node is RefExpressionSyntax or ArgumentSyntax or InvocationExpressionSyntax && Writes(node))
                 || (node is LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax
                     && node.DescendantNodes().Any(Writes))))
         {
