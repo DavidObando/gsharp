@@ -145,6 +145,8 @@ Typed equality handles are planned before any class bodies are emitted, so
 forward-declared and indirect data bases participate in equality too.
 Constructor inputs match the positional member's symbol, not an inherited
 member that happens to share its name; other inputs remain member assignments.
+Ordered literal staging uses the same own-member lookup, leaving inherited
+assignments after collection/content operations in their written order.
 Self-typed equality starts a new virtual slot; only the base-typed forwarding
 method overrides an inherited slot. Primary constructors own declared
 initializers: positional literals do not
