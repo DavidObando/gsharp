@@ -427,10 +427,12 @@ internal static class RepositoryMirror
 
         // Bootstrap projects can explicitly import Microsoft.NET.Sdk before
         // their bootstrap targets; both imports must still be replaced.
-        bool bootstrapProject = project.Root.Descendants().Any(element =>
+        XElement[] bootstrapImports = project.Root.Descendants().Where(element =>
                 element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase)
                 && element.Attribute("Project")?.Value?.Contains(
-                    "Gsharp.NET.Sdk.Bootstrap", StringComparison.OrdinalIgnoreCase) == true);
+                    "Gsharp.NET.Sdk.Bootstrap", StringComparison.OrdinalIgnoreCase) == true)
+            .ToArray();
+        bool bootstrapProject = bootstrapImports.Length > 0;
         if (!bootstrapProject && SdkPin.RebindProjectSdk(project.Root, sdkMoniker))
         {
             return;
@@ -441,9 +443,10 @@ internal static class RepositoryMirror
             .ToList())
         {
             string importedSdk = import.Attribute("Sdk")?.Value;
-            if (!string.IsNullOrWhiteSpace(importedSdk)
-                && !SdkPin.IsGsharpSdkAttribute(importedSdk)
-                && !string.Equals(importedSdk.Trim(), "Microsoft.NET.Sdk", StringComparison.OrdinalIgnoreCase))
+            if (!bootstrapImports.Contains(import)
+                && (string.IsNullOrWhiteSpace(importedSdk)
+                    || (!SdkPin.IsGsharpSdkAttribute(importedSdk)
+                        && !string.Equals(importedSdk.Trim(), "Microsoft.NET.Sdk", StringComparison.OrdinalIgnoreCase))))
             {
                 continue;
             }

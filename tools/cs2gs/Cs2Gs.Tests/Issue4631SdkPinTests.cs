@@ -650,9 +650,11 @@ public sealed class Issue4631SdkPinTests : IDisposable
             Path.Combine(fixture.Source, "src", "Extensions", "Extensions.csproj"),
             """
             <Project>
+              <Import Project="custom.props" />
               <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
               <Import Project="Gsharp.NET.Sdk.Bootstrap.targets" />
               <Import Project="Sdk.targets" Sdk="Other.Sdk" Version="1.2.3" />
+              <Import Project="custom.targets" Condition="'$(EnableCustomTargets)' == 'true'" />
             </Project>
             """);
         string sourceProject = Path.Combine(fixture.Source, "src", "Extensions", "Extensions.csproj");
@@ -671,7 +673,12 @@ public sealed class Issue4631SdkPinTests : IDisposable
         Assert.Equal(
             sdkAttribute is null ? "Gsharp.NET.Sdk" : "Gsharp.NET.Sdk;Other.Sdk/1.2.3",
             project.Root.Attribute("Sdk").Value);
-        XElement import = Assert.Single(project.Root.Elements("Import"));
+        XElement[] imports = project.Root.Elements("Import").ToArray();
+        Assert.Equal(
+            new[] { "custom.props", "Sdk.targets", "custom.targets" },
+            imports.Select(import => import.Attribute("Project").Value).ToArray());
+        Assert.Equal("'$(EnableCustomTargets)' == 'true'", imports[2].Attribute("Condition").Value);
+        XElement import = imports[1];
         Assert.Equal("Other.Sdk", import.Attribute("Sdk").Value);
         Assert.Equal("1.2.3", import.Attribute("Version").Value);
         Assert.Equal("Sdk.targets", import.Attribute("Project").Value);
