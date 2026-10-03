@@ -63,7 +63,15 @@ public sealed class Issue2514ImportedInterfaceConstraintPipelineTests
             Directory.GetFiles(runDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
 
-        Assert.Contains("func Read[T IPerson](value T) string -> value.Name", emitted, StringComparison.Ordinal);
+        // A constrained T can be a mutable struct, so reading its interface
+        // getter needs mutable parameter storage.
+        string expectedRead = string.Join(
+            Environment.NewLine,
+            "func Read[T IPerson](value T) string {",
+            "            var value = value",
+            "            return value.Name",
+            "        }");
+        Assert.Contains(expectedRead, emitted, StringComparison.Ordinal);
         Assert.Contains("value.Name = name", emitted, StringComparison.Ordinal);
         // Issue #3501: gsc types the constrained receiver's Books non-null,
         // so the polish pass strips the emitted forgiveness.
