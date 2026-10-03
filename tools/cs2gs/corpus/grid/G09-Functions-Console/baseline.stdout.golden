@@ -46,6 +46,7 @@ ParenthesizedLambdaExpressionAsync: result=42
 ParenthesizedLambdaExpressionAttributed: result=42
 ParenthesizedLambdaExpressionDefaults: fDefault=20 fGiven=6
 ParenthesizedLambdaExpressionDefaults: gDefault=6 gGiven=3
+RefExpressionLocalFunction: xs=1,2,30
 SimpleLambdaExpression: twice=16
 SimpleLambdaExpression: scale=40
 SimpleLambdaExpression: bang=go!

@@ -219,14 +219,13 @@ public sealed partial class CSharpToGSharpTranslator
                         : captureArgument);
                 }
 
-                GExpression recursiveTarget = recursiveLift.IsStatic
-                    && recursiveLocal.ContainingType is { } recursiveContainingType
-                    && !this.IsBareSiblingStaticScope(
-                        recursiveContainingType, recursiveLift.Name, invocation)
-                        ? new MemberAccessExpression(
-                            this.StaticQualifierReceiver(recursiveContainingType, invocation.GetLocation()),
-                            recursiveLift.Name)
-                        : new IdentifierExpression(recursiveLift.Name);
+                INamedTypeSymbol recursiveOwner =
+                    this.state.CurrentEmittedAggregate ?? recursiveLocal.ContainingType;
+                GExpression recursiveTarget = this.LiftedLocalFunctionReference(
+                    recursiveOwner,
+                    recursiveLift.Name,
+                    recursiveLift.IsStatic,
+                    invocation);
                 IReadOnlyList<GTypeReference> recursiveTypeArguments =
                     invocation.Expression is GenericNameSyntax recursiveGeneric
                         ? this.MapTypeArguments(recursiveGeneric)
@@ -397,13 +396,13 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction.OriginalDefinition, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
-                // Issue #3471: same-type call sites name the lifted `shared`
-                // helper bare; only cross-type sites qualify through the owner.
-                target = this.IsBareSiblingStaticScope(containingType, liftedName, invocation)
-                    ? new IdentifierExpression(liftedName)
-                    : new MemberAccessExpression(
-                        this.StaticQualifierReceiver(containingType, invocation.GetLocation()),
-                        liftedName);
+                INamedTypeSymbol emittedOwner = this.state.CurrentEmittedAggregate ?? containingType;
+
+                target = this.LiftedLocalFunctionReference(
+                    emittedOwner,
+                    liftedName,
+                    isStatic: true,
+                    invocation);
                 if (invocation.Expression is GenericNameSyntax liftedGeneric)
                 {
                     typeArguments = this.MapTypeArguments(liftedGeneric);
@@ -1240,7 +1239,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (this.state.PendingSpillPrologue != null)
             {
-                string temp = $"__spill{this.state.SpillCounter++}";
+                string temp = this.NewSpillName();
                 this.state.PendingSpillPrologue.Add(
                     new LocalDeclarationStatement(BindingKind.Let, temp, initializer: receiver));
                 return new IdentifierExpression(temp);
@@ -1731,7 +1730,7 @@ public sealed partial class CSharpToGSharpTranslator
                         and not IParameterReferenceOperation
                         and not IFieldReferenceOperation
                         and not IArrayElementReferenceOperation;
-                string temp = $"__spill{this.state.SpillCounter++}";
+                string temp = this.NewSpillName();
                 this.state.PendingSpillPrologue.Add(new LocalDeclarationStatement(
                     BindingKind.Var,
                     temp,
@@ -1766,7 +1765,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (argument.Value is IConversionOperation or IDelegateCreationOperation
                 || value is DefaultValueExpression)
             {
-                string temp = $"__spill{this.state.SpillCounter++}";
+                string temp = this.NewSpillName();
                 this.state.PendingSpillPrologue.Add(new LocalDeclarationStatement(
                     BindingKind.Let,
                     temp,
@@ -3203,6 +3202,14 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression,
             IMethodSymbol method)
         {
+            if (expression is SimpleNameSyntax simpleName
+                && this.TryTranslateLiftedLocalFunctionReference(
+                    simpleName,
+                    out GExpression liftedReference))
+            {
+                return liftedReference;
+            }
+
             if (method.IsStatic
                 && method.MethodKind != MethodKind.LocalFunction
                 && method.ContainingType is { IsImplicitlyDeclared: false } owner

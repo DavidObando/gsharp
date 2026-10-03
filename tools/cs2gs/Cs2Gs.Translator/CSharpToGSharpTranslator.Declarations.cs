@@ -342,8 +342,10 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            this.RegisterCapturingRecursiveLocalFunctions(
-                ordered.Where(statement => !topLevelHoistedStatements.Contains(statement)).ToList());
+            List<StatementSyntax> retainedLocalStatements =
+                ordered.Where(statement => !topLevelHoistedStatements.Contains(statement)).ToList();
+            this.RegisterCapturingRecursiveLocalFunctions(retainedLocalStatements);
+            this.RegisterRecursiveLocalFunctionLifts(retainedLocalStatements);
             bool renamedArgs = argsParameter != null && argsParameter.Name != "args";
             if (renamedArgs)
             {
@@ -1451,8 +1453,10 @@ public sealed partial class CSharpToGSharpTranslator
             // nested type translation must not leak them outward.
             List<MethodDeclaration> outerInstanceSynthHelpers = this.state.PendingInstanceSynthHelpers;
             List<MethodDeclaration> outerStaticSynthHelpers = this.state.PendingStaticSynthHelpers;
+            INamedTypeSymbol outerEmittedAggregate = this.state.CurrentEmittedAggregate;
             this.state.PendingInstanceSynthHelpers = new List<MethodDeclaration>();
             this.state.PendingStaticSynthHelpers = new List<MethodDeclaration>();
+            this.state.CurrentEmittedAggregate = symbol;
             try
             {
                 return this.VisitAggregateCore(node, kind.Value, symbol, otherParts);
@@ -1461,6 +1465,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 this.state.PendingInstanceSynthHelpers = outerInstanceSynthHelpers;
                 this.state.PendingStaticSynthHelpers = outerStaticSynthHelpers;
+                this.state.CurrentEmittedAggregate = outerEmittedAggregate;
             }
         }
 

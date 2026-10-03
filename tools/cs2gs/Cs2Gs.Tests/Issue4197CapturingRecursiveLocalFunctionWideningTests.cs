@@ -19,12 +19,10 @@ namespace Cs2Gs.Tests;
 /// SCC and lifted THEM too, rather than folding them into the same
 /// forward-declared group under their real name.
 ///
-/// This file adds the two positive regression cases described in the issue
-/// (a non-capturing mutual pair now uses the nullable scheme; a capturing
-/// cycle's non-recursive dependency folds into the same group) plus the two
-/// carve-out guards (a generic or ref-returning member of a cycle must still
-/// avoid the nullable scheme — see #4198 for the follow-up on actually
-/// making those categories lift cleanly end to end).
+/// The later #4302 coverage in this file also pins retirement of the
+/// <c>__local_</c> family: homogeneous excluded signatures use native
+/// direct-local groups, while compiler-deferred mixed groups keep readable
+/// source-named member helpers.
 /// </summary>
 public class Issue4197CapturingRecursiveLocalFunctionWideningTests
 {
@@ -145,7 +143,7 @@ namespace Demo
     }
 
     [Fact]
-    public void GenericMemberOfMutualRecursionCycle_StaysOffNullableScheme()
+    public void GenericMemberOfMutualRecursionCycle_UsesNativeGenericGroup()
     {
         // Carve-out guard (#4197 scope, #4198 follow-up): a generic local
         // function's type parameters cannot be expressed on a function-typed
@@ -174,24 +172,19 @@ namespace Demo
     }
 }");
 
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Helper[T] = func", printed, StringComparison.Ordinal);
+        Assert.Contains("let Other[T] = func", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("var Helper", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("var Other", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("Helper!!(", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("Other!!(", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Run_Helper", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Run_Other", printed, StringComparison.Ordinal);
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run(42))", "42");
     }
 
     [Fact]
-    public void RefReturningMemberOfMutualRecursionCycle_StillLiftsToSyntheticHelper()
+    public void RefReturningMemberOfMutualRecursionCycle_UsesNativeRefGroup()
     {
         // Carve-out regression guard (#4197 scope, #1900/#4198 follow-up):
-        // this translator has no lowering to a G# ref-returning function
-        // literal for a ref-returning local function (gsc gained that
-        // literal form in #4219; this translator does not emit it), so a
-        // mutual-recursion cycle that passes through one must still lift to
-        // `__local_` — #4197's widened gate must not touch it. The recursive
+        // #4302 emits native direct-local groups for static, non-generic
+        // ref-returning local functions. The recursive
         // step is a plain (non-ref) call rather than `return ref Other(...)`
         // to sidestep the unrelated, pre-existing #1987 "ref over a call
         // result" gap, isolating this test to the #4197 carve-out itself.
@@ -228,16 +221,1385 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("__local_Run_Helper", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Run_Other", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("var Helper", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("var Other", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Helper = func (a []int32, n int32) ref int32", printed, StringComparison.Ordinal);
+        Assert.Contains("let Other = func (a []int32, n int32) ref int32", printed, StringComparison.Ordinal);
 
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "C().Run(2)");
     }
 
     [Fact]
-    public void DefaultParameterNonRecursiveDependency_StaysLiftedNotFolded()
+    public void ExpressionBodiedRefReturningLocalFunction_UsesNativeLiteral()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        static ref int At(int[] values, int index) => ref values[index];
+                        ref int alias = ref At(data, 0);
+                        alias = 42;
+                        return data[0];
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let At = func (values []int32, index int32) ref int32", printed, StringComparison.Ordinal);
+        Assert.Contains("return ref values[index]", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run())",
+            "42");
+    }
+
+    [Fact]
+    public void GenericRefReturningLocalFunction_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        static ref T At<T>(T[] values, int index) => ref values[index];
+                        return At<int>(data, 0);
+                    }
+                }
+            }
+            """, "generic ref-returning function literals remain deliberately unsupported");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At[T] = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CapturingRefReturningLocalFunction_RemainsALoudGap()
+    {
+        // Issue #4580: gsc emits an access-violating program for a capturing
+        // ref-returning function literal, so cs2gs keeps that shape off the
+        // native path and reports it until gsc is fixed.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int seed) {
+                        int[] data = new int[] { seed };
+                        ref int At() => ref data[0];
+                        At() = 5;
+                        return data[0];
+                    }
+                }
+            }
+            """, "capturing ref-returning function literals stay guarded pending #4580");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RefReturningLocalFunctionUsedAsDelegate_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public delegate ref int RefGetter(int[] values);
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        RefGetter getter = At;
+                        return getter(data);
+                        static ref int At(int[] values) => ref values[0];
+                    }
+                }
+            }
+            """, "G# does not convert ref-returning function literals to delegate values");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecursiveGenericRefReturningLocalUsedAsDelegate_RemainsALoudGap()
+    {
+        // Issue #4302: member lifting must not turn a ref-returning local into
+        // a value-returning delegate wrapper.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public delegate ref int RefGetter(int[] values);
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        RefGetter getter = At<int>;
+                        getter(data) = 5;
+                        return data[0];
+                        static ref int At<T>(int[] values) =>
+                            ref values.Length > 100 ? ref Other(values) : ref values[0];
+                        static ref int Other(int[] values) => ref At<int>(values);
+                    }
+                }
+            }
+            """, "G# does not convert ref-returning function literals to delegate values");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("func At[", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RefReturningSwitchSectionLocalUsedAsDelegate_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public delegate ref int RefGetter(int[] values);
+                public class C {
+                    public int Run(int value) {
+                        int[] data = new int[] { 10 };
+                        switch (value) {
+                            case 0:
+                                RefGetter getter = At;
+                                return getter(data);
+                                static ref int At(int[] values) => ref values[0];
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "switch-section ref-returning function literals cannot become delegate values");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RefReturningLocalFunctionNameof_DoesNotCountAsDelegateUse()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        _ = nameof(At);
+                        return At(data);
+                        static ref int At(int[] values) => ref values[0];
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("let At = func (values []int32) ref int32", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void RefReturningLocalFunctionReferencedFromAnotherSwitchSection_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int[] data = new int[] { 10 };
+                        switch (value) {
+                            case 0:
+                                static ref int At(int[] values) => ref values[0];
+                                return At(data);
+                            case 1:
+                                return At(data);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "switch sections cannot share a direct ref-returning function literal");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CrossSectionLift_LambdaWrittenCapture_KeepsSharedStorage()
+    {
+        // Issue #4302: the cross-section member lift forwards captures as
+        // helper parameters. A write in a lambda outside the lifted body must
+        // still make the capture by-ref, or `F` returns a stale snapshot.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int x = 1;
+                        System.Action mutate = () => { x = 42; };
+                        switch (value) {
+                            case 0:
+                                int F(int n) {
+                                    if (n == 0) {
+                                        mutate();
+                                        return x;
+                                    }
+
+                                    return F(n - 1);
+                                }
+
+                                return F(0);
+                            default:
+                                return F(0);
+                        }
+                    }
+                }
+            }
+            """);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(0) + C().Run(1))",
+            "84");
+    }
+
+    [Theory]
+    [InlineData("x.N = 42;")]
+    [InlineData("x.Set(42);")]
+    [InlineData("x[0] = 42;")]
+    [InlineData("ref int alias = ref x[0]; alias = 42;")]
+    [InlineData("_ = x.Value;")]
+    public void CrossSectionLift_LambdaWriteThroughStructStorage_KeepsSharedStorage(string write)
+    {
+        // Issue #4302: writing a field or indexer of, or calling a mutating
+        // method on, a captured struct writes the struct's storage, so the lifted helper
+        // must receive it by ref rather than a stale copy.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit($$"""
+            namespace Demo {
+                public struct S {
+                    public int N;
+                    public void Set(int value) { N = value; }
+                    [System.Diagnostics.CodeAnalysis.UnscopedRef]
+                    public ref int this[int i] => ref N;
+                    public int Value { get { N = 42; return N; } }
+                }
+
+                public class C {
+                    public int Run(int value) {
+                        S x = new S { N = 1 };
+                        System.Action mutate = () => { {{write}} };
+                        switch (value) {
+                            case 0:
+                                int F(int n) {
+                                    if (n == 0) {
+                                        mutate();
+                                        return x.N;
+                                    }
+
+                                    return F(n - 1);
+                                }
+
+                                return F(0);
+                            default:
+                                return F(0);
+                        }
+                    }
+                }
+            }
+            """);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(0) + C().Run(1))",
+            "84");
+    }
+
+    [Fact]
+    public void CrossSectionLift_ParenthesizedNestedStructWrite_KeepsSharedStorage()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public struct Inner {
+                    public int N;
+                }
+
+                public struct Outer {
+                    public Inner Inner;
+                }
+
+                public class C {
+                    public int Run(int value) {
+                        Outer x = new Outer { Inner = new Inner { N = 1 } };
+                        System.Action mutate = () => { (x.Inner).N = 42; };
+                        switch (value) {
+                            case 0:
+                                int F(int n) {
+                                    if (n == 0) {
+                                        mutate();
+                                        return x.Inner.N;
+                                    }
+
+                                    return F(n - 1);
+                                }
+
+                                return F(0);
+                            default:
+                                return F(0);
+                        }
+                    }
+                }
+            }
+            """);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(0) + C().Run(1))",
+            "84");
+    }
+
+    [Fact]
+    public void GenericOwner_NameofInstanceMember_DoesNotCreateRuntimeCapture()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C<T> {
+                    private int Member;
+
+                    public string Run() {
+                        return First(1);
+                        string First(int n) =>
+                            n == 0 ? nameof(this.Member) : Second<int>(n - 1);
+                        string Second<U>(int n) =>
+                            n == 0 ? nameof(this.Member) : First(n - 1);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("// unsupported:", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C[int32]().Run())",
+            "Member");
+    }
+
+    [Fact]
+    public void AsyncRecursiveLift_WithWrittenCapture_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            using System.Threading.Tasks;
+
+            namespace Demo {
+                public class C {
+                    public async Task<int> Run() {
+                        int x = 1;
+                        x = 42;
+                        return await First(1);
+                        async Task<int> First(int n) =>
+                            n == 0 ? x : await Second<int>(n - 1);
+                        async Task<int> Second<T>(int n) =>
+                            n == 0 ? x : await First(n - 1);
+                    }
+                }
+            }
+            """, "suspending recursive helpers cannot carry ref captures");
+
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'First' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'Second' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IteratorRecursiveLift_WithWrittenCapture_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            using System.Collections.Generic;
+
+            namespace Demo {
+                public class C {
+                    public IEnumerable<int> Run() {
+                        int x = 1;
+                        x = 42;
+                        return First(1);
+
+                        IEnumerable<int> First(int n) {
+                            if (n == 0) {
+                                yield return x;
+                                yield break;
+                            }
+
+                            foreach (int value in Second<int>(n - 1)) {
+                                yield return value;
+                            }
+                        }
+
+                        IEnumerable<int> Second<T>(int n) {
+                            if (n == 0) {
+                                yield return x;
+                                yield break;
+                            }
+
+                            foreach (int value in First(n - 1)) {
+                                yield return value;
+                            }
+                        }
+                    }
+                }
+            }
+            """, "suspending recursive helpers cannot carry ref captures");
+
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'First' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'Second' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NonrecursiveIteratorDependency_WithWrittenCapture_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            using System.Collections.Generic;
+
+            namespace Demo {
+                public class C {
+                    public IEnumerable<int> Run() {
+                        int x = 1;
+                        x = 42;
+                        return First(1);
+
+                        IEnumerable<int> First(int n) =>
+                            n == 0 ? Leaf() : Second<int>(n - 1);
+                        IEnumerable<int> Second<T>(int n) =>
+                            n == 0 ? Leaf() : First(n - 1);
+
+                        IEnumerable<int> Leaf() {
+                            yield return x;
+                        }
+                    }
+                }
+            }
+            """, "suspending recursive dependencies cannot carry ref captures");
+
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'Leaf' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MixedRecursionGroup_NameofEnclosingTypeParameter_IsNotADependency()
+    {
+        // Issue #4302: `nameof(T)` translates to the literal "T", so the
+        // member-helper fallback does not need the enclosing `T`.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public static string Run<T>() {
+                        return First(2);
+                        static string First(int n) => n == 0 ? nameof(T) : Second<int>(n - 1);
+                        static string Second<U>(int n) => First(n);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("unsupported", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C.Run[int32]())",
+            "T");
+    }
+
+    [Fact]
+    public void GenericRecursiveGroup_NameofOuterValue_IsNotACapture()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        return First<T>(value, depth);
+                        static int First<U>(T item, int n) =>
+                            n == 0 ? nameof(value).Length : Second<U>(item, n - 1);
+                        static int Second<V>(T item, int n) =>
+                            n == 0 ? nameof(value).Length : First<V>(item, n - 1);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("// unsupported:", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run[string](\"x\", 1))",
+            "5");
+    }
+
+    [Fact]
+    public void RefReturningLocalFunctionNameofFromAnotherSwitchSection_IsHarmless()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int[] data = new int[] { 10 };
+                        switch (value) {
+                            case 0:
+                                static ref int At(int[] values) => ref values[0];
+                                return At(data);
+                            case 1:
+                                _ = nameof(At);
+                                return 0;
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("let At = func (values []int32) ref int32", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void RefReturningLocalFunctionCalledBeforeDeclarationInSwitchSection_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int[] data = new int[] { 10 };
+                        switch (value) {
+                            case 0:
+                                int result = At(data);
+                                static ref int At(int[] values) => ref values[0];
+                                return result;
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "switch sections do not hoist direct ref-returning function literals");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AdjacentCapturingDelegateLocal_IsNotSwallowedByNativeGroup()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private static int Apply(System.Func<int, int> callback) => callback(2);
+
+                    public int Run(int seed) {
+                        int Callback(int value) => value + seed;
+                        static int First(int value, params int[] rest) =>
+                            value == 0 ? 0 : Second(value - 1);
+                        static int Second(int value) =>
+                            value == 0 ? 0 : First(value - 1);
+                        return Apply(Callback) + First(2);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Callback = func", printed, StringComparison.Ordinal);
+        Assert.Contains("func First(", printed, StringComparison.Ordinal);
+        Assert.Contains("func Second(", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(40))",
+            "42");
+    }
+
+    [Fact]
+    public void EmptyStatementBeforeCapturingDelegateLocal_DoesNotIsolateNativeGroup()
+    {
+        // Issue #4302: `;` emits nothing, so it cannot separate the native
+        // `First`/`Second` group from the capturing `Callback` literal.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private static int Apply(System.Func<int, int> callback) => callback(2);
+
+                    public int Run(int seed) {
+                        ;
+                        static int First(int value, params int[] rest) =>
+                            value == 0 ? 0 : Second(value - 1);
+                        static int Second(int value) =>
+                            value == 0 ? 0 : First(value - 1);
+                        ;
+                        int Callback(int value) => value + seed;
+                        return Apply(Callback) + First(2);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Callback = func", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(40))",
+            "42");
+    }
+
+    [Fact]
+    public void GenericGroupInGenericOwner_KeepsPrivateMemberAccess()
+    {
+        // Issue #4302: gsc hosts a native generic local group under a generic
+        // type without the owner's private access (GS0472), so this group
+        // keeps the member-helper lowering.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class Holder<TOuter> {
+                    private static int Secret() => 42;
+
+                    public static int Run() {
+                        return First(1, 2);
+                        static int First<T>(T x, int n) => n == 0 ? Secret() : Second(x, n - 1);
+                        static int Second<U>(U x, int n) => First(x, n);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("let First[T] = func", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(Holder[string].Run())",
+            "42");
+    }
+
+    [Fact]
+    public void LeadingAdjacentDelegateLocal_IsNotSwallowedByNativeGroup()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private static int Apply(System.Func<int, int> callback) => callback(2);
+
+                    public int Run(int seed) {
+                        int applied = Apply(Prefix);
+                        int Prefix(int value) => value + seed;
+                        static int First(int value, params int[] rest) =>
+                            value == 0 ? 0 : Second(value - 1);
+                        static int Second(int value) =>
+                            value == 0 ? 0 : First(value - 1);
+                        return applied + First(2);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Prefix = func", printed, StringComparison.Ordinal);
+        Assert.Contains("func First(", printed, StringComparison.Ordinal);
+        Assert.Contains("func Second(", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(40))",
+            "42");
+    }
+
+    [Fact]
+    public void CapturingRecursiveLocalUsedAsDelegate_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int offset = 1;
+                        System.Func<int, int> callback = First;
+                        return callback(value);
+                        int First(int n) => n == 0 ? offset : Second<int>(n - 1);
+                        int Second<T>(int n) => n == 0 ? offset : First(n - 1);
+                    }
+                }
+            }
+            """, "capturing recursive member helpers require explicit capture arguments");
+
+        Assert.Contains(
+            "// unsupported: capturing recursive local function value 'First'",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MixedRecursiveGroupInSwitchSection_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                            case int n when n > 5:
+                                return First(value);
+                                static int First(int n) => n == 0 ? 0 : Second<int>(n - 1);
+                                static int Second<T>(int n) => First(n);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        Assert.Contains("// lifted static local function Second", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void MixedRecursiveGroupDeclaredInLaterSwitchSection_IsPreRegistered()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                return First(value);
+                            case 1:
+                                static int First(int n) => n == 0 ? 0 : Second<int>(n - 1);
+                                static int Second<T>(int n) => First(n);
+                                return First(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void HomogeneousGenericGroupCalledFromEarlierSwitchSection_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                return First<int>(value);
+                            case 1:
+                                static int First<T>(int n) => n == 0 ? 0 : Second<T>(n - 1);
+                                static int Second<U>(int n) => n == 0 ? 0 : First<U>(n - 1);
+                                return First<int>(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        Assert.Contains("// lifted static local function Second", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void SelfRecursiveLocalCalledFromEarlierSwitchSection_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                return First(value);
+                            case 1:
+                                static int First(int n) => n == 0 ? 0 : First(n - 1);
+                                return First(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void SelfRecursiveLocalForcedAcrossSwitchWithMethodTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth, int mode) {
+                        switch (mode) {
+                            case 0:
+                                return First(value, depth);
+                            case 1:
+                                static int First(T item, int n) =>
+                                    n == 0 ? 0 : First(item, n - 1);
+                                return First(value, depth);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConstrainedGenericRecursiveGroup_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(System.IDisposable value, int depth) {
+                        return First<System.IDisposable>(value, depth);
+
+                        static int First<T>(T item, int n) where T : System.IDisposable {
+                            item.Dispose();
+                            return n == 0 ? 0 : Second<T>(item, n - 1);
+                        }
+
+                        static int Second<U>(U item, int n) where U : System.IDisposable {
+                            item.Dispose();
+                            return n == 0 ? 0 : First<U>(item, n - 1);
+                        }
+                    }
+                }
+            }
+            """);
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        Assert.Contains("// lifted static local function Second", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void MixedRecursiveGroupSplitAcrossSwitchSections_UsesMemberFallback()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                static int First(int n) => n == 0 ? 0 : Second<int>(n - 1);
+                                return First(value);
+                            case 1:
+                                static int Second<T>(int n) => n == 0 ? 0 : First(n - 1);
+                                return Second<int>(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted static local function First", printed, StringComparison.Ordinal);
+        Assert.Contains("// lifted static local function Second", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void CapturingRecursiveDelegateGroupInOneSwitchSection_UsesNullableGroup()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                int First(int n) => n == 0 ? value : Second(n - 1);
+                                System.Func<int, int> callback = First;
+                                int Second(int n) => n == 0 ? value : First(n - 1);
+                                return callback(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("var First", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("// lifted recursive local function First", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void CapturingGenericGroupReferencingEnclosingTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        int offset = 1;
+                        int First<U>(U item, int n) =>
+                            n == 0 ? offset + value.GetHashCode() : Second<U>(item, n - 1);
+                        int Second<V>(V item, int n) =>
+                            n == 0 ? offset : First<V>(item, n - 1);
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SelfRecursiveCapturingGenericReferencingEnclosingTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        int First<U>(U item, int n) =>
+                            n == 0 ? value.GetHashCode() : First<U>(item, n - 1);
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericRecursiveGroupCapturingInstanceReceiver_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private int offset;
+
+                    public int Run<T>(T value, int depth) {
+                        int First<U>(T item, int n) =>
+                            n == 0 ? this.offset : Second<U>(item, n - 1);
+                        int Second<V>(T item, int n) =>
+                            n == 0 ? offset : First<V>(item, n - 1);
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StaticGenericRecursiveGroupUsingPatternInput_RemainsNative()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        static int First<U>(T item, int n) =>
+                            item.ToString() is { Length: > 0 } && n > 0
+                                ? Second<U>(item, n - 1)
+                                : 0;
+                        static int Second<V>(T item, int n) =>
+                            n > 0 ? First<V>(item, n - 1) : 0;
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("cannot preserve an enclosing type parameter", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void GenericRecursiveGroupImplicitlyCapturingGenericContainingType_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C<T> {
+                    private int offset;
+
+                    public int Run(int depth) {
+                        int First<U>(U item, int n) =>
+                            n == 0 ? offset : Second<U>(item, n - 1);
+                        int Second<V>(V item, int n) =>
+                            n == 0 ? offset : First<V>(item, n - 1);
+                        return First<int>(0, depth);
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericRecursiveGroupUsingStaticMemberOfGenericContainingType_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C<T> {
+                    private static int Shared() => 1;
+
+                    public int Run(int depth) {
+                        int offset = 1;
+                        int First<U>(U item, int n) =>
+                            n == 0 ? offset + Shared() : Second<U>(item, n - 1);
+                        int Second<V>(V item, int n) =>
+                            n == 0 ? offset : First<V>(item, n - 1);
+                        return First<int>(0, depth);
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericRecursiveGroupWithTransitivelyCapturedEnclosingTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        int Capture() => value.GetHashCode();
+                        int First<U>(U item, int n) =>
+                            n == 0 ? Capture() : Second<U>(item, n - 1);
+                        int Second<V>(V item, int n) =>
+                            n == 0 ? Capture() : First<V>(item, n - 1);
+                        return First<T>(value, depth);
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MixedRecursiveGroupAcrossSwitchSectionsWithEnclosingTypeParameterCapture_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth, int mode) {
+                        switch (mode) {
+                            case 0:
+                                int First<U>(U item, int n) =>
+                                    n == 0 ? value.GetHashCode() : Second<U>(item, n - 1);
+                                int Second<V>(V item, int n) =>
+                                    n == 0 ? value.GetHashCode() : Third(n - 1);
+                                return First<T>(value, depth);
+                            case 1:
+                                int Third(int n) =>
+                                    n == 0 ? value.GetHashCode() : First<T>(value, n - 1);
+                                return Third(depth);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CaptureFreeMixedGroupReferencingEnclosingMethodTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        static int First(T item, int n) =>
+                            n == 0 ? 0 : Second<T>(item, n - 1);
+                        static int Second<U>(T item, int n) =>
+                            n == 0 ? 0 : First(item, n - 1);
+                        return First(value, depth);
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CaptureFreeGenericGroupForcedAcrossSwitchSectionsWithMethodTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth, int mode) {
+                        switch (mode) {
+                            case 0:
+                                return First<T>(value, depth);
+                            case 1:
+                                static int First<U>(T item, int n) =>
+                                    n == 0 ? 0 : Second<U>(item, n - 1);
+                                static int Second<V>(T item, int n) =>
+                                    n == 0 ? 0 : First<V>(item, n - 1);
+                                return First<T>(value, depth);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CaptureFreeNonGenericGroupForcedAcrossSwitchSectionsWithMethodTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth, int mode) {
+                        switch (mode) {
+                            case 0:
+                                return First(value, depth);
+                            case 1:
+                                static int First(T item, int n) =>
+                                    n == 0 ? 0 : Second(item, n - 1);
+                                static int Second(T item, int n) =>
+                                    n == 0 ? 0 : First(item, n - 1);
+                                return First(value, depth);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CapturingRecursiveLocalUsedAsDelegateFromSiblingSwitchSection_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int offset = 1;
+                        switch (value) {
+                            case 0:
+                                int First(int n) => n == 0 ? offset : Second<int>(n - 1);
+                                int Second<T>(int n) => n == 0 ? offset : First(n - 1);
+                                return First(value);
+                            case 1:
+                                System.Func<int, int> callback = First;
+                                return callback(value);
+                            default:
+                                return offset;
+                        }
+                    }
+                }
+            }
+            """, "capturing recursive member helpers require explicit capture arguments");
+
+        Assert.Contains(
+            "// unsupported: capturing recursive local function value 'First'",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CapturingRecursiveLocalCalledFromSiblingSwitchSection_UsesLiftedHelper()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int offset = 1;
+                        switch (value) {
+                            case 0:
+                                int First(int n) => n == 0 ? offset : Second<int>(n - 1);
+                                int Second<T>(int n) => n == 0 ? offset : First(n - 1);
+                                return First(value);
+                            case 1:
+                                return First(value);
+                            default:
+                                return offset;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("// lifted recursive local function First", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "// unsupported: capturing recursive local function value 'First'",
+            printed,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void CaptureFreeRecursiveFunctionValue_UsesRenamedLiftedHelper()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private int First(int value) => -value;
+
+                    public int Run(int value) {
+                        System.Func<int, int> callback = First;
+                        return callback(value);
+                        int First(int n) => n == 0 ? 0 : Second<int>(n - 1);
+                        int Second<T>(int n) => First(n);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("func First_2(", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "let callback (int32) -> int32 = this.First_2",
+            printed,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void GeneratedPatternCarrier_DoesNotShadowLiftedHelper()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public delegate int Callback(int value);
+
+                public class C {
+                    public int Run(Callback value) {
+                        switch (value) {
+                            case Callback { }:
+                                return callback(0);
+                            default:
+                                return -1;
+                        }
+
+                        int callback(int n) => n == 0 ? 2 : Other<int>(n - 1);
+                        int Other<T>(int n) => callback(n);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("this.callback(", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run((value int32) -> 1))",
+            "2");
+    }
+
+    [Fact]
+    public void ClaimedRecursiveGroup_StillLiftsUnsafeRefReturningDependency()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int seed) {
+                        int[] data = new int[] { 10 };
+                        int First(int value) =>
+                            value == 0 ? At(data) + seed : Second(value - 1);
+                        int Second(int value) =>
+                            value == 0 ? 0 : First(value - 1);
+                        ref int At(int[] values) => ref values[0];
+                        return First(2);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("var First", printed, StringComparison.Ordinal);
+        Assert.Contains("var Second", printed, StringComparison.Ordinal);
+        Assert.Contains("func At(", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("unsupported: ref-returning local function 'At'", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(2))",
+            "12");
+    }
+
+    [Fact]
+    public void DefaultParameterNonRecursiveDependency_FoldsIntoSameGroup()
     {
         // Carve-out regression guard found via PR #4200's own "hot-core
         // translation guard" CI job (a separate root cause from that PR's
@@ -255,10 +1617,9 @@ namespace Demo
         // on the third parameter's default): folding it in produced
         // `GS0144: Function 'FindTopLevelBaseIndex!!' requires 3 arguments
         // but was given 2` at the `AddBaseFirst`-shaped call site. A
-        // default-parameter candidate must stay on the `__local_` lift path
-        // instead, which lifts to a REAL method declaration that natively
-        // supports default parameter values — both the 3-argument and the
-        // 2-argument (default-relying) call sites keep working.
+        // default value must therefore be materialized at nullable-group call
+        // sites. #4302 folds the helper into the group and performs that
+        // materialization explicitly.
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
 namespace Demo
 {
@@ -305,11 +1666,11 @@ namespace Demo
         Assert.Contains("AddPatternSwitch!!(", printed, StringComparison.Ordinal);
 
         // `CollectLabel` — the default-parameter non-recursive dependency —
-        // must NOT be folded into that group; it stays lifted to a synthetic
-        // helper (a real method, defaults and all).
-        Assert.DoesNotContain("var CollectLabel", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("CollectLabel!!(", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Project_CollectLabel", printed, StringComparison.Ordinal);
+        // joins the nullable group, with its omitted default materialized at
+        // call sites.
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("var CollectLabel", printed, StringComparison.Ordinal);
+        Assert.Contains("CollectLabel!!(", printed, StringComparison.Ordinal);
 
         // Add(3): total += CollectLabel(3, 10)=16 -> AddPatternSwitch(2) ->
         // Add(1): total += CollectLabel(1, 10)=12 (total=28) ->
@@ -596,7 +1957,7 @@ namespace Demo
     }
 
     [Fact]
-    public void VariadicCycleMember_StaysOnLiftPath()
+    public void VariadicCycleMember_UsesNativeGroup()
     {
         // PR #4211 review (Copilot), the other finding. cs2gs's
         // `ArrowTypeReference` carries parameter TYPES only — it has no
@@ -607,14 +1968,9 @@ namespace Demo
         // ("Cannot convert type '(int32, ...int32) -> void' to
         // '((int32, int32) -> void)?'"), plus "Function 'Add!!' requires 2
         // arguments but was given 3" at every expanded call site. Unlike a
-        // default parameter value this is not repairable at the call site — the
-        // DECLARATION is already the wrong type — so a variadic member keeps its
-        // whole cycle on the `__local_` lift path, whose real method declaration
-        // carries `params` natively.
-        //
-        // (gsc itself is not the limitation: a hand-written
-        // `var f ((int32, ...int32) -> void)? = nil` declares, binds and runs.
-        // Teaching `ArrowTypeReference` variadic shape is the follow-up.)
+        // default parameter value this is not repairable at the nullable-group
+        // call site. #4302 routes the whole homogeneous cycle through native
+        // direct locals, whose declarations carry `params` natively.
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
 namespace Demo
 {
@@ -651,13 +2007,12 @@ namespace Demo
     }
 }");
 
-        // The whole cycle stays on `__local_`, exactly as the generic and
-        // ref-returning carve-outs above do.
-        Assert.Contains("__local_Project_Add", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Project_AddPatternSwitch", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Add = func (depth int32, xs ...int32)", printed, StringComparison.Ordinal);
+        Assert.Contains("let AddPatternSwitch = func", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
 
-        // The lifted real method keeps the variadic parameter natively.
+        // The direct local keeps the variadic parameter natively.
         Assert.Contains("xs ...int32", printed, StringComparison.Ordinal);
 
         // Add(2, 3, 4) = 7 + AddPatternSwitch(1) -> Add(0, 1, 2) = 3. Total 10.
@@ -665,7 +2020,7 @@ namespace Demo
     }
 
     [Fact]
-    public void RefParameterCycleMember_StaysOnLiftPath()
+    public void RefParameterCycleMember_UsesNativeGroup()
     {
         // PR #4211 review round 3 (Copilot), finding 1 — reported as an
         // evaluation-order hazard in the claimed-cycle argument reassembly
@@ -685,15 +2040,12 @@ namespace Demo
         // for `ref`, `out` (`*?`) and `in` alike, with or without a default
         // parameter and with or without a named call site. There is
         // therefore no reachable "silently changing side effects": the program
-        // never compiles. The fix is the same carve-out `params` got, which
-        // additionally makes a ref-kind argument unreachable in
-        // `TranslateClaimedLocalFunctionArgumentsWithDefaults`.
+        // never compiles. #4302 routes these signatures through native direct
+        // locals instead.
         //
         // The call site below is Copilot's exact shape — a permuted named call
         // passing `ref slots[Idx()]` alongside an omitted default. On the
-        // `__local_` path it now takes, the lift keeps the `name:` wrappers
-        // (a real method HAS parameter names), so the emitted call is
-        // `__local_Project_Add(cell: &slots[Idx()], a: Val(), 100)` and the
+        // native direct-local path preserves the `name:` wrappers, so the
         // binding is right: cell aliases slots[1], a = 5, b = 100 => 105.
         //
         // `order` is 12, as in C#. It used to print 21, a separate gsc-side
@@ -750,11 +2102,11 @@ namespace Demo
     }
 }");
 
-        // The whole cycle stays on `__local_`, whose REAL method declaration
-        // carries `ref` natively — nothing ever declares an arrow type for it.
-        Assert.Contains("__local_Project_Add", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Project_AddPatternSwitch", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Add = func (a int32, ref cell int32, b int32 = 100)", printed, StringComparison.Ordinal);
+        Assert.Contains("let AddPatternSwitch = func", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("Add(cell: &slots[Idx()], a: Val())", printed, StringComparison.Ordinal);
         Assert.Contains("ref cell int32", printed, StringComparison.Ordinal);
 
         // a = 5, b = 100 (default), cell = slots[1] = 105 — the binding this
@@ -763,7 +2115,7 @@ namespace Demo
     }
 
     [Fact]
-    public void OutParameterCycleMember_StaysOnLiftPath()
+    public void OutParameterCycleMember_UsesNativeGroup()
     {
         // The `out` half of the carve-out above: the erased arrow type made the
         // call sites fail as "Cannot convert type '*?' to 'int32'" (the `out`
@@ -813,11 +2165,39 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("__local_Project_Add", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Add = func (depth int32, out cell int32)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
 
         // Add(2) -> total 2 -> AddPatternSwitch(1) -> Add(0) -> total 2. c = 2.
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(2)", "2:2");
+    }
+
+    [Fact]
+    public void InParameterCycleMember_UsesNativeGroup()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class Builder {
+                    public int Project(int seed) {
+                        int value = seed;
+                        int Add(int depth, in int cell) =>
+                            depth == 0 ? cell : Other(depth - 1, in cell);
+                        int Other(int depth, in int cell) =>
+                            depth == 0 ? cell : Add(depth - 1, in cell);
+                        return Add(2, in value);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Add = func (depth int32, in cell int32)", printed, StringComparison.Ordinal);
+        Assert.Contains("let Other = func (depth int32, in cell int32)", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(Builder().Project(7))",
+            "7");
     }
 
     [Fact]
