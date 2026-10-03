@@ -576,7 +576,7 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private static ArgumentSyntax EnclosingInvocationArgument(ExpressionSyntax value) =>
-            OutermostTransparentNode(value).Parent is ArgumentSyntax { Parent: ArgumentListSyntax } argument
+            OutermostTransparentNode(value).Parent is ArgumentSyntax { Parent: BaseArgumentListSyntax } argument
                 ? argument
                 : null;
 
