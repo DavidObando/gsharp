@@ -1402,6 +1402,65 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void TupleLeaves_InSubstitutedParameterFieldAndDelegateSlots_ReportLeafMetadata()
+    {
+        string source = """
+            #nullable enable
+            public class Box<T> { public T Value; }
+            public static class C
+            {
+                private static T Id<T>(T value) => value;
+                public static void Stores(string key, string? argument, string? field, string? result)
+                {
+                    Id<(string, string)>((key, argument!));
+                    var box = new Box<(string, string)>();
+                    box.Value = (key, field!);
+                    System.Func<(string, string)> callback = () => (key, result!);
+                }
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("argument!!", printed, StringComparison.Ordinal);
+        Assert.Contains("field!!", printed, StringComparison.Ordinal);
+        Assert.Contains("result!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "argument!") + " kind=forgiven,explicit-type-argument | target=C.Id<(string, string)>((string, string)) parameter 'value' | slot-type=string",
+                Expected(source, "field!") + " kind=forgiven,constructed-generic-member | target=Box<(string, string)>.Value | slot-type=string",
+                Expected(source, "result!") + " kind=forgiven,delegate-result | target=Func<(string, string)>.Invoke() | slot-type=string",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
+    }
+
+    [Fact]
+    public void ForgivenTypeParameterValues_PreserveTheirCallResultDependency()
+    {
+        string source = """
+            #nullable enable
+            public static class C
+            {
+                private static T Id<T>(T value) => value;
+                private static void Consume<T>(T value) { }
+                public static T Result<T>(T through) => Id<T>(through!);
+                public static void Ignored<T>(T ignored) => Consume<T>(ignored!);
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("through!!", printed, StringComparison.Ordinal);
+        Assert.Contains("ignored!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "through!") + " kind=forgiven-type-parameter-value | target=C.Id<T>(T) parameter 'value' | slot-type=T (NotAnnotated) | result-depends-on-slot=yes",
+                Expected(source, "ignored!") + " kind=forgiven-type-parameter-value | target=C.Consume<T>(T) parameter 'value' | slot-type=T (NotAnnotated) | result-depends-on-slot=no",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" | value=", StringComparison.Ordinal))));
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });

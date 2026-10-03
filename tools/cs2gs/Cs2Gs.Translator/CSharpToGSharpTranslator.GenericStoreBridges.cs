@@ -104,6 +104,7 @@ public sealed partial class CSharpToGSharpTranslator
                 paramsElement = true;
             }
 
+            slotType = GetBridgedSlotType(value, slotType);
             if (declared is not ITypeParameterSymbol typeParameter)
             {
                 // An expanded element of a concrete params array
@@ -164,6 +165,13 @@ public sealed partial class CSharpToGSharpTranslator
                 return bridged;
             }
 
+            if (targetSymbol == null)
+            {
+                (ISymbol finalStore, ITypeSymbol resolvedSlotType) = this.ResolveFinalStore(value);
+                targetSymbol = finalStore;
+                knownSlotType ??= resolvedSlotType;
+            }
+
             string kind = this.ClassifyGenericStoreSlot(value, targetSymbol, knownSlotType, out ITypeSymbol slotType, out bool resultDependsOnSlot);
             if (kind == null)
             {
@@ -206,21 +214,20 @@ public sealed partial class CSharpToGSharpTranslator
             string kind;
             ITypeSymbol slotType;
             bool resultDependsOnSlot = false;
+            (ISymbol finalStore, ITypeSymbol knownSlotType) = this.ResolveFinalStore(forgiving);
+            if (finalStore != null)
+            {
+                targetSymbol = finalStore;
+            }
+
             if (this.context.GetTypeInfo(forgiving.Operand).Type is ITypeParameterSymbol operandType)
             {
                 kind = "forgiven-type-parameter-value";
                 slotType = operandType;
+                this.ClassifyGenericStoreSlot(forgiving, targetSymbol, knownSlotType, out _, out resultDependsOnSlot);
             }
             else
             {
-                // A value-producing write may feed another store. Prefer a
-                // resolved generic store over the immediate concrete sink.
-                (ISymbol finalStore, ITypeSymbol knownSlotType) = this.ResolveFinalStore(forgiving);
-                if (finalStore != null)
-                {
-                    targetSymbol = finalStore;
-                }
-
                 kind = this.ClassifyGenericStoreSlot(forgiving, targetSymbol, knownSlotType, out slotType, out resultDependsOnSlot);
                 if (kind == null || kind == "unknown-target")
                 {
@@ -414,11 +421,11 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 case IPropertySymbol property when property.OriginalDefinition.Type is ITypeParameterSymbol:
-                    slotType = property.Type;
+                    slotType = GetBridgedSlotType(value, property.Type);
                     return "constructed-generic-member";
 
                 case IFieldSymbol field when field.OriginalDefinition.Type is ITypeParameterSymbol:
-                    slotType = field.Type;
+                    slotType = GetBridgedSlotType(value, field.Type);
                     return "constructed-generic-member";
 
                 case IMethodSymbol invoke when invoke.MethodKind == MethodKind.DelegateInvoke:
@@ -427,7 +434,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // the lambda is async, as the bridge guards the inner value.
                     bool asyncLambda = OutermostTransparentNode(value).Parent is AnonymousFunctionExpressionSyntax function
                         && function.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
-                    return DelegateResultSlot(invoke, asyncLambda, out slotType)
+                    return DelegateResultSlot(invoke, asyncLambda, value, out slotType)
                         ?? this.ClassifyTupleStoreSlot(value, invoke, out slotType, out resultDependsOnSlot);
                 }
 
@@ -453,7 +460,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // An array element: the CLR's built-in generic storage.
                     // C# stores a null there as readily as in List<T> (#4628:
                     // `new[] { p.GetMethod, p.SetMethod }.OfType<MethodInfo>()`).
-                    slotType = array.ElementType;
+                    slotType = GetBridgedSlotType(value, array.ElementType);
                     return "array-element";
 
                 case INamedTypeSymbol:
@@ -465,7 +472,7 @@ public sealed partial class CSharpToGSharpTranslator
                         return "unknown-target";
                     }
 
-                    slotType = knownSlotType;
+                    slotType = GetBridgedSlotType(value, knownSlotType);
                     return "collection-expression-element";
 
                 case IMethodSymbol lambda when lambda.MethodKind == MethodKind.AnonymousFunction:
@@ -481,7 +488,7 @@ public sealed partial class CSharpToGSharpTranslator
                         return "unknown-target";
                     }
 
-                    return DelegateResultSlot(delegateInvoke, lambda.IsAsync, out slotType)
+                    return DelegateResultSlot(delegateInvoke, lambda.IsAsync, value, out slotType)
                         ?? this.ClassifyTupleStoreSlot(value, lambda, out slotType, out resultDependsOnSlot);
                 }
 
@@ -654,13 +661,29 @@ public sealed partial class CSharpToGSharpTranslator
             return slotType;
         }
 
+        private static ITypeSymbol GetBridgedSlotType(ExpressionSyntax value, ITypeSymbol slotType)
+        {
+            if (value == null || slotType is not INamedTypeSymbol { IsTupleType: true })
+            {
+                return slotType;
+            }
+
+            var tupleIndices = new List<int>();
+            OutermostTransparentNode(value, tupleIndices);
+            return GetTupleSlot(slotType, tupleIndices);
+        }
+
         // A lambda result stored into its delegate's return slot. An async
         // lambda's `!!` guards the value inside the task, so both the declared
         // and the constructed return types are unwrapped (GetEffectiveReturnType).
-        private static string DelegateResultSlot(IMethodSymbol delegateInvoke, bool isAsync, out ITypeSymbol slotType)
+        private static string DelegateResultSlot(
+            IMethodSymbol delegateInvoke,
+            bool isAsync,
+            ExpressionSyntax value,
+            out ITypeSymbol slotType)
         {
             ITypeSymbol declared = delegateInvoke.OriginalDefinition.ReturnType;
-            slotType = GetEffectiveReturnType(delegateInvoke.ReturnType, isAsync);
+            slotType = GetBridgedSlotType(value, GetEffectiveReturnType(delegateInvoke.ReturnType, isAsync));
             return declared is ITypeParameterSymbol
                 || GetEffectiveReturnType(declared, isAsync) is ITypeParameterSymbol
                     ? "delegate-result"

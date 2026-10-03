@@ -241,6 +241,35 @@ public sealed class SyntaxAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void AnalyzerTupleArrayBridge_ResolvesItsArrayStore()
+    {
+        string source = """
+            using System.Collections.Immutable;
+            using Microsoft.CodeAnalysis;
+            using Microsoft.CodeAnalysis.Diagnostics;
+
+            [DiagnosticAnalyzer(LanguageNames.CSharp)]
+            public sealed class SyntaxAnalyzer : DiagnosticAnalyzer
+            {
+                public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+                public override void Initialize(AnalysisContext context) { }
+                public static (SyntaxNode, int)[] Values(IOperation op) => new (SyntaxNode, int)[] { (op.Syntax, 1) };
+            }
+            """;
+        var (printed, diagnostics) = TranslateAnalyzer(source);
+
+        Assert.Contains("op.Syntax!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(
+            diagnostics,
+            diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+        Assert.Equal(source.IndexOf("op.Syntax", StringComparison.Ordinal), site.Location.SourceSpan.Start);
+        Assert.StartsWith(
+            "kind=array-element | target=(SyntaxNode, int)[] | slot-type=SyntaxNode",
+            site.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void OperationActionAnalyzer_TranslatesToBoundNodeApi()
     {
         // The mechanical subset of GSA0002: operation actions become
