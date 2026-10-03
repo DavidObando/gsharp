@@ -1456,6 +1456,14 @@ public sealed partial class CSharpToGSharpTranslator
                 .Any();
         }
 
+        private static bool IsIteratorBody(LocalFunctionStatementSyntax node)
+        {
+            SyntaxNode body = (SyntaxNode)node.Body ?? node.ExpressionBody;
+            return body?.DescendantNodes(n => n is not LocalFunctionStatementSyntax)
+                .OfType<YieldStatementSyntax>()
+                .Any() == true;
+        }
+
         private List<AttributeUse> MapAttributes(IEnumerable<AttributeListSyntax> attributeLists)
         {
             var attributes = new List<AttributeUse>();
@@ -2028,9 +2036,15 @@ public sealed partial class CSharpToGSharpTranslator
             return allocated;
         }
 
-        private bool TryClaimSynthesizedLocalName(string name, SyntaxNode site = null)
+        private bool TryClaimSynthesizedLocalName(
+            string name,
+            SyntaxNode site = null,
+            ISymbol allowedSourceSymbol = null)
         {
-            if (this.SourceIdentifierClaimsSynthesizedLocalName(name, site))
+            if (this.SourceIdentifierClaimsSynthesizedLocalName(
+                name,
+                site,
+                allowedSourceSymbol))
             {
                 return false;
             }
@@ -2043,7 +2057,10 @@ public sealed partial class CSharpToGSharpTranslator
                 .TryClaimLocalName(owner, name);
         }
 
-        private bool SourceIdentifierClaimsSynthesizedLocalName(string name, SyntaxNode site)
+        private bool SourceIdentifierClaimsSynthesizedLocalName(
+            string name,
+            SyntaxNode site,
+            ISymbol allowedSourceSymbol)
         {
             SyntaxNode body = this.state.CurrentBodyScope ?? site?.SyntaxTree.GetRoot();
             if (body == null)
@@ -2059,7 +2076,31 @@ public sealed partial class CSharpToGSharpTranslator
                 this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, occupied);
             }
 
-            return occupied.Contains(name);
+            if (!occupied.Contains(name) || allowedSourceSymbol == null)
+            {
+                return occupied.Contains(name);
+            }
+
+            foreach (SyntaxToken token in body.DescendantTokens())
+            {
+                if (!token.IsKind(SyntaxKind.IdentifierToken)
+                    || this.nameAllocator.GetName(token.ValueText) != name)
+                {
+                    continue;
+                }
+
+                if (token.Parent is SimpleNameSyntax simpleName
+                    && SymbolEqualityComparer.Default.Equals(
+                        this.context.GetSymbolInfo(simpleName).Symbol,
+                        allowedSourceSymbol))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
         }
 
         private bool ReserveSynthesizedLocalName(string name, SyntaxNode site = null)
@@ -3064,7 +3105,8 @@ public sealed partial class CSharpToGSharpTranslator
                     && this.context.SemanticModel.GetOperation(candidate.Syntax)
                     ?.DescendantsAndSelf()
                     .Any(operation =>
-                        operation is IInstanceReferenceOperation instance
+                        !IsInsideNameOf(operation)
+                        && operation is IInstanceReferenceOperation instance
                         && instance.ReferenceKind == InstanceReferenceKind.ContainingTypeInstance) == true)
                 {
                     return true;
@@ -3097,6 +3139,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            static bool IsInsideNameOf(IOperation operation)
+            {
+                for (IOperation current = operation; current != null; current = current.Parent)
+                {
+                    if (current is INameOfOperation)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
             bool ReferencesEnclosingTypeParameter(
                 (LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol) candidate,
                 bool includeContainingTypeParameters)
@@ -3123,7 +3178,8 @@ public sealed partial class CSharpToGSharpTranslator
                     ?.DescendantsAndSelf()
                     .OfType<IInstanceReferenceOperation>()
                     .Any(instance =>
-                        instance.ReferenceKind == InstanceReferenceKind.ContainingTypeInstance
+                        !IsInsideNameOf(instance)
+                        && instance.ReferenceKind == InstanceReferenceKind.ContainingTypeInstance
                         && instance.Type != null
                         && enclosingTypeParameters.Any(enclosing =>
                             TypeContainsTypeParameter(instance.Type, enclosing))) == true)
@@ -3358,7 +3414,19 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (var pair in capturingLocals)
             {
-                if (this.state.LiftedRecursiveLocalFunctions.ContainsKey(pair.Symbol))
+                if ((pair.Symbol.IsAsync || IsIteratorBody(pair.Syntax))
+                    && directCaptures[pair.Symbol].Any(this.IsCaptureWrittenInDeclaringScope))
+                {
+                    this.state.UnsupportedSuspendingRefCaptureLocalFunctions.UnionWith(
+                        GetRecursiveComponent(pair.Symbol).Select(candidate => candidate.Symbol));
+                }
+            }
+
+            foreach (var pair in capturingLocals)
+            {
+                if (this.state.LiftedRecursiveLocalFunctions.ContainsKey(pair.Symbol)
+                    || this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Contains(
+                        pair.Symbol))
                 {
                     continue;
                 }

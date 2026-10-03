@@ -126,6 +126,7 @@ public sealed partial class CSharpToGSharpTranslator
     {
         while (true)
         {
+            target = UnwrapParenthesesAndSuppressions(target);
             if (BindsTo(target, symbol, model))
             {
                 return true;

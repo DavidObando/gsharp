@@ -527,6 +527,155 @@ namespace Demo
     }
 
     [Fact]
+    public void CrossSectionLift_ParenthesizedNestedStructWrite_KeepsSharedStorage()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public struct Inner {
+                    public int N;
+                }
+
+                public struct Outer {
+                    public Inner Inner;
+                }
+
+                public class C {
+                    public int Run(int value) {
+                        Outer x = new Outer { Inner = new Inner { N = 1 } };
+                        System.Action mutate = () => { (x.Inner).N = 42; };
+                        switch (value) {
+                            case 0:
+                                int F(int n) {
+                                    if (n == 0) {
+                                        mutate();
+                                        return x.Inner.N;
+                                    }
+
+                                    return F(n - 1);
+                                }
+
+                                return F(0);
+                            default:
+                                return F(0);
+                        }
+                    }
+                }
+            }
+            """);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(0) + C().Run(1))",
+            "84");
+    }
+
+    [Fact]
+    public void GenericOwner_NameofInstanceMember_DoesNotCreateRuntimeCapture()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C<T> {
+                    private int Member;
+
+                    public string Run() {
+                        return First(1);
+                        string First(int n) =>
+                            n == 0 ? nameof(this.Member) : Second<int>(n - 1);
+                        string Second<U>(int n) =>
+                            n == 0 ? nameof(this.Member) : First(n - 1);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("// unsupported:", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C[int32]().Run())",
+            "Member");
+    }
+
+    [Fact]
+    public void AsyncRecursiveLift_WithWrittenCapture_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            using System.Threading.Tasks;
+
+            namespace Demo {
+                public class C {
+                    public async Task<int> Run() {
+                        int x = 1;
+                        x = 42;
+                        return await First(1);
+                        async Task<int> First(int n) =>
+                            n == 0 ? x : await Second<int>(n - 1);
+                        async Task<int> Second<T>(int n) =>
+                            n == 0 ? x : await First(n - 1);
+                    }
+                }
+            }
+            """, "suspending recursive helpers cannot carry ref captures");
+
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'First' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'Second' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IteratorRecursiveLift_WithWrittenCapture_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            using System.Collections.Generic;
+
+            namespace Demo {
+                public class C {
+                    public IEnumerable<int> Run() {
+                        int x = 1;
+                        x = 42;
+                        return First(1);
+
+                        IEnumerable<int> First(int n) {
+                            if (n == 0) {
+                                yield return x;
+                                yield break;
+                            }
+
+                            foreach (int value in Second<int>(n - 1)) {
+                                yield return value;
+                            }
+                        }
+
+                        IEnumerable<int> Second<T>(int n) {
+                            if (n == 0) {
+                                yield return x;
+                                yield break;
+                            }
+
+                            foreach (int value in First(n - 1)) {
+                                yield return value;
+                            }
+                        }
+                    }
+                }
+            }
+            """, "suspending recursive helpers cannot carry ref captures");
+
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'First' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "// unsupported: suspending recursive local function 'Second' requires a ref capture",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MixedRecursionGroup_NameofEnclosingTypeParameter_IsNotADependency()
     {
         // Issue #4302: `nameof(T)` translates to the literal "T", so the

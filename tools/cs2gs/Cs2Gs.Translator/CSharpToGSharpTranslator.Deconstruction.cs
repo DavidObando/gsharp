@@ -1822,6 +1822,19 @@ public sealed partial class CSharpToGSharpTranslator
 
         private IReadOnlyList<GStatement> TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedSuspending
+                && this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Contains(
+                    unsupportedSuspending))
+            {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    $"recursive async or iterator local function '{localFunction.Identifier.Text}' captures storage written in its declaring scope; G# forbids the ref parameter needed to preserve that shared storage on a suspending helper.");
+                return new GStatement[]
+                {
+                    new RawStatement($"// unsupported: suspending recursive local function '{localFunction.Identifier.Text}' requires a ref capture"),
+                };
+            }
+
             if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedGeneric
                 && this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(
                     unsupportedGeneric))

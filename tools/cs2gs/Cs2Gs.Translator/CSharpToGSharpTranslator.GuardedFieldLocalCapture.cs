@@ -112,7 +112,10 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                if (!this.TryClaimSynthesizedLocalName(capturedName, ifStatement))
+                if (!this.TryClaimSynthesizedLocalName(
+                    capturedName,
+                    ifStatement,
+                    symbol))
                 {
                     continue;
                 }
