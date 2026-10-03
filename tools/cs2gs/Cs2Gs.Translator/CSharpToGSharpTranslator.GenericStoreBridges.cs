@@ -392,7 +392,9 @@ public sealed partial class CSharpToGSharpTranslator
                                 parameter))))
                     {
                         slotType = parameter.Type;
-                        return slotType is ITypeParameterSymbol ? "type-parameter-assignment" : null;
+                        return slotType is ITypeParameterSymbol
+                            ? "type-parameter-assignment"
+                            : this.ClassifyTupleStoreSlot(value, parameter, out slotType, out resultDependsOnSlot);
                     }
 
                     // Fail-safe: a params value is an element unless it is
@@ -407,7 +409,8 @@ public sealed partial class CSharpToGSharpTranslator
                         || (knownSlotType != null
                             && SymbolEqualityComparer.Default.Equals(knownSlotType, parameter.Type));
                     bool expandedParams = parameter.IsParams && !directArgument;
-                    return ClassifyParameterSlot(parameter, value, expandedParams, out slotType, out resultDependsOnSlot);
+                    return ClassifyParameterSlot(parameter, value, expandedParams, out slotType, out resultDependsOnSlot)
+                        ?? this.ClassifyTupleStoreSlot(value, parameter, out slotType, out resultDependsOnSlot, parameterArgument: true);
                 }
 
                 case IPropertySymbol property when property.OriginalDefinition.Type is ITypeParameterSymbol:
@@ -424,7 +427,8 @@ public sealed partial class CSharpToGSharpTranslator
                     // the lambda is async, as the bridge guards the inner value.
                     bool asyncLambda = OutermostTransparentNode(value).Parent is AnonymousFunctionExpressionSyntax function
                         && function.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
-                    return DelegateResultSlot(invoke, asyncLambda, out slotType);
+                    return DelegateResultSlot(invoke, asyncLambda, out slotType)
+                        ?? this.ClassifyTupleStoreSlot(value, invoke, out slotType, out resultDependsOnSlot);
                 }
 
                 case ILocalSymbol local when local.Type is ITypeParameterSymbol:
@@ -477,12 +481,54 @@ public sealed partial class CSharpToGSharpTranslator
                         return "unknown-target";
                     }
 
-                    return DelegateResultSlot(delegateInvoke, lambda.IsAsync, out slotType);
+                    return DelegateResultSlot(delegateInvoke, lambda.IsAsync, out slotType)
+                        ?? this.ClassifyTupleStoreSlot(value, lambda, out slotType, out resultDependsOnSlot);
                 }
 
                 default:
-                    return null;
+                    return this.ClassifyTupleStoreSlot(value, targetSymbol, out slotType, out resultDependsOnSlot);
             }
+        }
+
+        private string ClassifyTupleStoreSlot(
+            ExpressionSyntax value,
+            ISymbol targetSymbol,
+            out ITypeSymbol slotType,
+            out bool resultDependsOnSlot,
+            bool parameterArgument = false)
+        {
+            slotType = null;
+            resultDependsOnSlot = false;
+            var tupleIndices = new List<int>();
+            SyntaxNode node = OutermostTransparentNode(value, tupleIndices);
+            if (tupleIndices.Count == 0)
+            {
+                return null;
+            }
+
+            bool asyncLambda = node.Parent is AnonymousFunctionExpressionSyntax function
+                && function.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
+            ITypeSymbol declared = GetTupleSlot(GetStoreType(targetSymbol?.OriginalDefinition, asyncLambda), tupleIndices);
+            if (declared is not ITypeParameterSymbol typeParameter)
+            {
+                return null;
+            }
+
+            slotType = GetTupleSlot(GetStoreType(targetSymbol, asyncLambda), tupleIndices);
+            resultDependsOnSlot = parameterArgument
+                && targetSymbol is IParameterSymbol { ContainingSymbol: IMethodSymbol method }
+                && MentionsTypeParameter(method.OriginalDefinition.ReturnType, typeParameter);
+            return slotType == null ? null : "type-parameter-tuple-element";
+
+            static ITypeSymbol GetStoreType(ISymbol symbol, bool asyncLambda) => symbol switch
+            {
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IPropertySymbol property => property.Type,
+                IMethodSymbol method => GetEffectiveReturnType(method.ReturnType, method.IsAsync || asyncLambda),
+                _ => null,
+            };
         }
 
         // Whether the call that receives `value` as an argument spells its type
@@ -589,6 +635,11 @@ public sealed partial class CSharpToGSharpTranslator
                 && returnType.TypeArguments.Length == 1
                     ? returnType.TypeArguments[0]
                     : this.context.GetTypeInfo(yielded.Expression).ConvertedType;
+            return GetTupleSlot(slotType, tupleIndices);
+        }
+
+        private static ITypeSymbol GetTupleSlot(ITypeSymbol slotType, List<int> tupleIndices)
+        {
             for (int i = tupleIndices.Count - 1; i >= 0; i--)
             {
                 if (slotType is not INamedTypeSymbol { IsTupleType: true } tupleType
