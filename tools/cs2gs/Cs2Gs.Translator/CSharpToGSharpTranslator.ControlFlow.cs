@@ -47,7 +47,8 @@ public sealed partial class CSharpToGSharpTranslator
                 when refOf.Expression is IdentifierNameSyntax
                     && BindsTo(refOf.Expression, symbol, model)
                     && !(refOf.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator }
-                        && model.GetDeclaredSymbol(declarator) is ILocalSymbol { RefKind: RefKind.RefReadOnly }) => true,
+                        && model.GetDeclaredSymbol(declarator) is ILocalSymbol local
+                        && local.RefKind == RefKind.RefReadOnly) => true,
             _ => false,
         };
 

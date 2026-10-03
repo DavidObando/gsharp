@@ -330,6 +330,162 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Fact]
+    public void BackwardGoto_DoesNotReuseTupleYieldGuard()
+    {
+        string printed = Translate("""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    string text = choose ? null : "x";
+                    int count = 0;
+                    if (text != null) {
+                        Again:
+                        yield return (text, count);
+                        text = null;
+                        if (++count < 2) { goto Again; }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("func Rows(choose bool) sequence[(Text string?, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData("IEnumerable", false, false)]
+    [InlineData("IEnumerable", false, true)]
+    [InlineData("IEnumerable", true, false)]
+    [InlineData("IEnumerable", true, true)]
+    [InlineData("IEnumerator", false, false)]
+    [InlineData("IEnumerator", false, true)]
+    [InlineData("IEnumerator", true, false)]
+    [InlineData("IEnumerator", true, true)]
+    public void IteratorGetters_CollectOwnTupleYields(string envelope, bool indexer, bool guarded)
+    {
+        string member = indexer ? "this[bool choose]" : "Rows";
+        string choose = indexer ? "choose" : "Choose";
+        string initializer = $"{choose} ? null : \"x\"";
+        string yield = guarded
+            ? "if (text != null) { yield return (text, 1); }"
+            : $"yield return {choose} ? (text, 1) : (\"x\", 2);";
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public sealed class Obj {
+                public bool Choose;
+                public {{envelope}}<(string Text, int Code)> {{member}} {
+                    get {
+                        string text = {{initializer}};
+                        {{yield}}
+                    }
+                }
+            }
+            """);
+
+        string textType = guarded ? "string" : "string?";
+        Assert.Contains($"{envelope}[(Text {textType}, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public void IteratorGetterContracts_SynchronizeNullableTupleSlots(bool interfaceContract, bool indexer)
+    {
+        string member = indexer ? "this[bool choose]" : "Rows";
+        string contract = interfaceContract
+            ? $"public interface IRows {{ IEnumerable<(string Text, int Code)> {member} {{ get; }} }}"
+            : $"public abstract class RowsBase {{ public abstract IEnumerable<(string Text, int Code)> {member} {{ get; }} }}";
+        string owner = interfaceContract ? "IRows" : "RowsBase";
+        string modifier = interfaceContract ? string.Empty : "override ";
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            {{contract}}
+            public sealed class MissingRows : {{owner}} {
+                public {{modifier}}IEnumerable<(string Text, int Code)> {{member}} {
+                    get { string text = null; yield return (text, 1); }
+                }
+            }
+            public sealed class PresentRows : {{owner}} {
+                public {{modifier}}IEnumerable<(string Text, int Code)> {{member}} {
+                    get { yield return ("x", 1); }
+                }
+            }
+            """);
+
+        Assert.Equal(3, printed.Split("IEnumerable[(Text string?, Code int32)]").Length - 1);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LocalIteratorGoto_InvalidatesOnlyItsOwnGuard(bool ownJump)
+    {
+        string iteratorJump = ownJump ? "if (++count < 2) { goto Again; }" : string.Empty;
+        string unrelatedJump = ownJump ? string.Empty : "goto Done; Done: return 0;";
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            Obj.Rows(false);
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    IEnumerable<(string Text, int Code)> Inner() {
+                        string text = choose ? null : "x";
+                        int count = 0;
+                        if (text != null) {
+                            Again:
+                            yield return (text, count);
+                            text = null;
+                            {{iteratorJump}}
+                        }
+                    }
+                    int Sibling() { {{unrelatedJump}} return 1; }
+                    return Inner();
+                }
+            }
+            """, outputKind: OutputKind.ConsoleApplication);
+
+        string textType = ownJump ? "string?" : "string";
+        Assert.Contains($"func Rows(choose bool) IEnumerable[(Text {textType}, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void IteratorGetterForwarding_ReusesDeclarationPathsAndYieldOwnership()
+    {
+        string printed = Translate("""
+            using System.Collections.Generic;
+            public sealed class Obj {
+                public IEnumerable<((string Text, string Keep) Names, int Code)> Missing {
+                    get {
+                        string text = null;
+                        yield return ((text, "keep"), 1);
+                    }
+                }
+                public IEnumerable<((string Text, string Keep) Names, int Code)> Arrow => Missing;
+                public IEnumerable<((string Text, string Keep) Names, int Code)> Block {
+                    get { return Missing; }
+                }
+                public IEnumerable<(string Text, int Code)> Present {
+                    get {
+                        IEnumerable<(string Text, int Code)> Inner() {
+                            string text = null;
+                            yield return (text, 1);
+                        }
+                        yield return ("x", 1);
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal(3, printed.Split("IEnumerable[(Names (Text string?, Keep string), Code int32)]").Length - 1);
+        Assert.Contains("Present IEnumerable[(Text string, Code int32)]", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     [Theory]
     [InlineData("void Reset() { text = null; }", "Reset();", true)]
     [InlineData("System.Action reset = () => text = null;", "reset();", true)]

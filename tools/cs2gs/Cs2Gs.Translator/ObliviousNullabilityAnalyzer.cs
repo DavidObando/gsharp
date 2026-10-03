@@ -2533,16 +2533,15 @@ internal static class ObliviousNullabilityAnalyzer
 
                 case PropertyDeclarationSyntax property:
                     IPropertySymbol propertySymbol = model.GetDeclaredSymbol(property);
-                    if (TryGetTupleType(propertySymbol, out INamedTypeSymbol propertyTuple))
+                    if (propertySymbol != null)
                     {
                         if (property.Initializer?.Value is ExpressionSyntax initializer)
                         {
-                            CollectTupleValueFlow(
+                            CollectDeclarationTupleFlow(
                                 Canonical(propertySymbol),
-                                propertyTuple,
+                                propertySymbol.Type,
                                 initializer,
                                 model,
-                                string.Empty,
                                 tupleTainted,
                                 tupleEdges,
                                 tupleScalarEdges);
@@ -2550,7 +2549,6 @@ internal static class ObliviousNullabilityAnalyzer
 
                         CollectTupleGetterFlows(
                             propertySymbol,
-                            propertyTuple,
                             property.ExpressionBody?.Expression,
                             property.AccessorList,
                             model,
@@ -2563,11 +2561,10 @@ internal static class ObliviousNullabilityAnalyzer
 
                 case IndexerDeclarationSyntax indexer:
                     IPropertySymbol indexerSymbol = model.GetDeclaredSymbol(indexer);
-                    if (TryGetTupleType(indexerSymbol, out INamedTypeSymbol indexerTuple))
+                    if (indexerSymbol != null)
                     {
                         CollectTupleGetterFlows(
                             indexerSymbol,
-                            indexerTuple,
                             indexer.ExpressionBody?.Expression,
                             indexer.AccessorList,
                             model,
@@ -2639,7 +2636,7 @@ internal static class ObliviousNullabilityAnalyzer
     }
 
     private static void CollectTupleReturnFlows(
-        IMethodSymbol method,
+        ISymbol declaration,
         ExpressionSyntax arrowBody,
         BlockSyntax body,
         SemanticModel model,
@@ -2647,7 +2644,7 @@ internal static class ObliviousNullabilityAnalyzer
         List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
         List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
     {
-        ITypeSymbol returnType = SymbolValueType(method);
+        ITypeSymbol returnType = SymbolValueType(declaration);
         bool returnsTuple = returnType is INamedTypeSymbol namedReturn
             && namedReturn.IsTupleType;
         if (!returnsTuple && NestedTupleSlots(returnType).Count == 0)
@@ -2655,7 +2652,7 @@ internal static class ObliviousNullabilityAnalyzer
             return;
         }
 
-        ISymbol target = Canonical(method);
+        ISymbol target = Canonical(declaration);
         if (arrowBody != null)
         {
             CollectDeclarationTupleFlow(
@@ -2707,7 +2704,6 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static void CollectTupleGetterFlows(
         IPropertySymbol property,
-        INamedTypeSymbol tupleType,
         ExpressionSyntax arrowBody,
         AccessorListSyntax accessorList,
         SemanticModel model,
@@ -2715,50 +2711,16 @@ internal static class ObliviousNullabilityAnalyzer
         List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
         List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
     {
-        ISymbol target = Canonical(property);
-        if (arrowBody != null)
-        {
-            CollectTupleValueFlow(
-                target,
-                tupleType,
-                arrowBody,
-                model,
-                string.Empty,
-                tupleTainted,
-                tupleEdges,
-                tupleScalarEdges);
-        }
-
         AccessorDeclarationSyntax getter = accessorList?.Accessors
             .FirstOrDefault(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
-        if (getter?.ExpressionBody?.Expression is ExpressionSyntax getterArrow)
-        {
-            CollectTupleValueFlow(
-                target,
-                tupleType,
-                getterArrow,
-                model,
-                string.Empty,
-                tupleTainted,
-                tupleEdges,
-                tupleScalarEdges);
-        }
-
-        foreach (ReturnStatementSyntax statement in EnumerateOwnReturns(getter?.Body))
-        {
-            if (statement.Expression != null)
-            {
-                CollectTupleValueFlow(
-                    target,
-                    tupleType,
-                    statement.Expression,
-                    model,
-                    string.Empty,
-                    tupleTainted,
-                    tupleEdges,
-                    tupleScalarEdges);
-            }
-        }
+        CollectTupleReturnFlows(
+            property,
+            arrowBody ?? getter?.ExpressionBody?.Expression,
+            getter?.Body,
+            model,
+            tupleTainted,
+            tupleEdges,
+            tupleScalarEdges);
     }
 
     private static void CollectTupleArgumentFlows(
@@ -4345,19 +4307,35 @@ internal static class ObliviousNullabilityAnalyzer
 
             foreach (INamedTypeSymbol iface in type.AllInterfaces)
             {
-                foreach (IMethodSymbol interfaceMethod in iface.GetMembers().OfType<IMethodSymbol>())
+                foreach (ISymbol interfaceMember in iface.GetMembers())
                 {
-                    if (interfaceMethod.MethodKind != MethodKind.Ordinary
-                        || type.FindImplementationForInterfaceMember(interfaceMethod) is not IMethodSymbol implementation)
+                    if (interfaceMember is not (IMethodSymbol or IPropertySymbol)
+                        || (interfaceMember is IMethodSymbol interfaceMethod
+                            && interfaceMethod.MethodKind != MethodKind.Ordinary)
+                        || type.FindImplementationForInterfaceMember(interfaceMember) is not ISymbol implementation)
                     {
                         continue;
                     }
 
                     AddTupleContractPair(
-                        interfaceMethod,
-                        SymbolValueType(interfaceMethod),
+                        interfaceMember,
+                        SymbolValueType(interfaceMember),
                         implementation,
                         SymbolValueType(implementation),
+                        tupleTainted,
+                        tupleEdges);
+                }
+            }
+
+            foreach (IPropertySymbol property in type.GetMembers().OfType<IPropertySymbol>())
+            {
+                if (property.OverriddenProperty is IPropertySymbol overridden)
+                {
+                    AddTupleContractPair(
+                        property,
+                        SymbolValueType(property),
+                        overridden,
+                        SymbolValueType(overridden),
                         tupleTainted,
                         tupleEdges);
                 }
@@ -4366,18 +4344,20 @@ internal static class ObliviousNullabilityAnalyzer
     }
 
     private static void AddTupleContractPair(
-        IMethodSymbol first,
+        ISymbol first,
         ITypeSymbol firstType,
-        IMethodSymbol second,
+        ISymbol second,
         ITypeSymbol secondType,
         HashSet<TupleElementKey> tupleTainted,
         List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
     {
         ITypeSymbol comparisonType = firstType;
-        if (first.Arity > 0 && first.Arity == second.Arity)
+        if (first is IMethodSymbol { Arity: > 0 } firstMethod
+            && second is IMethodSymbol secondMethod
+            && firstMethod.Arity == secondMethod.Arity)
         {
             // Compare method parameters by ordinal without changing tuple-key ownership.
-            comparisonType = SymbolValueType(first.ConstructedFrom.Construct(second.TypeArguments.ToArray()));
+            comparisonType = SymbolValueType(firstMethod.ConstructedFrom.Construct(secondMethod.TypeArguments.ToArray()));
         }
 
         // Covariant envelopes can reorder type arguments. Bare tuple
@@ -5108,6 +5088,21 @@ internal static class ObliviousNullabilityAnalyzer
                 or CompilationUnitSyntax);
 
         if (scope == null)
+        {
+            return false;
+        }
+
+        // ponytail: lexical freshness cannot prove unstructured control flow.
+        // Retain nullable storage until a CFG-based proof can cover jumps.
+        SyntaxNode useScope = use.Ancestors().FirstOrDefault(node =>
+            node is AccessorDeclarationSyntax
+                or BaseMethodDeclarationSyntax
+                or LocalFunctionStatementSyntax
+                or AnonymousFunctionExpressionSyntax
+                or CompilationUnitSyntax);
+        if (useScope == null
+            || useScope.DescendantNodes(node => ReferenceEquals(node, useScope) || Descend(node))
+                .OfType<GotoStatementSyntax>().Any())
         {
             return false;
         }
