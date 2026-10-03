@@ -109,6 +109,26 @@ Before moving an application to a different compiler version, pin the intended S
   - `cs2gs validate` now requires the oracle, or an explicit
     `--count-only-test-parity`.
   - The mirrored test budget ceiling is now 120 minutes (was 90).
+- **`cs2gs migrate --sdk-version <v>` and `--sdk-pin global-json`** (issue
+  [#4631](https://github.com/DavidObando/gsharp/issues/4631)). A repository
+  migration can now pin an exact `Gsharp.NET.Sdk` version, such as a published
+  release, instead of the newest locally built package, and can write that pin
+  under `msbuild-sdks` in the migrated repository's root and nested
+  `global.json` files instead of into every generated project file. All nested
+  scopes use the same version while retaining their other settings.
+  `cs2gs validate` follows the pin recorded in the migrated tree, rejects
+  missing or conflicting nested pins, and accepts `--sdk-version` to check it.
+  SDK attributes, explicit SDK elements, and SDK imports participate in pin
+  rebinding and validation without dropping unrelated SDKs in translated or
+  excluded projects. Global-json migration canonicalizes existing root pins.
+  Copied native `.gsproj` files use the same pin; template payloads, including
+  project/item templates and their `global.json` files, remain untouched.
+  Per-project validation rejects bare G# SDK declarations instead of silently
+  resolving a different SDK, and rejects root or nested global pins that would
+  mix pin modes. Bootstrap projects are rebound even with existing root SDKs,
+  without dropping unrelated SDK declarations.
+  Isolated stage-4 parity projects retain the resolved version, including when
+  the exact package must be restored from NuGet instead of a local build.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values
@@ -192,6 +212,7 @@ Before moving an application to a different compiler version, pin the intended S
 
 ### Fixed
 
+- **A non-`open` class may declare a `protected override`, and cs2gs keeps the inheritance shape of public C# classes** (issue [#4674](https://github.com/DavidObando/gsharp/issues/4674)). `protected` on a member of a non-`open` class is still `GS0380`, except on an `override` method, property or event, whose accessibility the base member dictates; a `sealed class Lowerer : BoundTreeRewriter` can now keep overriding the base's protected hooks while staying CLR-sealed. cs2gs used to seal every class with no in-project subclass, which silently sealed public types that other assemblies (analyzers, for GSharp.Core) derive from. It now emits `open` for every C# class that is not `sealed` and is reachable from another assembly, and keeps a C# `sealed` class (including a sealed record, whose synthesized `protected` members never needed `open`) non-`open`. Migrated output therefore gains `open` on public non-sealed classes in every project.
 - **A ref-returning local function that captures outer state no longer emits a program that crashes with `AccessViolationException`** (issue [#4580](https://github.com/DavidObando/gsharp/issues/4580)). gsc emits a capturing `let At = func (i int32) ref int32 { return ref data[i] }` as the `Invoke` method of a closure class. That method was declared to return by value while its body returned a managed pointer, and the caller stored the result as one, so writing through the alias crashed the process. `Invoke` now carries the literal's `ref` / `ref readonly` return, for captured locals, parameters, `this` fields, nested literals and literals inside struct members.
   - **A ref-returning literal inside a struct member that returns a reference into `this` now reports `GS0254`.** The closure holds a copy of `this`, so the reference would alias the copy, not the caller's struct. Before, an `@UnscopedRef` member let `return ref this.n` compile, along with forwarding forms such as `return ref this.Slot()`, and writes through the reference were silently lost. **Remedy:** return a reference into heap storage (an array element or a class field), or make the literal a member function.
 - **A type can now implement the static abstract and static virtual members of an imported .NET interface** (issue [#4614](https://github.com/DavidObando/gsharp/issues/4614)). The runtime never matches a static interface member by name, and gsc bound static interface members only for G#-declared interfaces. So `struct SD : IS { shared { func Z() int32 { ... } } }` over an imported `interface IS { static abstract int Z(); }` failed to load with a `TypeLoadException`, a `shared` member overriding a static virtual's default was ignored, and `class DZ : BaseS, IS2`, where the imported `BaseS` already implements `IS`, silently ran `BaseS.Z`. gsc now binds each such member, including static properties, static events and members inherited through a base interface, to the type's static member of the same name and signature, as the C# compiler does, except that the member may have any accessibility (C# requires an implicit implementation to be public; G# already applies this rule to its own interfaces). An explicit-interface member such as `func (IB) Z()` no longer counts as an implementation of another interface's `Z`, for G# interfaces as well. A type that declares only `func (IB) Z()` while also listing `IA` with a static `Z` now reports `GS0331`; before, the explicit member was silently bound to `IA.Z` too.
