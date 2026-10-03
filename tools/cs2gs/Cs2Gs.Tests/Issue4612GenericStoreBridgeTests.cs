@@ -1333,6 +1333,75 @@ public class Issue4612GenericStoreBridgeTests
     }
 
     [Fact]
+    public void TypeParameterTupleLeaves_AreReportedForDeclarationsReturnsAndArguments()
+    {
+        string source = """
+            #nullable enable
+            public class Box<T> where T : class
+            {
+                private static T? FieldSource;
+                private static T? PropertySource;
+                public static ((T, int), string) Field = ((FieldSource, 1), "");
+                public static (T, string) Property => (PropertySource, "");
+                public static (T, string) Result(T? returned) => (returned, "");
+                public static (T, string) Local(T? localValue)
+                {
+                    (T, string) local = (localValue, "");
+                    return local;
+                }
+                private static U Echo<U>((U, string) pair) => pair.Item1;
+                public static T Argument(T? argument) => Echo<T>((argument, ""));
+                public static string Closed(string? closed) => Echo<string>((closed, ""));
+                public static (string, string) Concrete(string? negative) => (negative, "");
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("FieldSource!!", printed, StringComparison.Ordinal);
+        Assert.Contains("PropertySource!!", printed, StringComparison.Ordinal);
+        Assert.Contains("returned!!", printed, StringComparison.Ordinal);
+        Assert.Contains("localValue!!", printed, StringComparison.Ordinal);
+        Assert.Contains("argument!!", printed, StringComparison.Ordinal);
+        Assert.Contains("closed!!", printed, StringComparison.Ordinal);
+        Assert.Contains("negative!!", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                Expected(source, "FieldSource,") + " kind=type-parameter-tuple-element | target=Box<T>.Field | slot-type=T",
+                Expected(source, "PropertySource,") + " kind=type-parameter-tuple-element | target=Box<T>.Property | slot-type=T",
+                Expected(source, "returned,") + " kind=type-parameter-tuple-element | target=Box<T>.Result(T?) | slot-type=T",
+                Expected(source, "localValue,") + " kind=type-parameter-tuple-element | target=local | slot-type=T",
+                Expected(source, "argument,") + " kind=type-parameter-tuple-element | target=Box<T>.Echo<T>((T, string)) parameter 'pair' | slot-type=T",
+                Expected(source, "closed,") + " kind=type-parameter-tuple-element | target=Box<T>.Echo<string>((string, string)) parameter 'pair' | slot-type=string",
+            },
+            sites.Select(site => Position(site) + " " + site.Message.Substring(0, site.Message.IndexOf(" (", StringComparison.Ordinal))));
+        Assert.All(sites.Take(5), site => Assert.Contains(" | slot-type=T (NotAnnotated)", site.Message, StringComparison.Ordinal));
+        Assert.Contains("result-depends-on-slot=yes", sites[4].Message, StringComparison.Ordinal);
+        Assert.Contains("result-depends-on-slot=yes", sites[5].Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WrappedForgivenTupleLeaf_ReportsItsNullableTypeParameterDestination()
+    {
+        string source = """
+            #nullable enable
+            public static class C
+            {
+                public static (T?, string) Result<T>(string? value) where T : class => (value! as T, "");
+            }
+            """;
+        (string printed, List<TranslationDiagnostic> sites) = Translate(source, nullableContext: NullableContextOptions.Enable);
+
+        Assert.Contains("value!!", printed, StringComparison.Ordinal);
+        TranslationDiagnostic site = Assert.Single(sites);
+        Assert.Equal(Expected(source, "value!"), Position(site));
+        Assert.StartsWith(
+            "kind=forgiven,type-parameter-tuple-element | target=C.Result<T>(string?) | slot-type=T? (Annotated)",
+            site.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReportOnce_KeepsOneDiagnosticPerIdAndPosition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", "class C { }") });
