@@ -223,6 +223,15 @@ internal sealed class ImportedMemberRefFactory
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
+        // Interface aliases use the same reified element in opcode tokens
+        // as in signatures, including source-defined and open elements.
+        if (element is SequenceTypeSymbol or AsyncSequenceTypeSymbol)
+        {
+            var sigBlob = new BlobBuilder();
+            this.signatures.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), element);
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        }
+
         if (element is ImportedTypeSymbol symbolicImported
             && !symbolicImported.TypeArguments.IsDefaultOrEmpty
             && !symbolicImported.HasTypeParameterArgument

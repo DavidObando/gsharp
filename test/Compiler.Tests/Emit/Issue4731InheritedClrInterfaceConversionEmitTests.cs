@@ -9,6 +9,8 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Threading;
+using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
@@ -19,6 +21,147 @@ namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SymbolicSequenceInterfaces_BoxUnboxAndCheckActualRuntimeShape(bool asynchronous)
+    {
+        using var fixture = new Fixture();
+        string wrapper = asynchronous ? "AsyncValue[Kind]" : "ImmutableArray[Kind]";
+        string alias = asynchronous ? "async sequence[Kind]" : "sequence[Kind]";
+        string alternate = asynchronous ? "AsyncReference[Kind]" : "[]Kind";
+        string factory = asynchronous ? "AsyncValue[Kind](Kind.Second)" : "ImmutableArray.Create(Kind.Second)";
+        string openAlias = asynchronous ? "async sequence[TElement]" : "sequence[TElement]";
+        string selfAlias = asynchronous ? "async sequence[T]" : "sequence[T]";
+        var result = fixture.Compile($$"""
+            package Issue4731.SymbolicInterfaceEmission
+            import System.Collections.Immutable
+            import Issue4731.Contracts
+            enum Kind { First, Second }
+
+            class Counter {
+                var Calls int32 = 0
+                func Next() {{wrapper}} {
+                    Calls = Calls + 1
+                    return {{factory}}
+                }
+            }
+            public func Values() {{wrapper}} -> {{factory}}
+            public func Box(value {{wrapper}}) {{alias}} -> value
+            public func Unbox(value {{alias}}) {{wrapper}} -> cast[{{wrapper}}](value)
+            public func Checked[T](value T) {{alias}} -> cast[{{alias}}](value)
+            public func CheckedOpen[TSource, TElement](value TSource) {{openAlias}} -> cast[{{openAlias}}](value)
+            public func CheckedSelf[T](value T) {{selfAlias}} -> cast[{{selfAlias}}](value)
+            public func Merge(first bool, value {{wrapper}}, other {{alternate}}) {{alias}} ->
+                if first { value } else { other }
+            public func CountCalls() int32 {
+                let counter = Counter()
+                let converted {{alias}} = counter.Next()
+                return counter.Calls
+            }
+            """);
+        Assert.True(result.ExitCode == 0, result.Output);
+        IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
+        var assembly = EmittedFixture.Load(result.AssemblyPath);
+        var kind = Assert.Single(assembly.GetTypes(), type => type.Name == "Kind");
+        var interfaceType = (asynchronous ? typeof(IAsyncEnumerable<>) : typeof(IEnumerable<>)).MakeGenericType(kind);
+        var values = Assert.IsAssignableFrom<object>(FindMethod(assembly, "Values").Invoke(null, null));
+        var wrapperType = values.GetType();
+        var box = FindMethod(assembly, "Box");
+        var unbox = FindMethod(assembly, "Unbox");
+        var checkedCast = FindMethod(assembly, "Checked");
+        var checkedOpen = FindMethod(assembly, "CheckedOpen");
+        var checkedSelf = FindMethod(assembly, "CheckedSelf");
+        Assert.Equal(interfaceType, box.ReturnType);
+        Assert.Equal(interfaceType, Assert.Single(unbox.GetParameters()).ParameterType);
+        Assert.Equal(wrapperType, unbox.ReturnType);
+        Assert.Equal(1, FindMethod(assembly, "CountCalls").Invoke(null, null));
+
+        object boxed = Assert.IsAssignableFrom<object>(box.Invoke(null, new[] { values }));
+        Assert.Equal(values, unbox.Invoke(null, new[] { boxed }));
+        Assert.Same(boxed, checkedCast.MakeGenericMethod(interfaceType).Invoke(null, new[] { boxed }));
+        object genericBox = Assert.IsAssignableFrom<object>(
+            checkedCast.MakeGenericMethod(wrapperType).Invoke(null, new[] { values }));
+        Assert.Equal(values, unbox.Invoke(null, new[] { genericBox }));
+        Assert.Equal(values, unbox.Invoke(null, new[]
+        {
+            checkedOpen.MakeGenericMethod(wrapperType, kind).Invoke(null, new[] { values }),
+        }));
+        Assert.Same(boxed, checkedOpen.MakeGenericMethod(interfaceType, kind).Invoke(null, new[] { boxed }));
+        var selfCast = Assert.Throws<TargetInvocationException>(
+            () => checkedSelf.MakeGenericMethod(kind).Invoke(null, new[] { Enum.ToObject(kind, 1) }));
+        Assert.IsType<InvalidCastException>(selfCast.InnerException);
+        foreach (var (type, value) in new[] { (typeof(object), new object()), (kind, Enum.ToObject(kind, 1)) })
+        {
+            var exception = Assert.Throws<TargetInvocationException>(
+                () => checkedCast.MakeGenericMethod(type).Invoke(null, new[] { value }));
+            Assert.IsType<InvalidCastException>(exception.InnerException);
+        }
+
+        object other;
+        if (asynchronous)
+        {
+            var reference = FindMethod(assembly, "Merge").GetParameters()[2].ParameterType;
+            Assert.Equal("Issue4731.Contracts.AsyncReference`1", reference.GetGenericTypeDefinition().FullName);
+            Assert.Equal(kind, Assert.Single(reference.GetGenericArguments()));
+            other = Assert.IsAssignableFrom<object>(
+                Activator.CreateInstance(reference, Enum.ToObject(kind, 1)));
+            var getEnumerator = interfaceType.GetMethod("GetAsyncEnumerator");
+            Assert.NotNull(getEnumerator);
+            object enumerator = Assert.IsAssignableFrom<object>(
+                getEnumerator.Invoke(genericBox, new object[] { CancellationToken.None }));
+            var enumeratorType = typeof(IAsyncEnumerator<>).MakeGenericType(kind);
+            var moveNext = enumeratorType.GetMethod("MoveNextAsync");
+            var current = enumeratorType.GetProperty("Current");
+            Assert.NotNull(moveNext);
+            Assert.NotNull(current);
+            Assert.True(await Assert.IsType<ValueTask<bool>>(moveNext.Invoke(enumerator, null)));
+            Assert.Equal(1, Convert.ToInt32(current.GetValue(enumerator)));
+            Assert.False(await Assert.IsType<ValueTask<bool>>(moveNext.Invoke(enumerator, null)));
+            await Assert.IsAssignableFrom<IAsyncDisposable>(enumerator).DisposeAsync();
+        }
+        else
+        {
+            var array = Array.CreateInstance(kind, 1);
+            array.SetValue(Enum.ToObject(kind, 1), 0);
+            other = array;
+            var item = Assert.Single(Assert.IsAssignableFrom<System.Collections.IEnumerable>(genericBox).Cast<object>());
+            Assert.Equal(1, Convert.ToInt32(item));
+        }
+
+        var wrongUnbox = Assert.Throws<TargetInvocationException>(() => unbox.Invoke(null, new[] { other }));
+        Assert.IsType<InvalidCastException>(wrongUnbox.InnerException);
+        var merge = FindMethod(assembly, "Merge");
+        Assert.Equal(values, unbox.Invoke(null, new[] { merge.Invoke(null, new[] { (object)true, values, other }) }));
+        Assert.Same(other, merge.Invoke(null, new[] { (object)false, values, other }));
+        foreach (var (method, opcode, tokenType) in new[]
+        {
+            (box, OpCodes.Box, wrapperType),
+            (unbox, OpCodes.Unbox_Any, wrapperType),
+            (checkedCast, OpCodes.Box, checkedCast.GetGenericArguments()[0]),
+            (checkedCast, OpCodes.Castclass, interfaceType),
+            (checkedOpen, OpCodes.Box, checkedOpen.GetGenericArguments()[0]),
+            (checkedOpen, OpCodes.Castclass, interfaceType.GetGenericTypeDefinition().MakeGenericType(checkedOpen.GetGenericArguments()[1])),
+            (checkedSelf, OpCodes.Box, checkedSelf.GetGenericArguments()[0]),
+            (checkedSelf, OpCodes.Castclass, interfaceType.GetGenericTypeDefinition().MakeGenericType(checkedSelf.GetGenericArguments()[0])),
+        })
+        {
+            var body = Assert.IsAssignableFrom<MethodBody>(method.GetMethodBody());
+            var bytes = Assert.IsType<byte[]>(body.GetILAsByteArray());
+            var instruction = Assert.Single(IlInstructionReader.Read(bytes), instruction => instruction.OpCode == opcode);
+            Assert.Equal(
+                tokenType,
+                method.Module.ResolveType(
+                    BitConverter.ToInt32(bytes, instruction.Offset + instruction.OpCode.Size),
+                    null,
+                    method.GetGenericArguments()));
+        }
+
+        var mergeBody = Assert.IsAssignableFrom<MethodBody>(merge.GetMethodBody());
+        Assert.Equal(2, IlInstructionReader.Read(Assert.IsType<byte[]>(mergeBody.GetILAsByteArray()))
+            .Count(instruction => instruction.OpCode == OpCodes.Castclass));
+    }
+
     [Fact]
     public void SymbolicValueWrapper_ExactDirectAndClosureConsumers_BoxActualValueShape()
     {
@@ -189,6 +332,34 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
         }
 
         public class SequenceOwner<T> : System.Collections.Generic.List<T> { }
+        public readonly struct AsyncValue<T> : System.Collections.Generic.IAsyncEnumerable<T>
+        {
+            private readonly T value;
+            public AsyncValue(T value) => this.value = value;
+            public System.Collections.Generic.IAsyncEnumerator<T> GetAsyncEnumerator(
+                System.Threading.CancellationToken cancellationToken = default) => new Reader(value);
+            private sealed class Reader : System.Collections.Generic.IAsyncEnumerator<T>
+            {
+                private bool ready = true;
+                public Reader(T value) => Current = value;
+                public T Current { get; }
+                public System.Threading.Tasks.ValueTask<bool> MoveNextAsync()
+                {
+                    bool result = ready;
+                    ready = false;
+                    return new System.Threading.Tasks.ValueTask<bool>(result);
+                }
+                public System.Threading.Tasks.ValueTask DisposeAsync() => default;
+            }
+        }
+        public sealed class AsyncReference<T> : System.Collections.Generic.IAsyncEnumerable<T>
+        {
+            private readonly T value;
+            public AsyncReference(T value) => this.value = value;
+            public System.Collections.Generic.IAsyncEnumerator<T> GetAsyncEnumerator(
+                System.Threading.CancellationToken cancellationToken = default) =>
+                new AsyncValue<T>(value).GetAsyncEnumerator(cancellationToken);
+        }
         public static class Producer
         {
             public static (T entry, int number) Pair<T>(T value, int number) => (value, number);

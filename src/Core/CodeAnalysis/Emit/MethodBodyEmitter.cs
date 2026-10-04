@@ -629,28 +629,11 @@ internal sealed partial class MethodBodyEmitter
             type = nullable.UnderlyingType;
         }
 
-        if (type is InterfaceSymbol)
-        {
-            return true;
-        }
-
-        return type?.ClrType != null && type.ClrType.IsInterface;
+        return Conversion.IsInterfaceLikeType(type);
     }
 
     private static bool IsInterfaceSourceType(TypeSymbol? type)
-    {
-        if (type is NullableTypeSymbol nullable)
-        {
-            type = nullable.UnderlyingType;
-        }
-
-        if (type is InterfaceSymbol)
-        {
-            return true;
-        }
-
-        return type?.ClrType != null && type.ClrType.IsInterface;
-    }
+        => IsInterfaceTargetType(type);
 
     private static bool IsExplicitUnboxingSourceType(TypeSymbol type)
     {
