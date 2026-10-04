@@ -844,7 +844,13 @@ internal sealed class ReflectionMetadataEmitter
         this.embeddedResources = embeddedResources;
         this.moduleInitializers = program is null
             ? ImmutableArray<FunctionSymbol>.Empty
-            : program.Functions.Keys.Where(IsModuleInitializer).ToImmutableArray();
+            : program.Functions.Keys
+                .Where(IsModuleInitializer)
+
+                // Issue #4663: the <Module> .cctor calls these in this order,
+                // so it must be deterministic (source order), never hash order.
+                .OrderBy(function => function, SymbolSourceOrderComparer.Instance)
+                .ToImmutableArray();
         this.cache = new MetadataTokenCache();
         this.remaps = new GenericRemapState();
         this.signatures = new SignatureEncoder(this);
@@ -3105,7 +3111,8 @@ internal sealed class ReflectionMetadataEmitter
             functionsByPackage[pkg] = [];
         }
 
-        foreach (var kvp in this.emitCtx.Program.Functions)
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var kvp in BoundProgramOrder.Functions(this.emitCtx.Program))
         {
             // Issue #3883: an AUTHORED async `Main` is NOT skipped here — it
             // needs its own ordinary (Task-returning) row alongside the
@@ -3184,7 +3191,7 @@ internal sealed class ReflectionMetadataEmitter
         // table is emitted in the same order every run.
         foreach (var pkgKey in functionsByPackage.Keys.ToList())
         {
-            functionsByPackage[pkgKey].Sort(FunctionEmitOrderComparer.Instance);
+            functionsByPackage[pkgKey].Sort(SymbolSourceOrderComparer.Instance);
         }
 
         // Phase 4 emit parity (E1): non-capture function literals are attached
@@ -5860,81 +5867,6 @@ internal sealed class ReflectionMetadataEmitter
     // functionDelegateInvokeRefCache) moved with the delegate MemberRef
     // producers to ImportedMemberRefFactory as its private fields, since they
     // were RME privates consumed solely by that band.
-
-    /// <summary>
-    /// Issue #456: deterministic ordering for FunctionSymbols emitted into
-    /// the MethodDef table. Sort first by the function's source declaration
-    /// start (so user-visible order matches source order), then by name
-    /// (Ordinal) for synthesized helpers that lack a Declaration or share a
-    /// span. This guarantees byte-identical MethodDef layout across
-    /// Compilation instances, which is required for byte-deterministic emit
-    /// (cf. <see cref="DebugInformationOptions.Deterministic"/>).
-    /// </summary>
-    private sealed class FunctionEmitOrderComparer : IComparer<FunctionSymbol>
-    {
-        public static readonly FunctionEmitOrderComparer Instance = new FunctionEmitOrderComparer();
-
-        private FunctionEmitOrderComparer()
-        {
-        }
-
-        public int Compare(FunctionSymbol? x, FunctionSymbol? y)
-        {
-            if (ReferenceEquals(x, y))
-            {
-                return 0;
-            }
-
-            if (x is null)
-            {
-                return -1;
-            }
-
-            if (y is null)
-            {
-                return 1;
-            }
-
-            int xPos = x.Declaration?.Span.Start ?? int.MaxValue;
-            int yPos = y.Declaration?.Span.Start ?? int.MaxValue;
-            int cmp = xPos.CompareTo(yPos);
-            if (cmp != 0)
-            {
-                return cmp;
-            }
-
-            cmp = string.CompareOrdinal(x.Name ?? string.Empty, y.Name ?? string.Empty);
-            if (cmp != 0)
-            {
-                return cmp;
-            }
-
-            // Final tiebreaker for distinct-but-otherwise-equal symbols (e.g.
-            // synthesized partial-method shadows): fall back to a stable
-            // signature string so equal-named overloads get a deterministic
-            // order even when source positions and names coincide.
-            return string.CompareOrdinal(FormatSignature(x), FormatSignature(y));
-        }
-
-        private static string FormatSignature(FunctionSymbol fn)
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.Append(fn.Type?.Name ?? "?");
-            sb.Append('(');
-            for (int i = 0; i < fn.Parameters.Length; i++)
-            {
-                if (i > 0)
-                {
-                    sb.Append(',');
-                }
-
-                sb.Append(fn.Parameters[i].Type?.Name ?? "?");
-            }
-
-            sb.Append(')');
-            return sb.ToString();
-        }
-    }
 
     // PR-E-11: BodyEmitter promoted to top-level MethodBodyEmitter
     // (src/Core/CodeAnalysis/Emit/MethodBodyEmitter.cs and partials).

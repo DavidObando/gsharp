@@ -227,6 +227,22 @@ Before moving an application to a different compiler version, pin the intended S
 - **A library no longer exports an empty public `<Program>` type per package, and a lifted nested delegate keeps the reach of its container** (issue [#4676](https://github.com/DavidObando/gsharp/issues/4676)). Every package of a G# assembly gets a synthesized `<Program>` host type that carries its top-level functions, and it was always `public`, so a library of types only exported one empty public host per namespace (22 in the GSharp.Core built from its G# translation, none in the C# build), visible to reflection-based tooling. The host is now `public` only when it carries a public top-level function or the compilation has an entry point (an executable keeps every host public); otherwise it is emitted non-public. Function literals and local functions hosted there do not count. cs2gs lifted a `public` delegate nested in an `internal` class to a top-level `public` delegate; it now emits `internal` unless the delegate and every type enclosing it are public. A `protected` or `protected internal` container also bounds the lifted delegate to `internal`, preserving legal inside-owner and derived uses without exporting a globally public type.
 - **A ref-returning local function that captures outer state no longer emits a program that crashes with `AccessViolationException`** (issue [#4580](https://github.com/DavidObando/gsharp/issues/4580)). gsc emits a capturing `let At = func (i int32) ref int32 { return ref data[i] }` as the `Invoke` method of a closure class. That method was declared to return by value while its body returned a managed pointer, and the caller stored the result as one, so writing through the alias crashed the process. `Invoke` now carries the literal's `ref` / `ref readonly` return, for captured locals, parameters, `this` fields, nested literals and literals inside struct members.
   - **A ref-returning literal inside a struct member that returns a reference into `this` now reports `GS0254`.** The closure holds a copy of `this`, so the reference would alias the copy, not the caller's struct. Before, an `@UnscopedRef` member let `return ref this.n` compile, along with forwarding forms such as `return ref this.Slot()`, and writes through the reference were silently lost. **Remedy:** return a reference into heap storage (an array element or a class field), or make the literal a member function.
+- **Synthesized names and orderings in `/deterministic` emit no longer depend on object identity**
+  (issue [#4663](https://github.com/DavidObando/gsharp/issues/4663)). Several
+  lowering passes numbered synthesized types while walking the program in an
+  order derived from object identity: capture boxes (`<>__Box_<name>_<n>`),
+  iterator and async state machines of same-named methods, managed-location
+  helpers and interpolation temporaries. Adding an unrelated file, reordering
+  files within a package, or building with a differently-built compiler
+  renumbered them, so the emitted assembly changed. Synthesized names now
+  follow the established MethodDef source key, with structural package, nested
+  type and overload identities breaking ties. The `<Module>` initializer calls
+  `[ModuleInitializer]` functions in that same deterministic order instead of
+  an unspecified one. This does not make
+  the assembly independent of input order in general: packages are kept in
+  first-seen syntax-tree order and emit assigns each package's `MethodDef`
+  rows in that order, so reversing files that belong to different packages can
+  still change the assembly.
 - **cs2gs keeps each C# file's header comment** (issue [#4653](https://github.com/DavidObando/gsharp/issues/4653)).
   - **Before:** a license or copyright block at the top of a C# file disappeared, because it sits before the first `using` or `namespace` rather than on a declaration.
   - **Now:** it opens the translated G# file with its text unchanged except that trailing whitespace is trimmed from each line and line endings are normalized to `\n`, followed by a blank line and the `package` declaration. A file split into several packages repeats it in each.

@@ -91,7 +91,9 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         var changed = false;
 
         var functions = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
-        foreach (var pair in program.Functions)
+
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var pair in BoundProgramOrder.Functions(program))
         {
             var newBody = (BoundBlockStatement)lowerer.RewriteStatement(pair.Value);
             functions[pair.Key] = newBody;
@@ -117,7 +119,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         foreach (var interfaceSym in program.Interfaces)
         {
             var initializers = interfaceSym.StaticFieldInitializers.ToBuilder();
-            foreach (var pair in interfaceSym.StaticFieldInitializers)
+            foreach (var pair in BoundProgramOrder.FieldInitializers(interfaceSym.StaticFieldInitializers))
             {
                 var rewritten = lowerer.RewriteExpression(pair.Value);
                 initializers[pair.Key] = rewritten;
@@ -791,7 +793,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
     {
         var changed = false;
         var staticInitializers = structSym.StaticFieldInitializers.ToBuilder();
-        foreach (var pair in structSym.StaticFieldInitializers)
+        foreach (var pair in BoundProgramOrder.FieldInitializers(structSym.StaticFieldInitializers))
         {
             var rewritten = this.RewriteExpression(pair.Value);
             staticInitializers[pair.Key] = rewritten;
@@ -801,7 +803,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         structSym.SetStaticFieldInitializers(staticInitializers.ToImmutable());
 
         var instanceInitializers = structSym.InstanceFieldInitializers.ToBuilder();
-        foreach (var pair in structSym.InstanceFieldInitializers)
+        foreach (var pair in BoundProgramOrder.FieldInitializers(structSym.InstanceFieldInitializers))
         {
             var rewritten = this.RewriteExpression(pair.Value);
             instanceInitializers[pair.Key] = rewritten;

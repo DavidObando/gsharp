@@ -362,13 +362,39 @@ public sealed class FunctionTypeSymbol : TypeSymbol
     /// parameter identities while still collapsing structurally identical
     /// signatures.
     /// </summary>
-    private static void AppendStructuralKey(System.Text.StringBuilder builder, TypeSymbol type)
+    /// <param name="builder">The key builder.</param>
+    /// <param name="type">The structural type.</param>
+    /// <param name="appendComponent">Component identity; defaults to process-local cache identity.</param>
+    /// <param name="appendLeaf">Leaf identity; defaults to process-local CLR identity.</param>
+    internal static void AppendStructuralKey(
+        System.Text.StringBuilder builder,
+        TypeSymbol type,
+        System.Action<System.Text.StringBuilder, TypeSymbol?>? appendComponent = null,
+        System.Action<System.Text.StringBuilder, TypeSymbol?>? appendLeaf = null)
     {
+        appendComponent ??= AppendIdentityKey;
+        appendLeaf ??= AppendNameOrClrIdentityKey;
         switch (type)
         {
+            case FunctionTypeSymbol function:
+                builder.Append("!function(");
+                for (var i = 0; i < function.ParameterTypes.Length; i++)
+                {
+                    if (!function.IsVariadic.IsDefaultOrEmpty && function.IsVariadic[i])
+                    {
+                        builder.Append("...");
+                    }
+
+                    appendComponent(builder, function.ParameterTypes[i]);
+                    builder.Append(',');
+                }
+
+                builder.Append(")->");
+                appendComponent(builder, function.ReturnType);
+                break;
             case NullableTypeSymbol n:
                 builder.Append("!nullable(");
-                AppendIdentityKey(builder, n.UnderlyingType);
+                appendComponent(builder, n.UnderlyingType);
                 builder.Append(')');
                 break;
             case PlatformTypeSymbol p2:
@@ -376,12 +402,12 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 // copy is reachable through the `ContainsTypeParameter` /
                 // same-compilation-user-type routes, which come here directly.
                 builder.Append("!platform(");
-                AppendIdentityKey(builder, p2.UnderlyingType);
+                appendComponent(builder, p2.UnderlyingType);
                 builder.Append(')');
                 break;
             case SliceTypeSymbol s:
                 builder.Append("!slice(");
-                AppendIdentityKey(builder, s.ElementType);
+                appendComponent(builder, s.ElementType);
                 builder.Append(')');
                 break;
             case ArrayTypeSymbol a:
@@ -390,17 +416,17 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 // and `[5]int32` (and `[]int32`, via the distinct `!slice` tag
                 // above) would otherwise collide.
                 builder.Append("!array(").Append(a.Length).Append(',');
-                AppendIdentityKey(builder, a.ElementType);
+                appendComponent(builder, a.ElementType);
                 builder.Append(')');
                 break;
             case RectangularArrayTypeSymbol a:
                 builder.Append("!mdarray(").Append(a.Rank).Append(',');
-                AppendIdentityKey(builder, a.ElementType);
+                appendComponent(builder, a.ElementType);
                 builder.Append(')');
                 break;
             case PinnedTypeSymbol p:
                 builder.Append("!pinned(");
-                AppendIdentityKey(builder, p.UnderlyingType);
+                appendComponent(builder, p.UnderlyingType);
                 builder.Append(')');
                 break;
             case NullabilityAnnotatedTypeSymbol na:
@@ -414,31 +440,31 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                     builder.Append(na.NullableFlags[i]).Append(',');
                 }
 
-                AppendIdentityKey(builder, na.BaseType);
+                appendComponent(builder, na.BaseType);
                 builder.Append(')');
                 break;
             case SequenceTypeSymbol seq:
                 builder.Append("!seq(");
-                AppendIdentityKey(builder, seq.ElementType);
+                appendComponent(builder, seq.ElementType);
                 builder.Append(')');
                 break;
             case AsyncSequenceTypeSymbol aseq:
                 builder.Append("!aseq(");
-                AppendIdentityKey(builder, aseq.ElementType);
+                appendComponent(builder, aseq.ElementType);
                 builder.Append(')');
                 break;
             case ChannelTypeSymbol channel:
                 builder.Append("!chan");
                 builder.Append((int)channel.Direction);
                 builder.Append('(');
-                AppendIdentityKey(builder, channel.ElementType);
+                appendComponent(builder, channel.ElementType);
                 builder.Append(')');
                 break;
             case MapTypeSymbol m:
                 builder.Append("!map(");
-                AppendIdentityKey(builder, m.KeyType);
+                appendComponent(builder, m.KeyType);
                 builder.Append(',');
-                AppendIdentityKey(builder, m.ValueType);
+                appendComponent(builder, m.ValueType);
                 builder.Append(')');
                 break;
             case TupleTypeSymbol tup:
@@ -450,7 +476,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                         builder.Append(',');
                     }
 
-                    AppendIdentityKey(builder, tup.ElementTypes[i]);
+                    appendComponent(builder, tup.ElementTypes[i]);
                 }
 
                 builder.Append(')');
@@ -482,12 +508,12 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 break;
             case ByRefTypeSymbol br:
                 builder.Append("!byref(");
-                AppendIdentityKey(builder, br.PointeeType);
+                appendComponent(builder, br.PointeeType);
                 builder.Append(')');
                 break;
             case PointerTypeSymbol pointer:
                 builder.Append("!ptr(");
-                AppendIdentityKey(builder, pointer.PointeeType);
+                appendComponent(builder, pointer.PointeeType);
                 builder.Append(')');
                 break;
             case FunctionPointerTypeSymbol functionPointer:
@@ -517,11 +543,11 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                         builder.Append(',');
                     }
 
-                    AppendIdentityKey(builder, functionPointer.ParameterTypes[i]);
+                    appendComponent(builder, functionPointer.ParameterTypes[i]);
                 }
 
                 builder.Append(")->");
-                AppendIdentityKey(builder, functionPointer.ReturnType);
+                appendComponent(builder, functionPointer.ReturnType);
                 builder.Append(')');
                 break;
             case StructSymbol st when !st.EnclosingTypeArguments.IsDefaultOrEmpty || !st.TypeArguments.IsDefaultOrEmpty:
@@ -535,7 +561,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                             builder.Append(',');
                         }
 
-                        AppendIdentityKey(builder, st.EnclosingTypeArguments[i]);
+                        appendComponent(builder, st.EnclosingTypeArguments[i]);
                     }
 
                     builder.Append('|');
@@ -548,7 +574,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                         builder.Append(',');
                     }
 
-                    AppendIdentityKey(builder, st.TypeArguments[i]);
+                    appendComponent(builder, st.TypeArguments[i]);
                 }
 
                 builder.Append(')');
@@ -562,7 +588,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                         builder.Append(',');
                     }
 
-                    AppendIdentityKey(builder, iface.TypeArguments[i]);
+                    appendComponent(builder, iface.TypeArguments[i]);
                 }
 
                 builder.Append(')');
@@ -576,11 +602,11 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                         builder.Append(',');
                     }
 
-                    AppendIdentityKey(builder, del.Parameters[i].Type);
+                    appendComponent(builder, del.Parameters[i].Type);
                 }
 
                 builder.Append(")->");
-                AppendIdentityKey(builder, del.ReturnType);
+                appendComponent(builder, del.ReturnType);
                 break;
             case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
                 builder.Append("!imported:").Append(it.OpenDefinition?.FullName ?? it.Name).Append('(');
@@ -591,7 +617,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                         builder.Append(',');
                     }
 
-                    AppendIdentityKey(builder, it.TypeArguments[i]);
+                    appendComponent(builder, it.TypeArguments[i]);
                 }
 
                 builder.Append(')');
@@ -601,7 +627,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 // composite kinds handled above (see AnyTypeParameter), so
                 // this default is unreachable in practice; keep the
                 // name-based fallback for safety.
-                AppendNameOrClrIdentityKey(builder, type);
+                appendLeaf(builder, type);
                 break;
         }
     }
