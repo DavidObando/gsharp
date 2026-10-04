@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Generic inference accepts a comparer implementing multiple closed interfaces when other arguments determine the key type** (issue #4780). Symbolic and CLR inference no longer treat a non-unique interface projection as a contradictory bound or choose its first interface. Typed identity selectors now bind the self-migrated symbol-ordering tests without changing the comparer or generated assertions; unfixed type arguments, incompatible interfaces and violated constraints remain rejected.
+
 - **cs2gs preserves null-observing local stores before `??` fallbacks** (issue [#4770](https://github.com/DavidObando/gsharp/issues/4770)). The shared nullable-usage scan now recognizes coalescing, including parenthesized observations, so an intentionally null params-slot classification reaches its `"not-reported"` fallback instead of throwing at an inserted assertion. Defensive coalescing does not widen fixed parameter or member contracts; explicit non-null bridges and generic-store diagnostics retain their existing policy.
 - **cs2gs preserves reference-array covariance inside null coalescing** (issue #4768). Derived/base array operands now use the shared explicit conversion path, with a nullable left cast that preserves nil until the fallback decision. The compiler accepts those nullable checked array casts, including nullable reference elements; array identity, result type and short-circuit evaluation are preserved, while G# slices remain implicitly invariant and incompatible value arrays or ranks remain rejected.
 
