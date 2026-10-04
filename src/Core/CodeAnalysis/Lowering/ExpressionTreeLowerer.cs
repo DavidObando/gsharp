@@ -822,8 +822,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.BinaryExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create(
                     UpcastToExpression(new BoundVariableExpression(null, local)),
-                    UpcastToExpression(this.TranslateExpression(
+                    UpcastToExpression(this.TranslateArgument(
                         Invariant.Required(declaration.Initializer, "a staged construction argument has an initializer"),
+                        declaration.Variable.Type,
                         locals)))));
         }
 

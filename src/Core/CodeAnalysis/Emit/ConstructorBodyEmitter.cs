@@ -608,7 +608,10 @@ internal sealed class ConstructorBodyEmitter
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         foreach (var field in classSym.Fields)
         {
-            if (classSym.InstanceFieldInitializers.TryGetValue(field, out var initExpr))
+            var initExpr = zeroInitialize
+                ? MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(null, classSym, field)
+                : classSym.InstanceFieldInitializers.GetValueOrDefault(field);
+            if (initExpr != null)
             {
                 var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, field, initExpr);
                 statements.Add(new BoundExpressionStatement(null, assignment));

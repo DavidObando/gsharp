@@ -364,6 +364,11 @@ Storage checks retain backing-field identity but classify a constructed
 auto-property using its substituted property type, not its definition's open
 backing-field type. The same storage reader is used for direct zero construction
 and recursive aggregate required-handle detection.
+The in-type zero-field provider is shared with emission and first checks the
+definition-owned field assignment. Property backing storage and a closed generic
+argument cannot invent a store absent from that constructor. Ordinary constructed
+structs retain their definition's validated initializer constructor, but its
+validation does not credit newly required slots introduced by a type argument.
 
 Handle assignment copies the handle value; it does not copy the referent.
 `var copy = *p` copies `T` normally. Promoting `copy` later identifies that

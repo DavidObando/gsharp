@@ -718,37 +718,13 @@ public sealed class StructSymbol : TypeSymbol
     internal bool ValueStructDefaultCtorIsZeroInitialization => !IsClass && IsData && HasPrimaryConstructor;
 
     /// <summary>
-    /// Gets a value indicating whether the class was declared with the
-    /// <c>abstract</c> modifier (ADR-0195 / issue #4674). Unlike the
-    /// member-derived <see cref="IsAbstract"/>, this is the author's explicit
-    /// statement, so a class with no abstract member can still be
-    /// uninstantiable (a migrated C# <c>abstract class</c> with only concrete
-    /// members). Such a class is inheritable: the binder gives it
-    /// <see cref="IsOpen"/>.
+    /// Gets a value indicating whether non-public value-struct field initializers require an
+    /// in-type default constructor rather than call-site field stores.
+    /// Constructed types share their definition's initializer-constructor policy.
     /// </summary>
-    internal bool IsDeclaredAbstract => IsClass && (Declaration?.IsAbstract ?? false);
-
-    /// <summary>
-    /// Gets a value indicating whether the class was declared with the
-    /// <c>shared</c> modifier (ADR-0195 / issue #4674): emitted CLR
-    /// <c>abstract sealed</c> with no instance constructor, every member shared,
-    /// the shape of a C# <c>static class</c>.
-    /// </summary>
-    internal bool IsSharedClass => IsClass && (Declaration?.IsShared ?? false);
-
-    /// <summary>
-    /// Gets a value indicating whether value-struct field initializers require an
-    /// in-type constructor for accessibility, generic ownership, or primary
-    /// parameter scope. A primary type uses its parameterized constructor.
-    /// Definition-bound expressions must execute in their owning generic
-    /// context, not in a literal site's unrelated VAR/MVAR scope (#4755).
-    /// Imported collection defaults retain their existing CLR literal path;
-    /// their owning constructor cannot be synthesized in this compilation.
-    /// </summary>
-    internal bool NeedsSynthesizedValueStructDefaultCtor => Definition != null && !ReferenceEquals(Definition, this)
-        ? Definition.NeedsSynthesizedValueStructDefaultCtor
-        : ClrType == null
-        && !IsClass
+    internal bool NeedsSynthesizedValueStructDefaultCtor =>
+        !ReferenceEquals(Definition, this) ? Definition.NeedsSynthesizedValueStructDefaultCtor :
+        !IsClass
         && !IsInline
         && !InstanceFieldInitializers.IsEmpty
         && (IsGenericDefinition
@@ -2005,6 +1981,15 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         return SubstituteTypeForConstruction(type, GetSubstitutionMap(), mapClrType);
+    }
+
+    /// <summary>Resolves a bound instance field to its definition-owned identity.</summary>
+    /// <param name="field">The field in this declaring construction.</param>
+    /// <returns>The corresponding declared field, or null for storage outside the field list.</returns>
+    internal FieldSymbol? GetDefinitionField(FieldSymbol field)
+    {
+        var index = Fields.IndexOf(field);
+        return index < 0 ? null : Definition.Fields[index];
     }
 
     /// <summary>

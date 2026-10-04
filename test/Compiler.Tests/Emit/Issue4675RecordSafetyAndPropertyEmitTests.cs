@@ -370,6 +370,163 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
         Assert.Equal(managed ? "7\n0\n" : "0\n0\n", fixture.Run(dll));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PositionalNestedStorage_IsNotAnInTypeZeroField(bool generic)
+    {
+        Reject("""
+            package PositionalNestedZero
+            struct Inner {
+                private let Reference readonly managed[int32] = {
+                    var value = 7
+                    readonly managed(value)
+                }
+                private var Items []int32
+            }
+            data struct OuterGENERIC(Nested PARAMETER) { private var Items []int32 }
+            func Main() { DECLARATION }
+            """.Replace("GENERIC", generic ? "[T]" : string.Empty, StringComparison.Ordinal)
+                .Replace("PARAMETER", generic ? "T" : "Inner", StringComparison.Ordinal)
+                .Replace("DECLARATION", generic ? "var outer Outer[Inner]" : "var outer Outer", StringComparison.Ordinal),
+            generic ? "var outer Outer[Inner]" : "var outer Outer");
+    }
+
+    [Fact]
+    public void PositionalNestedStorage_ExplicitPrimaryArgumentRemainsInitialized()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package ExplicitPositionalNested
+            import System
+            struct Inner {
+                private let Reference readonly managed[int32] = {
+                    var value = 7
+                    readonly managed(value)
+                }
+                private var Items []int32
+                public func Read() int32 -> *Reference
+            }
+            data struct Outer(Nested Inner) { private var Items []int32 }
+            func Main() {
+                var inner Inner
+                let outer = Outer{Nested: inner}
+                Console.WriteLine(outer.Nested.Read())
+            }
+            """, "ExplicitPositionalNested", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DataZeroHelper_DoesNotCreditStorageAbsentFromItsDefinition(bool genericField)
+    {
+        Reject("""
+            package DefinitionOwnedZero
+            struct Inner {
+                private let Reference readonly managed[int32] = {
+                    var value = 7
+                    readonly managed(value)
+                }
+                private var Items []int32
+            }
+            data struct OuterGENERIC(Value int32) {
+                STORAGE
+                private var Items []int32
+            }
+            func Main() { DECLARATION }
+            """.Replace("GENERIC", genericField ? "[T]" : string.Empty, StringComparison.Ordinal)
+                .Replace("STORAGE", genericField ? "private var Nested T" : "public prop Nested Inner { get; init; }", StringComparison.Ordinal)
+                .Replace("DECLARATION", genericField ? "var outer Outer[Inner]" : "var outer Outer", StringComparison.Ordinal),
+            genericField ? "var outer Outer[Inner]" : "var outer Outer");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstructedOrdinaryZero_RetainsItsValidatedDefinitionConstructor(bool nested)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package ConstructedOrdinaryZero
+            import System
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return 7
+                    }
+                }
+            }
+            struct Inner[T] {
+                private let Reference readonly managed[int32] = {
+                    var value = Counter.Next()
+                    readonly managed(value)
+                }
+                private var Items []T
+                public func Read() int32 -> *Reference
+                public func Length() int32 -> Items.Length
+            }
+            data struct Outer(Value int32) { private var Nested Inner[int32]
+                private var Items []int32
+                public func Read() int32 -> Nested.Read()
+                public func Length() int32 -> Nested.Length()
+            }
+            func Main() {
+                DECLARATION
+                Console.WriteLine(item.Read())
+                Console.WriteLine(item.Length())
+                Console.WriteLine(Counter.Count)
+            }
+            """.Replace("DECLARATION", nested ? "var item Outer" : "var item Inner[int32]", StringComparison.Ordinal),
+            "ConstructedOrdinaryZero", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n0\n1\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData("public var Handle T")]
+    [InlineData("public prop Handle T { get; init; }")]
+    public void ConstructedOrdinaryZero_DoesNotCreditANewlyRequiredSlot(string storage)
+    {
+        Reject("""
+            package ConstructedOrdinaryRequiredZero
+            struct Box[T] {
+                STORAGE
+                private var Items []int32
+            }
+            func Main() { var box Box[readonly managed[int32]] }
+            """.Replace("STORAGE", storage, StringComparison.Ordinal),
+            "var box Box[readonly managed[int32]]");
+    }
+
+    [Theory]
+    [InlineData("data struct")]
+    [InlineData("data class")]
+    public void StagedExpressionTreeArgument_RetainsItsRequiredQuote(string kind)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package QuotedRecordArgument
+            import System
+            import System.Linq.Expressions
+            KIND Box(Selector Expression[Func[int32, int32]])
+            func Main() {
+                let tree Expression[Func[Box]] = () -> Box{Selector: (x int32) -> x + 1}
+                let box = tree.Compile()()
+                Console.WriteLine(box.Selector.Compile()(41))
+                let block = tree.Body as BlockExpression
+                let assignment = block!!.Expressions[0] as BinaryExpression
+                Console.WriteLine(assignment!!.Right.NodeType == ExpressionType.Quote)
+            }
+            """.Replace("KIND", kind, StringComparison.Ordinal), "QuotedRecordArgument", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("42\nTrue\n", fixture.Run(dll));
+    }
+
     private static void Reject(string source, string anchor)
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

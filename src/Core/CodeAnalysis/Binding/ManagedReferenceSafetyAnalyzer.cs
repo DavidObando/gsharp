@@ -430,21 +430,25 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     {
         if (zeroValue != null)
         {
-            if (type.NeedsSynthesizedValueStructDefaultCtor && !type.ValueStructDefaultCtorIsZeroInitialization)
-            {
-                // Ordinary structs retain their validated in-type initializer
-                // constructor. Positional data zero helpers do not run it.
-                return;
-            }
-
+            var validatedInitializers = type.NeedsSynthesizedValueStructDefaultCtor && !type.ValueStructDefaultCtorIsZeroInitialization;
+            var declaredStorage = validatedInitializers ? InstanceStorageTypes(type.Definition) : null;
             var supplied = zeroValue.Initializers.Select(initializer => initializer.Field ?? initializer.Property?.BackingField)
                 .OfType<FieldSymbol>().ToHashSet();
             foreach (var storage in InstanceStorageTypes(type))
             {
                 if (!supplied.Contains(storage.Key) && this.RequiredHandle(storage.Value) != null)
                 {
+                    // A validated ordinary constructor proves the definition's
+                    // required slots, not additional obligations introduced by T.
+                    var declaredField = type.GetDefinitionField(storage.Key) ?? storage.Key;
+                    if (declaredStorage != null && declaredStorage.TryGetValue(declaredField, out var declaredType)
+                        && this.RequiredHandle(declaredType) != null)
+                    {
+                        continue;
+                    }
+
                     if (type.ValueStructDefaultCtorIsZeroInitialization
-                        && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, storage.Value) is { } helperValue)
+                        && MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(zeroValue.Syntax, type, storage.Key) is { } helperValue)
                     {
                         this.VisitExpression(helperValue);
                     }

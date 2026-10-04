@@ -125,6 +125,29 @@ internal static class MagicCollectionZeroValue
         => type is ChannelTypeSymbol || ManagedReferenceTypes.TryGetElement(type, out _, out _);
 
     /// <summary>
+    /// Synthesizes a field value only when the definition's in-type zero
+    /// constructor actually writes that storage.
+    /// </summary>
+    /// <param name="syntax">The originating zero-value syntax.</param>
+    /// <param name="owner">The actual declaring construction.</param>
+    /// <param name="field">The bound storage identity.</param>
+    /// <returns>The constructed field's zero value, or null for untouched storage.</returns>
+    internal static BoundExpression? TrySynthesizeInTypeZeroField(SyntaxNode? syntax, StructSymbol owner, FieldSymbol field)
+    {
+        // Constructed fields preserve definition order; property backing fields
+        // are not in this list. A closed T must not invent a definition-time store.
+        if (owner.GetDefinitionField(field) is not { } definitionField)
+        {
+            return null;
+        }
+
+        var value = TrySynthesizeEmptyInstance(syntax, definitionField.Type);
+        return value == null || ReferenceEquals(definitionField.Type, field.Type)
+            ? value
+            : TrySynthesizeEmptyInstance(syntax, field.Type);
+    }
+
+    /// <summary>
     /// Issue #3329: classifies a struct field's shape into the compact tag
     /// recorded by the <c>GSharp.MagicCollectionFields</c> cross-assembly
     /// metadata marker (see <see cref="Symbols.ImportedAssemblySemantics"/>).

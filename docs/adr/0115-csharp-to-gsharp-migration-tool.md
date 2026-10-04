@@ -131,6 +131,8 @@ primary constructor's parameter scope. Scalar literal inputs are prepared in
 written order; omitted primary arguments are retained as bound default children
 before rewriting and scratch-local planning, including struct-valued and open-generic
 defaults. Emission and expression trees consume those same prepared arguments.
+Staged expression-tree inputs use that local's expected type through the shared
+argument translator, retaining required lambda quotes and delegate adaptation.
 Named data-class and data-struct constructor expression trees use ordinary
 `NewExpression` constructor/argument semantics, without anonymous member metadata
 or inherited property-name lookup. Property-based anonymous literals retain
