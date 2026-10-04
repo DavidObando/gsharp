@@ -373,7 +373,7 @@ public sealed class ValidationManifest
                 continue;
             }
 
-            string producingRoot = original[..^suffix.Length];
+            string producingRoot = original[..^relative.Length];
             roots.Add(ProducingPathComparison(producingRoot) == StringComparison.OrdinalIgnoreCase
                 ? producingRoot.ToUpperInvariant()
                 : producingRoot);
@@ -391,20 +391,21 @@ public sealed class ValidationManifest
 
     private static string SourceRelativePath(string producingRoot, string original)
     {
-        string root = Normalize(producingRoot)?.TrimEnd('/');
+        string root = Normalize(producingRoot);
+        string prefix = root?.TrimEnd('/') + "/";
         string path = Normalize(original);
         if (string.IsNullOrEmpty(root) ||
             !(root.StartsWith("/", StringComparison.Ordinal) ||
                 (root.Length > 2 && char.IsLetter(root[0]) && root[1] == ':' && root[2] == '/')) ||
             root.Contains('\0', StringComparison.Ordinal) ||
             root.Split('/').Any(segment => segment is "." or "..") ||
-            !path.StartsWith(root + "/", ProducingPathComparison(root)))
+            !path.StartsWith(prefix, ProducingPathComparison(root)))
         {
             throw new InvalidOperationException(
                 $"Validation source '{original}' is outside producing corpus '{producingRoot}'.");
         }
 
-        string relative = path[(root.Length + 1)..];
+        string relative = path[prefix.Length..];
         ValidateRelativePath(relative);
         return relative;
     }

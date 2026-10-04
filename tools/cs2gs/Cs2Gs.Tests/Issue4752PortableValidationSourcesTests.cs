@@ -227,19 +227,26 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Validate_PortablePathsAcceptWindowsProducerProvenance(bool legacy)
+    [InlineData(false, @"C:\RUNNER\GSHARP")]
+    [InlineData(true, @"C:\RUNNER\GSHARP")]
+    [InlineData(false, "/")]
+    [InlineData(true, "/")]
+    [InlineData(false, @"C:\")]
+    [InlineData(true, @"C:\")]
+    [InlineData(false, @"\\SERVER\SHARE\")]
+    [InlineData(true, @"\\SERVER\SHARE\")]
+    public async Task Validate_PortablePathsAcceptProducerProvenance(bool legacy, string producingRoot)
     {
         Fixture fixture = this.CreateFixture(legacy);
         ValidationManifest manifest = ValidationManifest.Read(Path.GetDirectoryName(fixture.ManifestPath));
         Assert.NotNull(manifest);
         if (!legacy)
         {
-            manifest.SourceRoot = @"C:\RUNNER\GSHARP";
+            manifest.SourceRoot = producingRoot;
             manifest.SourceProjectPath = manifest.SourceProjectPath.Replace('/', '\\');
         }
 
+        string prefix = producingRoot.TrimEnd('/', '\\') + "\\";
         int index = 0;
         foreach (ValidationManifestFile file in manifest.EmittedFiles)
         {
@@ -249,7 +256,7 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
                 file.RelativeCsPath = relative;
             }
 
-            file.CsFilePath = (index++ % 2 == 0 ? @"c:\runner\gsharp\" : @"C:\RUNNER\GSHARP\") + relative;
+            file.CsFilePath = (index++ % 2 == 0 ? prefix.ToLowerInvariant() : prefix) + relative;
             file.Path = file.Path.Replace('/', '\\');
         }
 
