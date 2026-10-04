@@ -563,10 +563,184 @@ public sealed class Issue4755GenericStructInitializerEmitTests
         });
     }
 
+    [Theory]
+    [InlineData("Holder[readonly managed[int32]]{}", false)]
+    [InlineData("Holder[readonly managed[int32]]{}", true)]
+    [InlineData("Holder[managed[int32]]{}", false)]
+    [InlineData("Holder[managed[int32]]{}", true)]
+    [InlineData("Holder[Aggregate[readonly managed[int32]]]{}", false)]
+    [InlineData("Holder[Envelope]{}", false)]
+    [InlineData("Holder[[1]readonly managed[int32]]{}", false)]
+    [InlineData("Holder[(readonly managed[int32], int32)]{}", false)]
+    [InlineData("Outer[readonly managed[int32]].Inner{}", false)]
+    [InlineData("Container[Holder[readonly managed[int32]]]{Value: Holder[readonly managed[int32]]{}}", false)]
+    [InlineData("Pair[readonly managed[int32]]{First: Factory.Make()}", false)]
+    [InlineData("Nested[readonly managed[int32]]{Value: Factory.Make()}", false)]
+    public void MissingRequiredPrimaryInputs_ReportDefaultDiagnosticAtTheLiteral(string expression, bool declaredInitializer)
+    {
+        InDirectory(directory =>
+        {
+            var values = typeof(Gsharp.Values.ReadOnlyManagedRef<>).Assembly.Location;
+            var native = EmitCSharp(directory, "MissingPrimary4755", """
+                #nullable enable
+                namespace MissingPrimary4755;
+                public readonly struct Envelope(Gsharp.Values.ReadOnlyManagedRef<int> handle)
+                {
+                    public readonly Gsharp.Values.ReadOnlyManagedRef<int> Handle = handle;
+                }
+                public static class Factory
+                {
+                    public static Gsharp.Values.ReadOnlyManagedRef<int> Make() =>
+                        Gsharp.Values.ReadOnlyManagedRef<int>.FromArray(new[] { 7 }, 0);
+                }
+                """, values);
+            var source = $$"""
+                package MissingPrimary4755Controls
+                import MissingPrimary4755
+                struct Holder[T](Value T) {
+                    {{(declaredInitializer ? "private var Handles [1]T = [1]T{Value}" : string.Empty)}}
+                    public func Read() T -> {{(declaredInitializer ? "Handles[0]" : "Value")}}
+                }
+                struct Aggregate[T](Item T) { }
+                struct Container[T](Value T) { }
+                struct Pair[T](First T, Second T) { }
+                class Outer[T] { public struct Inner(Value T) { } }
+                struct Nested[T](Value T) {
+                    private var Storage Holder[T] = Holder[T]{}
+                    public func Read() T -> Storage.Read()
+                }
+                func Bad() {
+                    let item = {{expression}}
+                }
+                """;
+            var result = TryCompile(directory, source, native, values);
+            Assert.Equal(1, result.Code);
+            Assert.Contains("error GS0604:", result.Output, StringComparison.Ordinal);
+            Assert.Contains("default would synthesize a null non-null managed-reference slot", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", result.Output, StringComparison.Ordinal);
+            Assert.False(File.Exists(result.AssemblyPath));
+            var rejected = expression.StartsWith("Nested", StringComparison.Ordinal) ? "Holder[T]{}"
+                : expression.StartsWith("Container", StringComparison.Ordinal)
+                ? "Holder[readonly managed[int32]]{}"
+                : expression.StartsWith("Outer", StringComparison.Ordinal) ? "Inner{}" : expression;
+            var offset = source.LastIndexOf(rejected, StringComparison.Ordinal);
+            Assert.True(offset >= 0);
+            var line = source[..offset].Count(character => character == '\n') + 1;
+            var column = offset - source.LastIndexOf('\n', offset);
+            Assert.Contains($"Fixture.gs({line},{column},{line},{column + rejected.Length}): error GS0604:", result.Output, StringComparison.Ordinal);
+            Assert.Single(result.Output.Split('\n'), text => text.Contains("error GS0604:", StringComparison.Ordinal));
+        });
+    }
+
+    [Fact]
+    public void MissingLegalPrimaryInputs_AndExplicitRequiredInputsRetainNativeRuntime()
+    {
+        InDirectory(directory =>
+        {
+            var values = typeof(Gsharp.Values.ReadOnlyManagedRef<>).Assembly.Location;
+            var native = EmitCSharp(directory, "LegalPrimary4755", """
+                #nullable enable
+                namespace LegalPrimary4755;
+                public static class Factory
+                {
+                    public static Gsharp.Values.ReadOnlyManagedRef<int> ReadOnly() =>
+                        Gsharp.Values.ReadOnlyManagedRef<int>.FromArray(new[] { 7 }, 0);
+                    public static Gsharp.Values.ManagedRef<int> Writable() =>
+                        Gsharp.Values.ManagedRef<int>.FromArray(new[] { 8 }, 0);
+                    public static bool MissingReadOnlyArray(Gsharp.Values.ReadOnlyManagedRef<int>[]? values) => values == null;
+                    public static bool MissingNullableArray(Gsharp.Values.ReadOnlyManagedRef<int>?[]? values) => values == null;
+                }
+                public struct Aggregate<T>(T item) { public T Item = item; }
+                public struct Holder<T>(T value)
+                {
+                    public T Value = value;
+                    private readonly T copy = value;
+                    public T Read() => copy;
+                }
+                public struct Nested<T>(T value)
+                {
+                    private Holder<T> storage = new(default);
+                    public T Read() => storage.Read();
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var readOnly = new Holder<Gsharp.Values.ReadOnlyManagedRef<int>>(Factory.ReadOnly());
+                        var writable = new Holder<Gsharp.Values.ManagedRef<int>>(Factory.Writable());
+                        var nullable = new Holder<Gsharp.Values.ReadOnlyManagedRef<int>?>(null);
+                        var scalar = new Holder<int>(0);
+                        var text = new Holder<string?>(null);
+                        var aggregate = new Holder<Aggregate<Gsharp.Values.ReadOnlyManagedRef<int>>>(
+                            new Aggregate<Gsharp.Values.ReadOnlyManagedRef<int>>(Factory.ReadOnly()));
+                        var array = new Holder<Gsharp.Values.ReadOnlyManagedRef<int>[]>([Factory.ReadOnly()]);
+                        var zeroLength = new Holder<Gsharp.Values.ReadOnlyManagedRef<int>[]?>(null);
+                        var nullableArray = new Holder<Gsharp.Values.ReadOnlyManagedRef<int>?[]?>(null);
+                        var nestedScalar = new Nested<int>(3);
+                        var nestedNullable = new Nested<Gsharp.Values.ReadOnlyManagedRef<int>?>(null);
+                        return readOnly.Value.Borrow() + "/" + readOnly.Read().Borrow() + ";" +
+                            writable.Value.Borrow() + "/" + writable.Read().Borrow() + ";" +
+                            (nullable.Read() == null) + ";" + scalar.Read() + ";" + (text.Read() == null) + ";" +
+                            aggregate.Read().Item.Borrow() + ";" + array.Read()[0].Borrow() + ";" +
+                            Factory.MissingReadOnlyArray(zeroLength.Read()) + ";" + Factory.MissingNullableArray(nullableArray.Read()) +
+                            ";" + nestedScalar.Read() + ";" + (nestedNullable.Read() == null);
+                    }
+                }
+                """, values);
+            Assert.Equal("7/7;8/8;True;0;True;7;7;True;True;0;True", Invoke(EmittedFixture.LoadTogether(values, native).Last(), "LegalPrimary4755.Oracle"));
+            var emitted = Compile(directory, """
+                package LegalPrimary4755Controls
+                import LegalPrimary4755
+                struct Holder[T](Value T) {
+                    private let Copy T = Value
+                    public func Read() T -> Copy
+                }
+                struct Aggregate[T](Item T) { }
+                struct Nested[T](Value T) {
+                    private var Storage Holder[T] = Holder[T]{}
+                    public func Read() T -> Storage.Read()
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let readonly = Holder[readonly managed[int32]]{Value: Factory.ReadOnly()}
+                            let writable = Holder[managed[int32]](Factory.Writable())
+                            let nullable = Holder[readonly managed[int32]?]{}
+                            let scalar = Holder[int32]{}
+                            let text = Holder[string?]{}
+                            let nestedScalar = Nested[int32](3)
+                            let nestedNullable = Nested[readonly managed[int32]?]{}
+                            let aggregate = Holder[Aggregate[readonly managed[int32]]]{Value: Aggregate[readonly managed[int32]](Factory.ReadOnly())}
+                            let array = Holder[[1]readonly managed[int32]]{Value: [1]readonly managed[int32]{Factory.ReadOnly()}}
+                            let zeroLength = Holder[[0]readonly managed[int32]]{}
+                            let nullableArray = Holder[[1]readonly managed[int32]?]{}
+                            return (*readonly.Value).ToString() + "/" + (*readonly.Read()).ToString() + ";" +
+                                (*writable.Value).ToString() + "/" + (*writable.Read()).ToString() + ";" +
+                                (nullable.Read() == nil).ToString() + ";" + scalar.Read().ToString() + ";" +
+                                (text.Read() == nil).ToString() + ";" + (*aggregate.Read().Item).ToString() + ";" +
+                                (*array.Read()[0]).ToString() + ";" + Factory.MissingReadOnlyArray(zeroLength.Read()).ToString() + ";" +
+                                Factory.MissingNullableArray(nullableArray.Read()).ToString() + ";" +
+                                nestedScalar.Read().ToString() + ";" + (nestedNullable.Read() == nil).ToString()
+                        }
+                    }
+                }
+                """, native, values);
+            IlVerifier.Verify(emitted, new[] { native, values });
+            AssertNativeConsumer(directory, emitted, "LegalPrimary4755Controls.Api", "7/7;8/8;True;0;True;7;7;True;True;0;True", native, values);
+        });
+    }
+
     private static object Invoke(Assembly assembly, string typeName) =>
         assembly.GetType(typeName, throwOnError: true).GetMethod("Run").Invoke(null, null);
 
     private static string Compile(string directory, string source, params string[] references)
+    {
+        var result = TryCompile(directory, source, references);
+        Assert.True(result.Code == 0, result.Output);
+        return result.AssemblyPath;
+    }
+
+    private static (int Code, string AssemblyPath, string Output) TryCompile(string directory, string source, params string[] references)
     {
         var sourcePath = Path.Combine(directory, "Fixture.gs");
         var assemblyPath = Path.Combine(directory, "Fixture.dll");
@@ -582,15 +756,14 @@ public sealed class Issue4755GenericStructInitializerEmitTests
         {
             Console.SetOut(stdout);
             Console.SetError(stderr);
-            Assert.True(Program.Main(arguments) == 0, stdout.ToString() + stderr);
+            var code = Program.Main(arguments);
+            return (code, assemblyPath, stdout.ToString() + stderr);
         }
         finally
         {
             Console.SetOut(previousOut);
             Console.SetError(previousError);
         }
-
-        return assemblyPath;
     }
 
     private static string EmitCSharp(string directory, string name, string source, params string[] references)

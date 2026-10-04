@@ -151,12 +151,13 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             type.Definition.InstanceFieldInitializers.Values,
             ReferenceEqualityComparer.Instance);
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        var supplied = new Dictionary<string, BoundExpression>();
+        var supplied = new Dictionary<FieldSymbol, BoundExpression>();
         var remaining = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
-        var primaryFields = new HashSet<string>();
-        foreach (var parameter in type.PrimaryConstructorParameters)
+        var primaryArguments = node.GetPrimaryConstructorArguments();
+        var primaryFields = new HashSet<FieldSymbol>();
+        foreach (var argument in primaryArguments)
         {
-            primaryFields.Add(parameter.Name);
+            primaryFields.Add(argument.Field);
         }
 
         foreach (var initializer in node.Initializers)
@@ -167,10 +168,11 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             }
 
             var value = this.RewriteExpression(initializer.Value);
-            if (primaryFields.Contains(initializer.MemberName))
+            var target = initializer.Field ?? initializer.Property?.BackingField;
+            if (target != null && primaryFields.Contains(target))
             {
                 value = this.MaybeSpill(value, true, "primary", statements);
-                supplied[initializer.MemberName] = value;
+                supplied[target] = value;
                 continue;
             }
 
@@ -180,15 +182,12 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         }
 
         var arguments = ImmutableArray.CreateBuilder<BoundExpression>(type.PrimaryConstructorParameters.Length);
-        foreach (var parameter in type.PrimaryConstructorParameters)
+        foreach (var argument in primaryArguments)
         {
-            ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(type, parameter.Name, out var field);
-            var storage = Invariant.Required(field, "primary constructor parameters have corresponding fields");
-
             // Omitted primary fields retain the composite literal's CLR zero.
-            arguments.Add(supplied.TryGetValue(parameter.Name, out var value)
+            arguments.Add(supplied.TryGetValue(argument.Field, out var value)
                 ? value
-                : new BoundDefaultExpression(node.Syntax, storage.Type));
+                : argument.Value);
         }
 
         var construction = new BoundConstructorCallExpression(node.Syntax, type, arguments.MoveToImmutable());

@@ -2,9 +2,11 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
+using System.Linq;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
-using System.Collections.Immutable;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -30,4 +32,20 @@ public sealed class BoundStructLiteralExpression : BoundExpression
     public override TypeSymbol Type => StructType;
 
     public override BoundNodeKind Kind => BoundNodeKind.StructLiteralExpression;
+
+    internal ImmutableArray<(FieldSymbol Field, BoundExpression Value, bool IsSupplied)> GetPrimaryConstructorArguments()
+    {
+        var arguments = ImmutableArray.CreateBuilder<(FieldSymbol Field, BoundExpression Value, bool IsSupplied)>(
+            StructType.PrimaryConstructorParameters.Length);
+        foreach (var parameter in StructType.PrimaryConstructorParameters)
+        {
+            ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(StructType, parameter.Name, out var field);
+            var storage = Invariant.Required(field, "primary constructor parameters have corresponding fields");
+            var initializer = Initializers.FirstOrDefault(
+                candidate => candidate.Field == storage || candidate.Property?.BackingField == storage);
+            arguments.Add((storage, initializer?.Value ?? new BoundDefaultExpression(Syntax, storage.Type), initializer != null));
+        }
+
+        return arguments.MoveToImmutable();
+    }
 }

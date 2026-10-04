@@ -1047,7 +1047,11 @@ The semantics match C#:
   owning constructor: primary inputs are evaluated once, then declaration
   initializers run in declaration order, then explicit non-primary member
   writes run in literal order. Ordinary omitted primary fields keep the
-  literal's zero value. Other public-only, non-generic literals retain inline
+  literal's zero value where that default is legal. An omitted primary input
+  whose substituted type requires a non-null managed-reference slot (including
+  nested aggregates and nonempty fixed arrays) reports `GS0604`, just like an
+  explicit `default` of that type. Nullable handles remain legal defaults.
+  Other public-only, non-generic literals retain inline
   initialization for omitted fields. Raw `default(T)` and array element
   zero-initialization do not invoke these constructors.
 
