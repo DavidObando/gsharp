@@ -15,11 +15,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>Checks initialization and segment-local borrowed adapters without changing their ABI.</summary>
 internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 {
+    private const int MaxInitializerDepth = 64;
     private readonly DiagnosticBag diagnostics;
     private readonly Dictionary<TypeSymbol, TypeSymbol?> required = new();
     private readonly HashSet<VariableSymbol> managedLocations = new();
     private readonly HashSet<(FunctionSymbol Function, StructSymbol? InitializerOwner)> analyzedFunctions = new();
     private readonly HashSet<(StructSymbol Owner, BoundExpression Initializer)> activeInitializers = new();
+    private readonly HashSet<(StructSymbol Owner, BoundExpression Initializer, SyntaxNode? Anchor, bool ResultOverwritten, bool StateMachine)> completedInitializers = new();
     private StructSymbol? initializerOwner;
     private SyntaxNode? initializerAnchor;
     private BoundExpression? overwrittenInitializerResult;
@@ -709,22 +711,35 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void VisitConstructedInitializer(StructSymbol owner, BoundExpression site, BoundExpression initializer, bool resultOverwritten)
     {
-        if (!this.activeInitializers.Add((owner, initializer)))
+        var anchor = this.initializerAnchor ?? site.Syntax;
+        var completedKey = (owner, initializer, anchor, resultOverwritten, this.analyzingStateMachine);
+        if (this.completedInitializers.Contains(completedKey) || this.activeInitializers.Contains((owner, initializer)))
         {
             return;
         }
 
+        // Exact-owner cycles terminate above; growing type arguments need a finite bound.
+        if (this.activeInitializers.Count >= MaxInitializerDepth)
+        {
+            this.Report(site, $"constructor initializer validation exceeds the supported recursion depth of {MaxInitializerDepth}; simplify the recursive construction");
+            return;
+        }
+
+        this.activeInitializers.Add((owner, initializer));
         var previousOwner = this.initializerOwner;
         var previousAnchor = this.initializerAnchor;
         var previousOverwrittenResult = this.overwrittenInitializerResult;
         this.initializerOwner = owner;
-        this.initializerAnchor = previousAnchor ?? site.Syntax;
+        this.initializerAnchor = anchor;
 
         // A later store replaces this result, not the expressions executed to obtain it.
         this.overwrittenInitializerResult = resultOverwritten ? initializer : null;
         try
         {
             this.VisitExpression(initializer);
+
+            // Diagnostics already belong to this anchor; other sites must validate separately.
+            this.completedInitializers.Add(completedKey);
         }
         finally
         {

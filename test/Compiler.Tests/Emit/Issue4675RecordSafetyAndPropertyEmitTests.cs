@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -1412,6 +1413,152 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
             """, "*"), invalid);
     }
 
+    [Theory]
+    [InlineData("[]T")]
+    [InlineData("Node[T]")]
+    public void ConstructorInitializerValidation_RejectsExpandingOwnersWithoutCrashing(string argument)
+    {
+        Reject("""
+            package ExpandingOwners
+            class Flags { shared { public var Recurse bool } }
+            class Node[T] {
+                public var Next Node[ARGUMENT]? = Flags.Recurse ? Node[ARGUMENT]{} : nil
+            }
+            func Main() { let item = Node[int32]{} }
+            """.Replace("ARGUMENT", argument, StringComparison.Ordinal), "Node[int32]{}", isolated: true);
+    }
+
+    [Theory]
+    [InlineData(8)]
+    [InlineData(29)]
+    [InlineData(63)]
+    public void ConstructorInitializerValidation_SharedChildGraphCompilesWithinTimeout(int depth)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = TryCompileIsolated(fixture, SharedChildInitializerSource(depth), "SharedInitializerGraph");
+        Assert.True(code == 0, output);
+        var dll = Path.Combine(fixture.Directory, "SharedInitializerGraph.dll");
+        IlVerifier.Verify(dll);
+        Assert.Equal("True\n1\n1\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void ConstructorInitializerValidation_RejectsTheFirstUnsupportedInitializerDepth()
+    {
+        const string anchor = "Node64[readonly managed[int32]]{}";
+        var source = SharedChildInitializerSource(64);
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = TryCompileIsolated(fixture, source, "InitializerDepth");
+        Assert.True(code == 1, output);
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "InitializerDepth.dll")), output);
+        AssertDiagnosticAt(source, source.IndexOf(anchor, StringComparison.Ordinal), anchor, output, "GS0604");
+        Assert.Contains("supported recursion depth of 64", output, StringComparison.Ordinal);
+    }
+
+    private static string SharedChildInitializerSource(int depth)
+    {
+        var source = new StringBuilder("""
+            package SharedInitializerGraph
+            import System
+            class Flags {
+                shared {
+                    public var Recurse bool
+                    public var Calls int32
+                    public func Next() int32 {
+                        Calls += 1
+                        return Calls
+                    }
+                }
+            }
+            class Provider[T] { shared { public var Value T } }
+            class Node0[T] { public var Saved T = Provider[T].Value }
+
+            """);
+        for (var i = 1; i <= depth; i++)
+        {
+            source.AppendLine($"class Node{i}[T] {{");
+            source.AppendLine($"public var First Node{i - 1}[T]? = Flags.Recurse ? Node{i - 1}[T]{{}} : nil");
+            source.AppendLine($"public var Second Node{i - 1}[T]? = Flags.Recurse ? Node{i - 1}[T]{{}} : nil");
+            source.AppendLine("public var Marker int32 = Flags.Next()");
+            source.AppendLine("}");
+        }
+
+        source.AppendLine("func Main() {");
+        source.AppendLine("var value = 11");
+        source.AppendLine("Provider[readonly managed[int32]].Value = readonly managed(value)");
+        source.AppendLine($"let item = Node{depth}[readonly managed[int32]]{{}}");
+        source.AppendLine("Console.WriteLine(item.First == nil && item.Second == nil)");
+        source.AppendLine("Console.WriteLine(item.Marker)");
+        source.AppendLine("Console.WriteLine(Flags.Calls)");
+        source.AppendLine("}");
+        return source.ToString();
+    }
+
+    [Fact]
+    public void ConstructorInitializerValidation_ReportsEachConstructionSite()
+    {
+        const string source = """
+            package InitializerSites
+            class Holder[T] { private var Saved T = (func() T { return default(T) })() }
+            func Main() {
+                let first = Holder[readonly managed[int32]]{}
+                let second = Holder[readonly managed[int32]]{}
+            }
+            """;
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = fixture.TryCompile(source, "InitializerSites", true);
+        Assert.NotEqual(0, code);
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "InitializerSites.dll")), output);
+        foreach (var declaration in new[] { "let first = ", "let second = " })
+        {
+            var offset = source.IndexOf(declaration, StringComparison.Ordinal) + declaration.Length;
+            AssertDiagnosticAt(source, offset, "Holder[readonly managed[int32]]{}", output, "GS0604");
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstructorInitializerValidation_DistinguishesOverwrittenAndConsumedResults(bool supplySecond)
+    {
+        const string construction = "Wrapper[readonly managed[int32]]{}";
+        var source = """
+            package InitializerResults
+            import System
+            class Provider[T] { shared { public var Value T } }
+            struct Inner[T] {
+                public var Extra T
+                private var Items []int32
+            }
+            data struct Outer[T](Value int32) {
+                public var Nested Inner[T]
+                private var Items []int32
+            }
+            class Wrapper[T] {
+                public var First Outer[T] = Outer[T]{Nested: Inner[T]{Extra: Provider[T].Value}}
+                public var Second Outer[T] = SECOND
+            }
+            func Main() {
+                var value = 11
+                Provider[readonly managed[int32]].Value = readonly managed(value)
+                let item = CONSTRUCTION
+                Console.WriteLine(*item.First.Nested.Extra)
+                Console.WriteLine(*item.Second.Nested.Extra)
+            }
+            """.Replace("SECOND", supplySecond ? "Outer[T]{Nested: Inner[T]{Extra: Provider[T].Value}}" : "Outer[T](0)", StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal);
+        if (!supplySecond)
+        {
+            Reject(source, construction);
+            return;
+        }
+
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(source, "InitializerResults", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("11\n11\n", fixture.Run(dll));
+    }
+
     private static (int Code, string Output) TryCompileIsolated(NativeSliceLanguageTests.Fixture fixture, string source, string name)
     {
         var sourcePath = Path.Combine(fixture.Directory, name + ".gs");
@@ -1452,11 +1599,16 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "RejectedRecord.dll")), output);
         var offset = source.IndexOf(anchor, StringComparison.Ordinal);
         Assert.True(offset >= 0);
-        var line = 1 + source[..offset].Count(c => c == '\n');
-        var column = offset - source.LastIndexOf('\n', offset);
-        Assert.True(output.Contains($"({line},{column},{line},{column + anchor.Length}): error {diagnostic}:", StringComparison.Ordinal), output);
+        AssertDiagnosticAt(source, offset, anchor, output, diagnostic);
         var diagnostics = output.Split('\n').Where(line => line.Contains(": error ", StringComparison.Ordinal)).ToArray();
         Assert.NotEmpty(diagnostics);
         Assert.All(diagnostics, line => Assert.Contains($": error {diagnostic}:", line, StringComparison.Ordinal));
+    }
+
+    private static void AssertDiagnosticAt(string source, int offset, string anchor, string output, string diagnostic)
+    {
+        var line = 1 + source[..offset].Count(c => c == '\n');
+        var column = offset - source.LastIndexOf('\n', offset);
+        Assert.True(output.Contains($"({line},{column},{line},{column + anchor.Length}): error {diagnostic}:", StringComparison.Ordinal), output);
     }
 }
