@@ -671,11 +671,6 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol returnType,
             ISymbol symbol)
         {
-            if (!this.IsObliviousCompilation())
-            {
-                return mapped;
-            }
-
             var path = new List<int>();
 
             // The analyzer keys iterator leaves under the declared envelope.
@@ -706,7 +701,7 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol typeSymbol,
             BaseObjectCreationExpressionSyntax creation)
         {
-            if (type == null || typeSymbol == null || !this.IsObliviousCompilation())
+            if (type == null || typeSymbol == null)
             {
                 return type;
             }

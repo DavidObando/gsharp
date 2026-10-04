@@ -167,7 +167,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             bool operatorInput = targetSymbol is IParameterSymbol
-                { ContainingSymbol: IMethodSymbol { MethodKind: MethodKind.Conversion } };
+                { ContainingSymbol: IMethodSymbol operatorMethod }
+                && operatorMethod.MethodKind == MethodKind.Conversion;
             if (!operatorInput
                 && ReferenceEquals(assertion.Operand, original))
             {

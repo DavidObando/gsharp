@@ -1829,6 +1829,382 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
     }
 
+    [Theory]
+    [InlineData("Task", false)]
+    [InlineData("ValueTask", false)]
+    [InlineData("Task", true)]
+    [InlineData("ValueTask", true)]
+    public void TupleContractEligibility_AnnotatedSourceRetainsPerLeafAssertions(string envelope, bool nested)
+    {
+        string fixture = this.EmitFixture();
+        string tuple = nested
+            ? "((NullableResultBox Required, NullAcceptingBox? Optional) Pair, int Code, int? Maybe)"
+            : "(NullableResultBox Required, NullAcceptingBox? Optional, int Code, int? Maybe)";
+        string result = nested ? "((value, (string?)null), 1, null)" : "(value, (string?)null, 1, null)";
+        string required = nested ? "row.Pair.Required" : "row.Required";
+        string optional = nested ? "row.Pair.Optional" : "row.Optional";
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable enable
+                public static async {{envelope}}<{{tuple}}> Read(string value) {
+                    await Task.Delay(1);
+                    return {{result}};
+                }
+                #nullable disable
+                public static void Main() {
+                    Probe.Reset();
+                    var row = Read("keep").GetAwaiter().GetResult();
+                    bool valid = {{required}} != null && {{optional}} == null
+                        && row.Code == 1 && row.Maybe == null && Probe.Calls == 2;
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { Read("miss").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Required NullableResultBox,", printed);
+        Assert.Contains("Optional NullAcceptingBox?", printed);
+        Assert.Contains("NullableResultBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Task", false)]
+    [InlineData("ValueTask", false)]
+    [InlineData("Task", true)]
+    [InlineData("ValueTask", true)]
+    public void TupleContractEligibility_ObliviousSourceContractsPromoteTogether(string envelope, bool enabledDefault)
+    {
+        string fixture = this.EmitFixture();
+        string source = $$"""
+            #nullable disable
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public interface ISourceRows {
+                {{envelope}}<((NullAcceptingBox Missing, ReferenceBox Keep) Pair, int Code, int? Maybe)> Read(string value);
+            }
+            public sealed class Rows : ISourceRows {
+                public async {{envelope}}<((NullAcceptingBox Missing, ReferenceBox Keep) Pair, int Code, int? Maybe)> Read(string value) {
+                    await Task.Delay(1);
+                    return (((string)null, value), 1, null);
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    ISourceRows rows = new Rows();
+                    var row = rows.Read("keep").GetAwaiter().GetResult();
+                    Console.WriteLine(row.Pair.Missing == null && row.Pair.Keep != null
+                        && row.Code == 1 && row.Maybe == null && Probe.Calls == 2 ? 15 : -1);
+                }
+            }
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) },
+            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(fixture)).ToArray());
+        var compilation = project.Compilation.WithOptions(project.Compilation.Options.WithNullableContextOptions(
+            enabledDefault ? NullableContextOptions.Enable : NullableContextOptions.Disable));
+        Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var model = compilation.GetSemanticModel(document.SyntaxTree);
+        var context = new TranslationContext(compilation, model, document.FilePath);
+        string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(
+            new LoadedDocument(document.FilePath, document.SyntaxTree, model), context));
+        Assert.Contains("Missing NullAcceptingBox?", printed);
+        Assert.Contains("Keep ReferenceBox", printed);
+        Assert.DoesNotContain("Keep ReferenceBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void TupleContractEligibility_NativeLockPropagatesAcrossSourceContractComponent(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string suffix = envelope == "Task" ? "Task" : "ValueTask";
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public interface ISourceRows {
+                {{envelope}}<(NullableResultBox Required, int Code)> Read(string value);
+            }
+            public sealed class Locked : RowsBase{{suffix}}, ISourceRows {
+                public override async {{envelope}}<(NullableResultBox Required, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+            }
+            public sealed class Other : ISourceRows {
+                public async {{envelope}}<(NullableResultBox Required, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    ISourceRows locked = new Locked();
+                    ISourceRows other = new Other();
+                    bool valid = locked.Read("keep").GetAwaiter().GetResult().Required != null
+                        && other.Read("keep").GetAwaiter().GetResult().Required != null && Probe.Calls == 2;
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { other.Read("miss").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.DoesNotContain("Required NullableResultBox?", printed);
+        Assert.Contains("NullableResultBox?(value)!!", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("Task", "interface")]
+    [InlineData("ValueTask", "interface")]
+    [InlineData("Task", "explicit")]
+    [InlineData("ValueTask", "explicit")]
+    [InlineData("Task", "base")]
+    [InlineData("ValueTask", "base")]
+    [InlineData("Task", "generic-interface")]
+    [InlineData("ValueTask", "generic-interface")]
+    [InlineData("Task", "generic-base")]
+    [InlineData("ValueTask", "generic-base")]
+    public void TupleContractEligibility_NativeInheritedReturnContractIsImmutable(string envelope, string contract)
+    {
+        string fixture = this.EmitFixture();
+        string suffix = envelope == "Task" ? "Task" : "ValueTask";
+        string inherited = contract switch
+        {
+            "base" => "RowsBase" + suffix,
+            "generic-base" => $"GenericRowsBase{suffix}<NullableResultBox>",
+            "generic-interface" => $"IGenericRows{suffix}<NullableResultBox>",
+            _ => "IRows" + suffix,
+        };
+        string method = contract == "explicit" ? $"{inherited}.Read" : "Read";
+        bool isBase = contract.Contains("base", StringComparison.Ordinal);
+        string modifiers = isBase ? "public override async"
+            : contract == "explicit" ? "async" : "public async";
+        string tuple = isBase ? "(NullableResultBox Required, int Code)"
+            : "(NullableResultBox Required, NullAcceptingBox Optional, int Code)";
+        string result = isBase ? "(value, 1)" : "(value, (string?)null, 1)";
+        string optional = isBase ? string.Empty : "&& row.Optional == null";
+        int calls = isBase ? 1 : 2;
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public sealed class Rows : {{inherited}} {
+                {{modifiers}} {{envelope}}<{{tuple}}> {{method}}(string value) {
+                    await Task.Delay(1);
+                    return {{result}};
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    var row = NativeRows.Read(({{inherited}})new Rows(), "keep").GetAwaiter().GetResult();
+                    bool valid = row.Required != null {{optional}}
+                        && row.Code == 1 && Probe.Calls == {{calls}};
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { NativeRows.Read(({{inherited}})new Rows(), "miss").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Required NullableResultBox,", printed);
+        if (!isBase)
+        {
+            Assert.Contains("Optional NullAcceptingBox?", printed);
+        }
+        Assert.Contains("NullableResultBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void TupleContractEligibility_ExactNativeNonNullContractRejectsNilOnce(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public sealed class Rows : IAlwaysRows{{envelope}} {
+                public async {{envelope}}<(MaybeBox Value, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    IAlwaysRows{{envelope}} rows = new Rows();
+                    try { NativeRows.Read(rows, "x").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains("Value MaybeBox,", printed);
+        Assert.Contains("MaybeBox?(value)!!", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("Task", false)]
+    [InlineData("ValueTask", false)]
+    [InlineData("Task", true)]
+    [InlineData("ValueTask", true)]
+    public void TupleContractEligibility_PartialDefinitionControlsOnlyItsOwnLeaves(string envelope, bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static partial class Obj {
+                #nullable {{(strict ? "enable" : "disable")}}
+                public static partial {{envelope}}<(MaybeBox Value, int Code)> Read(string value);
+                #nullable disable
+                public static async partial {{envelope}}<(MaybeBox Value, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try { nil = Read("x").GetAwaiter().GetResult().Value == null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(strict ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains(strict ? "MaybeBox?(value)!!" : "Value MaybeBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("enable")]
+    [InlineData("disable")]
+    public void TupleContractEligibility_LocalMethodUsesItsDeclarationContext(string directive)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static void Main() {
+                    #nullable {{directive}}
+                    (MaybeBox Value, int Code) Read(string value) => (value, 1);
+                    #nullable disable
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try { nil = Read("x").Value == null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(directive == "enable" ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains(directive == "enable" ? "MaybeBox?(value)!!" : "Value MaybeBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("field")]
+    [InlineData("property")]
+    [InlineData("argument")]
+    [InlineData("delegate")]
+    public void TupleContractEligibility_FrozenNativeStoresRetainTheirResultBridge(string store)
+    {
+        string fixture = this.EmitFixture();
+        string body = store switch
+        {
+            "field" => "NativeTupleSlots.Field = (value, 1); return NativeTupleSlots.Field.Code;",
+            "property" => "NativeTupleSlots.Property = (value, 1); return NativeTupleSlots.Property.Code;",
+            "argument" => "return NativeTupleSlots.Accept((value, 1));",
+            _ => "NativeTupleSlots.Factory factory = Make; return factory(value).Code;",
+        };
+        string maker = store == "delegate"
+            ? "public static (NullableResultBox Required, int Code) Make(string value) => (value, 1);"
+            : string.Empty;
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                {{maker}}
+                public static int Store(string value) { {{body}} }
+                public static void Main() {
+                    Probe.Reset();
+                    bool valid = Store("keep") == 1 && Probe.Calls == 1;
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { Store("miss"); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains("NullableResultBox?(value)!!", printed);
+        Assert.DoesNotContain("Required NullableResultBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void ScalarYieldNullableOperator_GuardedReadPreservesTheConvertedResult(bool local, bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string declaration = local ? "string text = value;" : string.Empty;
+        string read = local ? "text" : "value";
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable {{(strict ? "enable" : "disable")}}
+                public static IEnumerable<MaybeBox> Rows(string value) {
+                    {{declaration}}
+                    if ({{read}} != null) { yield return {{read}}; }
+                }
+                #nullable disable
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        foreach (var row in Rows("x")) { nil = row == null; }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(strict ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "sequence[MaybeBox]" : "sequence[MaybeBox?]", printed);
+    }
+
     public void Dispose()
     {
         try
@@ -1928,6 +2304,54 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                     }
                     public static class FrozenTupleContract {
                         public static int Accept((MaybeBox Value, int Code) row) => row.Code;
+                    }
+                    public static class NativeTupleSlots {
+                        public static (NullableResultBox Required, int Code) Field;
+                        public static (NullableResultBox Required, int Code) Property { get; set; }
+                        public static int Accept((NullableResultBox Required, int Code) row) => row.Code;
+                        public delegate (NullableResultBox Required, int Code) Factory(string value);
+                    }
+                    public interface IAlwaysRowsTask {
+                        System.Threading.Tasks.Task<(MaybeBox Value, int Code)> Read(string value);
+                    }
+                    public interface IAlwaysRowsValueTask {
+                        System.Threading.Tasks.ValueTask<(MaybeBox Value, int Code)> Read(string value);
+                    }
+                    public interface IRowsTask {
+                        System.Threading.Tasks.Task<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(string value);
+                    }
+                    public interface IRowsValueTask {
+                        System.Threading.Tasks.ValueTask<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(string value);
+                    }
+                    public abstract class RowsBaseTask {
+                        public abstract System.Threading.Tasks.Task<(NullableResultBox Required, int Code)> Read(string value);
+                    }
+                    public abstract class RowsBaseValueTask {
+                        public abstract System.Threading.Tasks.ValueTask<(NullableResultBox Required, int Code)> Read(string value);
+                    }
+                    public interface IGenericRowsTask<T> where T : class {
+                        System.Threading.Tasks.Task<(T Required, NullAcceptingBox? Optional, int Code)> Read(string value);
+                    }
+                    public interface IGenericRowsValueTask<T> where T : class {
+                        System.Threading.Tasks.ValueTask<(T Required, NullAcceptingBox? Optional, int Code)> Read(string value);
+                    }
+                    public abstract class GenericRowsBaseTask<T> where T : class {
+                        public abstract System.Threading.Tasks.Task<(T Required, int Code)> Read(string value);
+                    }
+                    public abstract class GenericRowsBaseValueTask<T> where T : class {
+                        public abstract System.Threading.Tasks.ValueTask<(T Required, int Code)> Read(string value);
+                    }
+                    public static class NativeRows {
+                        public static System.Threading.Tasks.Task<(MaybeBox Value, int Code)> Read(IAlwaysRowsTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(MaybeBox Value, int Code)> Read(IAlwaysRowsValueTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.Task<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(IRowsTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(IRowsValueTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.Task<(NullableResultBox Required, int Code)> Read(RowsBaseTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(NullableResultBox Required, int Code)> Read(RowsBaseValueTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.Task<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(IGenericRowsTask<NullableResultBox> rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(IGenericRowsValueTask<NullableResultBox> rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.Task<(NullableResultBox Required, int Code)> Read(GenericRowsBaseTask<NullableResultBox> rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(NullableResultBox Required, int Code)> Read(GenericRowsBaseValueTask<NullableResultBox> rows, string value) => rows.Read(value);
                     }
                 #nullable disable
                     public struct Token {

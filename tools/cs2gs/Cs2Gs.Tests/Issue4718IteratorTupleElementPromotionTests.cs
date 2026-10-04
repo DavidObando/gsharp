@@ -916,7 +916,8 @@ public sealed class Issue4718IteratorTupleElementPromotionTests
             printed.Add(GSharpPrinter.Print(unit));
         }
 
-        string textType = siblingContract ? "string?" : "string";
+        // Enabled callers own a fixed non-null construction, not the producer's oblivious tuple argument.
+        string textType = siblingContract && !nullableConsumer ? "string?" : "string";
         Assert.True(
             printed[1].Split($"IRows[(Label {textType}, Number int32)]").Length - 1 == 2,
             string.Join(Environment.NewLine, printed));

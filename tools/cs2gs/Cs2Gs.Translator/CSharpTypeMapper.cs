@@ -1401,12 +1401,6 @@ public sealed class CSharpTypeMapper
         TranslationContext context,
         List<int> path)
     {
-        if (context.Compilation.Options.NullableContextOptions != NullableContextOptions.Disable
-            && symbol is not INamedTypeSymbol)
-        {
-            return mapped;
-        }
-
         if (path.Count == 0
             && declaredType is not INamedTypeSymbol { IsTupleType: true }
             && !ObliviousNullabilityAnalyzer.HasNestedTupleSlots(declaredType))
@@ -1461,8 +1455,6 @@ public sealed class CSharpTypeMapper
 
         return path.Count > 0
             && !mapped.IsNullable
-            && declaredType.IsReferenceType
-            && declaredType.NullableAnnotation != NullableAnnotation.Annotated
             && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                 context.Compilation, symbol, path, context.SiblingCompilations)
                 ? WithNullable(mapped, true)
@@ -3386,11 +3378,6 @@ public sealed class CSharpTypeMapper
         TranslationContext context,
         List<int> tuplePath)
     {
-        if (context.Compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
-        {
-            return mapped;
-        }
-
         if (mapped is TupleTypeReference mappedTuple
             && returnType is INamedTypeSymbol { IsTupleType: true } tupleType
             && mappedTuple.ElementTypes.Count == tupleType.TupleElements.Length)

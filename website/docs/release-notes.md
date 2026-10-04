@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **cs2gs tuple-leaf promotion respects each declaration's writable contract** (issues #4719 and #4751). Explicitly non-null source leaves and fixed imported interface, base, delegate and store positions retain their non-null result bridges. Genuinely oblivious source-owned contracts still promote null-bearing leaves together, including `Task`/`ValueTask` results, partial declarations and local nullable-context islands. Operator inputs and converted results remain separate boundaries; null-accepting inputs are not asserted merely because the result has a non-null destination. Guarded scalar iterator operands likewise preserve a nullable operator result rather than asserting it as non-null.
+
 - **cs2gs preserves C# value and generic parameter metadata names** (issue #4680, ADR-0170). Reserved names use `$name` in declarations, references, and named arguments instead of the lossy `name_` rename, regardless of member visibility. Named-argument binding compares semantic names, so `$scope:` binds the CLR parameter `scope`; escaped spelling preserves argument slots, optional defaults, and lexical evaluation order. Documentation tags use the original unescaped names. Locals and other names without metadata retain collision-safe sanitization.
 
 ### Reader's overview

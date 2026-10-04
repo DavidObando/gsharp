@@ -6889,9 +6889,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (tupleIndices.Count != 0)
             {
-                return sinkType is { IsReferenceType: true }
-                    && !this.TargetContractIsFrozenInMetadata(sink)
-                    && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                return ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                         this.context.Compilation, sink, path, this.context.SiblingCompilations)
                             ? sinkType.WithNullableAnnotation(NullableAnnotation.Annotated)
                             : sinkType;
