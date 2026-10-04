@@ -2693,12 +2693,17 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression translated = this.TranslateExpression(value);
 
             if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
-                || this.PlatformTypedImportNeedsNoBridge(value))
+                || this.PlatformTypedImportNeedsNoBridge(value)
+                || this.FlowsThroughUserDefinedConversion(value))
             {
                 return translated;
             }
 
             (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
+            if (ObliviousNullabilityAnalyzer.GetContextualOperator(value, this.context.SemanticModel, targetType) != null)
+            {
+                return translated;
+            }
 
             // Issue #3848: the unconditional branch below predates any promotion
             // that could make a RETURN position nullable, so it asserts without
@@ -2780,7 +2785,9 @@ public sealed partial class CSharpToGSharpTranslator
             // ADR-0186 step 6 (PR 0): a `T!` value flowing into a non-null
             // target is checked by gsc at that coercion (§4).
             if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
-                || this.PlatformTypedImportNeedsNoBridge(value))
+                || this.PlatformTypedImportNeedsNoBridge(value)
+                || this.FlowsThroughUserDefinedConversion(value)
+                || ObliviousNullabilityAnalyzer.GetContextualOperator(value, this.context.SemanticModel, targetType) != null)
             {
                 return translated;
             }
@@ -4068,19 +4075,27 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        // Whether `node` reaches its sink through a cast that calls a
-        // user-defined conversion operator. Such a cast is an invocation
-        // boundary: the value feeds the operator's (non-null) parameter, not
-        // the sink that receives the converted result, so that sink is not the
-        // value's target. ResolveValueSink walks casts, so this is asked first.
+        // Whether `node` reaches its sink through a conversion that calls a
+        // user-defined conversion operator. The input obeys the operator's
+        // parameter contract, not the contract of the converted-result sink.
         private bool FlowsThroughUserDefinedConversion(SyntaxNode node)
         {
-            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            while (node is ExpressionSyntax expression)
             {
-                if (node.Parent is CastExpressionSyntax cast
-                    && this.context.SemanticModel.GetOperation(cast) is IConversionOperation { OperatorMethod: not null })
+                for (IConversionOperation conversion = ObliviousNullabilityAnalyzer.GetResultConversion(
+                        expression, this.context.SemanticModel);
+                    conversion != null;
+                    conversion = conversion.Operand as IConversionOperation)
                 {
-                    return true;
+                    if (conversion.OperatorMethod != null)
+                    {
+                        return true;
+                    }
+                }
+
+                if (node.Parent is not (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax))
+                {
+                    break;
                 }
 
                 node = node.Parent;

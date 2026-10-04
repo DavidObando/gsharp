@@ -318,6 +318,223 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
+    [InlineData("checked((int?)1)", false)]
+    [InlineData("unchecked((int?)1)", false)]
+    [InlineData("checked(value ?? (int?)1)", false)]
+    [InlineData("unchecked(value ?? (int?)1)", false)]
+    [InlineData("checked(choose ? (int?)1 : (int?)2)", false)]
+    [InlineData("unchecked(choose switch { true => (int?)1, false => (int?)2 })", false)]
+    [InlineData("checked(value)", true)]
+    [InlineData("unchecked(value)", true)]
+    [InlineData("checked(choose ? value : (int?)1)", true)]
+    [InlineData("unchecked(choose switch { true => value, false => (int?)1 })", true)]
+    public void CheckedNullableOperands_PreserveCompositeTupleScalarAndSourceContracts(string operand, bool nullable)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row(bool choose, int? value) => ((object){{operand}}, 1);
+                public static object Scalar(bool choose, int? value) => (object){{operand}};
+                public static object Local(bool choose, int? value) {
+                    object result = (object){{operand}};
+                    return result;
+                }
+                public static (object Value, int Code) Forward(bool choose, int? value) => Row(choose, value);
+                public static int Run() {
+                    var missing = Forward(true, null);
+                    var present = Forward(false, 7);
+                    return {{(nullable ? "missing.Value == null && Scalar(true, null) == null && Local(true, null) == null" : "missing.Value != null && Scalar(true, null) != null && Local(true, null) != null")}}
+                        && present.Value != null && Scalar(false, 7) != null && Local(false, 7) != null
+                        && missing.Code == 1 && present.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+        string optional = nullable ? "?" : string.Empty;
+        Assert.Contains($"func Row(choose bool, value int32?) (Value object{optional}, Code int32)", printed);
+        Assert.Contains($"func Forward(choose bool, value int32?) (Value object{optional}, Code int32)", printed);
+        Assert.Contains($"func Scalar(choose bool, value int32?) object{optional}", printed);
+        Assert.Contains($"func Local(choose bool, value int32?) object{optional}", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("checked(value)")]
+    [InlineData("unchecked(value)")]
+    public void CheckedGuardedNullableOperand_PreservesIteratorPrecision(string operand)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(object Value, int Code)> Rows(int? value) {
+                    if (value != null) { yield return ((object){{operand}}, 1); }
+                }
+                public static int Run() {
+                    foreach (var row in Rows(null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows(7)) {
+                        if ((int)row.Value != 7 || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    return count;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Rows(value int32?) sequence[(Value object, Code int32)]", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("value")]
+    [InlineData("(value)")]
+    [InlineData("checked(value)")]
+    [InlineData("unchecked(value)")]
+    [InlineData("choose ? value : (int?)1")]
+    [InlineData("choose switch { true => value, false => (int?)1 }")]
+    [InlineData("Probe.Number(!choose)")]
+    public void ContextualOrdinaryNullableParameterOperator_DeclarationOnlyPreservesItsNonNullResult(string operand)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (Box Value, int Code) Row(bool choose, int? value) => ({{operand}}, 1);
+                public static Box Scalar(bool choose, int? value) => {{operand}};
+                public static Box Local(bool choose, int? value) {
+                    Box result = {{operand}};
+                    return result;
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    var missing = Row(true, null);
+                    var present = Row(false, 7);
+                    return missing.Value != null && present.Value != null
+                        && Scalar(true, null) != null && Scalar(false, 7) != null
+                        && Local(true, null) != null && Local(false, 7) != null
+                        && missing.Code == 1 && present.Code == 1 && Probe.Calls == {{(operand.StartsWith("Probe.", StringComparison.Ordinal) ? 12 : 6)}} ? 1 : -1;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Row(choose bool, value int32?) (Value Box, Code int32)", printed);
+        Assert.Contains("func Scalar(choose bool, value int32?) Box", printed);
+        Assert.Contains("func Local(choose bool, value int32?) Box", printed);
+        // #4737 also covers native nullable-value contextual operator binding.
+    }
+
+    [Theory]
+    [InlineData("Input(missing)")]
+    [InlineData("(Input(missing))")]
+    [InlineData("checked(Input(missing))")]
+    [InlineData("missing ? Input(true) : \"x\"")]
+    [InlineData("Pair(missing).Text")]
+    public void ContextualOrdinaryReferenceOperator_BlocksOperandSourceAndTupleEdges(string operand)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static string Input(bool missing) => missing ? null : "x";
+                public static (string Text, int Code) Pair(bool missing) => (Input(missing), 1);
+                public static (ReferenceBox Value, int Code) Row(bool missing) => ({{operand}}, 1);
+                public static ReferenceBox Scalar(bool missing) => {{operand}};
+                public static ReferenceBox Local(bool missing) {
+                    ReferenceBox result = {{operand}};
+                    return result;
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    return Row(true).Value != null && Row(false).Value != null
+                        && Scalar(true) != null && Scalar(false) != null
+                        && Local(true) != null && Local(false) != null
+                        && Probe.Calls == 6 ? 1 : -1;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Input(missing bool) string?", printed);
+        Assert.Contains("func Pair(missing bool) (Text string?, Code int32)", printed);
+        Assert.Contains("func Row(missing bool) (Value ReferenceBox, Code int32)", printed);
+        Assert.Contains("func Scalar(missing bool) ReferenceBox", printed);
+        Assert.Contains("func Local(missing bool) ReferenceBox", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void ContextualOrdinaryOperator_IteratorPreservesItsNonNullLeafAndTypedHoist()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static string Input(bool missing) => missing ? null : "x";
+                public static IEnumerable<(ReferenceBox Value, int Code)> Rows(bool missing) {
+                    yield return missing ? (Input(true), 1) : (Input(false), 2);
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    int count = 0;
+                    foreach (var row in Rows(true)) {
+                        if (row.Value == null || row.Code != 1) { return -1; }
+                        count++;
+                    }
+                    foreach (var row in Rows(false)) {
+                        if (row.Value == null || row.Code != 2) { return -2; }
+                        count++;
+                    }
+                    return count == 2 && Probe.Calls == 2 ? 1 : -3;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Rows(missing bool) sequence[(Value ReferenceBox, Code int32)]", printed);
+        AssertTypedHoists(printed, "(Value ReferenceBox, Code int32)", expectedCount: 1);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void ContextualNullableResultOperator_InputGuardDoesNotEraseTheOperatorsOwnNullResult()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<(MaybeBox Value, int Code)> Rows(string value) {
+                    if (value != null) { yield return (value, 1); }
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    foreach (var row in Rows(null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows("x")) {
+                        if (row.Value != null || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    return count == 1 && Probe.Calls == 1 ? 1 : -3;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Rows(value string?) sequence[(Value MaybeBox?, Code int32)]", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void ContextualOrdinaryOperator_DeclarationOnlyStaticInitializerPreservesNonNullStorage()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static Box Value = (int?)null;
+                public static Box Read() => Value;
+                public static int Run() => Read() != null ? 1 : -1;
+            }
+            """, fixture);
+        Assert.Contains("Value Box =", printed);
+        Assert.Contains("func Read() Box", printed);
+        // #4737: implicit int32? -> Box fails loudly before execution.
+    }
+
+    [Theory]
     [InlineData("value", true)]
     [InlineData("(object)(int?)value", true)]
     [InlineData("choose ? value : (Token?)new Token()", true)]
@@ -559,23 +776,32 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                     return ((int?)value, 1);
                 }
                 public static (object Value, int Code) Known(bool choose, int? value)
-                    => ((object)(Probe.Choose(choose) ? (value ?? (int?)1) : (int?)2), 1);
+                    => ((object)checked(Probe.Choose(choose) ? (value ?? (int?)1) : (int?)2), 1);
+                public static (ReferenceBox Value, int Code) Ordinary(bool missing) {
+                    string value = missing ? null : "x";
+                    return (value, 1);
+                }
                 public static void Main() {
                     Probe.Reset();
                     var missing = Lift(true);
                     var present = Lift(false);
                     var first = Known(true, null);
                     var second = Known(false, null);
+                    var ordinaryMissing = Ordinary(true);
+                    var ordinaryPresent = Ordinary(false);
                     Console.WriteLine(missing.Value == null && (int)present.Value == 7
                         && (int)first.Value == 1 && (int)second.Value == 2
                         && missing.Code + present.Code + first.Code + second.Code == 4
-                        && Probe.Calls == 3 ? 15 : -1);
+                        && ordinaryMissing.Value != null && ordinaryPresent.Value != null
+                        && ordinaryMissing.Code + ordinaryPresent.Code == 2
+                        && Probe.Calls == 5 ? 15 : -1);
                 }
             }
             """, fixture);
 
         Assert.Contains("func Lift(missing bool) (Value object?, Code int32)", printed);
         Assert.Contains("func Known(choose bool, value int32?) (Value object, Code int32)", printed);
+        Assert.Contains("func Ordinary(missing bool) (Value ReferenceBox, Code int32)", printed);
         string source = Path.Combine(this.fixtureDirectory, "Program.gs");
         string assemblyPath = Path.Combine(this.fixtureDirectory, "Program.dll");
         string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
@@ -599,12 +825,15 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         var loadContext = new AssemblyLoadContext("issue4719-metadata", isCollectible: true);
         try
         {
+            loadContext.LoadFromAssemblyPath(fixture);
             Type owner = Assert.Single(loadContext.LoadFromAssemblyPath(assemblyPath).GetTypes(), type => type.Name == "Obj");
             var nullability = new NullabilityInfoContext();
             MethodInfo lift = Assert.IsAssignableFrom<MethodInfo>(owner.GetMethod("Lift"));
             MethodInfo known = Assert.IsAssignableFrom<MethodInfo>(owner.GetMethod("Known"));
+            MethodInfo ordinary = Assert.IsAssignableFrom<MethodInfo>(owner.GetMethod("Ordinary"));
             Assert.Equal(NullabilityState.Nullable, nullability.Create(lift.ReturnParameter).GenericTypeArguments[0].ReadState);
             Assert.Equal(NullabilityState.NotNull, nullability.Create(known.ReturnParameter).GenericTypeArguments[0].ReadState);
+            Assert.Equal(NullabilityState.NotNull, nullability.Create(ordinary.ReturnParameter).GenericTypeArguments[0].ReadState);
         }
         finally
         {
@@ -1029,7 +1258,16 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                 namespace Issue4719Fixture {
                     public sealed class Box {
                         public static explicit operator Box(string text) => new Box();
+                        public static implicit operator Box(int? value) { Probe.Calls++; return new Box(); }
                     }
+                    public sealed class ReferenceBox {
+                        public static implicit operator ReferenceBox(string value) { Probe.Calls++; return new ReferenceBox(); }
+                    }
+                #nullable enable
+                    public sealed class MaybeBox {
+                        public static implicit operator MaybeBox?(string value) { Probe.Calls++; return null; }
+                    }
+                #nullable disable
                     public struct Token {
                         public static explicit operator int(Token value) { Probe.Calls++; return 7; }
                     }

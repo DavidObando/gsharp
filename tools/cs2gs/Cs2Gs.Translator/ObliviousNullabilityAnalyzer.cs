@@ -1046,6 +1046,48 @@ internal static class ObliviousNullabilityAnalyzer
 
     internal static bool HasNestedTupleSlots(ITypeSymbol type) => NestedTupleSlots(type).Count != 0;
 
+    internal static IConversionOperation GetResultConversion(ExpressionSyntax expression, SemanticModel model)
+    {
+        if (expression == null)
+        {
+            return null;
+        }
+
+        ExpressionSyntax value = expression;
+        while (value is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
+        {
+            value = value is ParenthesizedExpressionSyntax parenthesized
+                ? parenthesized.Expression : ((CheckedExpressionSyntax)value).Expression;
+        }
+
+        IOperation operation = model.GetOperation(value);
+        while (operation?.Parent is IConversionOperation parent
+            && (parent.Syntax == value || parent.Syntax == expression))
+        {
+            operation = parent;
+        }
+
+        return operation?.Syntax == value || operation?.Syntax == expression
+            ? operation as IConversionOperation : null;
+    }
+
+    internal static IMethodSymbol GetContextualOperator(
+        ExpressionSyntax expression,
+        SemanticModel model,
+        ITypeSymbol resultType)
+    {
+        ITypeSymbol operandType = expression == null ? null : model.GetTypeInfo(expression).Type;
+        if (operandType == null || resultType == null)
+        {
+            return null;
+        }
+
+        // Aggregate tuple conversions bind at the envelope, not each leaf.
+        Microsoft.CodeAnalysis.CSharp.Conversion conversion =
+            model.Compilation.ClassifyConversion(operandType, resultType);
+        return conversion.IsUserDefined ? conversion.MethodSymbol : null;
+    }
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,
@@ -3052,26 +3094,24 @@ internal static class ObliviousNullabilityAnalyzer
                     }
                     else if (IsEligibleTupleLeaf(targetType))
                     {
-                        // An iterator's guarded yield is evidence about each
-                        // leaf at this use, just as for its scalar element.
-                        if (respectNullGuards && IsNullGuardDominatedRead(elementValue, model))
-                        {
-                            continue;
-                        }
-
                         var targetKey = new TupleElementKey(target, path);
-                        if (IsDirectlyNullable(elementValue, model, respectNullGuards))
+                        IMethodSymbol contextualOperator = GetContextualOperator(elementValue, model, targetType);
+                        bool canForwardElement = contextualOperator == null
+                            || CanForwardConversionOperandNullability(
+                                targetType, model.GetTypeInfo(elementValue).Type, contextualOperator);
+                        if (IsDirectlyNullable(elementValue, model, respectNullGuards, resultType: targetType))
                         {
                             tupleTainted.Add(targetKey);
                         }
-                        else if (TryResolveTupleElementSource(elementValue, model, out TupleElementKey tupleSource))
+                        else if (canForwardElement
+                            && TryResolveTupleElementSource(elementValue, model, out TupleElementKey tupleSource))
                         {
                             tupleEdges.Add((targetKey, tupleSource));
                         }
                         else
                         {
                             foreach (ISymbol scalarSource in ResolveSources(
-                                elementValue, model, respectNullGuards: respectNullGuards))
+                                elementValue, model, respectNullGuards: respectNullGuards, resultType: targetType))
                             {
                                 // Issue #3615 (2026-08-28 nightly, Cs2Gs.Translator
                                 // wall): only SOURCE-declared symbols propagate
@@ -3796,21 +3836,30 @@ internal static class ObliviousNullabilityAnalyzer
     {
         while (true)
         {
+            if (model != null)
+            {
+                for (IConversionOperation conversion = GetResultConversion(expression, model);
+                    conversion != null;
+                    conversion = conversion.Operand as IConversionOperation)
+                {
+                    // Tuple envelopes preserve leaf flow, not scalar nulls.
+                    if (conversion.Type is not INamedTypeSymbol { IsTupleType: true }
+                        && !CanForwardCastOperandNullability(conversion))
+                    {
+                        return null;
+                    }
+                }
+            }
+
             switch (expression)
             {
                 case ParenthesizedExpressionSyntax parenthesized:
                     expression = parenthesized.Expression;
                     continue;
+                case CheckedExpressionSyntax checkedExpression:
+                    expression = checkedExpression.Expression;
+                    continue;
                 case CastExpressionSyntax cast:
-                    // Tuple envelopes preserve leaf flow, not scalar nulls.
-                    if (model != null
-                        && model.GetOperation(cast) is IConversionOperation conversion
-                        && conversion.Type is not INamedTypeSymbol { IsTupleType: true }
-                        && !CanForwardCastOperandNullability(conversion))
-                    {
-                        return null;
-                    }
-
                     expression = cast.Expression;
                     continue;
                 case AwaitExpressionSyntax awaitExpression:
@@ -4822,7 +4871,8 @@ internal static class ObliviousNullabilityAnalyzer
         HashSet<ISymbol> tainted,
         List<(ISymbol Target, ISymbol Source)> edges,
         List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges,
-        SourceScope scope = SourceScope.AllSources)
+        SourceScope scope = SourceScope.AllSources,
+        bool readConversion = true)
     {
         if (!IsEligibleScalarTarget(target))
         {
@@ -4838,7 +4888,13 @@ internal static class ObliviousNullabilityAnalyzer
             return;
         }
 
-        if (IsDirectlyNullable(value, model))
+        if (readConversion && GetResultConversion(value, model) is IConversionOperation conversion)
+        {
+            CollectScalarValueFlow(target, conversion, model, tainted, edges, scalarTupleEdges, scope);
+            return;
+        }
+
+        if (IsDirectlyNullable(value, model, readConversion: false))
         {
             tainted.Add(target);
             return;
@@ -4848,6 +4904,10 @@ internal static class ObliviousNullabilityAnalyzer
         {
             case ParenthesizedExpressionSyntax parenthesized:
                 CollectScalarValueFlow(target, parenthesized.Expression, model, tainted, edges, scalarTupleEdges, scope);
+                return;
+
+            case CheckedExpressionSyntax checkedExpression:
+                CollectScalarValueFlow(target, checkedExpression.Expression, model, tainted, edges, scalarTupleEdges, scope);
                 return;
 
             case AwaitExpressionSyntax awaitExpression:
@@ -4872,20 +4932,6 @@ internal static class ObliviousNullabilityAnalyzer
                 foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
                 {
                     CollectScalarValueFlow(target, arm.Expression, model, tainted, edges, scalarTupleEdges, scope);
-                }
-
-                return;
-
-            case CastExpressionSyntax cast:
-                IConversionOperation conversion = model.GetOperation(cast) as IConversionOperation;
-                if (conversion != null && CanForwardCastOperandNullability(conversion))
-                {
-                    CollectScalarValueFlow(target, cast.Expression, model, tainted, edges, scalarTupleEdges, scope);
-                }
-
-                if (conversion?.OperatorMethod != null || conversion == null)
-                {
-                    AddEdges(target, cast, model, edges, scope);
                 }
 
                 return;
@@ -4918,6 +4964,38 @@ internal static class ObliviousNullabilityAnalyzer
         AddEdges(target, value, model, edges, scope);
     }
 
+    private static void CollectScalarValueFlow(
+        ISymbol target,
+        IOperation value,
+        SemanticModel model,
+        HashSet<ISymbol> tainted,
+        List<(ISymbol Target, ISymbol Source)> edges,
+        List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges,
+        SourceScope scope)
+    {
+        if (value is IConversionOperation conversion)
+        {
+            if (CanForwardCastOperandNullability(conversion))
+            {
+                CollectScalarValueFlow(target, conversion.Operand, model, tainted, edges, scalarTupleEdges, scope);
+            }
+
+            if (conversion.OperatorMethod != null && !IsNonNullableValueType(conversion.Type))
+            {
+                if (IsDeclaredNullablePosition(conversion.OperatorMethod.ReturnType))
+                {
+                    tainted.Add(target);
+                }
+
+                edges.Add((target, Canonical(conversion.OperatorMethod)));
+            }
+        }
+        else if (value?.Syntax is ExpressionSyntax expression)
+        {
+            CollectScalarValueFlow(target, expression, model, tainted, edges, scalarTupleEdges, scope, readConversion: false);
+        }
+    }
+
     private static bool IsCallableValueExpression(ExpressionSyntax expression, SemanticModel model)
     {
         while (expression is ParenthesizedExpressionSyntax parenthesized)
@@ -4933,8 +5011,39 @@ internal static class ObliviousNullabilityAnalyzer
         ExpressionSyntax expression,
         SemanticModel model,
         SourceScope scope = SourceScope.AllSources,
-        bool respectNullGuards = false)
+        bool respectNullGuards = false,
+        bool readConversion = true,
+        ITypeSymbol resultType = null)
     {
+        if (GetContextualOperator(expression, model, resultType) is IMethodSymbol contextualOperator)
+        {
+            if (CanForwardConversionOperandNullability(
+                resultType, model.GetTypeInfo(expression).Type, contextualOperator))
+            {
+                foreach (ISymbol source in ResolveSources(expression, model, scope, respectNullGuards, readConversion: false))
+                {
+                    yield return source;
+                }
+            }
+
+            if (!IsNonNullableValueType(resultType))
+            {
+                yield return Canonical(contextualOperator);
+            }
+
+            yield break;
+        }
+
+        if (readConversion && GetResultConversion(expression, model) is IConversionOperation conversion)
+        {
+            foreach (ISymbol source in ResolveSources(conversion, model, scope, respectNullGuards))
+            {
+                yield return source;
+            }
+
+            yield break;
+        }
+
         if (respectNullGuards && IsNullGuardDominatedRead(expression, model))
         {
             yield break;
@@ -4947,6 +5056,14 @@ internal static class ObliviousNullabilityAnalyzer
 
             case ParenthesizedExpressionSyntax paren:
                 foreach (ISymbol source in ResolveSources(paren.Expression, model, scope, respectNullGuards))
+                {
+                    yield return source;
+                }
+
+                break;
+
+            case CheckedExpressionSyntax checkedExpression:
+                foreach (ISymbol source in ResolveSources(checkedExpression.Expression, model, scope, respectNullGuards))
                 {
                     yield return source;
                 }
@@ -5003,25 +5120,6 @@ internal static class ObliviousNullabilityAnalyzer
 
                 break;
 
-            case CastExpressionSyntax cast:
-                if (model.GetOperation(cast) is IConversionOperation conversion)
-                {
-                    if (CanForwardCastOperandNullability(conversion))
-                    {
-                        foreach (ISymbol source in ResolveSources(cast.Expression, model, scope, respectNullGuards))
-                        {
-                            yield return source;
-                        }
-                    }
-
-                    if (conversion.OperatorMethod != null && !IsNonNullableValueType(conversion.Type))
-                    {
-                        yield return Canonical(conversion.OperatorMethod);
-                    }
-                }
-
-                break;
-
             case InvocationExpressionSyntax invocation:
                 if (model.GetSymbolInfo(invocation).Symbol is IMethodSymbol called
                     && !called.ReturnsVoid)
@@ -5059,6 +5157,36 @@ internal static class ObliviousNullabilityAnalyzer
                 }
 
                 break;
+        }
+    }
+
+    private static IEnumerable<ISymbol> ResolveSources(
+        IOperation value,
+        SemanticModel model,
+        SourceScope scope,
+        bool respectNullGuards)
+    {
+        if (value is IConversionOperation conversion)
+        {
+            if (CanForwardCastOperandNullability(conversion))
+            {
+                foreach (ISymbol source in ResolveSources(conversion.Operand, model, scope, respectNullGuards))
+                {
+                    yield return source;
+                }
+            }
+
+            if (conversion.OperatorMethod != null && !IsNonNullableValueType(conversion.Type))
+            {
+                yield return Canonical(conversion.OperatorMethod);
+            }
+        }
+        else if (value?.Syntax is ExpressionSyntax expression)
+        {
+            foreach (ISymbol source in ResolveSources(expression, model, scope, respectNullGuards, readConversion: false))
+            {
+                yield return source;
+            }
         }
     }
 
@@ -5370,14 +5498,29 @@ internal static class ObliviousNullabilityAnalyzer
     private static bool IsDirectlyNullable(
         ExpressionSyntax expression,
         SemanticModel model,
-        bool respectNullGuards = false)
+        bool respectNullGuards = false,
+        bool readConversion = true,
+        ITypeSymbol resultType = null)
     {
+        if (GetContextualOperator(expression, model, resultType) is IMethodSymbol contextualOperator)
+        {
+            return (CanForwardConversionOperandNullability(
+                        resultType, model.GetTypeInfo(expression).Type, contextualOperator)
+                    && IsDirectlyNullable(expression, model, respectNullGuards, readConversion: false))
+                || (!IsNonNullableValueType(resultType)
+                    && IsDeclaredNullablePosition(contextualOperator.ReturnType));
+        }
+
+        if (readConversion && GetResultConversion(expression, model) is IConversionOperation conversion)
+        {
+            return IsDirectlyNullable(conversion, model, respectNullGuards);
+        }
+
         if (respectNullGuards && IsNullGuardDominatedRead(expression, model))
         {
             return false;
         }
 
-        ISymbol resultSymbol = null;
         switch (expression)
         {
             case null:
@@ -5386,23 +5529,8 @@ internal static class ObliviousNullabilityAnalyzer
             case ParenthesizedExpressionSyntax paren:
                 return IsDirectlyNullable(paren.Expression, model, respectNullGuards);
 
-            // Lifted operators can bypass their body for a null operand.
-            // Otherwise, only the operator's own result contract contributes.
-            case CastExpressionSyntax cast
-                when model.GetOperation(cast) is IConversionOperation conversion:
-                if (CanForwardCastOperandNullability(conversion)
-                    && IsDirectlyNullable(cast.Expression, model, respectNullGuards))
-                {
-                    return true;
-                }
-
-                if (conversion.OperatorMethod == null || IsNonNullableValueType(conversion.Type))
-                {
-                    return false;
-                }
-
-                resultSymbol = conversion.OperatorMethod;
-                break;
+            case CheckedExpressionSyntax checkedExpression:
+                return IsDirectlyNullable(checkedExpression.Expression, model, respectNullGuards);
 
             // `await expr`: an awaited `Task<T>`'s own nullability is that of
             // T, which is exactly what the UNWRAPPED awaited expression's own
@@ -5500,7 +5628,7 @@ internal static class ObliviousNullabilityAnalyzer
         // survives in BCL/source metadata regardless of the consuming context
         // (e.g. `AssemblyName.Name` and `Path.GetFileNameWithoutExtension(...)`
         // are declared `string?`).
-        ISymbol symbol = resultSymbol ?? model.GetSymbolInfo(expression).Symbol;
+        ISymbol symbol = model.GetSymbolInfo(expression).Symbol;
         ITypeSymbol symbolType = symbol switch
         {
             IMethodSymbol m => m.ReturnType,
@@ -5511,10 +5639,29 @@ internal static class ObliviousNullabilityAnalyzer
             _ => null,
         };
 
-        return IsNullableValueType(symbolType ?? info.Type)
-            || (symbolType is { IsReferenceType: true }
-                && symbolType.NullableAnnotation == NullableAnnotation.Annotated);
+        return IsDeclaredNullablePosition(symbolType ?? info.Type);
     }
+
+    private static bool IsDirectlyNullable(IOperation value, SemanticModel model, bool respectNullGuards)
+    {
+        if (value is IConversionOperation conversion)
+        {
+            // Read the converted result before the operand, including contextual
+            // implicit operators. Only genuinely lifted inputs can bypass them.
+            return (CanForwardCastOperandNullability(conversion)
+                    && IsDirectlyNullable(conversion.Operand, model, respectNullGuards))
+                || (conversion.OperatorMethod != null
+                    && !IsNonNullableValueType(conversion.Type)
+                    && IsDeclaredNullablePosition(conversion.OperatorMethod.ReturnType));
+        }
+
+        return value?.Syntax is ExpressionSyntax expression
+            && IsDirectlyNullable(expression, model, respectNullGuards, readConversion: false);
+    }
+
+    private static bool IsDeclaredNullablePosition(ITypeSymbol type) =>
+        IsNullableValueType(type)
+            || (type is { IsReferenceType: true } && type.NullableAnnotation == NullableAnnotation.Annotated);
 
     private static bool IsReferenceLike(ITypeSymbol type) =>
         (type != null && type.IsReferenceType) || type is ITypeParameterSymbol;
@@ -5526,12 +5673,18 @@ internal static class ObliviousNullabilityAnalyzer
         type is { IsValueType: true } && !IsNullableValueType(type);
 
     private static bool CanForwardCastOperandNullability(IConversionOperation conversion) =>
-        !IsNonNullableValueType(conversion.Type)
-            && !IsNonNullableValueType(conversion.Operand.Type)
-            && (conversion.OperatorMethod == null
-                || (IsNullableValueType(conversion.Operand.Type)
-                    && conversion.OperatorMethod.Parameters.Length == 1
-                    && IsNonNullableValueType(conversion.OperatorMethod.Parameters[0].Type)));
+        CanForwardConversionOperandNullability(conversion.Type, conversion.Operand.Type, conversion.OperatorMethod);
+
+    private static bool CanForwardConversionOperandNullability(
+        ITypeSymbol resultType,
+        ITypeSymbol operandType,
+        IMethodSymbol operatorMethod) =>
+        !IsNonNullableValueType(resultType)
+            && !IsNonNullableValueType(operandType)
+            && (operatorMethod == null
+                || (IsNullableValueType(operandType)
+                    && operatorMethod.Parameters.Length == 1
+                    && IsNonNullableValueType(operatorMethod.Parameters[0].Type)));
 
     // The declaration kinds whose emitted reference type this analysis governs.
     private static bool IsValueDeclarationSymbol(ISymbol symbol) =>
