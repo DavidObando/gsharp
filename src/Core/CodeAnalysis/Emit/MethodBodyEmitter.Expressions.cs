@@ -1412,6 +1412,14 @@ internal sealed partial class MethodBodyEmitter
         // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
         foreach (var init in literal.Initializers)
         {
+            if (literal.IsZeroInitialization && structDefinition.ValueStructDefaultCtorIsZeroInitialization
+                && declaredInitializerValues != null && init.Field is { } zeroField
+                && MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(literal.Syntax, literal.StructType, zeroField) != null)
+            {
+                // Skip only the definition-owned zero stores that actually ran.
+                continue;
+            }
+
             if (primaryValues.Contains(init))
             {
                 continue;

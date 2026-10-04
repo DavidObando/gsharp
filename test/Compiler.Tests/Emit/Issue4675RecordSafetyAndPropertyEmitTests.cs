@@ -244,6 +244,40 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
     }
 
     [Theory]
+    [InlineData("data class", false)]
+    [InlineData("data struct", false)]
+    [InlineData("data class", true)]
+    [InlineData("data struct", true)]
+    public void ConstructedConstrainedSelector_RetainsTheSubstitutedInterfaceOwner(string kind, bool inherited)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package ConstructedConstrainedPropertyTree
+            import System
+            import System.Linq.Expressions
+            interface IValue[V] { prop Value V { get; } }
+            interface IChild[V] : IValue[V] {}
+            KIND Item[V](Saved V) : CONSTRAINT[V] { public prop Value V -> Saved }
+            func make[T CONSTRAINT[int32]]() Expression[Func[T, int32]] -> (item T) -> item.Value
+            func readValue[T CONSTRAINT[int32]](item T) int32 -> item.Value
+            func Main() {
+                let tree = make[Item[int32]]()
+                let item = Item[int32]{Saved: 7}
+                Console.WriteLine(tree.Compile()(item))
+                Console.WriteLine(readValue[Item[int32]](item))
+                let viaInterface IValue[int32] = item
+                Console.WriteLine(viaInterface.Value)
+                let read = tree.Body as MemberExpression
+                Console.WriteLine(read!!.Member.DeclaringType == typeof(IValue[int32]))
+                Console.WriteLine(read!!.Type == typeof(int32))
+            }
+            """.Replace("KIND", kind, StringComparison.Ordinal)
+                .Replace("CONSTRAINT", inherited ? "IChild" : "IValue", StringComparison.Ordinal), "ConstructedConstrainedPropertyTree", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n7\n7\nTrue\nTrue\n", fixture.Run(dll));
+    }
+
+    [Theory]
     [InlineData("private", "")]
     [InlineData("public", "private var Extra []int32")]
     [InlineData("public", "")]
@@ -525,6 +559,76 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
             """.Replace("KIND", kind, StringComparison.Ordinal), "QuotedRecordArgument", true);
         IlVerifier.Verify(dll);
         Assert.Equal("42\nTrue\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ClosedGenericZero_RetainsValuesNotWrittenByTheDefinitionConstructor(bool explicitConstruction, bool privateCollection)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package RetainedGenericZero
+            import System
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            struct Inner { public var Items []int32 }
+            data struct Outer[T](Value int32) {
+                public var Nested T
+                private var Marker int32 = Counter.Next()
+                COLLECTION
+                public func Mark() int32 -> Marker
+            }
+            func Main() {
+                CONSTRUCT
+                Console.WriteLine(outer.Nested.Items.Length)
+                Console.WriteLine(outer.Value)
+                Console.WriteLine(outer.Mark())
+                Console.WriteLine(Counter.Count)
+            }
+            """.Replace("COLLECTION", privateCollection ? "private var Items []int32" : string.Empty, StringComparison.Ordinal)
+                .Replace("CONSTRUCT", explicitConstruction ? "let outer = Outer[Inner]{Value: 7, Nested: Inner{}}" : "var outer Outer[Inner]", StringComparison.Ordinal),
+            "RetainedGenericZero", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal(explicitConstruction ? "0\n7\n1\n1\n" : "0\n0\n0\n0\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void ClosedGenericZero_RetainedRequiredChildUsesItsValidatedConstructor()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package RetainedRequiredChild
+            import System
+            struct Inner {
+                private let Reference readonly managed[int32] = {
+                    var value = 7
+                    readonly managed(value)
+                }
+                private var Items []int32
+                public func Read() int32 -> *Reference
+            }
+            data struct Outer[T](Value int32) {
+                public var Nested T
+                private var Items []int32
+            }
+            func Main() {
+                var outer Outer[Inner]
+                Console.WriteLine(outer.Nested.Read())
+                Console.WriteLine(outer.Value)
+            }
+            """, "RetainedRequiredChild", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n0\n", fixture.Run(dll));
     }
 
     private static void Reject(string source, string anchor)

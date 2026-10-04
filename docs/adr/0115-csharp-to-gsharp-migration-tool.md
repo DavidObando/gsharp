@@ -142,6 +142,8 @@ declaring construction by symbol/accessor identity and use declared-only
 reflection, preserving hidden and truly inherited generic properties.
 Source-constrained receivers resolve through their existing constraint reference
 before that same identity lookup, including inherited interface properties.
+Ordinary interface reads and source-interface-constrained reads share the owner
+binding path, retaining constructed interface owners and substituted signatures.
 Ordered literals pass their original syntax to retained omitted arguments;
 required managed-reference defaults remain source-anchored diagnostics.
 Collection-initializer forms prepare constructor inputs and the

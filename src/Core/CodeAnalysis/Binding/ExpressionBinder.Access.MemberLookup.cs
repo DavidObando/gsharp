@@ -1514,47 +1514,9 @@ internal sealed partial class ExpressionBinder
                     // accessor and emits a verifiable `callvirt get_H`.
                     // Inherited base-interface members are surfaced because
                     // TypeMemberModel.TryGetProperty walks SelfAndAllBaseInterfaces.
-                    if (TypeMemberModel.TryGetPropertyWithOwner(
-                        ifaceSym,
-                        ne.IdentifierToken.ValueText,
-                        out var ifaceProp,
-                        out var ifacePropertyOwner))
+                    if (this.BindSourceInterfacePropertyAccess(ifaceSym, receiver, ne) is { } propertyAccess)
                     {
-                        if (!ifaceProp.HasGetter)
-                        {
-                            Diagnostics.ReportCannotAssign(ne.Location, ne.IdentifierToken.ValueText);
-                            return new BoundErrorExpression(null);
-                        }
-
-                        if (!AccessibilityChecker.IsAccessible(
-                            ifaceProp.GetterAccessibility,
-                            ifacePropertyOwner,
-                            this.function))
-                        {
-                            Diagnostics.ReportMemberInaccessible(
-                                ne.IdentifierToken.Location,
-                                ifaceProp.Name,
-                                ifacePropertyOwner?.Name ?? ifaceSym.Name,
-                                ifaceProp.GetterAccessibility);
-                        }
-
-                        var effectiveInterfaceOwner = ifacePropertyOwner as InterfaceSymbol;
-                        var propertyType = effectiveInterfaceOwner != null
-                            ? effectiveInterfaceOwner.SubstituteMemberType(ifaceProp.Type)
-                            : ifaceProp.Type;
-                        var substitutedPropertyType = ReferenceEquals(
-                            propertyType,
-                            ifaceProp.Type)
-                            ? null
-                            : propertyType;
-                        return new BoundPropertyAccessExpression(
-                            null,
-                            receiver,
-                            null,
-                            ifaceProp,
-                            substitutedPropertyType,
-                            narrowedType: null,
-                            interfaceType: effectiveInterfaceOwner);
+                        return propertyAccess;
                     }
 
                     // Issue #1397: an instance method declared on the static
@@ -5446,23 +5408,13 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        // Interface constraint: an instance property declared on the (non-generic)
+        // Interface constraint: an instance property declared on the
         // interface or any base interface. The getter dispatches through a
         // verifiable `box !!T; callvirt I::get_X` in the emitter.
         if (tpRecv.InterfaceConstraint is InterfaceSymbol interfaceConstraint
-            && !interfaceConstraint.IsGenericDefinition
-            && interfaceConstraint.TypeArguments.IsDefaultOrEmpty)
+            && this.BindSourceInterfacePropertyAccess(interfaceConstraint, receiver, ne) is { } propertyAccess)
         {
-            if (TypeMemberModel.TryGetProperty(interfaceConstraint, memberName, out var ifaceProp, out _))
-            {
-                if (!ifaceProp.HasGetter)
-                {
-                    Diagnostics.ReportCannotAssign(ne.Location, memberName);
-                    return new BoundErrorExpression(null);
-                }
-
-                return new BoundPropertyAccessExpression(null, receiver, null, ifaceProp);
-            }
+            return propertyAccess;
         }
 
         if (tpRecv.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint
@@ -5497,6 +5449,39 @@ internal sealed partial class ExpressionBinder
         }
 
         return null;
+    }
+
+    private BoundExpression? BindSourceInterfacePropertyAccess(
+        InterfaceSymbol receiverType,
+        BoundExpression receiver,
+        NameExpressionSyntax syntax)
+    {
+        if (!TypeMemberModel.TryGetPropertyWithOwner(receiverType, syntax.IdentifierToken.ValueText, out var property, out var owner))
+        {
+            return null;
+        }
+
+        if (!property.HasGetter)
+        {
+            Diagnostics.ReportCannotAssign(syntax.Location, syntax.IdentifierToken.ValueText);
+            return new BoundErrorExpression(null);
+        }
+
+        if (!AccessibilityChecker.IsAccessible(property.GetterAccessibility, owner, this.function))
+        {
+            Diagnostics.ReportMemberInaccessible(syntax.IdentifierToken.Location, property.Name, owner?.Name ?? receiverType.Name, property.GetterAccessibility);
+        }
+
+        var interfaceOwner = owner as InterfaceSymbol;
+        var propertyType = interfaceOwner?.SubstituteMemberType(property.Type) ?? property.Type;
+        return new BoundPropertyAccessExpression(
+            null,
+            receiver,
+            null,
+            property,
+            ReferenceEquals(propertyType, property.Type) ? null : propertyType,
+            narrowedType: null,
+            interfaceType: interfaceOwner);
     }
 
     /// <summary>

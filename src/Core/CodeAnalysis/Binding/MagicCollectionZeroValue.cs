@@ -491,20 +491,29 @@ internal static class MagicCollectionZeroValue
                 return null;
             }
 
-            // Once at least one non-public field needs a zero value, this
-            // struct's OWN #3219 ctor is guaranteed to be synthesized (see
-            // above) and — per ConstructorBodyEmitter.BuildInstanceFieldInitializerStatements
-            // — that ctor assigns EVERY declared field with a zero-value
-            // entry, public or private, in one pass. Emit a field-initializer-free
-            // literal so MethodBodyEmitter.EmitStructLiteral routes through
-            // `call .ctor()` instead of the historical inline
-            // initobj+per-field-stfld path, avoiding both the illegal
-            // external private-field store AND a redundant double
-            // assignment of any public sibling field.
-            var initializers = hasNonPublicZeroValueField
-                ? ImmutableArray<BoundFieldInitializer>.Empty
-                : inits?.ToImmutable() ?? ImmutableArray<BoundFieldInitializer>.Empty;
-            return new BoundStructLiteralExpression(syntax, structType, initializers);
+            var initializers = inits?.ToImmutable() ?? ImmutableArray<BoundFieldInitializer>.Empty;
+            if (hasNonPublicZeroValueField && !initializers.IsEmpty)
+            {
+                var retained = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+                foreach (var initializer in initializers)
+                {
+                    var field = Invariant.Required(initializer.Field, "synthesized struct zero entries target fields");
+                    var initializedInType = visitKey.ValueStructDefaultCtorIsZeroInitialization
+                        ? TrySynthesizeInTypeZeroField(syntax, structType, field) != null
+                        : structType.GetDefinitionField(field) is { } declaredField
+                            && visitKey.InstanceFieldInitializers.ContainsKey(declaredField);
+                    if (!initializedInType)
+                    {
+                        retained.Add(initializer);
+                    }
+                }
+
+                // A private sibling does not erase public closed-generic values
+                // whose definition's constructor has no corresponding store.
+                initializers = retained.ToImmutable();
+            }
+
+            return new BoundStructLiteralExpression(syntax, structType, initializers, copySource: null, isZeroInitialization: true);
         }
         finally
         {

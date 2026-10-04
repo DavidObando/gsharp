@@ -369,6 +369,10 @@ definition-owned field assignment. Property backing storage and a closed generic
 argument cannot invent a store absent from that constructor. Ordinary constructed
 structs retain their definition's validated initializer constructor, but its
 validation does not credit newly required slots introduced by a type argument.
+Selecting an in-type helper removes only literal values whose actual storage
+that constructor writes. Closed-generic public field values remain bound and
+planned when the definition has no store, even with a private collection sibling;
+emission and safety consume those retained children normally.
 
 Handle assignment copies the handle value; it does not copy the referent.
 `var copy = *p` copies `T` normally. Promoting `copy` later identifies that
