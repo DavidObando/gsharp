@@ -18,12 +18,7 @@ if SPEC is None or SPEC.loader is None:
 packer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(packer)
 
-def sdk_pin(version: str) -> str:
-    # Synthetic versions are test data, not published-release references.
-    return f'Sdk="{packer.SDK_ID}/{version}"'
-
-
-GENERATED = sdk_pin("0.4.1129")
+GENERATED = 'Sdk="Gsharp.NET.Sdk/0.4.1129"'
 
 
 def project(sdk_attribute: str, body: str = "") -> str:
@@ -40,7 +35,7 @@ def make_tree(root: Path, core_sdk: str = GENERATED) -> Path:
     write(tree / "src/Core/Core.gsproj", project(core_sdk), bom=True)
     write(tree / "src/Compiler/Compiler.gsproj", project(core_sdk))
     write(tree / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj",
-          project(core_sdk, f'  <Import {sdk_pin("9.9.9")} Project="x" />\n'))
+          project(core_sdk, '  <Import Sdk="Gsharp.NET.Sdk/9.9.9" Project="x" />\n'))
     write(tree / "samples/Trail/Trail.gsproj", project('Sdk="Gsharp.NET.Sdk/0.4.591"'))
     write(tree / "global.json",
           '{\n  // keep me\n  "sdk": { "version": "10.0.300", "rollForward": "latestFeature", },\n}\n')
@@ -82,7 +77,7 @@ class NormalizePinsTests(unittest.TestCase):
             self.assertTrue(core.startswith(b"\xef\xbb\xbf"), "BOM must be preserved")
             self.assertIn(b'<Project Sdk="Gsharp.NET.Sdk">', core)
             sdk_project = (tree / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj").read_text()
-            self.assertIn(f'<Import {sdk_pin("9.9.9")}', sdk_project, "only the Project element is rewritten")
+            self.assertIn('<Import Sdk="Gsharp.NET.Sdk/9.9.9"', sdk_project, "only the Project element is rewritten")
             self.assertIn('Sdk="Gsharp.NET.Sdk/0.4.591"', (tree / "samples/Trail/Trail.gsproj").read_text())
 
     def test_global_json_tree_is_left_alone(self) -> None:
@@ -98,7 +93,7 @@ class NormalizePinsTests(unittest.TestCase):
     def test_a_leftover_versioned_toolchain_pin_is_an_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tree = make_tree(Path(temp), core_sdk='Sdk="Gsharp.NET.Sdk"')
-            write(tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", project(sdk_pin("0.4.7")))
+            write(tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", project('Sdk="Gsharp.NET.Sdk/0.4.7"'))
             with self.assertRaises(packer.SelfHostError) as raised:
                 packer.check_no_versioned_toolchain_pins(tree)
             self.assertIn("src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", str(raised.exception))
@@ -108,7 +103,7 @@ class NormalizePinsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             tree = make_tree(root)
-            write(tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", project(sdk_pin("0.4.7")))
+            write(tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", project('Sdk="Gsharp.NET.Sdk/0.4.7"'))
             bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.0.4.1129.nupkg", {"x": b""})
             report: dict = {}
 
@@ -126,12 +121,11 @@ class GlobalJsonTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             tree = make_tree(Path(temp))
             (tree / "global.json").write_text(
-                json.dumps({"sdk": {"version": "10.0.300"},
-                            "msbuild-sdks": {packer.SDK_ID.lower(): "0.0.1", "X": "1.0.0"}}))
+                '{ "sdk": { "version": "10.0.300" }, "msbuild-sdks": { "gsharp.net.sdk": "0.0.1", "X": "1.0.0" }, }')
             packer.pin_global_json(tree, "0.4.1129-g6c4824cbc0")
             document = json.loads((tree / "global.json").read_text())
             self.assertEqual("10.0.300", document["sdk"]["version"])
-            self.assertEqual({"X": "1.0.0", packer.SDK_ID: "0.4.1129-g6c4824cbc0"}, document["msbuild-sdks"])
+            self.assertEqual({"X": "1.0.0", "Gsharp.NET.Sdk": "0.4.1129-g6c4824cbc0"}, document["msbuild-sdks"])
 
     def test_a_bom_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -404,7 +398,7 @@ class VersionTests(unittest.TestCase):
             tree = make_tree(root)
             write(tree / "test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj",
                   project('Sdk="Gsharp.NET.Sdk"',
-                          f'<ItemGroup><PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" Version="0.4.1129" /></ItemGroup>'))
+                          '<ItemGroup><PackageReference Include="GSharp.CodeAnalysis.Analyzers.Testing" Version="0.4.1129" /></ItemGroup>'))
             bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
             with self.assertRaises(packer.SelfHostError) as raised:
                 packer.prepare_tree(tree, bootstrap)
