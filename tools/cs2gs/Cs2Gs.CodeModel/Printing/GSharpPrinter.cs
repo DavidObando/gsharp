@@ -2113,6 +2113,11 @@ public static class GSharpPrinter
             sb.Append("abstract ");
         }
 
+        if (declaration.IsShared)
+        {
+            sb.Append("shared ");
+        }
+
         if (declaration.IsPartial)
         {
             // ADR-0144 §G: the `partial` modifier is placed after

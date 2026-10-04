@@ -44,13 +44,15 @@ namespace Corpus.DataOpen
     }
 
     [Fact]
-    public void AbstractRecord_IsForcedOpen()
+    public void AbstractRecord_IsDeclaredAbstract_WhichImpliesOpen()
     {
         CompilationUnit unit = Translate();
         TypeDeclaration shape = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Shape");
 
+        // ADR-0195 / issue #4674: `abstract data class` is inheritable on its own.
         Assert.Equal(TypeDeclarationKind.DataClass, shape.Kind);
-        Assert.True(shape.IsOpen);
+        Assert.True(shape.IsAbstract);
+        Assert.False(shape.IsOpen);
     }
 
     [Fact]

@@ -84,6 +84,39 @@ partial class P {
         Assert.StartsWith(GeneratedPackage + ".", (string)Invoke(p, "Kind"), StringComparison.Ordinal);
     }
 
+    // ADR-0195 / issue #4674: a `shared partial class` is a C# static class, so the stub
+    // renders it as one and the generated implementing part is back-translated as a
+    // `shared partial class` part with its members flat, which merges with the user's
+    // (GS0479 otherwise: every part of a shared class must say `shared`).
+    [Fact]
+    public void SharedPartialClass_GeneratedImplementingPart_IsAlsoShared_AndCompilesAndRuns()
+    {
+        const string userSource = @"package App
+
+import System.Text.RegularExpressions
+
+shared partial class P {
+    @GeneratedRegex(""\\d+"")
+    private partial func Digits() Regex;
+
+    public func Test(s string) bool {
+        return Digits().IsMatch(s)
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { userSource }, RegexGenerator());
+
+        string userPart = run.File("RegexGenerator.g.cs");
+        Assert.Contains("shared partial class P", userPart, StringComparison.Ordinal);
+        Assert.Contains("private partial func Digits() Regex -> Digits_0.Instance", userPart, StringComparison.Ordinal);
+        Assert.DoesNotContain("shared {", userPart, StringComparison.Ordinal);
+
+        Type p = run.Type("P");
+        Assert.True(p.IsAbstract && p.IsSealed, "a shared partial class is CLR abstract sealed");
+        Assert.Equal(true, Invoke(p, "Test", "a1"));
+        Assert.Equal(false, Invoke(p, "Test", "zzz"));
+    }
+
     // Step 4: the generator's `file` helper types (`Digits_0`, `Utilities`,
     // `RunnerFactory`, the `IndexOfAny*` extension funcs) come out in their
     // own package, so a user type named `Utilities` no longer collides with
