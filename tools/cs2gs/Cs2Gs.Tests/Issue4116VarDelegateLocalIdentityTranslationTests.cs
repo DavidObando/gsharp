@@ -36,8 +36,8 @@ namespace Cs2Gs.Tests;
 /// <para>
 /// The emitted annotation is the structural arrow spelling (<c>() -&gt;
 /// void</c>), not the nominal name <c>Action</c>: <c>MapExplicitType</c>
-/// (issue #2835/#3841/#4113/#4205) treats <c>Func</c>/<c>Action</c>/
-/// <c>Predicate</c> as the structural spelling's own canonical identity and
+/// (issue #2835/#3841/#4113/#4205) treats <c>Func</c>/<c>Action</c>
+/// as the structural spelling's own canonical identity and
 /// still canonicalizes them, unlike a genuinely distinct nominal delegate
 /// such as <c>EventHandler</c>. What matters for correctness here is only
 /// that an explicit type clause exists at all, so gsc target-types the
@@ -103,7 +103,7 @@ namespace Corpus.Issue4116
     [Fact]
     public void VarEventHandlerLocal_FromDelegateCreationWithIncrementBody_KeepsNominalDelegateType()
     {
-        // A genuinely nominal (non-Func/Action/Predicate) delegate must keep
+        // A genuinely nominal (non-Func/Action) delegate must keep
         // its own name, not collapse to the structural spelling — the same
         // distinction issue #4113/#4205 draws for typeof(...) operands and
         // explicit generic type arguments.
