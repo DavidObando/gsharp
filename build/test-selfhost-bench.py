@@ -66,6 +66,13 @@ class RedirectTests(unittest.TestCase):
         redirected = bench.redirect_outputs("/out:/tree/a.dll\n", Path("/work dir/run"))
         self.assertIn('/out:"/work dir/run/a.dll"', redirected)
 
+    def test_bare_log_uses_a_run_local_default_without_changing_other_empty_options(self) -> None:
+        for spelling in ("/log:", '"/log:"', "/LOG:"):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(
+                    '/log:"/work dir/run/gsharp-compiler-debug.log"\n/out:\n',
+                    bench.redirect_outputs(spelling + "\n/out:\n", Path("/work dir/run")))
+
 
 class BuildTaskSpellingTests(unittest.TestCase):
     def test_a_whole_token_quoted_output_option_is_redirected(self) -> None:

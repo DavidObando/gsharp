@@ -12,7 +12,7 @@ python3 build/selfhost-bench.py \
 ```
 
 - **Same input for both compilers.** Each compiles the same response file, the one an SDK build of the migrated tree's `src/Core` writes (692 `.gs` files, 173 references, the G# internal analyzers, `/optimize+ /deterministic+ /debug:portable`). The packages come from build/selfhost-pack-stage1.py (#4669).
-- **Output.** Output options are redirected into the work directory.
+- **Output.** Output options are redirected into each run directory, including `/log:<file>`. Bare `/log:` uses a run-local `gsharp-compiler-debug.log` rather than the compiler's shared default log.
 - **Interleaving.** Runs alternate which compiler goes first, so load on a shared machine affects both.
 - **Measurement.** Each run is measured with GNU time: wall seconds, user+system CPU seconds, maximum RSS.
 - **Verdict.** It compares medians. Exit 1 when any migrated/native median ratio exceeds the budget; exit 2 on a failed compile.

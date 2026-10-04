@@ -57,8 +57,9 @@ def redirect_outputs(rsp_text: str, directory: Path) -> str:
             lines.append(line)
             continue
         name = Path(probe[len(option):].strip('"')).name
+        if not name and option == "/log:":
+            name = "gsharp-compiler-debug.log"
         if not name:
-            # `/log:` with no path means the compiler's default location; nothing to redirect.
             lines.append(line)
             continue
         target = str(directory / ("ref-" + name if option == "/refout:" else name))

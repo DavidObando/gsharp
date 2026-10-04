@@ -110,7 +110,7 @@ def project_files(tree: Path, patterns=("*.gsproj", "*.csproj")):
             yield path
 
 
-def normalize_pins(tree: Path) -> list[str]:
+def normalize_pins(tree: Path, rewritten: list[str] | None = None) -> list[str]:
     """Rewrites the generated per-project pin to the bare SDK name.
 
     Returns the tree-relative paths rewritten (empty for a global-json tree).
@@ -124,7 +124,7 @@ def normalize_pins(tree: Path) -> list[str]:
     if generated == SDK_ID:
         return []
 
-    rewritten = []
+    rewritten = [] if rewritten is None else rewritten
     for path in sorted(project_files(tree)):
         raw = path.read_bytes()
         bom = raw.startswith(b"\xef\xbb\xbf")
@@ -223,11 +223,11 @@ def pin_global_json(tree: Path, version: str) -> bool:
     return changed
 
 
-def stage_feed(tree: Path, nupkgs: list[Path]) -> list[dict]:
+def stage_feed(tree: Path, nupkgs: list[Path], staged: list[dict] | None = None) -> list[dict]:
     """Copies `nupkgs` into the tree's .nugs feed; returns what was staged and whether it replaced a file."""
     feed = tree / ".nugs"
     feed.mkdir(exist_ok=True)
-    staged = []
+    staged = [] if staged is None else staged
     for nupkg in nupkgs:
         target = feed / nupkg.name
         replaced = target.exists()
@@ -321,7 +321,8 @@ def prepare_tree(tree: Path, bootstrap: Path, report: dict | None = None) -> dic
     if not (tree / SDK_PROJECT).is_file():
         raise SelfHostError(f"{tree / SDK_PROJECT} not found; is {tree} a migrated repository?")
     report["bootstrapVersion"] = version
-    report["rewrittenPins"] = normalize_pins(tree)
+    report["rewrittenPins"] = []
+    normalize_pins(tree, report["rewrittenPins"])
     report["globalJsonUpdated"] = pin_global_json(tree, version)
     check_no_versioned_toolchain_pins(tree)
     required_versions = analyzer_verifier_versions(tree)
@@ -336,7 +337,8 @@ def prepare_tree(tree: Path, bootstrap: Path, report: dict | None = None) -> dic
             f"{ANALYZER_VERIFIER_ID} is referenced as a PackageReference in the tree but "
             f"{', '.join(missing)} is not beside the bootstrap {bootstrap.name}")
     report["feed"] = str(tree / ".nugs")
-    report["stagedPackages"] = stage_feed(tree, [bootstrap] + [path for path in siblings if path.is_file()])
+    report["stagedPackages"] = []
+    stage_feed(tree, [bootstrap] + [path for path in siblings if path.is_file()], report["stagedPackages"])
     return report
 
 
@@ -500,7 +502,7 @@ def main(argv: list[str]) -> int:
             nupkg = pack(tree, version, out, work, args.config)
             report["stage1Package"] = str(nupkg)
             report.update(verify(nupkg, bootstrap))
-    except SelfHostError as error:
+    except (SelfHostError, OSError, UnicodeError) as error:
         # The tree may already be modified; the report still records how.
         report["error"] = str(error)
         print(f"selfhost-pack-stage1: {error}", file=sys.stderr)

@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location("selfhost_pack_stage1", REPO / "build" / "selfhost-pack-stage1.py")
@@ -151,6 +152,76 @@ class GlobalJsonTests(unittest.TestCase):
 
 
 class PrepareTreeTests(unittest.TestCase):
+    def test_mid_scan_failure_retains_each_completed_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            # This sorts after Compiler and Core, which have already been rewritten.
+            bad = tree / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"
+            bad.write_bytes(b"\xff")
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            report: dict = {}
+
+            with self.assertRaises(UnicodeError):
+                packer.prepare_tree(tree, bootstrap, report)
+
+            expected = ["src/Compiler/Compiler.gsproj", "src/Core/Core.gsproj"]
+            self.assertEqual(expected, report.get("rewrittenPins", []))
+            for relative in expected:
+                self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / relative).read_text(encoding="utf-8-sig")))
+            self.assertNotIn("globalJsonUpdated", report)
+
+    def test_mid_staging_failure_retains_completed_copies_in_the_driver_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            sibling = nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg", {"x": b""})
+            copy = packer.shutil.copy2
+
+            def fail_sibling(source, target):
+                if source == sibling:
+                    raise OSError("injected sibling copy failure")
+                return copy(source, target)
+
+            import contextlib
+            with mock.patch.object(packer.shutil, "copy2", side_effect=fail_sibling), contextlib.redirect_stderr(io.StringIO()):
+                code = packer.main(["--tree", str(tree), "--bootstrap", str(bootstrap),
+                                    "--out", str(root / "out"), "--prepare-only"])
+            report = json.loads((root / "out/work/stage1-report.json").read_text())
+
+            self.assertEqual(1, code)
+            self.assertIn("injected sibling copy failure", report["error"])
+            self.assertEqual([{"package": bootstrap.name, "replacedExisting": False}], report.get("stagedPackages", []))
+            self.assertEqual(bootstrap.read_bytes(), (tree / ".nugs" / bootstrap.name).read_bytes())
+            self.assertFalse((tree / ".nugs" / sibling.name).exists())
+            self.assertTrue(report["globalJsonUpdated"])
+
+    def test_mid_write_failure_retains_only_successful_rewrites_in_the_driver_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            write_bytes = Path.write_bytes
+
+            def fail_core(path, data):
+                if path == tree / packer.CORE_PROJECT:
+                    raise OSError("injected Core write failure")
+                return write_bytes(path, data)
+
+            import contextlib
+            with mock.patch.object(Path, "write_bytes", fail_core), contextlib.redirect_stderr(io.StringIO()):
+                code = packer.main(["--tree", str(tree), "--bootstrap", str(bootstrap),
+                                    "--out", str(root / "out"), "--prepare-only"])
+            report = json.loads((root / "out/work/stage1-report.json").read_text())
+
+            self.assertEqual(1, code)
+            self.assertIn("injected Core write failure", report["error"])
+            self.assertEqual(["src/Compiler/Compiler.gsproj"], report.get("rewrittenPins", []))
+            self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / "src/Compiler/Compiler.gsproj").read_text()))
+            self.assertNotEqual(packer.SDK_ID, packer.project_sdk((tree / packer.CORE_PROJECT).read_text(encoding="utf-8-sig")))
+            self.assertNotIn("globalJsonUpdated", report)
+
     def test_prepare_stages_the_bootstrap_and_its_sibling_and_pins_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
