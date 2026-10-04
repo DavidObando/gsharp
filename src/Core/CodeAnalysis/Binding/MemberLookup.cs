@@ -5958,7 +5958,7 @@ internal sealed class MemberLookup
         {
             var slot = layout.GenericParameterPosition;
             if (effectiveMethodTypeArguments.IsDefaultOrEmpty
-                || slot >= effectiveMethodTypeArguments.Length
+                || (uint)slot >= (uint)effectiveMethodTypeArguments.Length
                 || effectiveMethodTypeArguments[slot] == null
                 || effectiveMethodTypeArguments[slot] == TypeSymbol.Error)
             {

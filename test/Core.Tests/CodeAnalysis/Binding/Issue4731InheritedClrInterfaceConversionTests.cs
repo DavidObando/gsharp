@@ -24,12 +24,16 @@ public sealed class Issue4731InheritedClrInterfaceConversionTests
     [InlineData(typeof(object), "error-slot")]
     [InlineData(typeof(object), "short-vector")]
     [InlineData(typeof(object), "missing-unrelated-slot")]
+    [InlineData(typeof(object), "present-nullable")]
+    [InlineData(typeof(object), "missing-unrelated-slot-nullable")]
     [InlineData(typeof(string), "absent")]
     [InlineData(typeof(string), "present")]
     [InlineData(typeof(string), "null-slot")]
     [InlineData(typeof(string), "error-slot")]
     [InlineData(typeof(string), "short-vector")]
     [InlineData(typeof(string), "missing-unrelated-slot")]
+    [InlineData(typeof(string), "present-nullable")]
+    [InlineData(typeof(string), "missing-unrelated-slot-nullable")]
     [InlineData(typeof(int), "absent")]
     [InlineData(typeof(int), "present")]
     [InlineData(typeof(int), "null-slot")]
@@ -47,15 +51,21 @@ public sealed class Issue4731InheritedClrInterfaceConversionTests
         Assert.Equal(
             ClrNullabilityState.NotAnnotated,
             ClrNullability.GetParameterDeclaredState(definition.GetParameters()[1]));
+        var nullableContext = symbolicArguments is "present-nullable" or "missing-unrelated-slot-nullable";
         var contextSymbol = TypeSymbol.FromClrType(contextType);
+        if (nullableContext)
+        {
+            contextSymbol = NullableTypeSymbol.Get(contextSymbol);
+        }
+
         var arguments = symbolicArguments switch
         {
             "absent" => default,
-            "present" => ImmutableArray.Create<TypeSymbol>(TypeSymbol.String, contextSymbol),
+            "present" or "present-nullable" => ImmutableArray.Create<TypeSymbol>(TypeSymbol.String, contextSymbol),
             "null-slot" => ImmutableArray.Create<TypeSymbol>(TypeSymbol.String, null),
             "error-slot" => ImmutableArray.Create<TypeSymbol>(TypeSymbol.String, TypeSymbol.Error),
             "short-vector" => ImmutableArray.Create<TypeSymbol>(TypeSymbol.String),
-            "missing-unrelated-slot" => ImmutableArray.Create<TypeSymbol>(null, contextSymbol),
+            "missing-unrelated-slot" or "missing-unrelated-slot-nullable" => ImmutableArray.Create<TypeSymbol>(null, contextSymbol),
             _ => throw new ArgumentOutOfRangeException(nameof(symbolicArguments)),
         };
         var target = MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
@@ -64,7 +74,7 @@ public sealed class Issue4731InheritedClrInterfaceConversionTests
             1,
             arguments);
 
-        if (symbolicArguments is "present" or "missing-unrelated-slot")
+        if (symbolicArguments is "present" or "missing-unrelated-slot" || nullableContext)
         {
             Assert.Equal(contextSymbol, target);
         }
