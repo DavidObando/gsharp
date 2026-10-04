@@ -22,6 +22,89 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
 {
     [Theory]
+    [InlineData("[]Other", "Item", "GS0155")]
+    [InlineData("List[Other]", "Item", "GS0155")]
+    [InlineData("sequence[List[Other]]", "List[Item]", "GS0155")]
+    [InlineData("sequence[(Other, int32)]", "(Item, int32)", "GS0156")]
+    [InlineData("sequence[ImmutableArray[Item]]", "IEnumerable[Item]", "GS0159")]
+    public void ImportedGenericMethodSlot_UnrelatedSourceShapes_AreRejected(
+        string sourceType,
+        string elementType,
+        string diagnostic)
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile($$"""
+            package Issue4731.GenericSlotNegative
+            import System.Collections.Generic
+            import System.Collections.Immutable
+            import System.Linq
+            class Item {}
+            class Other {}
+            func Unsafe(value {{sourceType}}) int32 ->
+                Enumerable.Count[{{elementType}}](value)
+            """);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(
+            result.Output.Contains("error " + diagnostic + ":", StringComparison.Ordinal),
+            result.Output);
+        Assert.False(File.Exists(result.AssemblyPath));
+    }
+
+    [Fact]
+    public void ImportedGenericMethodSlots_NullableReferencePolicies_PreserveActualRuntimeSignatures()
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile("""
+            package Issue4731.NullableClrArgument
+            import System.Collections.Generic
+            import System.Linq
+            import Issue4731.Contracts
+            enum Kind { First, Second }
+            class Child {}
+            class Entity {
+                prop Children ICollection[Child]? { get; init; }
+            }
+            public func Minimum(values IEnumerable[Kind]?) Kind -> values.Min()
+            public func Navigation(source IQueryRoot[Entity]) IQueryRoot[Entity] ->
+                source.IncludeChild((entity Entity) -> entity.Children)
+                    .ThenChild((child Child) -> child)
+            public func Probe() int32 {
+                let values = []Kind{Kind.Second, Kind.First}
+                let minimum = Minimum(values)
+                let navigation = Navigation(QueryRoot[Entity](9))
+                return if minimum == Kind.First { navigation.Count } else { -1 }
+            }
+            """);
+        Assert.True(result.ExitCode == 0, result.Output);
+        IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
+        var assembly = EmittedFixture.Load(result.AssemblyPath);
+        Assert.Equal(11, FindMethod(assembly, "Probe").Invoke(null, null));
+        var kind = Assert.Single(assembly.GetTypes(), type => type.Name == "Kind");
+        var child = Assert.Single(assembly.GetTypes(), type => type.Name == "Child");
+        var entity = Assert.Single(assembly.GetTypes(), type => type.Name == "Entity");
+        var minimum = FindMethod(assembly, "Minimum");
+        Assert.Equal(typeof(IEnumerable<>).MakeGenericType(kind), Assert.Single(minimum.GetParameters()).ParameterType);
+        var nil = Assert.Throws<TargetInvocationException>(
+            () => minimum.Invoke(null, new object[] { null }));
+        Assert.IsType<ArgumentNullException>(nil.InnerException);
+        var navigation = FindMethod(assembly, "Navigation");
+        var body = Assert.IsAssignableFrom<MethodBody>(navigation.GetMethodBody());
+        var calls = IlInstructionReader.Read(Assert.IsType<byte[]>(body.GetILAsByteArray()))
+            .Where(instruction => instruction.OpCode == OpCodes.Call)
+            .Select(instruction => navigation.Module.ResolveMethod(instruction.MetadataToken.GetValueOrDefault()))
+            .OfType<MethodInfo>()
+            .ToArray();
+        var include = Assert.Single(calls, method => method.Name == "IncludeChild");
+        var then = Assert.Single(calls, method => method.Name == "ThenChild");
+        Assert.Equal(new[] { entity, child, child }, then.GetGenericArguments());
+        var property = Assert.Single(include.ReturnType.GetGenericArguments().Skip(1));
+        Assert.Equal(typeof(ICollection<>).MakeGenericType(child), property);
+        var expectedProperty = then.GetParameters()[0].ParameterType.GetGenericArguments()[1];
+        Assert.Equal(typeof(IEnumerable<>).MakeGenericType(child), expectedProperty);
+        Assert.Equal(include.ReturnType.GetGenericTypeDefinition(), then.GetParameters()[0].ParameterType.GetGenericTypeDefinition());
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task SymbolicSequenceInterfaces_BoxUnboxAndCheckActualRuntimeShape(bool asynchronous)
@@ -332,6 +415,29 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
         }
 
         public class SequenceOwner<T> : System.Collections.Generic.List<T> { }
+        public interface IQueryRoot<out T> { int Count { get; } }
+        public interface IQueryProjection<out T, out TProperty> : IQueryRoot<T> { }
+        public sealed class QueryRoot<T> : IQueryRoot<T>
+        {
+            public QueryRoot(int count) => Count = count;
+            public int Count { get; }
+        }
+        public sealed class QueryProjection<T, TProperty> : IQueryProjection<T, TProperty>
+        {
+            public QueryProjection(int count) => Count = count;
+            public int Count { get; }
+        }
+        public static class QueryExtensions
+        {
+            public static IQueryProjection<T, TProperty> IncludeChild<T, TProperty>(
+                this IQueryRoot<T> source,
+                System.Linq.Expressions.Expression<System.Func<T, TProperty>> navigation)
+                => new QueryProjection<T, TProperty>(source.Count + 1);
+            public static IQueryRoot<T> ThenChild<T, TPrevious, TProperty>(
+                this IQueryProjection<T, System.Collections.Generic.IEnumerable<TPrevious>> source,
+                System.Linq.Expressions.Expression<System.Func<TPrevious, TProperty>> navigation)
+                => new QueryProjection<T, TProperty>(source.Count + 1);
+        }
         public readonly struct AsyncValue<T> : System.Collections.Generic.IAsyncEnumerable<T>
         {
             private readonly T value;

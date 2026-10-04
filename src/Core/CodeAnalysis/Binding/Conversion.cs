@@ -370,6 +370,21 @@ public sealed class Conversion
     }
 
     /// <summary>
+    /// Checks the actual runtime relation of a slot already admitted by CLR
+    /// applicability; this does not replace a declared nullability contract.
+    /// </summary>
+    /// <param name="source">The argument's actual type.</param>
+    /// <param name="target">The emitted MethodSpec slot.</param>
+    /// <returns>Whether their runtime shapes satisfy identity or reference variance.</returns>
+    internal static bool HasClrArgumentRuntimeRelation(TypeSymbol source, TypeSymbol target)
+        => TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(source, target)
+            || (!NullableLifting.IsAnyValueTypeNullable(source as NullableTypeSymbol)
+                && TryClassifyConstructedImportedReferenceConversion(
+                    source.StripToBareShape(),
+                    target,
+                    clrArgumentBoundary: true));
+
+    /// <summary>
     /// Classifies only pre-ADR-0148 conversions. Projection planning uses this
     /// to keep member conversion non-recursive.
     /// </summary>
@@ -3238,9 +3253,14 @@ public sealed class Conversion
     /// imported generic types from their symbolic open-definition hierarchy
     /// instead of their possibly-erased CLR probe types.
     /// </summary>
+    /// <param name="from">The actual source shape.</param>
+    /// <param name="to">The actual target shape.</param>
+    /// <param name="clrArgumentBoundary">Whether CLR applicability already admitted reference annotations.</param>
+    /// <returns>Whether the symbolic hierarchy and variance admit the relation.</returns>
     private static bool TryClassifyConstructedImportedReferenceConversion(
         TypeSymbol from,
-        TypeSymbol? to)
+        TypeSymbol? to,
+        bool clrArgumentBoundary = false)
     {
         if (from == null
             || !TryGetConstructedGenericShape(to, out var targetOpen, out var targetArguments)
@@ -3341,12 +3361,17 @@ public sealed class Conversion
             // classifies, matching C# (issue #3501 Translator burn-down).
             var variance = genericParameters[i].GenericParameterAttributes
                 & System.Reflection.GenericParameterAttributes.VarianceMask;
+            var clrReferenceArguments = clrArgumentBoundary
+                && IsReferenceTypeArgument(sourceArgument)
+                && IsReferenceTypeArgument(targetArgument);
             var compatible = variance switch
             {
                 System.Reflection.GenericParameterAttributes.Covariant =>
-                    IsVarianceArgumentCompatible(sourceArgument, targetArgument, isDelegateConformanceBoundary),
+                    IsVarianceArgumentCompatible(sourceArgument, targetArgument, isDelegateConformanceBoundary)
+                        || (clrReferenceArguments && HasClrArgumentRuntimeRelation(sourceArgument, targetArgument)),
                 System.Reflection.GenericParameterAttributes.Contravariant =>
-                    IsVarianceArgumentCompatible(targetArgument, sourceArgument, isDelegateConformanceBoundary),
+                    IsVarianceArgumentCompatible(targetArgument, sourceArgument, isDelegateConformanceBoundary)
+                        || (clrReferenceArguments && HasClrArgumentRuntimeRelation(targetArgument, sourceArgument)),
                 _ => false,
             };
             if (!compatible)
