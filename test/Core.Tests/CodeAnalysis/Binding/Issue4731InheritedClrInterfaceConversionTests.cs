@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection.Metadata;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -16,6 +17,44 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 public sealed class Issue4731InheritedClrInterfaceConversionTests
 {
+    [Theory]
+    [InlineData(typeof(object), false)]
+    [InlineData(typeof(object), true)]
+    [InlineData(typeof(string), false)]
+    [InlineData(typeof(string), true)]
+    [InlineData(typeof(int), false)]
+    [InlineData(typeof(int), true)]
+    public void ClosedClrInference_DoesNotInventSymbolicMethodSlotAnnotations(
+        Type contextType,
+        bool symbolicArguments)
+    {
+        var definition = typeof(MethodDefinition).GetMethods()
+            .Single(method => method.Name == nameof(MethodDefinition.DecodeSignature));
+        var closed = definition.MakeGenericMethod(typeof(string), contextType);
+        Assert.Equal(contextType, closed.GetParameters()[1].ParameterType);
+        Assert.Equal(
+            ClrNullabilityState.NotAnnotated,
+            ClrNullability.GetParameterDeclaredState(definition.GetParameters()[1]));
+        var contextSymbol = TypeSymbol.FromClrType(contextType);
+        var arguments = symbolicArguments
+            ? ImmutableArray.Create<TypeSymbol>(TypeSymbol.String, contextSymbol)
+            : default;
+        var target = MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+            TypeSymbol.FromClrType(typeof(MethodDefinition)),
+            closed,
+            1,
+            arguments);
+
+        if (symbolicArguments)
+        {
+            Assert.Equal(contextSymbol, target);
+        }
+        else
+        {
+            Assert.Null(target);
+        }
+    }
+
     [Theory]
     [InlineData("ImmutableArray[int32]", "IEnumerable[object]")]
     [InlineData("ImmutableArray[List[Item]]", "IEnumerable[List[object]]")]

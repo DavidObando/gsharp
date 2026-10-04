@@ -5951,6 +5951,16 @@ internal sealed class MemberLookup
             effectiveMethodTypeArguments = merged.MoveToImmutable();
         }
 
+        // A CLR-inferred closure carries runtime types, not the caller's
+        // reference annotations. It cannot invent a mandatory method-slot
+        // contract when no symbolic method arguments were inferred.
+        if (layout.IsGenericParameter
+            && layout.DeclaringMethod != null
+            && effectiveMethodTypeArguments.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
         if ((effectiveMethodTypeArguments.IsDefaultOrEmpty
                 || effectiveMethodTypeArguments.Any(static type => type == null || type == TypeSymbol.Error))
             && !closedMethod.IsGenericMethodDefinition)
