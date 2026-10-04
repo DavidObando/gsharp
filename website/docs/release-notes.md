@@ -16,6 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **The nullable-classifier reflection test remains self-migratable** (issue #4779). Its intentional null input/out argument storage now declares nullable object elements, so the containing test class compiles as G# without widening fixed production contracts or changing the reflection assertions.
 - **cs2gs preserves null-observing local stores before `??` fallbacks** (issue [#4770](https://github.com/DavidObando/gsharp/issues/4770)). The shared nullable-usage scan now recognizes coalescing, including parenthesized observations, so an intentionally null params-slot classification reaches its `"not-reported"` fallback instead of throwing at an inserted assertion. Defensive coalescing does not widen fixed parameter or member contracts; explicit non-null bridges and generic-store diagnostics retain their existing policy.
 - **cs2gs preserves reference-array covariance inside null coalescing** (issue #4768). Derived/base array operands now use the shared explicit conversion path, with a nullable left cast that preserves nil until the fallback decision. The compiler accepts those nullable checked array casts, including nullable reference elements; array identity, result type and short-circuit evaluation are preserved, while G# slices remain implicitly invariant and incompatible value arrays or ranks remain rejected.
 
