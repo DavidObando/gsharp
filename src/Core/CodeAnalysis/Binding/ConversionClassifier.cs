@@ -367,9 +367,9 @@ internal sealed class ConversionClassifier
 
         return sourceType?.ClrType != null
             && targetType?.ClrType != null
-            && ClrOperatorResolution.TryResolveConversion(
-                sourceType.ClrType,
-                targetType.ClrType,
+            && ClrOperatorResolution.TryResolveConversionForTypes(
+                sourceType,
+                targetType,
                 allowExplicit: false,
                 out var method,
                 out _)
@@ -887,7 +887,7 @@ internal sealed class ConversionClassifier
             }
 
             if (expression.Type?.ClrType != null && type?.ClrType != null
-                && ClrOperatorResolution.TryResolveConversion(expression.Type.ClrType, type.ClrType, allowExplicit, out var convMethod, out var isExplicit)
+                && ClrOperatorResolution.TryResolveConversionForTypes(expression.Type, type, allowExplicit, out var convMethod, out var isExplicit)
                 && (allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(expression.Type, type, convMethod)))
             {
                 _ = isExplicit;
@@ -1035,9 +1035,9 @@ internal sealed class ConversionClassifier
             }
 
             if (expression.Type?.ClrType != null && type?.ClrType != null
-                && ClrOperatorResolution.TryResolveConversion(
-                    expression.Type.ClrType,
-                    type.ClrType,
+                && ClrOperatorResolution.TryResolveConversionForTypes(
+                    expression.Type,
+                    type,
                     allowExplicit,
                     out var projectionConvMethod,
                     out _)
@@ -1840,7 +1840,7 @@ internal sealed class ConversionClassifier
         if (argument.Type?.ClrType != null
             && expectedType.ClrType != null
             && argument.Type != TypeSymbol.Error
-            && ClrOperatorResolution.TryResolveConversion(argument.Type.ClrType, expectedType.ClrType, allowExplicit: false, out var convMethod, out _)
+            && ClrOperatorResolution.TryResolveConversionForTypes(argument.Type, expectedType, allowExplicit: false, out var convMethod, out _)
             && BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType, convMethod))
         {
             converted = new BoundClrConversionCallExpression(null, argument, convMethod, expectedType);

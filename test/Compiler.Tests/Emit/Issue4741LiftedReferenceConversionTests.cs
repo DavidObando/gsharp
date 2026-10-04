@@ -43,6 +43,55 @@ public sealed class Issue4741LiftedReferenceConversionTests
     }
 
     [Theory]
+    [InlineData("NullableInputToken", "Box(value)", "(Box)value", "Box")]
+    [InlineData("NullableInputToken", "Box?(value)", "(Box?)value", "Box?")]
+    [InlineData("NullableImplicitInputToken", "value", "value", "Box")]
+    [InlineData("DualNullableInputToken", "value", "value", "Box")]
+    [InlineData("DualNullableInputToken", "value", "value", "Box?")]
+    [InlineData("GenericNullableInputToken[int32]", "Box(value)", "(Box)value", "Box", "GenericNullableInputToken<int>")]
+    [InlineData("GenericNullableInputToken[string]", "Box(value)", "(Box)value", "Box", "GenericNullableInputToken<string>")]
+    [InlineData("NullableReturningInputToken", "Box?(value)", "(Box?)value", "Box?", null, "111,110,18,10,11,10")]
+    public void ImportedNullableOperand_ActuallyRunsOnNullAndPreservesItsContract(
+        string token,
+        string cast,
+        string csharpCast,
+        string result,
+        string csharpToken = null,
+        string expectedOutput = "110,110,18,10,11,10")
+    {
+        RunPair(
+            $$"""
+            func Raw(present bool) {{result}} {
+                return {{cast.Replace("value", $"Probe.Read[{token}](present)", StringComparison.Ordinal)}}
+            }
+            func Convert(present bool) Box? -> Raw(present)
+            """,
+            $$"""
+            static {{result}} Raw(bool present) {
+                return {{csharpCast.Replace("value", $"Probe.Read<{csharpToken ?? token}>(present)", StringComparison.Ordinal)}};
+            }
+            static Box? Convert(bool present) => Raw(present);
+            """,
+            expectedOutput);
+    }
+
+    [Fact]
+    public void ImportedNullableOperand_NullableReturnCannotSatisfyANonNullableContract()
+    {
+        RunPair(
+            """
+            func Raw(present bool) Box -> Probe.Read[NullableReturningImplicitInputToken](present)
+            func Convert(present bool) Box? -> Raw(present)
+            """,
+            """
+            static Box Raw(bool present) => Probe.Read<NullableReturningImplicitInputToken>(present);
+            static Box? Convert(bool present) => Raw(present);
+            """,
+            expectedOutput: "111,110,18,10,11,10",
+            expectedDiagnostic: "GS0155");
+    }
+
+    [Theory]
     [InlineData("initializer")]
     [InlineData("assignment")]
     [InlineData("argument")]
@@ -317,6 +366,31 @@ public sealed class Issue4741LiftedReferenceConversionTests
                 }
                 public sealed class OrdinaryToken {
                     public static explicit operator Box(OrdinaryToken? value) { Probe.Calls++; return new Box(); }
+                }
+                public struct NullableInputToken {
+                    public static explicit operator Box(NullableInputToken? value) { Probe.Calls++; return new Box(); }
+                }
+                public struct NullableImplicitInputToken {
+                    public static implicit operator Box(NullableImplicitInputToken? value) { Probe.Calls++; return new Box(); }
+                }
+                public struct DualNullableInputToken {
+                    public static implicit operator Box(DualNullableInputToken value) { Probe.Calls++; return new Box(); }
+                    public static implicit operator Box(DualNullableInputToken? value) { Probe.Calls++; return new Box(); }
+                }
+                public struct GenericNullableInputToken<T> {
+                    public static explicit operator Box(GenericNullableInputToken<T>? value) { Probe.Calls++; return new Box(); }
+                }
+                public struct NullableReturningInputToken {
+                    public static explicit operator Box?(NullableReturningInputToken? value) {
+                        Probe.Calls++;
+                        return value.HasValue ? new Box() : null;
+                    }
+                }
+                public struct NullableReturningImplicitInputToken {
+                    public static implicit operator Box?(NullableReturningImplicitInputToken? value) {
+                        Probe.Calls++;
+                        return value.HasValue ? new Box() : null;
+                    }
                 }
                 public static class Probe {
                     public static int Calls;

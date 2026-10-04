@@ -54,14 +54,8 @@ public sealed class BoundClrConversionCallExpression : BoundExpression
         Method = method;
         Function = function;
         FunctionOwnerType = functionOwnerType;
-        Type = resultType;
         IsLifted = ComputeIsLifted(source.Type, resultType, method, function, functionOwnerType);
-        if (IsLifted && resultType is not NullableTypeSymbol)
-        {
-            // The effective conversion can return nil even when op_Explicit
-            // itself promises a non-null reference result (#4741).
-            Type = NullableTypeSymbol.Get(resultType);
-        }
+        Type = GetEffectiveResultType(source.Type, resultType, method, IsLifted);
     }
 
     public BoundExpression Source { get; }
@@ -89,7 +83,32 @@ public sealed class BoundClrConversionCallExpression : BoundExpression
             && Conversion.ClassifyNonStructural(NullableTypeSymbol.Get(target), target).IsImplicit;
 
     internal static bool CanApplyImplicitClrConversion(TypeSymbol source, TypeSymbol target, MethodInfo method)
-        => !ComputeIsLifted(source, target, method, null, null) || CanLiftImplicitlyTo(target);
+        => Conversion.ClassifyNonStructural(
+            GetEffectiveResultType(source, target, method, ComputeIsLifted(source, target, method, null, null)),
+            target).IsImplicit;
+
+    private static TypeSymbol GetEffectiveResultType(TypeSymbol source, TypeSymbol target, MethodInfo? method, bool isLifted)
+    {
+        if (isLifted)
+        {
+            return NullableTypeSymbol.Get(target);
+        }
+
+        if (source is NullableTypeSymbol nullable
+            && NullableLifting.IsAnyValueTypeNullable(nullable)
+            && method?.GetParameters() is { Length: 1 } parameters
+            && ClrTypeUtilities.AreSame(parameters[0].ParameterType, NullableLifting.GetEffectiveClrType(source)))
+        {
+            var declaredResult = ClrNullability.GetReturnTypeSymbol(method);
+            if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(declaredResult, target)
+                && !Conversion.ClassifyNonStructural(declaredResult, target).IsImplicit)
+            {
+                return declaredResult;
+            }
+        }
+
+        return target;
+    }
 
     private static bool ComputeIsLifted(
         TypeSymbol sourceType,

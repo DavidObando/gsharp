@@ -139,11 +139,14 @@ without calling the operator, and a present operand calls it once. This
 applies to explicit `Box(value)` / `Box?(value)` casts and contextual implicit
 conversions into a nil-accepting target; a non-nullable `Box` destination still
 requires a non-null result. The operand is evaluated once. A source-declared
-G# operator accepting `Token?` itself is an ordinary conversion, not this
-lift; it receives nil, controls its own result, and takes precedence over the
-lift of an operator accepting `Token`. Imported CLR operators with a nullable
-value parameter remain unsupported (`GS0155`, issue
-[#4737](https://github.com/DavidObando/gsharp/issues/4737)).
+G# or imported CLR operator accepting `Token?` itself is an ordinary
+conversion, not this lift; it receives nil, controls its own result, and
+takes precedence over the lift of an operator accepting `Token`. Imported
+nullable-value operands are matched using their actual `Nullable<Token>`
+signature, not erased to `Token`. Their declared reference-result
+nullability remains part of the conversion contract. Other imported
+nullable-value signature gaps remain tracked in issue
+[#4737](https://github.com/DavidObando/gsharp/issues/4737).
 
 ```gsharp
 class Vec {

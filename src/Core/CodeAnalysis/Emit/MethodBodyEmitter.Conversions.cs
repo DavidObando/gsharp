@@ -726,7 +726,7 @@ internal sealed partial class MethodBodyEmitter
         // no built-in emit path fires. This covers types like JsonNode that
         // expose conversion operators to string, int, bool, etc.
         if (from.ClrType != null && to.ClrType != null
-            && ClrOperatorResolution.TryResolveConversion(from.ClrType, to.ClrType, allowExplicit: true, out var userConvMethod, out _))
+            && ClrOperatorResolution.TryResolveConversionForTypes(from, to, allowExplicit: true, out var userConvMethod, out _))
         {
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(this.outer.memberRefs.GetMethodReference(userConvMethod));
