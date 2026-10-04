@@ -690,7 +690,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.MapDelegateLikeReturnType(invoke, isAsync: false, node.ReturnType.GetLocation())
                 : this.MapTypeSyntax(node.ReturnType);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
-            bool isNested = symbol?.ContainingType != null;
+            bool isNested = CSharpTypeMapper.IsLiftedNestedDelegate(symbol);
             string name = isNested
                 ? this.typeMapper.LiftedNestedDelegateName(symbol, this.context)
                 : this.EmittedName(symbol, node.Identifier.ValueText);

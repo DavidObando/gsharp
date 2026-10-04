@@ -1039,17 +1039,25 @@ public sealed partial class CSharpToGSharpTranslator
     /// </summary>
     /// <param name="method">The extension method.</param>
     /// <returns><see langword="true"/> when a signature type names an owner-private nested type.</returns>
-    private static bool SignatureTypesNamePrivateNestedType(IMethodSymbol method)
+    private static bool SignatureTypesNamePrivateNestedType(IMethodSymbol method) =>
+        SignatureTypesNamePrivateNestedType(
+            method,
+            method.ContainingType,
+            new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+
+    private static bool SignatureTypesNamePrivateNestedType(
+        IMethodSymbol method,
+        INamedTypeSymbol owner,
+        HashSet<ITypeSymbol> visited)
     {
-        INamedTypeSymbol owner = method.ContainingType;
-        if (NamesPrivateNestedType(method.ReturnType, owner))
+        if (NamesPrivateNestedType(method.ReturnType, owner, visited))
         {
             return true;
         }
 
         foreach (IParameterSymbol parameter in method.Parameters)
         {
-            if (NamesPrivateNestedType(parameter.Type, owner))
+            if (NamesPrivateNestedType(parameter.Type, owner, visited))
             {
                 return true;
             }
@@ -1059,7 +1067,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             foreach (ITypeSymbol constraint in typeParameter.ConstraintTypes)
             {
-                if (NamesPrivateNestedType(constraint, owner))
+                if (NamesPrivateNestedType(constraint, owner, visited))
                 {
                     return true;
                 }
@@ -1182,23 +1190,34 @@ public sealed partial class CSharpToGSharpTranslator
         }
     }
 
-    private static bool NamesPrivateNestedType(ITypeSymbol type, INamedTypeSymbol owner)
+    private static bool NamesPrivateNestedType(ITypeSymbol type, INamedTypeSymbol owner) =>
+        NamesPrivateNestedType(
+            type,
+            owner,
+            new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+
+    private static bool NamesPrivateNestedType(
+        ITypeSymbol type,
+        INamedTypeSymbol owner,
+        HashSet<ITypeSymbol> visited)
     {
+        if (!visited.Add(type))
+        {
+            return false;
+        }
+
         switch (type)
         {
             case IArrayTypeSymbol array:
-                return NamesPrivateNestedType(array.ElementType, owner);
+                return NamesPrivateNestedType(array.ElementType, owner, visited);
             case IPointerTypeSymbol pointer:
-                return NamesPrivateNestedType(pointer.PointedAtType, owner);
+                return NamesPrivateNestedType(pointer.PointedAtType, owner, visited);
             case IFunctionPointerTypeSymbol functionPointer:
-                if (NamesPrivateNestedType(functionPointer.Signature.ReturnType, owner))
+                return SignatureTypesNamePrivateNestedType(functionPointer.Signature, owner, visited);
+            case ITypeParameterSymbol typeParameter:
+                foreach (ITypeSymbol constraint in typeParameter.ConstraintTypes)
                 {
-                    return true;
-                }
-
-                foreach (IParameterSymbol parameter in functionPointer.Signature.Parameters)
-                {
-                    if (NamesPrivateNestedType(parameter.Type, owner))
+                    if (NamesPrivateNestedType(constraint, owner, visited))
                     {
                         return true;
                     }
@@ -1206,12 +1225,33 @@ public sealed partial class CSharpToGSharpTranslator
 
                 return false;
             case INamedTypeSymbol named:
+                bool liftedDelegate = CSharpTypeMapper.IsLiftedNestedDelegate(named);
+                if (liftedDelegate)
+                {
+                    // Lifting makes the nominal delegate reachable, not private types
+                    // exposed by its declaration. Visit that declaration cycle-safely.
+                    if (named.DelegateInvokeMethod is IMethodSymbol invoke
+                        && SignatureTypesNamePrivateNestedType(invoke, owner, visited))
+                    {
+                        return true;
+                    }
+
+                    foreach (ITypeParameterSymbol parameter in named.TypeParameters)
+                    {
+                        if (NamesPrivateNestedType(parameter, owner, visited))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
                 // Every type in the containing chain: it may be an owner-private nested type
                 // itself, and it may carry type arguments (`Outer<Box>.Inner` names `Box`
                 // through the CONTAINING type's arguments, not Inner's own).
                 for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
                 {
-                    if (SymbolEqualityComparer.Default.Equals(current.ContainingType, owner)
+                    if (!liftedDelegate
+                        && SymbolEqualityComparer.Default.Equals(current.ContainingType, owner)
                         && current.DeclaredAccessibility == Accessibility.Private)
                     {
                         return true;
@@ -1219,7 +1259,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                     foreach (ITypeSymbol argument in current.TypeArguments)
                     {
-                        if (NamesPrivateNestedType(argument, owner))
+                        if (NamesPrivateNestedType(argument, owner, visited))
                         {
                             return true;
                         }

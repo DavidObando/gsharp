@@ -185,7 +185,12 @@ function cannot name the private type; a method whose signature names one cannot
 public API, and one that only has an attribute naming it keeps the in-owner helper and
 its forwarding companion, the companion leaving off only the attributes that name the
 private type, since at top level they cannot resolve; every other attribute is copied). The
-description that follows applies to those two cases only.
+description that follows applies to those two cases only. Source-declared nested
+delegates use the mapper's allocated lifted top-level name, so their original
+private nominal container is not itself an inaccessible type exposure. Their
+invoke signature, delegate constraints and generic containing type arguments are
+still checked for genuine private types, cycle-safely. Imported delegates retain
+their nominal CLR accessibility and identity; they are not source-lifted.
 
 Issue #3413 adds one ownership-preserving exception: when the declaring static
 class contains a private nested aggregate, its extension methods stay as
