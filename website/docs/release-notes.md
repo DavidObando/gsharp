@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **An inherited non-virtual property accessor can satisfy a G# interface across assemblies** (issue [#4717](https://github.com/DavidObando/gsharp/issues/4717)). The derived class now emits a private forwarding slot that calls the exact imported accessor selected by binding, including setters, init accessors, indexers and constructed generic bases. Previously the two compilations succeeded but the derived type failed IL verification and runtime loading. Ordinary base accessors stay non-virtual; existing virtual and inherited interface mappings are preserved, and reference assemblies carry the same forwarding-slot metadata.
+- **Ordinary class methods now emit non-virtual CLR metadata as specified by ADR-0017** (issue [#4677](https://github.com/DavidObando/gsharp/issues/4677)). `open` methods, overrides, and interface implementations retain their virtual slots, including members inherited by a descendant introducing an interface, synthesized sync/async iterators, and symbolic generic event accessors. Unrelated inherited members remain non-virtual.
 - **cs2gs preserves C# value and generic parameter metadata names** (issue #4680, ADR-0170). Reserved names use `$name` in declarations, references, and named arguments instead of the lossy `name_` rename, regardless of member visibility. Named-argument binding compares semantic names, so `$scope:` binds the CLR parameter `scope`; escaped spelling preserves argument slots, optional defaults, and lexical evaluation order. Documentation tags use the original unescaped names. Locals and other names without metadata retain collision-safe sanitization.
 
 ### Reader's overview

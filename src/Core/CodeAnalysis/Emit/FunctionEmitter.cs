@@ -219,7 +219,8 @@ internal sealed class FunctionEmitter
         FunctionSymbol function,
         BoundBlockStatement body,
         bool isEntryPoint,
-        bool isSynthesizedEntryPointStub = false)
+        bool isSynthesizedEntryPointStub = false,
+        bool isInterfaceImplementation = false)
     {
         // ADR-0086 / issue #727 + ADR-0092 / issue #758: P/Invoke functions
         // skip body emission. Classic @DllImport functions route through the
@@ -240,7 +241,11 @@ internal sealed class FunctionEmitter
         var bodyEmission = this.EmitFunctionBody(function, bodySelection.Body, bodySelection.AsyncPlan, isEntryPoint);
         var signature = this.EncodeFunctionSignature(function, bodySelection.AsyncPlan, isEntryPoint);
         var methodName = GetMethodMetadataName(function, isEntryPoint, isSynthesizedEntryPointStub);
-        var methodAttributes = GetMethodAttributes(function, isEntryPoint, isSynthesizedEntryPointStub);
+        var methodAttributes = GetMethodAttributes(
+            function,
+            isEntryPoint,
+            isSynthesizedEntryPointStub,
+            isInterfaceImplementation || this.emitCtx.InheritedInterfaceMethods.Contains(function));
         var parameterMetadata = this.EmitParameterMetadata(function, bodySelection.AsyncPlan, isEntryPoint);
         var handle = this.EmitMethodDefinition(
             function,
@@ -511,7 +516,8 @@ internal sealed class FunctionEmitter
     private static MethodAttributes GetMethodAttributes(
         FunctionSymbol function,
         bool isEntryPoint,
-        bool isSynthesizedEntryPointStub = false)
+        bool isSynthesizedEntryPointStub = false,
+        bool isInterfaceImplementation = false)
     {
         // The synthesized entry point must remain Public so the runtime can find it.
         // ADR-0149: an explicit-interface qualifier clause member is ALWAYS
@@ -531,17 +537,13 @@ internal sealed class FunctionEmitter
             ? MethodAttributes.Public
             : AccessibilityMap.ToMethodVisibility(effectiveAccessibility, AccessibilityMap.IsTopLevelProgramMember(function));
 
-        // Instance methods omit MethodAttributes.Static. Phase 3.B.3 sub-step 3
-        // models open/override per ADR-0017 for classes:
-        //   plain (neither):    Virtual | NewSlot | Final  (callvirt-safe, non-overridable)
-        //   open:               Virtual | NewSlot          (overridable in derived)
-        //   override (sealed):  Virtual | Final            (reuses base slot, no further override)
-        //   open override:      Virtual                    (reuses base slot, still overridable)
-        //
-        // Issue #409 follow-up: plain instance methods on value-type StructSymbol
-        // receivers use the C#-conventional HideBySig-only shape. Value-type
-        // overrides and interface implementations still need virtual slots for
-        // CLR dispatch through the base/interface vtable.
+        // Instance methods omit MethodAttributes.Static. ADR-0017's class
+        // methods are non-virtual unless declared `open`; overrides and
+        // interface implementations need virtual slots for CLR dispatch:
+        //   plain (neither):    no virtual flags
+        //   open:               Virtual | NewSlot
+        //   override (sealed):  Virtual | Final (reuses base slot)
+        //   open override:      Virtual (reuses base slot)
         var methodAttrs = visibility | MethodAttributes.HideBySig;
 
         // Stream D: extension functions whose name follows the CLR `op_*`
@@ -561,7 +563,6 @@ internal sealed class FunctionEmitter
         if (function.IsInstanceMethod)
         {
             var receiverStruct = function.ReceiverType as StructSymbol;
-            var receiverIsValueType = receiverStruct != null && !receiverStruct.IsClass;
             var receiverIsInterface = function.ReceiverType is InterfaceSymbol;
 
             // Issue #2361: a user-declared "ToString" on a data class/struct
@@ -600,7 +601,11 @@ internal sealed class FunctionEmitter
                 //
                 // Fall through — no further attribute stamping needed.
             }
-            else if (isDataToStringOverride || !receiverIsValueType || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
+            else if (isDataToStringOverride
+                || function.IsOpen
+                || function.IsOverride
+                || isInterfaceImplementation
+                || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
                 methodAttrs |= MethodAttributes.Virtual;
                 if ((!function.IsOverride && !isDataToStringOverride)

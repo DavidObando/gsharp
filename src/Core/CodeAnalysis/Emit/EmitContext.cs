@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Reflection.Metadata;
@@ -68,6 +69,8 @@ internal sealed class EmitContext
         this.MethodBodyStream = new MethodBodyStreamEncoder(this.IlStream);
         this.DebugInformation = new DebugInformationOptions();
         this.PendingGenericParameters = new System.Collections.Generic.List<PendingGenericParameter>();
+        (this.InheritedInterfaceMethods, this.InheritedInterfacePropertyAccessors)
+            = MethodInfoHelpers.GetInheritedInterfaceImplementations(program);
 
         // Resolved here rather than part-way through emit so the context never
         // exists in a half-initialized state (ADR-0155: tighten the
@@ -94,6 +97,12 @@ internal sealed class EmitContext
     /// Gets the bound program being emitted.
     /// </summary>
     public BoundProgram Program { get; }
+
+    /// <summary>Gets inherited source methods selected for a descendant's interface slots.</summary>
+    public HashSet<FunctionSymbol> InheritedInterfaceMethods { get; }
+
+    /// <summary>Gets inherited property accessors selected for a descendant's interface slots.</summary>
+    public HashSet<(PropertySymbol Property, bool IsGetter)> InheritedInterfacePropertyAccessors { get; }
 
     /// <summary>
     /// Gets the reference resolver associated with this emit. Provided as a
