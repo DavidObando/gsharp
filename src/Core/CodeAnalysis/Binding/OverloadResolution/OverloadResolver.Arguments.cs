@@ -979,10 +979,10 @@ internal sealed partial class OverloadResolver
             {
                 names ??= new string[arguments.Count];
                 seenNames ??= new HashSet<string>(StringComparer.Ordinal);
-                names[i] = named.NameToken.Text;
-                if (!seenNames.Add(named.NameToken.Text))
+                names[i] = named.NameToken.ValueText;
+                if (!seenNames.Add(named.NameToken.ValueText))
                 {
-                    Diagnostics.ReportDuplicateNamedArgument(named.NameToken.Location, named.NameToken.Text);
+                    Diagnostics.ReportDuplicateNamedArgument(named.NameToken.Location, named.NameToken.ValueText);
                     ok = false;
                 }
             }
@@ -1097,7 +1097,7 @@ internal sealed partial class OverloadResolver
             {
                 if (string.Equals(
                         parameterNameAt(candidate),
-                        named.NameToken.Text,
+                        named.NameToken.ValueText,
                         StringComparison.Ordinal))
                 {
                     parameterIndex = candidate;
@@ -1780,11 +1780,14 @@ internal sealed partial class OverloadResolver
         return false;
     }
 
+    // Metadata names are semantic identifiers; retain the collision-safe
+    // sanitizer spelling accepted by older G# callers as an alias.
     internal static bool ClrParameterNameMatches(
         string parameterName,
         string argumentName,
         IEnumerable<string> parameterNames) =>
-        string.Equals(
+        string.Equals(parameterName, argumentName, StringComparison.Ordinal)
+        || string.Equals(
             SyntaxFacts.GetEmittedIdentifier(
                 parameterName,
                 IdentifierNameContext.Parameter,
