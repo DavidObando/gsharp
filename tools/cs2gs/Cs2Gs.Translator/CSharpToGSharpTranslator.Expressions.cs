@@ -2781,15 +2781,19 @@ public sealed partial class CSharpToGSharpTranslator
             bool includePromotedValue,
             bool operatorInput = false)
         {
+            bool convertsValue = false;
+            IMethodSymbol conversionOperator = operatorInput
+                ? null
+                : this.GetUserDefinedConversionInputOperator(value, targetType, out convertsValue);
             if (!operatorInput
+                && (conversionOperator != null || this.FlowsThroughUserDefinedConversion(value))
                 && this.GetFixedElementDestinationType(value, targetSymbol) is { } projectedTarget
                 && SymbolEqualityComparer.Default.Equals(projectedTarget, targetType))
             {
                 targetType = projectedTarget;
             }
 
-            if (!operatorInput
-                && this.GetUserDefinedConversionInputOperator(value, targetType, out bool convertsValue) is { } conversionOperator)
+            if (conversionOperator != null)
             {
                 IParameterSymbol parameter = conversionOperator.Parameters[0];
                 GExpression operatorOperand = this.ForgiveNullableReferenceValueCore(

@@ -1302,14 +1302,16 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         Assert.Contains("!!", printed);
     }
 
-    [Fact]
-    public void NullableOperatorConvertedResult_PromotedTupleSinkStillAcceptsNull()
+    [Theory]
+    [InlineData("value")]
+    [InlineData("(MaybeBox?)value")]
+    public void NullableOperatorConvertedResult_PromotedTupleSinkStillAcceptsNull(string value)
     {
         string fixture = this.EmitFixture();
-        string printed = Translate("""
+        string printed = Translate($$"""
             using Issue4719Fixture;
             public static class Obj {
-                public static (MaybeBox Value, int Code) Row(string value) => (value, 1);
+                public static (MaybeBox Value, int Code) Row(string value) => ({{value}}, 1);
                 public static int Run() {
                     Probe.Reset();
                     var row = Row("x");
