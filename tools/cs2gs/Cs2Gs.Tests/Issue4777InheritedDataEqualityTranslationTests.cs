@@ -209,9 +209,8 @@ public sealed class Issue4777InheritedDataEqualityTranslationTests
         var context = new AssemblyLoadContext("issue4777-" + Guid.NewGuid().ToString("N"), isCollectible: true);
         try
         {
-            var assembly = context.LoadFromAssemblyPath(Path.GetFullPath(target));
-            Assert.Equal(Path.GetFullPath(target), assembly.Location);
-            var consumer = context.LoadFromAssemblyPath(Path.GetFullPath(caller));
+            LoadActualImage(context, target);
+            var consumer = LoadActualImage(context, caller);
             Type consumerType = consumer.GetType("MatrixConsumer", throwOnError: true);
             MethodInfo run = consumerType.GetMethod("Run");
             Assert.NotNull(run);
@@ -222,6 +221,18 @@ public sealed class Issue4777InheritedDataEqualityTranslationTests
         {
             context.Unload();
         }
+    }
+
+    private static Assembly LoadActualImage(AssemblyLoadContext context, string path)
+    {
+        using var image = new MemoryStream(File.ReadAllBytes(path));
+        using var pe = new PEReader(image, PEStreamOptions.LeaveOpen);
+        MetadataReader metadata = pe.GetMetadataReader();
+        Guid expectedMvid = metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
+        image.Position = 0;
+        Assembly assembly = context.LoadFromStream(image);
+        Assert.Equal(expectedMvid, assembly.ManifestModule.ModuleVersionId);
+        return assembly;
     }
 
     private void AssertNativeTypedSlots(string native, string translated)
@@ -235,8 +246,8 @@ public sealed class Issue4777InheritedDataEqualityTranslationTests
         {
             var images = new[]
             {
-                contexts[0].LoadFromAssemblyPath(Path.GetFullPath(native)),
-                contexts[1].LoadFromAssemblyPath(Path.GetFullPath(translated)),
+                LoadActualImage(contexts[0], native),
+                LoadActualImage(contexts[1], translated),
             };
             string[] Snapshot(Assembly assembly) => assembly.GetExportedTypes().SelectMany(type =>
                 type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
