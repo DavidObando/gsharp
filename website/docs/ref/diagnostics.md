@@ -2242,7 +2242,7 @@ above retain their longer explanations and examples.
 | GS0281 | Error | A designated initializer delegates to a sibling `init(args)` overload instead of chaining to its base class.  | |
 | GS0282 | Error | A convenience initializer delegates to itself.  | |
 | GS0283 | Error | No sibling initializer overload matches an `init(args)` self-delegation call.  | |
-| GS0284 | Error | An explicit `init(...)` duplicates the constructor synthesized from the class's primary-constructor parameters.  | |
+| GS0284 | Error | An explicit `init(...)` duplicates the constructor synthesized from the type's primary-constructor parameters.  | |
 | GS0367 | Error | A `yield` appears inside a `try` block that has a `catch` clause.  | |
 | GS0369 | Error | A collection initializer targets a type with no accessible `Add` method or settable indexer.  | |
 | GS0370 | Error | An indexer declaration has no index parameters.  | |

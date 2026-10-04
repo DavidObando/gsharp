@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -134,7 +135,7 @@ internal static class InitializationPlanner
         // Authored constructors have their own parameter scope; declaration
         // initializers read primary inputs from the already-owned storage.
         var storedPrimaryInputs = !primaryStores && owner.HasPrimaryConstructor
-            ? new HoistedFieldRewriter(owner, receiver, owner.PrimaryConstructorParameters.ToDictionary(
+            ? new PrimaryStorageRewriter(owner, receiver, owner.PrimaryConstructorParameters.ToDictionary(
                 parameter => (VariableSymbol)parameter,
                 parameter =>
                 {
@@ -204,6 +205,34 @@ internal static class InitializationPlanner
         var finder = new RequestFinder();
         finder.Visit(statement);
         return finder.Found;
+    }
+
+    private sealed class PrimaryStorageRewriter : HoistedFieldRewriter
+    {
+        internal PrimaryStorageRewriter(StructSymbol owner, ParameterSymbol receiver, Dictionary<VariableSymbol, FieldSymbol> fields)
+            : base(owner, receiver, fields)
+        {
+        }
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            var body = (BoundBlockStatement)this.RewriteStatement(node.Body);
+            var captures = node.CapturedVariables.Where(variable => !this.fieldMap.ContainsKey(variable)).ToImmutableArray().ToBuilder();
+            if (node.CapturedVariables.Any(variable => this.fieldMap.ContainsKey(variable)) && !captures.Contains(this.thisParameter))
+            {
+                captures.Add(this.thisParameter);
+            }
+
+            return ReferenceEquals(body, node.Body) && captures.SequenceEqual(node.CapturedVariables)
+                ? node
+                : new BoundFunctionLiteralExpression(node.Syntax, node.Function, node.FunctionType, body, captures.ToImmutable());
+        }
+
+        protected override BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+        {
+            var literal = (BoundFunctionLiteralExpression)this.RewriteFunctionLiteralExpression(node.Literal);
+            return ReferenceEquals(literal, node.Literal) ? node : new BoundLocalFunctionDeclaration(node.Syntax, literal);
+        }
     }
 
     private sealed class RequestFinder : BoundTreeWalker

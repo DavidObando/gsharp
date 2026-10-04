@@ -16,6 +16,176 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue4755GenericStructInitializerEmitTests
 {
     [Fact]
+    public void DataPrimaryConstructor_IsRegisteredBeforeInterfaceAndClassCallers()
+    {
+        InDirectory(directory =>
+        {
+            var native = EmitCSharp(directory, "NativeData4755", """
+                namespace NativeData4755;
+                public static class Effects { public static int Calls; }
+                public record struct Data<T>(T Value)
+                {
+                    private readonly T copy = Observe(Value);
+                    private static T Observe(T value) { Effects.Calls++; return value; }
+                    public T Read() => copy;
+                }
+                public interface Factory { public static Data<int> Make() => new(7); }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var number = Factory.Make();
+                        var text = new Data<string>("text");
+                        return number.Value + "/" + number.Read() + ";" + text.Value + "/" + text.Read() + ";" + Effects.Calls;
+                    }
+                }
+                """);
+            Assert.Equal("7/7;text/text;2", Invoke(EmittedFixture.Load(native), "NativeData4755.Oracle"));
+            var emitted = Compile(directory, """
+                package Data4755
+                class Effects { shared { public var Calls int32 } }
+                data struct Data[T](Value T) {
+                    private let Copy T = Observe(Value)
+                    public func Read() T -> Copy
+                    shared { private func Observe(value T) T { Effects.Calls += 1 return value } }
+                }
+                interface Factory {
+                    shared { func Make() Data[int32] { return Data[int32]{Value: 7} } }
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let number = Factory.Make()
+                            let text = Data[string]{Value: "text"}
+                            return number.Value.ToString() + "/" + number.Read().ToString() + ";" +
+                                text.Value + "/" + text.Read() + ";" + Effects.Calls.ToString()
+                        }
+                    }
+                }
+                """);
+            IlVerifier.Verify(emitted);
+            AssertNativeConsumer(directory, emitted, "Data4755.Api", "7/7;text/text;2");
+            var type = EmittedFixture.Load(emitted).GetType("Data4755.Data`1", throwOnError: true);
+            Assert.Single(type.GetConstructors());
+            Assert.Single(type.GetConstructors(), constructor => constructor.GetParameters().Length == 1);
+            var field = type.GetField("Copy", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.True(field.IsPrivate);
+            Assert.True(field.IsInitOnly);
+            Assert.Equal(type, field.DeclaringType);
+        });
+    }
+
+    [Theory]
+    [InlineData("struct Duplicate(Value int32)", "int32", "public struct Duplicate(int value) { public Duplicate(int other) { } }")]
+    [InlineData("struct Duplicate[T](Value T)", "T", "public struct Duplicate<T>(T value) { public Duplicate(T other) { } }")]
+    public void AuthoredConstructor_DuplicatePrimarySignatureIsRejected(string declaration, string parameterType, string nativeSource)
+    {
+        var native = CSharpCompilation.Create(
+            "Duplicate4755",
+            new[] { CSharpSyntaxTree.ParseText(nativeSource) },
+            RuntimeReferences().Select(reference => MetadataReference.CreateFromFile(reference)),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        Assert.Contains(native.GetDiagnostics(), diagnostic => diagnostic.Id == "CS0111");
+        InDirectory(directory =>
+        {
+            var result = TryCompile(directory, $$"""
+                package Duplicate4755
+                {{declaration}} {
+                    public var Copy {{parameterType}} = Value
+                    public init(other {{parameterType}}) { }
+                }
+                """);
+            Assert.Equal(1, result.Code);
+            Assert.Contains("GS0284", result.Output, StringComparison.Ordinal);
+            Assert.Contains("(4,12,", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", result.Output, StringComparison.Ordinal);
+            Assert.False(File.Exists(result.AssemblyPath));
+        });
+    }
+
+    [Fact]
+    public void AuthoredPrimaryConstructor_DeclarationClosuresRetainTheirOwningStorage()
+    {
+        InDirectory(directory =>
+        {
+            var native = EmitCSharp(directory, "NativeCaptured4755", """
+                namespace NativeCaptured4755;
+                public static class Effects { public static string Trace = ""; }
+                public struct Captured<T>(T value)
+                {
+                    public T Value = value;
+                    public System.Func<T> Read = Observe(() => value);
+                    private readonly System.Func<System.Func<T>> nested = () => () => value;
+                    private static System.Func<T> Observe(System.Func<T> read) { Effects.Trace += "I"; return read; }
+                    public Captured() : this(default(T)) { Effects.Trace += "C"; }
+                    public Captured(bool first, bool second) : this(default(T)) { Effects.Trace += "A"; }
+                    public T Nested() => nested()();
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var number = new Captured<int>(7);
+                        number.Value = 9;
+                        var zero = new Captured<int>();
+                        zero.Value = 9;
+                        var text = new Captured<string?>("text");
+                        text.Value = "changed";
+                        var missing = new Captured<string?>(false, false);
+                        missing.Value = "changed";
+                        return number.Read() + "/" + number.Nested() + ";" + zero.Read() + "/" + zero.Nested() +
+                            ";" + text.Read() + "/" + text.Nested() + ";" +
+                            (missing.Read() == null) + "/" + (missing.Nested() == null) + ";" + Effects.Trace;
+                    }
+                }
+                """);
+            Assert.Equal("7/7;0/0;text/text;True/True;IICIIA",
+                Invoke(EmittedFixture.Load(native), "NativeCaptured4755.Oracle"));
+            var emitted = Compile(directory, """
+                package Captured4755
+                class Effects { shared { public var Trace string = "" } }
+                struct Captured[T](Value T) {
+                    public var Read () -> T = Observe(func () T { return Value })
+                    private let NestedReader () -> (() -> T) = func () (() -> T) {
+                        return func () T { return Value }
+                    }
+                    public init() { Effects.Trace += "C" }
+                    public init(first bool, second bool) { Effects.Trace += "A" }
+                    public func Nested() T -> NestedReader()()
+                    shared { private func Observe(read () -> T) () -> T { Effects.Trace += "I" return read } }
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            var number = Captured[int32]{Value: 7}
+                            number.Value = 9
+                            var zero = Captured[int32]()
+                            zero.Value = 9
+                            var text = Captured[string?]{Value: "text"}
+                            text.Value = "changed"
+                            var missing = Captured[string?](false, false)
+                            missing.Value = "changed"
+                            return number.Read().ToString() + "/" + number.Nested().ToString() + ";" +
+                                zero.Read().ToString() + "/" + zero.Nested().ToString() + ";" +
+                                text.Read()!! + "/" + text.Nested()!! + ";" +
+                                (missing.Read() == nil).ToString() + "/" + (missing.Nested() == nil).ToString() +
+                                ";" + Effects.Trace
+                        }
+                    }
+                }
+                """);
+            IlVerifier.Verify(emitted);
+            AssertNativeConsumer(directory, emitted, "Captured4755.Api", "7/7;0/0;text/text;True/True;IICIIA");
+            var type = EmittedFixture.Load(emitted).GetType("Captured4755.Captured`1", throwOnError: true);
+            Assert.Equal(3, type.GetConstructors().Length);
+            var field = type.GetField("NestedReader", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.True(field.IsPrivate);
+            Assert.True(field.IsInitOnly);
+            Assert.Equal(type, field.DeclaringType);
+        });
+    }
+
+    [Fact]
     public void OrderedPrimaryMembers_ReachTheInitializerBeforeCollectionPopulation()
     {
         InDirectory(directory =>
