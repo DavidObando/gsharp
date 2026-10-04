@@ -1,4 +1,4 @@
-﻿// <copyright file="TypeSymbol.cs" company="GSharp">
+// <copyright file="TypeSymbol.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -453,143 +453,171 @@ public partial class TypeSymbol : Symbol
     /// <returns><c>true</c> if some referenced type parameter satisfies <paramref name="match"/>.</returns>
     public static bool AnyTypeParameter(TypeSymbol type, Func<TypeParameterSymbol, bool> match)
     {
-        switch (type)
+        var originalMatch = match;
+        HashSet<(DelegateTypeSymbol Definition, int BoundParameters)>? visitedDelegates = null;
+        return AnyTypeParameter(type, match);
+
+        bool AnyTypeParameter(
+            TypeSymbol type,
+            Func<TypeParameterSymbol, bool> match)
         {
-            case null:
-                return false;
-            case TypeParameterSymbol tp:
-                return match(tp);
-            case NullableTypeSymbol n:
-                return AnyTypeParameter(n.UnderlyingType, match);
-            case PlatformTypeSymbol p:
-                // ADR-0186 §1: `T!` wraps exactly as `T?` does.
-                return AnyTypeParameter(p.UnderlyingType, match);
-            case SliceTypeSymbol s:
-                return AnyTypeParameter(s.ElementType, match);
-            case ArrayTypeSymbol a:
-                return AnyTypeParameter(a.ElementType, match);
-            case RectangularArrayTypeSymbol a:
-                return AnyTypeParameter(a.ElementType, match);
-            case PinnedTypeSymbol pinned:
-                return AnyTypeParameter(pinned.UnderlyingType, match);
-            case NullabilityAnnotatedTypeSymbol annotated:
-                return AnyTypeParameter(annotated.BaseType, match);
-            case SequenceTypeSymbol seq:
-                return AnyTypeParameter(seq.ElementType, match);
-            case AsyncSequenceTypeSymbol aseq:
-                return AnyTypeParameter(aseq.ElementType, match);
-            case ChannelTypeSymbol channel:
-                return AnyTypeParameter(channel.ElementType, match);
-            case MapTypeSymbol m:
-                return AnyTypeParameter(m.KeyType, match) || AnyTypeParameter(m.ValueType, match);
-            case FunctionTypeSymbol fn:
-                foreach (var param in fn.ParameterTypes)
-                {
-                    if (AnyTypeParameter(param, match))
+            switch (type)
+            {
+                case null:
+                    return false;
+                case TypeParameterSymbol tp:
+                    return match(tp);
+                case NullableTypeSymbol n:
+                    return AnyTypeParameter(n.UnderlyingType, match);
+                case PlatformTypeSymbol p:
+                    // ADR-0186 §1: `T!` wraps exactly as `T?` does.
+                    return AnyTypeParameter(p.UnderlyingType, match);
+                case SliceTypeSymbol s:
+                    return AnyTypeParameter(s.ElementType, match);
+                case ArrayTypeSymbol a:
+                    return AnyTypeParameter(a.ElementType, match);
+                case RectangularArrayTypeSymbol a:
+                    return AnyTypeParameter(a.ElementType, match);
+                case PinnedTypeSymbol pinned:
+                    return AnyTypeParameter(pinned.UnderlyingType, match);
+                case NullabilityAnnotatedTypeSymbol annotated:
+                    return AnyTypeParameter(annotated.BaseType, match);
+                case SequenceTypeSymbol seq:
+                    return AnyTypeParameter(seq.ElementType, match);
+                case AsyncSequenceTypeSymbol aseq:
+                    return AnyTypeParameter(aseq.ElementType, match);
+                case ChannelTypeSymbol channel:
+                    return AnyTypeParameter(channel.ElementType, match);
+                case MapTypeSymbol m:
+                    return AnyTypeParameter(m.KeyType, match) || AnyTypeParameter(m.ValueType, match);
+                case FunctionTypeSymbol fn:
+                    foreach (var param in fn.ParameterTypes)
                     {
-                        return true;
+                        if (AnyTypeParameter(param, match))
+                        {
+                            return true;
+                        }
                     }
-                }
 
-                return AnyTypeParameter(fn.ReturnType, match);
-            case TupleTypeSymbol tup:
-                // Issue #813: value-tuple element types must propagate
-                // "contains type parameter" so callers like
-                // `ImportedTypeSymbol.HasTypeParameterArgument` route a
-                // wrapping `IEnumerable[(int32, T)]` through the
-                // type-spec encoder instead of falling back to the
-                // type-erased `IEnumerable<object>` shape.
-                foreach (var elem in tup.ElementTypes)
-                {
-                    if (AnyTypeParameter(elem, match))
+                    return AnyTypeParameter(fn.ReturnType, match);
+                case TupleTypeSymbol tup:
+                    // Issue #813: value-tuple element types must propagate
+                    // "contains type parameter" so callers like
+                    // `ImportedTypeSymbol.HasTypeParameterArgument` route a
+                    // wrapping `IEnumerable[(int32, T)]` through the
+                    // type-spec encoder instead of falling back to the
+                    // type-erased `IEnumerable<object>` shape.
+                    foreach (var elem in tup.ElementTypes)
                     {
-                        return true;
+                        if (AnyTypeParameter(elem, match))
+                        {
+                            return true;
+                        }
                     }
-                }
 
-                return false;
-            case ByRefTypeSymbol br:
-                return AnyTypeParameter(br.PointeeType, match);
-            case PointerTypeSymbol pointer:
-                return AnyTypeParameter(pointer.PointeeType, match);
-            case FunctionPointerTypeSymbol functionPointer:
-                foreach (var parameterType in functionPointer.ParameterTypes)
-                {
-                    if (AnyTypeParameter(parameterType, match))
+                    return false;
+                case ByRefTypeSymbol br:
+                    return AnyTypeParameter(br.PointeeType, match);
+                case PointerTypeSymbol pointer:
+                    return AnyTypeParameter(pointer.PointeeType, match);
+                case FunctionPointerTypeSymbol functionPointer:
+                    foreach (var parameterType in functionPointer.ParameterTypes)
                     {
-                        return true;
+                        if (AnyTypeParameter(parameterType, match))
+                        {
+                            return true;
+                        }
                     }
-                }
 
-                return AnyTypeParameter(functionPointer.ReturnType, match);
-            case EnumSymbol en when !en.EnclosingTypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in en.EnclosingTypeArguments)
-                {
-                    if (AnyTypeParameter(arg, match))
+                    return AnyTypeParameter(functionPointer.ReturnType, match);
+                case EnumSymbol en when !en.EnclosingTypeArguments.IsDefaultOrEmpty:
+                    foreach (var arg in en.EnclosingTypeArguments)
                     {
-                        return true;
+                        if (AnyTypeParameter(arg, match))
+                        {
+                            return true;
+                        }
                     }
-                }
 
-                return false;
-            case StructSymbol st when !st.EnclosingTypeArguments.IsDefaultOrEmpty || !st.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in st.EnclosingTypeArguments)
-                {
-                    if (AnyTypeParameter(arg, match))
+                    return false;
+                case StructSymbol st when !st.EnclosingTypeArguments.IsDefaultOrEmpty || !st.TypeArguments.IsDefaultOrEmpty:
+                    foreach (var arg in st.EnclosingTypeArguments)
                     {
-                        return true;
+                        if (AnyTypeParameter(arg, match))
+                        {
+                            return true;
+                        }
                     }
-                }
 
-                foreach (var arg in st.TypeArguments)
-                {
-                    if (AnyTypeParameter(arg, match))
+                    foreach (var arg in st.TypeArguments)
                     {
-                        return true;
+                        if (AnyTypeParameter(arg, match))
+                        {
+                            return true;
+                        }
                     }
-                }
 
-                return false;
-            case InterfaceSymbol iface when !iface.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in iface.TypeArguments)
-                {
-                    if (AnyTypeParameter(arg, match))
+                    return false;
+                case InterfaceSymbol iface when !iface.TypeArguments.IsDefaultOrEmpty:
+                    foreach (var arg in iface.TypeArguments)
                     {
-                        return true;
+                        if (AnyTypeParameter(arg, match))
+                        {
+                            return true;
+                        }
                     }
-                }
 
-                return false;
-            case DelegateTypeSymbol del:
-                foreach (var arg in del.TypeArguments)
-                {
-                    if (AnyTypeParameter(arg, match))
+                    return false;
+                case DelegateTypeSymbol del:
+                    foreach (var arg in del.TypeArguments)
                     {
-                        return true;
+                        if (AnyTypeParameter(arg, match))
+                        {
+                            return true;
+                        }
                     }
-                }
 
-                foreach (var param in del.Parameters)
-                {
-                    if (AnyTypeParameter(param.Type, match))
+                    // Read declaration signatures, never force constructed projection:
+                    // wrapper builders can call this query during that same projection.
+                    // Bound formal slots are covered by actual arguments above.
+                    var definition = del.Definition ?? del;
+                    var boundParameters = Math.Min(definition.TypeParameters.Length, del.TypeArguments.Length);
+
+                    // An unbound definition can still expose used formal slots.
+                    visitedDelegates ??= new HashSet<(DelegateTypeSymbol, int)>();
+                    if (!visitedDelegates.Add((definition, boundParameters)))
                     {
-                        return true;
+                        return false;
                     }
-                }
 
-                return AnyTypeParameter(del.ReturnType, match);
-            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in it.TypeArguments)
-                {
-                    if (AnyTypeParameter(arg, match))
+                    bool MatchSignatureParameter(TypeParameterSymbol parameter)
                     {
-                        return true;
+                        var index = definition.TypeParameters.IndexOf(parameter);
+                        return (index < 0 || index >= boundParameters) && originalMatch(parameter);
                     }
-                }
 
-                return false;
-            default:
-                return false;
+                    foreach (var param in definition.Parameters)
+                    {
+                        if (AnyTypeParameter(param.Type, MatchSignatureParameter))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return AnyTypeParameter(definition.ReturnType, MatchSignatureParameter);
+                case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                    foreach (var arg in it.TypeArguments)
+                    {
+                        if (AnyTypeParameter(arg, match))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                default:
+                    return false;
+            }
         }
     }
 
@@ -926,135 +954,7 @@ public partial class TypeSymbol : Symbol
     /// <param name="type">The type to inspect (may be <see langword="null"/>).</param>
     /// <param name="sink">The ordered set to add referenced type parameters to.</param>
     public static void CollectReferencedTypeParameters(TypeSymbol? type, List<TypeParameterSymbol> sink)
-    {
-        switch (type)
-        {
-            case null:
-                return;
-            case TypeParameterSymbol tp:
-                if (!sink.Contains(tp))
-                {
-                    sink.Add(tp);
-                }
-
-                return;
-            case NullableTypeSymbol n:
-                CollectReferencedTypeParameters(n.UnderlyingType, sink);
-                return;
-            case PlatformTypeSymbol p:
-                // ADR-0186 §1: `T!` wraps exactly as `T?` does.
-                CollectReferencedTypeParameters(p.UnderlyingType, sink);
-                return;
-            case SliceTypeSymbol s:
-                CollectReferencedTypeParameters(s.ElementType, sink);
-                return;
-            case ArrayTypeSymbol a:
-                CollectReferencedTypeParameters(a.ElementType, sink);
-                return;
-            case RectangularArrayTypeSymbol a:
-                CollectReferencedTypeParameters(a.ElementType, sink);
-                return;
-            case SequenceTypeSymbol sq:
-                CollectReferencedTypeParameters(sq.ElementType, sink);
-                return;
-            case AsyncSequenceTypeSymbol asq:
-                CollectReferencedTypeParameters(asq.ElementType, sink);
-                return;
-            case ChannelTypeSymbol channel:
-                CollectReferencedTypeParameters(channel.ElementType, sink);
-                return;
-            case MapTypeSymbol m:
-                CollectReferencedTypeParameters(m.KeyType, sink);
-                CollectReferencedTypeParameters(m.ValueType, sink);
-                return;
-            case FunctionTypeSymbol fn:
-                foreach (var param in fn.ParameterTypes)
-                {
-                    CollectReferencedTypeParameters(param, sink);
-                }
-
-                CollectReferencedTypeParameters(fn.ReturnType, sink);
-                return;
-            case TupleTypeSymbol tup:
-                foreach (var elem in tup.ElementTypes)
-                {
-                    CollectReferencedTypeParameters(elem, sink);
-                }
-
-                return;
-            case ByRefTypeSymbol br:
-                CollectReferencedTypeParameters(br.PointeeType, sink);
-                return;
-            case EnumSymbol es when !es.EnclosingTypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in es.EnclosingTypeArguments)
-                {
-                    CollectReferencedTypeParameters(arg, sink);
-                }
-
-                return;
-            case StructSymbol ss:
-                if (!ss.EnclosingTypeArguments.IsDefaultOrEmpty)
-                {
-                    foreach (var arg in ss.EnclosingTypeArguments)
-                    {
-                        CollectReferencedTypeParameters(arg, sink);
-                    }
-                }
-                else
-                {
-                    foreach (var tp in StructSymbol.CollectEnclosingTypeParameters(ss))
-                    {
-                        CollectReferencedTypeParameters(tp, sink);
-                    }
-                }
-
-                foreach (var arg in ss.TypeArguments)
-                {
-                    CollectReferencedTypeParameters(arg, sink);
-                }
-
-                if (ss.TypeArguments.IsDefaultOrEmpty)
-                {
-                    foreach (var tp in ss.TypeParameters)
-                    {
-                        CollectReferencedTypeParameters(tp, sink);
-                    }
-                }
-
-                return;
-            case InterfaceSymbol iface when !iface.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in iface.TypeArguments)
-                {
-                    CollectReferencedTypeParameters(arg, sink);
-                }
-
-                return;
-            case InterfaceSymbol ifaceOpen when !ifaceOpen.TypeParameters.IsDefaultOrEmpty:
-                foreach (var tp in ifaceOpen.TypeParameters)
-                {
-                    CollectReferencedTypeParameters(tp, sink);
-                }
-
-                return;
-            case DelegateTypeSymbol del:
-                foreach (var param in del.Parameters)
-                {
-                    CollectReferencedTypeParameters(param.Type, sink);
-                }
-
-                CollectReferencedTypeParameters(del.ReturnType, sink);
-                return;
-            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in it.TypeArguments)
-                {
-                    CollectReferencedTypeParameters(arg, sink);
-                }
-
-                return;
-            default:
-                return;
-        }
-    }
+        => CollectReferencedTypeParameters(type, sink, null);
 
     /// <summary>
     /// Issue #903: returns <c>true</c> when <paramref name="type"/> is, or
@@ -1740,6 +1640,213 @@ public partial class TypeSymbol : Symbol
                 }
 
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Collects referenced parameters with an optional delegate traversal observer.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <param name="sink">The ordered set to add referenced type parameters to.</param>
+    /// <param name="onDelegateVisit">Observes each actual delegate walk.</param>
+    internal static void CollectReferencedTypeParameters(
+        TypeSymbol? type,
+        List<TypeParameterSymbol> sink,
+        Action<DelegateTypeSymbol>? onDelegateVisit)
+    {
+        CollectReferencedTypeParameters(type, null, ImmutableHashSet<(DelegateTypeSymbol, int)>.Empty);
+
+        void AddParameter(TypeParameterSymbol parameter)
+        {
+            if (!sink.Contains(parameter))
+            {
+                sink.Add(parameter);
+            }
+        }
+
+        void CollectReferencedTypeParameters(
+            TypeSymbol? type,
+            Action<TypeParameterSymbol>? visitParameter,
+            ImmutableHashSet<(DelegateTypeSymbol Definition, int BoundParameters)> signaturePath)
+        {
+            switch (type)
+            {
+                case null:
+                    return;
+                case TypeParameterSymbol tp:
+                    if (visitParameter is { } visit)
+                    {
+                        visit(tp);
+                    }
+                    else
+                    {
+                        AddParameter(tp);
+                    }
+
+                    return;
+                case NullableTypeSymbol n:
+                    CollectReferencedTypeParameters(n.UnderlyingType, visitParameter, signaturePath);
+                    return;
+                case PlatformTypeSymbol p:
+                    // ADR-0186 §1: `T!` wraps exactly as `T?` does.
+                    CollectReferencedTypeParameters(p.UnderlyingType, visitParameter, signaturePath);
+                    return;
+                case SliceTypeSymbol s:
+                    CollectReferencedTypeParameters(s.ElementType, visitParameter, signaturePath);
+                    return;
+                case ArrayTypeSymbol a:
+                    CollectReferencedTypeParameters(a.ElementType, visitParameter, signaturePath);
+                    return;
+                case RectangularArrayTypeSymbol a:
+                    CollectReferencedTypeParameters(a.ElementType, visitParameter, signaturePath);
+                    return;
+                case SequenceTypeSymbol sq:
+                    CollectReferencedTypeParameters(sq.ElementType, visitParameter, signaturePath);
+                    return;
+                case AsyncSequenceTypeSymbol asq:
+                    CollectReferencedTypeParameters(asq.ElementType, visitParameter, signaturePath);
+                    return;
+                case ChannelTypeSymbol channel:
+                    CollectReferencedTypeParameters(channel.ElementType, visitParameter, signaturePath);
+                    return;
+                case MapTypeSymbol m:
+                    CollectReferencedTypeParameters(m.KeyType, visitParameter, signaturePath);
+                    CollectReferencedTypeParameters(m.ValueType, visitParameter, signaturePath);
+                    return;
+                case FunctionTypeSymbol fn:
+                    foreach (var param in fn.ParameterTypes)
+                    {
+                        CollectReferencedTypeParameters(param, visitParameter, signaturePath);
+                    }
+
+                    CollectReferencedTypeParameters(fn.ReturnType, visitParameter, signaturePath);
+                    return;
+                case TupleTypeSymbol tup:
+                    foreach (var elem in tup.ElementTypes)
+                    {
+                        CollectReferencedTypeParameters(elem, visitParameter, signaturePath);
+                    }
+
+                    return;
+                case ByRefTypeSymbol br:
+                    CollectReferencedTypeParameters(br.PointeeType, visitParameter, signaturePath);
+                    return;
+                case EnumSymbol es when !es.EnclosingTypeArguments.IsDefaultOrEmpty:
+                    foreach (var arg in es.EnclosingTypeArguments)
+                    {
+                        CollectReferencedTypeParameters(arg, visitParameter, signaturePath);
+                    }
+
+                    return;
+                case StructSymbol ss:
+                    if (!ss.EnclosingTypeArguments.IsDefaultOrEmpty)
+                    {
+                        foreach (var arg in ss.EnclosingTypeArguments)
+                        {
+                            CollectReferencedTypeParameters(arg, visitParameter, signaturePath);
+                        }
+                    }
+                    else
+                    {
+                        foreach (var tp in StructSymbol.CollectEnclosingTypeParameters(ss))
+                        {
+                            CollectReferencedTypeParameters(tp, visitParameter, signaturePath);
+                        }
+                    }
+
+                    foreach (var arg in ss.TypeArguments)
+                    {
+                        CollectReferencedTypeParameters(arg, visitParameter, signaturePath);
+                    }
+
+                    if (ss.TypeArguments.IsDefaultOrEmpty)
+                    {
+                        foreach (var tp in ss.TypeParameters)
+                        {
+                            CollectReferencedTypeParameters(tp, visitParameter, signaturePath);
+                        }
+                    }
+
+                    return;
+                case InterfaceSymbol iface when !iface.TypeArguments.IsDefaultOrEmpty:
+                    foreach (var arg in iface.TypeArguments)
+                    {
+                        CollectReferencedTypeParameters(arg, visitParameter, signaturePath);
+                    }
+
+                    return;
+                case InterfaceSymbol ifaceOpen when !ifaceOpen.TypeParameters.IsDefaultOrEmpty:
+                    foreach (var tp in ifaceOpen.TypeParameters)
+                    {
+                        CollectReferencedTypeParameters(tp, visitParameter, signaturePath);
+                    }
+
+                    return;
+                case DelegateTypeSymbol del:
+                    onDelegateVisit?.Invoke(del);
+                    var definition = del.Definition ?? del;
+                    var boundParameters = Math.Min(definition.TypeParameters.Length, del.TypeArguments.Length);
+                    var signatureKey = (definition, boundParameters);
+                    var visitedArguments = new bool[del.TypeArguments.Length];
+
+                    // Signature uses and unused-argument fallback share one slot walk.
+                    // Mark before descending, retaining its first signature position.
+                    void VisitArgumentSlot(int index)
+                    {
+                        if (visitedArguments[index])
+                        {
+                            return;
+                        }
+
+                        visitedArguments[index] = true;
+                        CollectReferencedTypeParameters(del.TypeArguments[index], visitParameter, signaturePath);
+                    }
+
+                    if (!signaturePath.Contains(signatureKey))
+                    {
+                        var declarationPath = signaturePath.Add(signatureKey);
+
+                        // Resolve only formal leaves, retaining signature order without
+                        // constructing types. An argument uses its containing mapping;
+                        // its declaration path also belongs to that containing context.
+                        // A definition's free parameter does not inherit the mapping.
+                        void VisitSignatureParameter(TypeParameterSymbol parameter)
+                        {
+                            var index = definition.TypeParameters.IndexOf(parameter);
+                            if (index >= 0 && index < boundParameters)
+                            {
+                                VisitArgumentSlot(index);
+                            }
+                            else
+                            {
+                                AddParameter(parameter);
+                            }
+                        }
+
+                        foreach (var param in definition.Parameters)
+                        {
+                            CollectReferencedTypeParameters(param.Type, VisitSignatureParameter, declarationPath);
+                        }
+
+                        CollectReferencedTypeParameters(definition.ReturnType, VisitSignatureParameter, declarationPath);
+                    }
+
+                    for (var index = 0; index < del.TypeArguments.Length; index++)
+                    {
+                        VisitArgumentSlot(index);
+                    }
+
+                    return;
+                case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                    foreach (var arg in it.TypeArguments)
+                    {
+                        CollectReferencedTypeParameters(arg, visitParameter, signaturePath);
+                    }
+
+                    return;
+                default:
+                    return;
+            }
         }
     }
 
