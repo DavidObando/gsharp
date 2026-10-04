@@ -63,7 +63,7 @@ CORE_PROJECT = Path("src/Core/Core.gsproj")
 NESTED_PROJECTS = ("src/Compiler/Compiler.gsproj", "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj",
                    "tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj", "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj")
 ANALYZER_VERIFIER_ID = "GSharp.CodeAnalysis.Analyzers.Testing"
-VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$")
+VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+){2,3}(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?")
 # Only the Project element's own Sdk attribute; never an <Import Sdk=...>.
 PROJECT_SDK_RE = re.compile(r'(<Project\b[^>]*?\bSdk=")([^"]*)(")', re.DOTALL)
 # Directories whose project files the SDK package (transitively) builds.
@@ -87,7 +87,7 @@ def package_version(nupkg: Path, package_id: str = SDK_ID) -> str:
     if not name.startswith(prefix) or not name.endswith(".nupkg"):
         raise SelfHostError(f"{nupkg} is not a {package_id} package")
     version = name[len(prefix):-len(".nupkg")]
-    if not VERSION_RE.match(version):
+    if not VERSION_RE.fullmatch(version):
         raise SelfHostError(f"cannot read a version from {nupkg.name}")
     return version
 
@@ -483,7 +483,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--tree", required=True, type=Path, help="migrated repository tree (modified in place)")
     parser.add_argument("--bootstrap", required=True, type=Path, help="stage-0 Gsharp.NET.Sdk.<v>.nupkg")
-    parser.add_argument("--version", help="stage-1 package version (default <major.minor.patch>-stage1)")
+    parser.add_argument("--version", help="stage-1 package version (default <bootstrap numeric version>-stage1)")
     parser.add_argument("--out", required=True, type=Path, help="directory to write the stage-1 nupkg into")
     parser.add_argument("--work", type=Path, help="scratch root for logs and the isolated package cache (default <out>/work)")
     parser.add_argument("--config", default="Release")
@@ -500,7 +500,7 @@ def main(argv: list[str]) -> int:
             raise SelfHostError(f"{bootstrap} does not exist")
         bootstrap_version = package_version(bootstrap)
         version = args.version or default_stage1_version(bootstrap_version)
-        if not VERSION_RE.match(version):
+        if not VERSION_RE.fullmatch(version):
             raise SelfHostError(f"--version {version!r} is not a valid package version")
         if version == bootstrap_version:
             raise SelfHostError("the stage-1 version must differ from the bootstrap version "

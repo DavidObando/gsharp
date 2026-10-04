@@ -735,6 +735,106 @@ class GlobalJsonFailureTests(unittest.TestCase):
                     self.assertFalse(again["globalJsonUpdated"])
 
 
+class RevisionVersionTests(unittest.TestCase):
+    def test_literal_version_contract_is_shared_by_sdk_and_verifier_archives(self) -> None:
+        for version in ("1.2.3", "1.2.3.4", "1.2.3.0", "1.2.3.4-beta.1"):
+            for package_id in (packer.SDK_ID, packer.ANALYZER_VERIFIER_ID):
+                with self.subTest(version=version, package_id=package_id):
+                    self.assertEqual(version, packer.package_version(
+                        Path(f"{package_id}.{version}.nupkg"), package_id))
+                    self.assertEqual(version.split("-", 1)[0] + "-stage1",
+                                     packer.default_stage1_version(version))
+        for version in ("1.2", "1.2.3.4.5", "1.2.3.4.", "1.2.3.4-alpha..1",
+                        "$(Version)", "[1.2.3.4,2.0.0)", "1.2.3.4+build", "1.2.3\n"):
+            with self.subTest(version=version), self.assertRaises(packer.SelfHostError):
+                packer.package_version(Path(f"{packer.SDK_ID}.{version}.nupkg"))
+
+    def test_literal_revision_references_prepare_at_exact_same_and_cross_sdk_versions(self) -> None:
+        import contextlib
+        for sdk_version, verifier_version in (
+            ("1.2.3.4", "1.2.3.4"), ("1.2.3", "1.2.3.4"),
+            ("1.2.3.4", "2.3.4"), ("1.2.3.4", "2.3.4.5-beta.1"),
+        ):
+            for shape in ("self-closing", "full", "child-namespaced"):
+                with self.subTest(sdk=sdk_version, verifier=verifier_version, shape=shape), (
+                    tempfile.TemporaryDirectory()) as temp:
+                    root = Path(temp)
+                    tree = make_tree(root)
+                    if shape == "child-namespaced":
+                        body = (f'<PackageReference Include="{packer.ANALYZER_VERIFIER_ID}">'
+                                f'<Version>{verifier_version}</Version></PackageReference>')
+                        namespace = ' xmlns="http://schemas.microsoft.com/developer/msbuild/2003"'
+                    else:
+                        body = (f'<PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" '
+                                f'Version="{verifier_version}"')
+                        body += " />" if shape == "self-closing" else "></PackageReference>"
+                        namespace = ""
+                    write(tree / "test/Verifier.gsproj", f'<Project{namespace}><ItemGroup>{body}</ItemGroup></Project>')
+                    bootstrap = nupkg(root / f"feed/{packer.SDK_ID}.{sdk_version}.nupkg", {"x": b"sdk fixture"})
+                    sibling = nupkg(root / f"feed/{packer.ANALYZER_VERIFIER_ID}.{verifier_version}.nupkg",
+                                    {"x": b"verifier fixture"})
+                    args = ["--tree", str(tree), "--bootstrap", str(bootstrap), "--prepare-only",
+                            "--out", str(root / "out")]
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        code = packer.main(args)
+                    report = json.loads((root / "out/work/stage1-report.json").read_text())
+                    self.assertEqual(0, code, report)
+                    self.assertNotIn("error", report)
+                    self.assertEqual(sdk_version, report["bootstrapVersion"])
+                    self.assertEqual(packer.default_stage1_version(sdk_version), report["stage1Version"])
+                    self.assertEqual([verifier_version], report["requiredAnalyzerVerifierVersions"])
+                    self.assertEqual([], report["missingSiblings"])
+                    self.assertEqual([bootstrap.name, sibling.name], [p["package"] for p in report["stagedPackages"]])
+                    self.assertEqual(sdk_version, json.loads((tree / "global.json").read_text())["msbuild-sdks"][packer.SDK_ID])
+                    self.assertEqual(sibling.read_bytes(), (tree / ".nugs" / sibling.name).read_bytes())
+                    again = packer.prepare_tree(tree, bootstrap)
+                    self.assertEqual([], again["rewrittenPins"])
+                    self.assertFalse(again["globalJsonUpdated"])
+                    self.assertEqual([verifier_version], again["requiredAnalyzerVerifierVersions"])
+
+    def test_explicit_stage1_revision_uses_same_literal_validation(self) -> None:
+        import contextlib
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.2.3.nupkg", {"x": b"sdk fixture"})
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                code = packer.main(["--tree", str(tree), "--bootstrap", str(bootstrap), "--prepare-only",
+                                    "--out", str(root / "out"), "--version", "9.8.7.6-stage1"])
+            report = json.loads((root / "out/work/stage1-report.json").read_text())
+            self.assertEqual(0, code, report)
+            self.assertEqual("9.8.7.6-stage1", report["stage1Version"])
+            self.assertEqual("1.2.3", report["bootstrapVersion"])
+            self.assertEqual([], report["requiredAnalyzerVerifierVersions"])
+
+    def test_revision_does_not_allow_wrong_sibling_or_evaluated_override_shapes(self) -> None:
+        reference = f'<PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" Version="1.2.3.4" />'
+        for body in (reference.replace("Version=", "VersionOverride="),
+                     reference.replace("/>", "><VersionOverride>1.2.3.4</VersionOverride></PackageReference>"),
+                     reference.replace('Version="1.2.3.4"', 'Version="$(VerifierVersion)"'),
+                     reference.replace("Include=", "Update=")):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                write(tree / "test/Verifier.gsproj", f"<Project><ItemGroup>{body}</ItemGroup></Project>")
+                bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+                nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.1.2.3.4.nupkg", {"x": b""})
+                with self.assertRaisesRegex(packer.SelfHostError, "one literal Version"):
+                    packer.prepare_tree(tree, bootstrap)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            write(tree / "test/Verifier.gsproj", f"<Project><ItemGroup>{reference}</ItemGroup></Project>")
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.1.2.3.nupkg", {"x": b"wrong revision"})
+            report = {}
+            with self.assertRaisesRegex(packer.SelfHostError, r"1\.2\.3\.4\.nupkg"):
+                packer.prepare_tree(tree, bootstrap, report)
+            self.assertEqual(["1.2.3.4"], report["requiredAnalyzerVerifierVersions"])
+            self.assertEqual(["GSharp.CodeAnalysis.Analyzers.Testing.1.2.3.4.nupkg"], report["missingSiblings"])
+            self.assertNotIn("stagedPackages", report)
+
+
 class VersionTests(unittest.TestCase):
     def test_versions(self) -> None:
         self.assertEqual("0.4.1129-g6c4824cbc0",
