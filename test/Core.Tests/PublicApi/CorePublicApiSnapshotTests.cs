@@ -89,7 +89,49 @@ public sealed class CorePublicApiSnapshotTests
     [Fact]
     public void Renderer_TracksPublicShape_AndIgnoresPrivateMembers()
     {
-        IReadOnlyList<string> rendered = RenderPublicApi(typeof(SnapshotFixture).Assembly.Location);
+        // These are native C# metadata contracts, not types from the
+        // self-migrated test assembly (which maps protected internal to internal).
+        using var fixture = new CSharpFixture("""
+            namespace GSharp.Core.Tests.PublicApi;
+
+            public enum SnapshotByteEnum : byte
+            {
+                One = 1,
+            }
+
+            public class SnapshotFixture
+            {
+                public const int Answer = 42;
+                public const string Quoted = "a\"b\\c\nd";
+                private int hidden;
+
+                public string Name { get; protected set; }
+                public int Fixed { get; init; }
+                protected internal int Shared { get; set; }
+
+                public static int Add(int left, int right) => left + right;
+                public static int Take(int count = 3) => count;
+                public static int Peek(in int value) => value;
+                public static decimal Price(decimal amount = 1.5m) => amount;
+                public static System.DateTime At(
+                    [System.Runtime.InteropServices.Optional, System.Runtime.CompilerServices.DateTimeConstant(42L)]
+                    System.DateTime when) => when;
+
+                protected virtual void OnChanged()
+                {
+                    this.hidden++;
+                    this.HiddenHelper();
+                }
+
+                public override string ToString() => "fixture";
+                private void HiddenHelper() => this.hidden--;
+
+                protected internal sealed class Nested
+                {
+                }
+            }
+            """);
+        IReadOnlyList<string> rendered = RenderPublicApi(fixture.AssemblyPath);
         string baseline = string.Join("\n", rendered
             .SkipWhile(line => !line.StartsWith("type class GSharp.Core.Tests.PublicApi.SnapshotFixture", StringComparison.Ordinal))
             .TakeWhile((line, index) => index == 0 || !line.StartsWith("type ", StringComparison.Ordinal)));
@@ -761,77 +803,5 @@ public sealed class CorePublicApiSnapshotTests
             unmodifiedType + (isRequired ? " modreq(" : " modopt(") + modifier + ")";
 
         public string GetPinnedType(string elementType) => elementType;
-    }
-}
-
-/// <summary>An enum with a non-default underlying type, pinned by the renderer test.</summary>
-public enum SnapshotByteEnum : byte
-{
-    /// <summary>The only value.</summary>
-    One = 1,
-}
-
-/// <summary>A tiny public type whose rendering the renderer test pins.</summary>
-public class SnapshotFixture
-{
-    /// <summary>A public constant.</summary>
-    public const int Answer = 42;
-
-    /// <summary>A constant that needs escaping to stay on one line.</summary>
-    public const string Quoted = "a\"b\\c\nd";
-
-    private int hidden;
-
-    /// <summary>Gets or sets a name with a protected setter.</summary>
-    public string Name { get; protected set; }
-
-    /// <summary>Gets an init-only value.</summary>
-    public int Fixed { get; init; }
-
-    /// <summary>Gets or sets a protected internal value.</summary>
-    protected internal int Shared { get; set; }
-
-    /// <summary>Adds two numbers.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns>The sum.</returns>
-    public static int Add(int left, int right) => left + right;
-
-    /// <summary>Has an optional parameter whose default value is part of the API.</summary>
-    /// <param name="count">How many.</param>
-    /// <returns>The count.</returns>
-    public static int Take(int count = 3) => count;
-
-    /// <summary>Takes an <c>in</c> parameter.</summary>
-    /// <param name="value">The value.</param>
-    /// <returns>The value.</returns>
-    public static int Peek(in int value) => value;
-
-    /// <summary>Has a decimal default, which csc encodes as an attribute.</summary>
-    /// <param name="amount">The amount.</param>
-    /// <returns>The amount.</returns>
-    public static decimal Price(decimal amount = 1.5m) => amount;
-
-    /// <summary>Has a DateTime default, which csc encodes as an attribute.</summary>
-    /// <param name="when">The time.</param>
-    /// <returns>The time.</returns>
-    public static System.DateTime At([System.Runtime.InteropServices.Optional, System.Runtime.CompilerServices.DateTimeConstant(42L)] System.DateTime when) => when;
-
-    /// <summary>A protected virtual hook.</summary>
-    protected virtual void OnChanged()
-    {
-        this.hidden++;
-        this.HiddenHelper();
-    }
-
-    /// <summary>Overrides an inherited slot.</summary>
-    /// <returns>A fixed string.</returns>
-    public override string ToString() => "fixture";
-
-    private void HiddenHelper() => this.hidden--;
-
-    /// <summary>A nested type visible only to derived types.</summary>
-    protected internal sealed class Nested
-    {
     }
 }
