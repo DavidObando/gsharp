@@ -5158,6 +5158,45 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Recognizes only the natural Action/Func backing of an exact structural
+    /// function signature; unrelated named delegates remain nominal.
+    /// </summary>
+    /// <param name="source">The structural source.</param>
+    /// <param name="target">The expected delegate.</param>
+    /// <returns>Whether both spellings denote the same natural delegate.</returns>
+    internal static bool IsNaturalStructuralDelegateTarget(TypeSymbol source, TypeSymbol target)
+    {
+        source = source is NullableTypeSymbol sourceNullable ? sourceNullable.UnderlyingType : source;
+        target = target is NullableTypeSymbol targetNullable ? targetNullable.UnderlyingType : target;
+        target = target is NullabilityAnnotatedTypeSymbol annotated ? annotated.BaseType : target;
+
+        if (source is not FunctionTypeSymbol sourceFunction
+            || !TryCanonicalizeStructuralFunctionType(sourceFunction, target, out _)
+            || target.ClrType == null
+            || sourceFunction.Arity > 16)
+        {
+            return false;
+        }
+
+        var naturalFullName = FunctionTypeSymbol.IsVoidReturn(sourceFunction.ReturnType)
+            ? sourceFunction.Arity == 0
+                ? "System.Action"
+                : "System.Action`" + sourceFunction.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "System.Func`" + (sourceFunction.Arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var targetDefinition = target.ClrType.IsGenericType
+            ? target.ClrType.GetGenericTypeDefinition()
+            : target.ClrType;
+        var baseType = targetDefinition.BaseType;
+        return string.Equals(targetDefinition.FullName, naturalFullName, StringComparison.Ordinal)
+            && baseType != null
+            && string.Equals(baseType.FullName, "System.MulticastDelegate", StringComparison.Ordinal)
+            && string.Equals(
+                targetDefinition.Assembly.FullName,
+                baseType.Assembly.FullName,
+                StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Removes every entry from the method cache.
     /// Called by <see cref="ReferenceResolver.Dispose"/> (#1678, mirroring #1622)
     /// alongside <see cref="ClrTypeUtilities.ClearCache"/>.
@@ -5862,6 +5901,11 @@ internal sealed class MemberLookup
             return null;
         }
 
+        if (openMethod is { IsGenericMethod: true, IsGenericMethodDefinition: false })
+        {
+            openMethod = openMethod.GetGenericMethodDefinition();
+        }
+
         var openParameters = openMethod?.GetParameters();
         if (openMethod == null
             || openParameters == null
@@ -5905,6 +5949,21 @@ internal sealed class MemberLookup
             }
 
             effectiveMethodTypeArguments = merged.MoveToImmutable();
+        }
+
+        // A CLR-inferred closure carries runtime types, not caller annotations.
+        // Only the recovered symbolic argument for this slot supplies its contract.
+        if (layout.IsGenericParameter
+            && layout.DeclaringMethod != null)
+        {
+            var slot = layout.GenericParameterPosition;
+            if (effectiveMethodTypeArguments.IsDefaultOrEmpty
+                || (uint)slot >= (uint)effectiveMethodTypeArguments.Length
+                || effectiveMethodTypeArguments[slot] == null
+                || effectiveMethodTypeArguments[slot] == TypeSymbol.Error)
+            {
+                return null;
+            }
         }
 
         if ((effectiveMethodTypeArguments.IsDefaultOrEmpty

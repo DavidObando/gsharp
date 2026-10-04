@@ -71,10 +71,10 @@ public sealed partial class CSharpToGSharpTranslator
                         && this.context.GetDeclaredSymbol(method) is IMethodSymbol companionSymbol
                         && this.HasReceiverCompanion(companionSymbol))
                     {
-                        (GMember companion, bool companionIsStatic) = this.TranslateMethod(
+                        (GMember companion, bool companionIsStatic) = this.TranslateOwnerScopedCompanion(
                             method,
                             ownerKind,
-                            forceExtensionReceiver: true);
+                            companionSymbol);
                         if (companion != null)
                         {
                             yield return (companion, companionIsStatic);
@@ -690,7 +690,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.MapDelegateLikeReturnType(invoke, isAsync: false, node.ReturnType.GetLocation())
                 : this.MapTypeSyntax(node.ReturnType);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
-            bool isNested = symbol?.ContainingType != null;
+            bool isNested = CSharpTypeMapper.IsLiftedNestedDelegate(symbol);
             string name = isNested
                 ? this.typeMapper.LiftedNestedDelegateName(symbol, this.context)
                 : this.EmittedName(symbol, node.Identifier.ValueText);
@@ -1811,6 +1811,39 @@ public sealed partial class CSharpToGSharpTranslator
                 ? new ExpressionStatement(forwarded)
                 : new ReturnStatement(forwarded);
             return new BlockStatement(new[] { statement });
+        }
+
+        /// <summary>
+        /// Translates the top-level forwarding companion of an owner-scoped extension. It sits
+        /// outside the owner, so a source attribute that names one of the owner's private
+        /// nested types (as the attribute class or in an argument) cannot resolve there; it is
+        /// left off the companion, in every position (method, return value, parameter), and
+        /// stays on the in-owner helper. Every other attribute is copied as before.
+        /// </summary>
+        /// <param name="method">The extension's declaration.</param>
+        /// <param name="ownerKind">The G# kind of the owner.</param>
+        /// <param name="symbol">The extension's symbol.</param>
+        /// <returns>The translated companion and whether it is static.</returns>
+        private (GMember Member, bool IsStatic) TranslateOwnerScopedCompanion(
+            MethodDeclarationSyntax method,
+            TypeDeclarationKind ownerKind,
+            IMethodSymbol symbol)
+        {
+            HashSet<SyntaxNode> privateTypeAttributes = AttributeApplicationsNamingPrivateNestedType(symbol);
+            Func<AttributeSyntax, bool> previous = this.attributeOmission;
+            if (privateTypeAttributes.Count > 0)
+            {
+                this.attributeOmission = attribute => privateTypeAttributes.Contains(attribute);
+            }
+
+            try
+            {
+                return this.TranslateMethod(method, ownerKind, forceExtensionReceiver: true);
+            }
+            finally
+            {
+                this.attributeOmission = previous;
+            }
         }
 
         private bool HasReceiverCompanion(IMethodSymbol method)

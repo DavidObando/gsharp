@@ -1553,7 +1553,22 @@ internal sealed class ConversionClassifier
                         substituted = nilTarget;
                     }
 
+                    var methodSlot = substituted ?? TrySubstituteParameterTypeFromMethodTypeArgs(
+                        method,
+                        paramIndex,
+                        symbolicMethodTypeArgs);
+                    var requiresRuntimeContract = substituted == null
+                        && methodSlot != null
+                        && !Conversion.HasClrArgumentRuntimeRelation(argument.Type, methodSlot);
+                    if (requiresRuntimeContract)
+                    {
+                        substituted = methodSlot;
+                    }
+
+                    // CLR applicability has already decided reference annotations;
+                    // reification must still reject a genuinely different runtime shape.
                     var targetType = substituted
+                        ?? methodSlot
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
                     var rejectionTargetType = substituted
                         ?? TrySubstituteParameterTypeFromMethodTypeArgs(
@@ -1679,7 +1694,8 @@ internal sealed class ConversionClassifier
                         // `ContainsMetadataRecoveredArray` line), so this
                         // cannot fire on an interop slot.
                         var allowExplicitArgument = !parameterConversion.IsStructuralProjection
-                            && targetType is not ArrayTypeSymbol;
+                            && targetType is not ArrayTypeSymbol
+                            && !requiresRuntimeContract;
                         rebound = BindConversion(
                             location,
                             argument,
@@ -3932,36 +3948,7 @@ internal sealed class ConversionClassifier
     }
 
     private static bool IsNaturalStructuralDelegateTarget(TypeSymbol source, TypeSymbol target)
-    {
-        source = source is NullableTypeSymbol sourceNullable ? sourceNullable.UnderlyingType : source;
-        target = target is NullableTypeSymbol targetNullable ? targetNullable.UnderlyingType : target;
-        target = target is NullabilityAnnotatedTypeSymbol annotated ? annotated.BaseType : target;
-
-        if (source is not FunctionTypeSymbol sourceFunction
-            || !MemberLookup.TryCanonicalizeStructuralFunctionType(sourceFunction, target, out _)
-            || target.ClrType == null
-            || sourceFunction.Arity > 16)
-        {
-            return false;
-        }
-
-        var naturalFullName = FunctionTypeSymbol.IsVoidReturn(sourceFunction.ReturnType)
-            ? sourceFunction.Arity == 0
-                ? "System.Action"
-                : "System.Action`" + sourceFunction.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : "System.Func`" + (sourceFunction.Arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var targetDefinition = target.ClrType.IsGenericType
-            ? target.ClrType.GetGenericTypeDefinition()
-            : target.ClrType;
-        var baseType = targetDefinition.BaseType;
-        return string.Equals(targetDefinition.FullName, naturalFullName, StringComparison.Ordinal)
-            && baseType != null
-            && string.Equals(baseType.FullName, "System.MulticastDelegate", StringComparison.Ordinal)
-            && string.Equals(
-                targetDefinition.Assembly.FullName,
-                baseType.Assembly.FullName,
-                StringComparison.Ordinal);
-    }
+        => MemberLookup.IsNaturalStructuralDelegateTarget(source, target);
 
     /// <summary>
     /// Issue #2148: returns the <see cref="TypeSymbol.ClrType"/> of the nearest

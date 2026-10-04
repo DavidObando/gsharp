@@ -170,6 +170,30 @@ Instance methods on a **`class`** (or `data class`) the package **owns** are dec
 
 C# **extension methods** (`static R M(this T self, …)`) translate to `func (self T) M(…) R` (ADR-0019; historically `func extension (self T) M(…) R` for enum/owned receivers per ADR-0165, superseded above — the plain form now covers every receiver kind and ownership).
 
+Issue #4676 narrows the exception below to extensions whose receiver the project
+*owns* (a source type in the same namespace, or an enum). An extension on an
+external receiver (`this Type`, `this string`, `this T`) of a static class with a
+private nested aggregate is lifted like any other and hosted on its owner through
+`@ExtensionOwner(typeof(Owner))` (issue #4234): a function hosted on its owner
+reaches the owner's private nested types and members, so the real body is kept in
+one function, the owner carries the one `[Extension]` method the C# assembly had,
+and no forwarding companion lands on the package's public `<Program>`. A
+second case keeps the scheme: an extension whose signature or attributes name one of
+the owner's private nested types (gsc binds a function's receiver, parameter and
+return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
+function cannot name the private type; a method whose signature names one cannot be
+public API, and one that only has an attribute naming it keeps the in-owner helper and
+its forwarding companion, the companion leaving off only the attributes that name the
+private type, since at top level they cannot resolve; every other attribute is copied). The
+description that follows applies to those two cases only. Source-declared nested
+delegates use the mapper's allocated lifted top-level name, so their original
+private nominal container is not itself an inaccessible type exposure. Their
+original-definition invoke signature, delegate constraints and actual generic
+type arguments (including containing types) are still checked for genuine private
+types, cycle-safely; constructed invoke signatures can expand generic recursion.
+Imported delegates retain
+their nominal CLR accessibility and identity; they are not source-lifted.
+
 Issue #3413 adds one ownership-preserving exception: when the declaring static
 class contains a private nested aggregate, its extension methods stay as
 ordinary static methods in that owner's `shared` block. A forwarding

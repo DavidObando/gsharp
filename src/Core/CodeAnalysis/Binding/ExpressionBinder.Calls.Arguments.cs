@@ -4260,7 +4260,8 @@ internal sealed partial class ExpressionBinder
             parameters,
             downstreamMapping,
             method,
-            constraintType);
+            constraintType,
+            symbolicMethodTypeArgs);
 
         // Non-generic constrained slots stay on the established unconverted
         // path: the emitted MemberRef parameter is the interface type-variable
@@ -4350,7 +4351,8 @@ internal sealed partial class ExpressionBinder
         ParameterInfo[] parameters,
         ImmutableArray<int> parameterMapping,
         MethodInfo method,
-        TypeSymbol constraintType)
+        TypeSymbol constraintType,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -4363,10 +4365,15 @@ internal sealed partial class ExpressionBinder
             }
 
             var argument = arguments[i];
-            var targetType = MemberLookup.GetClrMethodParameterTypeSymbol(
-                constraintType,
-                method,
-                parameterIndex);
+            var targetType = MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+                    constraintType,
+                    method,
+                    parameterIndex,
+                    symbolicMethodTypeArgs)
+                ?? MemberLookup.GetClrMethodParameterTypeSymbol(
+                    constraintType,
+                    method,
+                    parameterIndex);
             if (argument.Type is not { } sourceType
                 || sourceType.ClrType != null
                 || !TypeSymbol.ContainsSameCompilationUserType(sourceType)

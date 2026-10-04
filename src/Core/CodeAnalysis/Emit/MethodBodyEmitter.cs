@@ -629,28 +629,11 @@ internal sealed partial class MethodBodyEmitter
             type = nullable.UnderlyingType;
         }
 
-        if (type is InterfaceSymbol)
-        {
-            return true;
-        }
-
-        return type?.ClrType != null && type.ClrType.IsInterface;
+        return Conversion.IsInterfaceLikeType(type);
     }
 
     private static bool IsInterfaceSourceType(TypeSymbol? type)
-    {
-        if (type is NullableTypeSymbol nullable)
-        {
-            type = nullable.UnderlyingType;
-        }
-
-        if (type is InterfaceSymbol)
-        {
-            return true;
-        }
-
-        return type?.ClrType != null && type.ClrType.IsInterface;
-    }
+        => IsInterfaceTargetType(type);
 
     private static bool IsExplicitUnboxingSourceType(TypeSymbol type)
     {
@@ -928,32 +911,20 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
-        // Issue #525: class → imported CLR interface upcast. The G#
-        // class has no ClrType during emit, so the general #521 rule
-        // below cannot match; recognise the implementation structurally
-        // through `ImplementedClrInterfaces`.
+        // #4731: a user class has no CLR type here. Reuse the binder's
+        // nominal relation, including substituted imported bases, rather
+        // than independently deciding interface assignability from CLR probes.
         if (a is StructSymbol srcClass2 && srcClass2.IsClass
-            && b?.ClrType != null && b.ClrType.IsInterface)
+            && b is not null and not InterfaceSymbol
+            && Conversion.IsInterfaceLikeType(b))
         {
-            foreach (var c in srcClass2.GetHierarchy())
+            if (Conversion.ClassifyCore(
+                a,
+                b,
+                allowStructuralProjection: false,
+                allowExplicitReference: false).IsImplicit)
             {
-                foreach (var iface in c.ImplementedClrInterfaces)
-                {
-                    var ifaceClr = iface?.ClrType;
-                    if (ifaceClr == null)
-                    {
-                        continue;
-                    }
-
-                    // Issue #2135: `b.ClrType` may be a
-                    // TypeBuilderInstantiation whose IsAssignableFrom throws
-                    // NotSupportedException at emit; use the guarded by-name
-                    // helper instead of calling IsAssignableFrom directly.
-                    if (ifaceClr == b.ClrType || ClrTypeUtilities.IsAssignableByName(b.ClrType, ifaceClr))
-                    {
-                        return true;
-                    }
-                }
+                return true;
             }
         }
 
@@ -1000,11 +971,16 @@ internal sealed partial class MethodBodyEmitter
         // (`IEqualityComparer[IMethodSymbol]`): the binder now classifies it
         // through the CLR interface-closure projection, and the emitted form
         // is the same no-op reference upcast.
-        if (a is ImportedTypeSymbol importedReference
+        // #4731: sequence aliases also emit their actual symbolic element.
+        // A valid widening must retain that precise stack type when a
+        // reflected parameter is erased but its MethodSpec consumes the
+        // real element; casting to the erased envelope would lose it.
+        if (((a is ImportedTypeSymbol importedReference
             && (importedReference.OpenDefinition?.IsValueType == false
                 || (importedReference.OpenDefinition == null
-                    && importedReference.ClrType is { IsValueType: false, IsArray: false }))
-            && b is ImportedTypeSymbol
+                    && importedReference.ClrType is { IsValueType: false, IsArray: false })))
+            || a is SequenceTypeSymbol or AsyncSequenceTypeSymbol)
+            && b is ImportedTypeSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol
             && Conversion.ClassifyNonStructural(a, b) is
             {
                 Exists: true,
