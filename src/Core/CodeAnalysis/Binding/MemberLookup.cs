@@ -5901,6 +5901,11 @@ internal sealed class MemberLookup
             return null;
         }
 
+        if (openMethod is { IsGenericMethod: true, IsGenericMethodDefinition: false })
+        {
+            openMethod = openMethod.GetGenericMethodDefinition();
+        }
+
         var openParameters = openMethod?.GetParameters();
         if (openMethod == null
             || openParameters == null

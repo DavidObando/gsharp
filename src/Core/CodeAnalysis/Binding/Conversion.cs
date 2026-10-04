@@ -379,10 +379,11 @@ public sealed class Conversion
     internal static bool HasClrArgumentRuntimeRelation(TypeSymbol source, TypeSymbol target)
         => TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(source, target)
             || (!NullableLifting.IsAnyValueTypeNullable(source as NullableTypeSymbol)
-                && TryClassifyConstructedImportedReferenceConversion(
-                    source.StripToBareShape(),
-                    target,
-                    clrArgumentBoundary: true));
+                && (IsMapInterfaceReferenceUpcast(source.StripToBareShape(), target.StripToBareShape())
+                    || TryClassifyConstructedImportedReferenceConversion(
+                        source.StripToBareShape(),
+                        target.StripToBareShape(),
+                        clrArgumentBoundary: true)));
 
     /// <summary>
     /// Classifies only pre-ADR-0148 conversions. Projection planning uses this

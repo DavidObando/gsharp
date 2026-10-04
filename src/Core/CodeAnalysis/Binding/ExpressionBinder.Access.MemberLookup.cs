@@ -5916,7 +5916,8 @@ internal sealed partial class ExpressionBinder
             parameters,
             downstreamMapping,
             method,
-            constraintType);
+            constraintType,
+            symbolicMethodTypeArgs);
         arguments = method.IsGenericMethod
             ? conversions.BindClrParameterConversions(
                 arguments,

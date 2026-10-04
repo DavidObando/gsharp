@@ -22,6 +22,128 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstrainedExpandedParams_PreserveSourceAndInferredResult(bool genericOwner)
+    {
+        using var fixture = new Fixture();
+        var constraint = genericOwner ? "IGenericParamsReceiver[int32]" : "IParamsReceiver";
+        var receiver = genericOwner ? "GenericParamsReceiver[int32]" : "ParamsReceiver";
+        var result = fixture.Compile($$"""
+            package Issue4731.ConstrainedParams
+            import Issue4731.Contracts
+            open class Base {}
+            class Derived : Base {}
+            class Counter {
+                var Calls int32 = 0
+                func Next() Derived {
+                    Calls = Calls + 1
+                    return Derived()
+                }
+                func Factory() Base {
+                    Calls = Calls + 10
+                    return Base()
+                }
+                func Factory(value int32) Derived {
+                    Calls = Calls + 100
+                    return Derived()
+                }
+            }
+            public func Dispatch[TReceiver {{constraint}}](receiver TReceiver, counter Counter) Base ->
+                receiver.Choose(counter.Next(), counter.Factory)
+            public func Probe() int32 {
+                let counter = Counter()
+                let chosen = Dispatch({{receiver}}(), counter)
+                return counter.Calls
+            }
+            """);
+        Assert.True(result.ExitCode == 0, result.Output);
+        IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
+        var assembly = EmittedFixture.Load(result.AssemblyPath);
+        Assert.Equal(11, FindMethod(assembly, "Probe").Invoke(null, null));
+        var dispatch = FindMethod(assembly, "Dispatch");
+        var baseType = Assert.Single(assembly.GetTypes(), type => type.Name == "Base");
+        Assert.Equal(baseType, dispatch.ReturnType);
+        var body = Assert.IsAssignableFrom<MethodBody>(dispatch.GetMethodBody());
+        var chosenCall = Assert.Single(
+            IlInstructionReader.Read(Assert.IsType<byte[]>(body.GetILAsByteArray()))
+                .Where(instruction => instruction.OpCode == OpCodes.Callvirt)
+                .Select(instruction => dispatch.Module.ResolveMethod(
+                    instruction.MetadataToken.GetValueOrDefault(),
+                    null,
+                    dispatch.GetGenericArguments()))
+                .OfType<MethodInfo>(),
+            method => method.Name == "Choose");
+        Assert.Equal(baseType, Assert.Single(chosenCall.GetGenericArguments()));
+        Assert.Equal(baseType, chosenCall.ReturnType);
+        Assert.Equal(baseType, chosenCall.GetParameters()[0].ParameterType);
+        Assert.Equal(typeof(Func<>).MakeGenericType(baseType).MakeArrayType(), chosenCall.GetParameters()[1].ParameterType);
+        if (genericOwner)
+        {
+            var declaringType = Assert.IsAssignableFrom<Type>(chosenCall.DeclaringType);
+            Assert.Equal(typeof(int), Assert.Single(declaringType.GetGenericArguments()));
+        }
+    }
+
+    [Theory]
+    [InlineData("object", "GS0156")]
+    [InlineData("Other", "GS0155")]
+    public void ImportedExpandedParams_UnrelatedActualSourceIsRejected(string sourceType, string diagnostic)
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile($$"""
+            package Issue4731.ConstrainedParamsNegative
+            import Issue4731.Contracts
+            class Base {}
+            class Other {}
+            func Factory() Base -> Base()
+            public func Bad(receiver IParamsReceiver, value {{sourceType}}) object ->
+                receiver.Choose[Base](value, Factory)
+            """);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(result.Output.Contains("error " + diagnostic + ":", StringComparison.Ordinal), result.Output);
+        Assert.False(File.Exists(result.AssemblyPath));
+    }
+
+    [Fact]
+    public void NullableMapAtImportedGenericSlot_PreservesRuntimeAndOriginalNilPolicy()
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile("""
+            package Issue4731.NullableMap
+            import Issue4731.Contracts
+            public func OpenMap[K, V](value map[K, V]?) int32 -> MapReader.Count[K, V](value)
+            public func ClosedMap(value map[string, int32]?) int32 -> MapReader.Count[string, int32](value)
+            public func Probe() int32 {
+                let value = map[string, int32]{"first": 1, "second": 2}
+                return OpenMap[string, int32](value) * 10 + ClosedMap(value)
+            }
+            """);
+        Assert.True(result.ExitCode == 0, result.Output);
+        IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
+        var assembly = EmittedFixture.Load(result.AssemblyPath);
+        Assert.Equal(22, FindMethod(assembly, "Probe").Invoke(null, null));
+        var open = FindMethod(assembly, "OpenMap");
+        var closed = FindMethod(assembly, "ClosedMap");
+        Assert.Equal(-1, open.MakeGenericMethod(typeof(string), typeof(int)).Invoke(null, new object[] { null }));
+        Assert.Equal(-1, closed.Invoke(null, new object[] { null }));
+        var body = Assert.IsAssignableFrom<MethodBody>(open.GetMethodBody());
+        var count = Assert.Single(
+            IlInstructionReader.Read(Assert.IsType<byte[]>(body.GetILAsByteArray()))
+                .Where(instruction => instruction.OpCode == OpCodes.Call)
+                .Select(instruction => open.Module.ResolveMethod(
+                    instruction.MetadataToken.GetValueOrDefault(),
+                    null,
+                    open.GetGenericArguments()))
+                .OfType<MethodInfo>(),
+            method => method.Name == "Count");
+        Assert.Equal(open.GetGenericArguments(), count.GetGenericArguments());
+        Assert.Equal(
+            typeof(IDictionary<,>).MakeGenericType(open.GetGenericArguments()),
+            Assert.Single(count.GetParameters()).ParameterType);
+    }
+
+    [Theory]
     [InlineData("[]Other", "Item", "GS0155")]
     [InlineData("List[Other]", "Item", "GS0155")]
     [InlineData("sequence[List[Other]]", "List[Item]", "GS0155")]
@@ -415,6 +537,27 @@ public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
         }
 
         public class SequenceOwner<T> : System.Collections.Generic.List<T> { }
+        public interface IParamsReceiver
+        {
+            T Choose<T>(T value, params System.Func<T>[] factories);
+        }
+        public sealed class ParamsReceiver : IParamsReceiver
+        {
+            public T Choose<T>(T value, params System.Func<T>[] factories) => factories[0]();
+        }
+        public interface IGenericParamsReceiver<TMarker>
+        {
+            T Choose<T>(T value, params System.Func<T>[] factories);
+        }
+        public sealed class GenericParamsReceiver<TMarker> : IGenericParamsReceiver<TMarker>
+        {
+            public T Choose<T>(T value, params System.Func<T>[] factories) => factories[0]();
+        }
+        public static class MapReader
+        {
+            public static int Count<K, V>(System.Collections.Generic.IDictionary<K, V> value)
+                => value?.Count ?? -1;
+        }
         public interface IQueryRoot<out T> { int Count { get; } }
         public interface IQueryProjection<out T, out TProperty> : IQueryRoot<T> { }
         public sealed class QueryRoot<T> : IQueryRoot<T>
