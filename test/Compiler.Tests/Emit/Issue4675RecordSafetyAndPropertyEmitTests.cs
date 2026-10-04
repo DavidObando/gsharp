@@ -1494,17 +1494,22 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
         return source.ToString();
     }
 
-    [Fact]
-    public void ConstructorInitializerValidation_ReportsEachConstructionSite()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstructorInitializerValidation_ReportsEachConstructionSite(bool generic)
     {
-        const string source = """
+        var construction = generic ? "Holder[readonly managed[int32]]{}" : "Holder{}";
+        var source = """
             package InitializerSites
-            class Holder[T] { private var Saved T = (func() T { return default(T) })() }
+            class HOLDER { private var Saved HANDLE = (func() HANDLE { return default(HANDLE) })() }
             func Main() {
-                let first = Holder[readonly managed[int32]]{}
-                let second = Holder[readonly managed[int32]]{}
+                let first = CONSTRUCTION
+                let second = CONSTRUCTION
             }
-            """;
+            """.Replace("HOLDER", generic ? "Holder[T]" : "Holder", StringComparison.Ordinal)
+                .Replace("HANDLE", generic ? "T" : "readonly managed[int32]", StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal);
         using var fixture = new NativeSliceLanguageTests.Fixture();
         var (code, output) = fixture.TryCompile(source, "InitializerSites", true);
         Assert.NotEqual(0, code);
@@ -1512,8 +1517,66 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
         foreach (var declaration in new[] { "let first = ", "let second = " })
         {
             var offset = source.IndexOf(declaration, StringComparison.Ordinal) + declaration.Length;
-            AssertDiagnosticAt(source, offset, "Holder[readonly managed[int32]]{}", output, "GS0604");
+            AssertDiagnosticAt(source, offset, construction, output, "GS0604");
         }
+    }
+
+    [Fact]
+    public void ConstructorInitializerValidation_RepeatedFunctionValuesExecuteOncePerConstruction()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package InitializerFunctions
+            import System
+            class Provider[T] {
+                shared {
+                    public var Value T
+                    public var Calls int32
+                    public func Next() T {
+                        Calls += 1
+                        return Value
+                    }
+                }
+            }
+            class Holder {
+                private var Saved readonly managed[int32] = (func() readonly managed[int32] { return Provider[readonly managed[int32]].Next() })()
+                public func Read() int32 -> *Saved
+            }
+            func Main() {
+                var value = 7
+                Provider[readonly managed[int32]].Value = readonly managed(value)
+                let first = Holder{}
+                let second = Holder{}
+                Console.WriteLine(first.Read())
+                Console.WriteLine(second.Read())
+                Console.WriteLine(Provider[readonly managed[int32]].Calls)
+            }
+            """, "InitializerFunctions", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n7\n2\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void ConstructorInitializerValidation_FunctionRecursionStillTerminates()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = TryCompileIsolated(fixture, """
+            package InitializerFunctionRecursion
+            import System
+            class Flags { shared { public var Recurse bool } }
+            class Node {
+                public var Next Node? = (func() Node? { return Flags.Recurse ? Node{} : nil })()
+            }
+            func Main() {
+                let first = Node{}
+                let second = Node{}
+                Console.WriteLine(first.Next == nil && second.Next == nil)
+            }
+            """, "InitializerFunctionRecursion");
+        Assert.True(code == 0, output);
+        var dll = Path.Combine(fixture.Directory, "InitializerFunctionRecursion.dll");
+        IlVerifier.Verify(dll);
+        Assert.Equal("True\n", fixture.Run(dll));
     }
 
     [Theory]
