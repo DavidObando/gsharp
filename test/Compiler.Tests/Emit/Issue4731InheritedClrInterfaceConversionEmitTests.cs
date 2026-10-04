@@ -19,6 +19,65 @@ namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue4731InheritedClrInterfaceConversionEmitTests
 {
+    [Fact]
+    public void SymbolicValueWrapper_ExactDirectAndClosureConsumers_BoxActualValueShape()
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile("""
+            package Issue4731.SymbolicValueBoxing
+            import System
+            import System.Collections.Generic
+            import System.Collections.Immutable
+            import System.Linq
+            enum Kind { First, Second }
+
+            public func Direct(left ImmutableArray[Kind], right ImmutableArray[Kind]) bool -> left.SequenceEqual(right)
+            public func Closure(left ImmutableArray[Kind]) ((ImmutableArray[Kind]) -> bool?) {
+                return (right ImmutableArray[Kind]) -> {
+                    return if left.Length == right.Length { left.SequenceEqual(right) } else { nil }
+                }
+            }
+
+            public func Probe() int32 {
+                let values = ImmutableArray.Create(Kind.First, Kind.Second)
+                let other = ImmutableArray.Create(Kind.Second, Kind.First)
+                let check = Closure(values)
+                if !Direct(values, values) || Direct(values, other) { return -1 }
+                if check(values) != true || check(other) != false { return -2 }
+                if check(ImmutableArray[Kind].Empty) != nil { return -3 }
+                return 37
+            }
+            """);
+        Assert.True(result.ExitCode == 0, result.Output);
+        IlVerifier.Verify(result.AssemblyPath, additionalReferences: new[] { fixture.AssemblyPath });
+        var assembly = EmittedFixture.Load(result.AssemblyPath);
+        Assert.Equal(37, FindMethod(assembly, "Probe").Invoke(null, null));
+        var kind = Assert.Single(assembly.GetTypes(), type => type.Name == "Kind");
+        var wrapper = typeof(ImmutableArray<>).MakeGenericType(kind);
+        var enumerable = typeof(IEnumerable<>).MakeGenericType(kind);
+        var direct = FindMethod(assembly, "Direct");
+        Assert.Equal(new[] { wrapper, wrapper }, direct.GetParameters().Select(parameter => parameter.ParameterType));
+        var closure = Assert.Single(assembly.GetTypes(), type => type.Name.StartsWith("<closure_", StringComparison.Ordinal));
+        var invoke = Assert.Single(closure.GetMethods(), method => method.Name == "Invoke");
+        Assert.Equal(wrapper, Assert.Single(invoke.GetParameters()).ParameterType);
+        foreach (var method in new[] { direct, invoke })
+        {
+            var body = Assert.IsAssignableFrom<MethodBody>(method.GetMethodBody());
+            var bytes = Assert.IsType<byte[]>(body.GetILAsByteArray());
+            var instructions = IlInstructionReader.Read(bytes).ToArray();
+            var boxes = instructions.Where(instruction => instruction.OpCode == OpCodes.Box).ToArray();
+            Assert.Equal(2, boxes.Length);
+            Assert.All(boxes, instruction => Assert.Equal(wrapper, method.Module.ResolveType(BitConverter.ToInt32(bytes, instruction.Offset + instruction.OpCode.Size))));
+            var sequenceEqual = Assert.Single(
+                instructions.Where(instruction => instruction.OpCode == OpCodes.Call)
+                    .Select(instruction => method.Module.ResolveMethod(instruction.MetadataToken.GetValueOrDefault()))
+                    .OfType<MethodInfo>(),
+                callee => callee.DeclaringType == typeof(Enumerable) && callee.Name == nameof(Enumerable.SequenceEqual));
+            Assert.Equal(kind, Assert.Single(sequenceEqual.GetGenericArguments()));
+            Assert.Equal(new[] { enumerable, enumerable }, sequenceEqual.GetParameters().Select(parameter => parameter.ParameterType));
+        }
+    }
+
     [Theory]
     [InlineData("ImmutableArray[int32]", "IEnumerable[object]")]
     [InlineData("ImmutableArray[List[Item]]", "IEnumerable[List[object]]")]

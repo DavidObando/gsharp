@@ -1550,6 +1550,14 @@ internal sealed class ConversionClassifier
                         substituted = nilTarget;
                     }
 
+                    // The emitted MethodSpec uses the actual method arguments,
+                    // so every argument conversion must target that same slot,
+                    // including value wrappers whose own CLR probe is erased.
+                    substituted ??= TrySubstituteParameterTypeFromMethodTypeArgs(
+                        method,
+                        paramIndex,
+                        symbolicMethodTypeArgs);
+
                     var targetType = substituted
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
                     var rejectionTargetType = substituted
