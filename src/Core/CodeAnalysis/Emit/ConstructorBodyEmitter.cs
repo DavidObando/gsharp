@@ -447,8 +447,10 @@ internal sealed class ConstructorBodyEmitter
     /// gets a synthesized public parameterless <c>.ctor</c> that runs ALL
     /// declared instance field initializers in-type (mirroring the class
     /// default-ctor path), and struct-literal sites construct through it.
-    /// Structs whose initializers are all public keep the historical inline
-    /// emission byte-for-byte. A user-declared parameterless ctor (which
+    /// Generic structs also require in-type initialization: their definition-bound
+    /// expressions cannot execute in the literal site's generic context (#4755).
+    /// Non-generic structs whose initializers are all public keep the historical
+    /// inline emission. A user-declared parameterless ctor (which
     /// would collide) and inline structs (fixed synthesized-member layout)
     /// are excluded.
     /// </summary>

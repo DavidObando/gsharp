@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Ordinary generic struct literals retain declared field initializers** (issue #4755). Default construction now runs definition-bound initializers once in the owning generic type, before explicit literal member writes, instead of silently leaving initialized fields at CLR zero. Constructed value/reference arguments, private and readonly storage keep their owning metadata; array/default zero-initialization is unchanged.
+
 - **cs2gs keeps attributes naming a safely lifted source delegate on the original extension owner** (issue #4676). A private nested delegate already maps to a bindable top-level name, so an external-receiver extension no longer unnecessarily splits into an owner helper and a public `<Program>` companion. The shared exposure check still follows the delegate's signature, constraints and containing generic arguments for genuine private types, and does not relax imported delegate accessibility or CLR identity.
 
 - **An inherited non-virtual property accessor can satisfy a G# interface across assemblies** (issue [#4717](https://github.com/DavidObando/gsharp/issues/4717)). The derived class now emits a private forwarding slot that calls the exact imported accessor selected by binding, including setters, init accessors, indexers and constructed generic bases. Previously the two compilations succeeded but the derived type failed IL verification and runtime loading. Ordinary base accessors stay non-virtual; existing virtual and inherited interface mappings are preserved, and reference assemblies carry the same forwarding-slot metadata.

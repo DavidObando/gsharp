@@ -702,15 +702,20 @@ public sealed class StructSymbol : TypeSymbol
     internal bool IsSharedClass => IsClass && (Declaration?.IsShared ?? false);
 
     /// <summary>
-    /// Gets a value indicating whether non-public value-struct field initializers require an
-    /// in-type default constructor rather than call-site field stores.
+    /// Gets a value indicating whether value-struct field initializers require an
+    /// in-type default constructor for accessibility or generic ownership.
+    /// Definition-bound expressions must execute in their owning generic
+    /// context, not in a literal site's unrelated VAR/MVAR scope (#4755).
     /// </summary>
-    internal bool NeedsSynthesizedValueStructDefaultCtor =>
-        !IsClass
+    internal bool NeedsSynthesizedValueStructDefaultCtor => Definition != null && !ReferenceEquals(Definition, this)
+        ? Definition.NeedsSynthesizedValueStructDefaultCtor
+        : !IsClass
         && !IsInline
         && !InstanceFieldInitializers.IsEmpty
         && (ExplicitConstructors.IsDefaultOrEmpty || !ExplicitConstructors.Any(ctor => ctor.Parameters.Length == 0))
-        && InstanceFieldInitializers.Keys.Any(member => member.Accessibility != Accessibility.Public);
+        && (IsGenericDefinition
+            || !CollectEnclosingTypeParameters(this).IsDefaultOrEmpty
+            || InstanceFieldInitializers.Keys.Any(member => member.Accessibility != Accessibility.Public));
 
     /// <summary>Sets <see cref="Symbol.ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>
