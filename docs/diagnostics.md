@@ -1318,7 +1318,7 @@ nesting depth.
 | GS0281 | Error | A designated initializer delegates to a sibling `init(args)` overload instead of chaining to its base class.  | |
 | GS0282 | Error | A convenience initializer delegates to itself.  | |
 | GS0283 | Error | No sibling initializer overload matches an `init(args)` self-delegation call.  | |
-| GS0284 | Error | An explicit `init(...)` duplicates the constructor synthesized from the class's primary-constructor parameters.  | |
+| GS0284 | Error | An explicit `init(...)` duplicates the constructor synthesized from the type's primary-constructor parameters.  | |
 | GS0293 | Error | No enclosing loop is labeled `<label>` (in `break <label>` / `continue <label>`). |
 | GS0294 | _Retired_ | Previously: labels could only be applied to loop statements. Non-loop labels are now valid `goto` targets; this diagnostic is no longer emitted. |
 | GS0295 | Warning | Label `<label>` shadows an enclosing loop label of the same name; the inner label wins for nested `break` / `continue`. |
