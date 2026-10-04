@@ -1442,6 +1442,147 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
+    [InlineData(true, "return")]
+    [InlineData(true, "array")]
+    [InlineData(true, "list")]
+    [InlineData(false, "return")]
+    [InlineData(false, "array")]
+    [InlineData(false, "list")]
+    public void OperatorInputStoreBridge_ReportsTheActualParameterOnceAndExecutesOnce(bool genericParameter, string store)
+    {
+        string box = genericParameter ? "StrictInputBox<string>" : "StrictReferenceBox";
+        string body = store switch
+        {
+            "array" => $"var rows = new {box}[] {{ Text }}; return rows[0];",
+            "list" => $"var rows = new System.Collections.Generic.List<{box}>(); rows.Add(Text); return rows[0];",
+            _ => "return Text;",
+        };
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static {{box}} Read() {
+                    if (Text != null) { {{body}} }
+                    return new {{box}}();
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    var result = Read();
+                    Console.WriteLine(result != null && Probe.Calls == 1 && Reads == 2 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Single(Regex.Matches(printed, @"Text!!").Cast<Match>());
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToArray();
+        if (genericParameter)
+        {
+            TranslationDiagnostic site = Assert.Single(sites);
+            Assert.Equal(TranslationSeverity.Warning, site.Severity);
+            Assert.StartsWith("kind=constructed-generic-member | target=StrictInputBox<string>.implicit operator", site.Message);
+            Assert.Contains("parameter 'value' | slot-type=string (NotAnnotated) | result-depends-on-slot=yes | value=Text", site.Message);
+            Assert.Equal("Text", site.Location.SourceTree.GetText().ToString(site.Location.SourceSpan));
+        }
+        else
+        {
+            Assert.Empty(sites);
+        }
+    }
+
+    [Theory]
+    [InlineData("return")]
+    [InlineData("list")]
+    public void NullableOperatorInputStoreBridge_RemainsBareAndUnreported(string store)
+    {
+        string body = store == "list"
+            ? "var rows = new System.Collections.Generic.List<NullAcceptingInputBox<string>>(); rows.Add(Text); return rows[0];"
+            : "return Text;";
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return null; }
+                    set { }
+                }
+                public static NullAcceptingInputBox<string> Read() { {{body}} }
+                public static void Main() {
+                    Probe.Reset();
+                    Reads = 0;
+                    var result = Read();
+                    Console.WriteLine(result != null && Probe.Calls == 1 && Reads == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.DoesNotContain("Text!!", printed);
+        Assert.DoesNotContain(context.Diagnostics, diagnostic =>
+            diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+    }
+
+    [Theory]
+    [InlineData("array")]
+    [InlineData("list")]
+    public void OperatorInputAndResultStoreBridges_ReportDistinctSlotsWithoutRepeatingEvaluation(string store)
+    {
+        string body = store == "array"
+            ? "var rows = new MaybeStrictInputBox<string>[] { Text }; return rows[0];"
+            : "var rows = new System.Collections.Generic.List<MaybeStrictInputBox<string>>(); rows.Add(Text); return rows[0];";
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static MaybeStrictInputBox<string> Read() {
+                    if (Text != null) { {{body}} }
+                    return new MaybeStrictInputBox<string>();
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    var result = Read();
+                    Console.WriteLine(result != null && Probe.Calls == 1 && Reads == 2 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Single(Regex.Matches(printed, @"Text!!").Cast<Match>());
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToArray();
+        Assert.Equal(2, sites.Length);
+        Assert.Contains(sites, site => site.Message.Contains("target=MaybeStrictInputBox<string>.implicit operator", StringComparison.Ordinal)
+            && site.Message.Contains("parameter 'value' | slot-type=string (NotAnnotated)", StringComparison.Ordinal));
+        Assert.Contains(sites, site => store == "array"
+            ? site.Message.StartsWith("kind=array-element | target=MaybeStrictInputBox<string>[]", StringComparison.Ordinal)
+            : site.Message.StartsWith("kind=constructed-generic-member | target=List<MaybeStrictInputBox<string>>.Add", StringComparison.Ordinal));
+        Assert.All(sites, site => Assert.Equal("Text", site.Location.SourceTree.GetText().ToString(site.Location.SourceSpan)));
+    }
+
+    [Theory]
     [InlineData(false, "return Text;")]
     [InlineData(false, "StrictBox result = Text; return result;")]
     [InlineData(false, "StrictBox result = new StrictBox(); result = Text; return result;")]
@@ -1619,6 +1760,30 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                             return value == null ? null : new NullAcceptingBox();
                         }
                     }
+                    public sealed class StrictInputBox<T> where T : class {
+                        public static implicit operator StrictInputBox<T>(T value) {
+                            Probe.Calls++;
+                            return new StrictInputBox<T>();
+                        }
+                    }
+                    public sealed class StrictReferenceBox {
+                        public static implicit operator StrictReferenceBox(string value) {
+                            Probe.Calls++;
+                            return new StrictReferenceBox();
+                        }
+                    }
+                    public sealed class MaybeStrictInputBox<T> where T : class {
+                        public static implicit operator MaybeStrictInputBox<T>?(T value) {
+                            Probe.Calls++;
+                            return new MaybeStrictInputBox<T>();
+                        }
+                    }
+                    public sealed class NullAcceptingInputBox<T> where T : class {
+                        public static implicit operator NullAcceptingInputBox<T>(T? value) {
+                            Probe.Calls++;
+                            return new NullAcceptingInputBox<T>();
+                        }
+                    }
                     public static class FrozenTupleContract {
                         public static int Accept((MaybeBox Value, int Code) row) => row.Code;
                     }
@@ -1704,7 +1869,10 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         return (process.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult());
     }
 
-    private static string Translate(string source, string fixture = null)
+    private static string Translate(string source, string fixture = null) =>
+        TranslateWithContext(source, fixture).Printed;
+
+    private static (string Printed, TranslationContext Context) TranslateWithContext(string source, string fixture)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Snippet.cs", source) },
@@ -1717,6 +1885,6 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         Assert.DoesNotContain(context.Diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        return GSharpPrinter.Print(unit);
+        return (GSharpPrinter.Print(unit), context);
     }
 }

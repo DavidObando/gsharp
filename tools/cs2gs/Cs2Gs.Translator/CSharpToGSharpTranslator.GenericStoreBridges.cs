@@ -159,18 +159,38 @@ public sealed partial class CSharpToGSharpTranslator
             // cannot throw there and is not reported.
             if (value == null
                 || ReferenceEquals(original, bridged)
-                || bridged is not NonNullAssertionExpression
+                || bridged is not NonNullAssertionExpression assertion
                 || original is NonNullAssertionExpression
                 || this.IsWithinExpressionTreeLambda(value))
             {
                 return bridged;
             }
 
-            (ISymbol finalStore, ITypeSymbol resolvedSlotType) = this.ResolveFinalStore(value);
-            if (finalStore != null)
+            bool operatorInput = targetSymbol is IParameterSymbol
+                { ContainingSymbol: IMethodSymbol { MethodKind: MethodKind.Conversion } };
+            if (!operatorInput
+                && ReferenceEquals(assertion.Operand, original))
             {
-                targetSymbol = finalStore;
-                knownSlotType ??= resolvedSlotType;
+                ITypeSymbol conversionTarget = knownSlotType
+                    ?? this.GetFixedElementDestinationType(value, targetSymbol)
+                    ?? ObliviousNullabilityAnalyzer.SymbolValueType(targetSymbol);
+                if (this.GetUserDefinedConversionInputOperator(value, conversionTarget, out _) is { } conversionOperator)
+                {
+                    // An input assertion guards the operator parameter, not its result's store.
+                    targetSymbol = conversionOperator.Parameters[0];
+                    knownSlotType = conversionOperator.Parameters[0].Type;
+                    operatorInput = true;
+                }
+            }
+
+            if (!operatorInput)
+            {
+                (ISymbol finalStore, ITypeSymbol resolvedSlotType) = this.ResolveFinalStore(value);
+                if (finalStore != null)
+                {
+                    targetSymbol = finalStore;
+                    knownSlotType ??= resolvedSlotType;
+                }
             }
 
             string kind = this.ClassifyGenericStoreSlot(value, targetSymbol, knownSlotType, out ITypeSymbol slotType, out bool resultDependsOnSlot);

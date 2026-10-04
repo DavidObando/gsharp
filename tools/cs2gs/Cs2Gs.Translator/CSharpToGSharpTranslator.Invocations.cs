@@ -2185,6 +2185,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && !isXunitNullAssertion
                 && targetRequiresNonNull
                 && !isFlowNarrowedLocal
+                && this.GetUserDefinedConversionInputOperator(argument.Expression, targetType, out _) == null
                 && this.ReceiverNeedsNullForgiveness(argument.Expression))
             {
                 GExpression unbridged = this.TranslateExpression(argument.Expression);

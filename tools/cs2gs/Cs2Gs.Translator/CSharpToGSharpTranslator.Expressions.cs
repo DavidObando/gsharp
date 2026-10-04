@@ -2796,8 +2796,13 @@ public sealed partial class CSharpToGSharpTranslator
             if (conversionOperator != null)
             {
                 IParameterSymbol parameter = conversionOperator.Parameters[0];
-                GExpression operatorOperand = this.ForgiveNullableReferenceValueCore(
-                    value, translated, parameter.Type, parameter, includePromotedValue, operatorInput: true);
+                GExpression operatorOperand = this.ReportStoreBridge(
+                    value,
+                    translated,
+                    this.ForgiveNullableReferenceValueCore(
+                        value, translated, parameter.Type, parameter, includePromotedValue, operatorInput: true),
+                    parameter,
+                    parameter.Type);
                 if (convertsValue && this.TargetWillRemainNonNullableReference(targetType, targetSymbol))
                 {
                     GTypeReference resultType = this.MapDelegateLikeReturnType(
