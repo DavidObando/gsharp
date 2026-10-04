@@ -2967,7 +2967,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            if (method.Name is not ("Where" or "FirstOrDefault")
+            // A terminal quantifier can observe nil through a type pattern just
+            // as a filter can. Asserting the preceding selector loses that input.
+            if (method.Name is not ("Where" or "FirstOrDefault" or "Any" or "All")
                 || filteringInvocation.ArgumentList.Arguments.FirstOrDefault()?.Expression
                     is not AnonymousFunctionExpressionSyntax predicate)
             {
@@ -3004,9 +3006,7 @@ public sealed partial class CSharpToGSharpTranslator
                     .OfType<IsPatternExpressionSyntax>()
                     .Any(isPattern =>
                         this.BindsTo(isPattern.Expression, parameterSymbol)
-                        && IsNullConstantPattern(isPattern.Pattern)
-                        && isPattern.Pattern is UnaryPatternSyntax unary
-                        && unary.IsKind(SyntaxKind.NotPattern))
+                        && TryGetPatternNonNullPolarity(isPattern.Pattern, out _))
                 || predicate.Body.DescendantNodesAndSelf()
                     .OfType<BinaryExpressionSyntax>()
                     .Any(binary =>
