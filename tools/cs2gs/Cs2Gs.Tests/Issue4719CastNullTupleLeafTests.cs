@@ -2967,7 +2967,7 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         LoadedCSharpProject unrelated = CSharpProjectLoader.LoadInMemory(
             new[] { ("Rows.cs", """
                 using Issue4719Fixture;
-                public sealed class Rows : IOverloadedRows {
+                public sealed class Rows : IOverloadedRows, IStringRows {
                     public (NullableResultBox Required, int Code) Read(int value) => ("keep", value);
                     public (NullableResultBox Required, int Code) Read(string value) => ("keep", 1);
                 }
@@ -3284,6 +3284,9 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                     }
                     public interface IOverloadedRows {
                         (NullableResultBox Required, int Code) Read(int value);
+                    }
+                    public interface IStringRows {
+                        (NullableResultBox Required, int Code) Read(string value);
                     }
                     public abstract class WholeRowsBase<T> {
                         public abstract T Read(string value);
