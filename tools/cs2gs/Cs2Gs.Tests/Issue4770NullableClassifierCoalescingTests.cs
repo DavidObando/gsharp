@@ -160,6 +160,84 @@ public class Issue4770NullableClassifierCoalescingTests
         this.Run(source, Controls, assembly => Assert.Equal(expected, Invoke(assembly, "Run")));
     }
 
+    [Fact]
+    public void DefensiveCoalescing_DoesNotWidenFixedParameterOrMemberContracts()
+    {
+        string root = GsharpTestProjectRunner.FindRepoRoot();
+        string binding = Path.Combine(root, "src", "Core", "CodeAnalysis", "Binding");
+        RecordDeclarationSyntax record = Assert.Single(CSharpSyntaxTree.ParseText(
+            File.ReadAllText(Path.Combine(binding, "BoundBodyCacheKey.cs"))).GetRoot()
+            .DescendantNodes().OfType<RecordDeclarationSyntax>());
+        SyntaxNode resolver = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(
+            binding, "OverloadResolution", "OverloadResolver.cs"))).GetRoot();
+        DelegateDeclarationSyntax callback = Assert.Single(resolver.DescendantNodes().OfType<DelegateDeclarationSyntax>(),
+            declaration => declaration.Identifier.ValueText == "TryGetFunctionLiteralDelegate");
+        StatementSyntax assignment = Assert.Single(resolver.DescendantNodes().OfType<ExpressionStatementSyntax>(),
+            statement => statement.ToString() == "this.tryGetFunctionLiteral = tryGetFunctionLiteral ?? throw new ArgumentNullException(nameof(tryGetFunctionLiteral));");
+        MethodDeclarationSyntax implementation = Assert.Single(CSharpSyntaxTree.ParseText(
+            File.ReadAllText(Path.Combine(binding, "LambdaBinder.cs"))).GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>(),
+            method => method.Identifier.ValueText == "TryGetFunctionLiteral");
+        string source = """
+            #nullable enable
+            using System;
+            using GSharp.Core.CodeAnalysis.Binding;
+            namespace Issue4770;
+            """ + record.ToFullString() + callback.ToFullString() + """
+            public static class Helper
+            {
+            """ + implementation.ToFullString() + """
+            }
+            public class Holder
+            {
+                private readonly TryGetFunctionLiteralDelegate tryGetFunctionLiteral;
+                public Holder(TryGetFunctionLiteralDelegate tryGetFunctionLiteral)
+                {
+            """ + assignment.ToFullString() + """
+                }
+            }
+            public static class Probe
+            {
+                public static string Run() => "contracts";
+            }
+            """;
+        this.Run(source, Controls, assembly =>
+        {
+            Assert.Equal("contracts", Invoke(assembly, "Run"));
+            Type key = assembly.GetType("Issue4770.BoundBodyCacheKey");
+            Assert.NotNull(key);
+            ConstructorInfo constructor = Assert.Single(key.GetConstructors(), candidate => candidate.GetParameters().Length == 2);
+            var nullability = new NullabilityInfoContext();
+            foreach (ParameterInfo parameter in constructor.GetParameters())
+            {
+                Assert.Equal(NullabilityState.NotNull, nullability.Create(parameter).ReadState);
+            }
+
+            foreach (string name in new[] { "StableMemberId", "BodyHash" })
+            {
+                PropertyInfo property = key.GetProperty(name);
+                Assert.NotNull(property);
+                Assert.Equal(NullabilityState.NotNull, nullability.Create(property).ReadState);
+            }
+
+            Type holder = assembly.GetType("Issue4770.Holder");
+            Type callbackType = assembly.GetType("Issue4770.TryGetFunctionLiteralDelegate");
+            Assert.NotNull(holder);
+            Assert.NotNull(callbackType);
+            ConstructorInfo holderConstructor = Assert.Single(holder.GetConstructors());
+            ParameterInfo callbackParameter = Assert.Single(holderConstructor.GetParameters());
+            Assert.Equal(callbackType, callbackParameter.ParameterType);
+            Assert.Equal(NullabilityState.NotNull, nullability.Create(callbackParameter).ReadState);
+            MethodInfo method = assembly.GetType("Issue4770.Helper").GetMethod("TryGetFunctionLiteral");
+            Assert.NotNull(method);
+            Delegate callbackValue = method.CreateDelegate(callbackType);
+            Assert.NotNull(holderConstructor.Invoke(new object[] { callbackValue }));
+            object[] arguments = { null, null };
+            Assert.Equal(false, callbackValue.DynamicInvoke(arguments));
+            Assert.Null(arguments[1]);
+            Assert.Equal("member", key.GetProperty("StableMemberId").GetValue(constructor.Invoke(new object[] { "member", "hash" })));
+        });
+    }
+
     private const string Controls = """
         #nullable enable
         namespace Issue4770.Contracts;
@@ -244,6 +322,7 @@ public class Issue4770NullableClassifierCoalescingTests
                 typeof(CSharpProjectLoader).Assembly.Location,
                 typeof(CSharpToGSharpTranslator).Assembly.Location,
                 typeof(GSharpPrinter).Assembly.Location,
+                typeof(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol).Assembly.Location,
                 typeof(Assert).Assembly.Location,
             };
             MetadataReference[] references = Directory.EnumerateFiles(Path.GetDirectoryName(typeof(object).Assembly.Location), "*.dll")
