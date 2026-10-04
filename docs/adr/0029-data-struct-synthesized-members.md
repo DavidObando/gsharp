@@ -109,3 +109,30 @@ Synthesized-member behavior for a zero-field data type:
 
 - Leaf-type-only equality for an `open` base type with derived data-type siblings is a pre-existing limitation independent of zero-field support: `Equals(Name other)` dispatches on the *declared* type of the typed overload, so two different sibling data types (e.g. `MfaChallenge` vs. `CvfChallenge`) are never equal to one another even when both are zero-field, which matches C# record semantics (sibling record types are never equal) and is not a new gap introduced here.
 - An abstract/open base record with only property overrides and no positional data of its own (e.g. Oahu's `CallbackChallenge` with only an abstract `Kind` property) is downgraded by `cs2gs` to a plain (non-`data`) class rather than an empty `data class` — this is separate, pre-existing `cs2gs` translator behavior (`RecordHasAutoPropertyDataMember`) unrelated to #2363's binder/emitter relaxation, and is unaffected by this amendment.
+
+## Amendment 2026-10-04: inherited typed equality and declared interfaces (#4777, #4675)
+
+Structural equality includes inherited data fields regardless of the caller's
+static type. A data class declares a compiler-owned virtual `bool Equals(Self?
+other)` slot (final on a non-extensible class). A derived data class also declares
+`public final override bool Equals(Base? other)` for its direct data base's self
+slot. That override dispatches through virtual object equality to the
+most-derived structural comparison. The self comparison calls its direct base's
+self comparison **nonvirtually**, then compares its own fields in declaration
+order; making this base-field call virtual would recurse through the override.
+Class equality operators use the same virtual self comparison after their
+existing null checks. Runtime-type discrimination, zero-field behavior and
+value-data field comparison remain intact.
+
+These signatures participate in ordinary member lookup, constructed-owner
+projection, MethodDef row planning and implementation/reference assembly
+emission. Typed parameters are named `other`: reference-data parameters admit
+null, while value-data parameters are passed by value. Generic/nested owner
+mapping and parameter nullability use the existing shared services.
+
+A declared `IEquatable[Self]` is implemented by the compiler-owned self slot;
+cs2gs preserves the interface advertised by the native record. This does **not**
+add an interface to a G# data declaration that did not name it, nor satisfy a
+wrong-self interface or an ordinary class without an implementation. GS0232
+still reserves user-authored `Equals` members; no source override escape hatch
+is introduced. Ordinary method virtuality remains governed by ADR-0017.

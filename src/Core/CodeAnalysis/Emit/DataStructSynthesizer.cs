@@ -101,8 +101,9 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken;
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
     private readonly Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef;
+    private readonly Func<StructSymbol, FunctionSymbol, EntityHandle> resolveUserInstanceMethodToken;
+    private readonly Action<ParameterHandle, ImmutableArray<byte>> emitParameterNullability;
 
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassEqualsTypedMethods = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
 
     // Per-emit standalone signature cache for the >8-field GetHashCode fold
@@ -123,7 +124,9 @@ internal sealed class DataStructSynthesizer
         Func<StructSymbol, EntityHandle> resolveUserTypeToken,
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken,
         Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef,
-        Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef)
+        Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef,
+        Func<StructSymbol, FunctionSymbol, EntityHandle> resolveUserInstanceMethodToken,
+        Action<ParameterHandle, ImmutableArray<byte>> emitParameterNullability)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -137,6 +140,8 @@ internal sealed class DataStructSynthesizer
         this.resolveUserFieldToken = resolveUserFieldToken ?? throw new ArgumentNullException(nameof(resolveUserFieldToken));
         this.resolveUserMethodRef = resolveUserMethodRef ?? throw new ArgumentNullException(nameof(resolveUserMethodRef));
         this.resolveImportedMethodRef = resolveImportedMethodRef ?? throw new ArgumentNullException(nameof(resolveImportedMethodRef));
+        this.resolveUserInstanceMethodToken = resolveUserInstanceMethodToken ?? throw new ArgumentNullException(nameof(resolveUserInstanceMethodToken));
+        this.emitParameterNullability = emitParameterNullability ?? throw new ArgumentNullException(nameof(emitParameterNullability));
     }
 
     /// <summary>
@@ -503,8 +508,13 @@ internal sealed class DataStructSynthesizer
         }
 
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
-        this.dataClassEqualsTypedMethods[structSym] = equalsTypedHandle;
+        this.cache.MethodHandles[structSym.DataEqualsSelf] = equalsTypedHandle;
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
+        if (structSym.DataEqualsBase is { } baseEquals)
+        {
+            this.EmitDataClassEqualsBase(structSym, baseEquals);
+        }
+
         this.EmitDataStructGetHashCode(structSym);
 
         // Issue #2361: skip the synthesized ToString body/row when the type
@@ -1025,13 +1035,12 @@ internal sealed class DataStructSynthesizer
                 il.OpCode(ILOpCode.Ceq);
                 il.Branch(ILOpCode.Brfalse, retFalse);
 
-                if (structSym.BaseClass?.IsData == true
-                    && this.dataClassEqualsTypedMethods.TryGetValue(structSym.BaseClass, out var baseEqualsTyped))
+                if (structSym.BaseClass is { IsData: true } dataBase)
                 {
                     il.LoadArgument(0);
                     il.LoadArgument(1);
                     il.OpCode(ILOpCode.Call);
-                    il.Token(baseEqualsTyped);
+                    il.Token(this.resolveUserInstanceMethodToken(dataBase, dataBase.DataEqualsSelf));
                     il.Branch(ILOpCode.Brfalse, retFalse);
                 }
             }
@@ -1076,12 +1085,60 @@ internal sealed class DataStructSynthesizer
             .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
 
         return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.NewSlot
+                | (IsDataObjectOverrideFinal(structSym) ? MethodAttributes.Final : MethodAttributes.PrivateScope),
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.nextParameterHandle());
+            parameterList: this.EmitEqualityParameter(structSym.DataEqualsSelf.Parameters[0]));
+    }
+
+    private void EmitDataClassEqualsBase(StructSymbol structSym, FunctionSymbol method)
+    {
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.emitCtx.MetadataOnly)
+        {
+            // The base typed slot must dispatch to the most-derived object
+            // equality. Self equality's base-field call remains nonvirtual.
+            il.LoadArgument(0);
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Callvirt);
+            var objectEquals = Invariant.Required(
+                typeof(object).GetMethod("Equals", new[] { typeof(object) }),
+                "System.Object declares instance Equals");
+            il.Token(this.resolveImportedMethodRef(objectEquals, TypeSymbol.Object));
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), method.Parameters[0].Type));
+        var handle = this.emitCtx.Metadata.AddMethodDefinition(
+            MethodAttributes.Public | MethodAttributes.Final | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+            MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            this.emitCtx.Metadata.GetOrAddString("Equals"),
+            this.emitCtx.Metadata.GetOrAddBlob(signature),
+            this.FinishInlineBody(il),
+            this.EmitEqualityParameter(method.Parameters[0]));
+        this.cache.MethodHandles[method] = handle;
+        var dataBase = Invariant.Required(structSym.BaseClass, "typed-base equality has a direct data base");
+        this.emitCtx.Metadata.AddMethodImplementation(
+            this.cache.StructTypeDefs[structSym],
+            handle,
+            this.resolveUserInstanceMethodToken(dataBase, dataBase.DataEqualsSelf));
+    }
+
+    private ParameterHandle EmitEqualityParameter(ParameterSymbol parameter)
+    {
+        var handle = ParameterMetadataEmitter.AddParameter(this.emitCtx, parameter, sequenceNumber: 1);
+        var flags = NullableFlagsBuilder.Build(parameter.Type);
+        if (!flags.IsDefaultOrEmpty)
+        {
+            this.emitParameterNullability(handle, flags);
+        }
+
+        return handle;
     }
 
     /// <summary>
@@ -1312,45 +1369,45 @@ internal sealed class DataStructSynthesizer
                 il.MarkLabel(leftNotNull);
                 il.LoadArgument(1);
                 il.Branch(ILOpCode.Brfalse, retFalse);
-            }
 
-            foreach (var field in GetSynthesisFields(structSym))
+                il.LoadArgument(0);
+                il.LoadArgument(1);
+                il.OpCode(ILOpCode.Callvirt);
+                il.Token(this.resolveUserInstanceMethodToken(structSym, structSym.DataEqualsSelf));
+                if (isInequality)
+                {
+                    il.LoadConstantI4(0);
+                    il.OpCode(ILOpCode.Ceq);
+                }
+
+                il.OpCode(ILOpCode.Ret);
+                il.MarkLabel(retFalse);
+                il.LoadConstantI4(isInequality ? 1 : 0);
+                il.OpCode(ILOpCode.Ret);
+            }
+            else
             {
-                var fieldHandle = this.resolveUserFieldToken(structSym, field);
-                if (structSym.IsClass)
+                foreach (var field in GetSynthesisFields(structSym))
                 {
-                    il.LoadArgument(0);
-                }
-                else
-                {
+                    var fieldHandle = this.resolveUserFieldToken(structSym, field);
                     il.LoadArgumentAddress(0);
-                }
-
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-
-                if (structSym.IsClass)
-                {
-                    il.LoadArgument(1);
-                }
-                else
-                {
+                    il.OpCode(ILOpCode.Ldfld);
+                    il.Token(fieldHandle);
+                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
                     il.LoadArgumentAddress(1);
+                    il.OpCode(ILOpCode.Ldfld);
+                    il.Token(fieldHandle);
+                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
+                    il.Call(this.wellKnown.GetObjectStaticEqualsReference());
+                    il.Branch(ILOpCode.Brfalse, retFalse);
                 }
 
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.Call(this.wellKnown.GetObjectStaticEqualsReference());
-                il.Branch(ILOpCode.Brfalse, retFalse);
+                il.LoadConstantI4(isInequality ? 0 : 1);
+                il.OpCode(ILOpCode.Ret);
+                il.MarkLabel(retFalse);
+                il.LoadConstantI4(isInequality ? 1 : 0);
+                il.OpCode(ILOpCode.Ret);
             }
-
-            il.LoadConstantI4(isInequality ? 0 : 1);
-            il.OpCode(ILOpCode.Ret);
-            il.MarkLabel(retFalse);
-            il.LoadConstantI4(isInequality ? 1 : 0);
-            il.OpCode(ILOpCode.Ret);
         }
 
         var sig = new BlobBuilder();

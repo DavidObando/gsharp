@@ -953,7 +953,26 @@ internal sealed class ReflectionMetadataEmitter
         emitter.emitCtx.DebugInformation = debugInformation ?? new DebugInformationOptions();
         emitter.emitCtx.PdbStream = pdbStream;
 
-        emitter.EmitCore(peStream, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
+        // Nested generic reification belongs to this emission. A following
+        // reference-assembly emission must start from the same source vector.
+        var structParameters = program.Structs.Select(s => (Symbol: s, Parameters: s.TypeParameters)).ToArray();
+        var enumParameters = program.Enums.Select(e => (Symbol: e, Parameters: e.TypeParameters)).ToArray();
+        try
+        {
+            emitter.EmitCore(peStream, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
+        }
+        finally
+        {
+            foreach (var (symbol, parameters) in structParameters)
+            {
+                symbol.SetTypeParameters(parameters);
+            }
+
+            foreach (var (symbol, parameters) in enumParameters)
+            {
+                symbol.SetTypeParameters(parameters);
+            }
+        }
     }
 
     // Phase records retain the original mutable collection instances so row
@@ -1211,7 +1230,9 @@ internal sealed class ReflectionMetadataEmitter
             this.userTokens.ResolveUserTypeToken,
             this.userTokens.ResolveFieldToken,
             this.userTokens.GetUserStructMethodRef,
-            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType));
+            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType),
+            this.userTokens.ResolveUserInstanceMethodToken,
+            this.customAttrEncoder.EmitNullableAttributeOnParameter);
 
         // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -2187,7 +2208,14 @@ internal sealed class ReflectionMetadataEmitter
                 // this row; their clone is abstract and has no body.
                 this.cache.DataClassCopyConstructorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 1);
                 this.cache.DataClassCloneHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 2);
+                this.cache.MethodHandles[c.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow + 3);
+                if (c.DataEqualsBase is { } baseEquals)
+                {
+                    this.cache.MethodHandles[baseEquals] = MetadataTokens.MethodDefinitionHandle(methodRow + 5);
+                }
+
                 methodRow += 10
+                    + (c.DataEqualsBase != null ? 1 : 0)
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
                     - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
             }
@@ -2356,6 +2384,8 @@ internal sealed class ReflectionMetadataEmitter
             }
             else if (s.IsData)
             {
+                this.cache.MethodHandles[s.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow);
+
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef

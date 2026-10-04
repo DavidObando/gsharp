@@ -108,10 +108,10 @@ internal sealed class ConversionEmitter
         // the CLR requires `box T` to materialise the boxed slot.
         // The JIT eliminates the box when T is statically a reference
         // type at the JIT site.
-        if (type is TypeParameterSymbol)
+        if (type.StripToBareShape() is TypeParameterSymbol parameter)
         {
             il.OpCode(ILOpCode.Box);
-            il.Token(this.getElementTypeToken(type));
+            il.Token(this.getElementTypeToken(parameter));
         }
     }
 

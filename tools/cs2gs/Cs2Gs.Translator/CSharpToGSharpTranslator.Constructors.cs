@@ -794,24 +794,8 @@ public sealed partial class CSharpToGSharpTranslator
                 baseType = this.typeMapper.Map(csBase, this.context, location);
             }
 
-            // A `data class` / `data struct` (C# record / record struct) synthesizes
-            // structural equality in G#, exactly as the C# record auto-implements
-            // `IEquatable<Self>`. Re-stating the synthesized `IEquatable[Self]` base
-            // clause is redundant for a `data` type (equality comes from the `data`
-            // modifier) and would be unimplemented on a fieldless record mapped to a
-            // plain `class` (no synthesized `Equals`), so it is dropped here.
-            // (Naming the enclosing type as a base-clause type ARGUMENT is itself
-            // legal since issue #949 — `open class Shape : IEquatable[Shape]` now
-            // compiles; the drop is a semantic redundancy filter, not a syntax
-            // limitation.) See ADR-0115 §B.4.
-            bool isRecord = symbol.IsRecord;
             foreach (INamedTypeSymbol iface in symbol.Interfaces)
             {
-                if (isRecord && IsIEquatableOf(iface, symbol))
-                {
-                    continue;
-                }
-
                 // Interface inheritance is supported by the G# parser since
                 // issue #1006 (`interface B : A, C { ... }`); the printer emits
                 // base interfaces via the same base-clause path as a class, so
@@ -851,15 +835,6 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return null;
-        }
-
-        private static bool IsIEquatableOf(INamedTypeSymbol iface, INamedTypeSymbol self)
-        {
-            return iface.IsGenericType &&
-                iface.Name == "IEquatable" &&
-                iface.ContainingNamespace?.ToDisplayString() == "System" &&
-                iface.TypeArguments.Length == 1 &&
-                SymbolEqualityComparer.Default.Equals(iface.TypeArguments[0], self);
         }
 
         private List<TypeParameter> MapTypeParameters(INamedTypeSymbol symbol)

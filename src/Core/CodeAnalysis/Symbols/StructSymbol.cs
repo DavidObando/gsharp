@@ -100,6 +100,9 @@ public sealed class StructSymbol : TypeSymbol
     private InterfaceArraySnapshot? substitutedInterfaces;
     private TypeArraySnapshot? substitutedImplementedClrInterfaces;
     private TypeSnapshot? substitutedImportedBaseType;
+    private FunctionSymbol? dataEqualsSelf;
+    private FunctionSymbol? dataEqualsBase;
+    private StructSymbol? dataEqualsBaseOwner;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructSymbol"/> class.
@@ -682,6 +685,30 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets imported accessors selected by interface conformance binding.</summary>
     internal List<(InterfaceSymbol Interface, PropertySymbol Property, MethodInfo Accessor, TypeSymbol ContainingType, bool IsSetter)> ImportedInterfaceAccessors { get; } = new();
 
+    /// <summary>Gets the compiler-owned self equality signature on this exact construction.</summary>
+    internal FunctionSymbol DataEqualsSelf => dataEqualsSelf ??= DataEqualityMemberModel.Create(this, this, isOverride: false);
+
+    /// <summary>Gets the compiler-owned override of a direct data base's typed equality slot.</summary>
+    internal FunctionSymbol? DataEqualsBase
+    {
+        get
+        {
+            var directBase = BaseClass;
+            if (!IsData || !IsClass || directBase?.IsData != true)
+            {
+                return null;
+            }
+
+            if (!ReferenceEquals(dataEqualsBaseOwner, directBase))
+            {
+                dataEqualsBase = DataEqualityMemberModel.Create(this, directBase, isOverride: true);
+                dataEqualsBaseOwner = directBase;
+            }
+
+            return dataEqualsBase;
+        }
+    }
+
     /// <summary>
     /// Gets a value indicating whether the class was declared with the
     /// <c>abstract</c> modifier (ADR-0195 / issue #4674). Unlike the
@@ -1152,6 +1179,12 @@ public sealed class StructSymbol : TypeSymbol
             }
         }
 
+        if (IsData && name == "Equals")
+        {
+            method = DataEqualsSelf;
+            return true;
+        }
+
         method = null;
         return false;
     }
@@ -1163,7 +1196,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns>The overload set; empty if none.</returns>
     public System.Collections.Immutable.ImmutableArray<FunctionSymbol> GetMethods(string name)
     {
-        if (Methods.IsDefaultOrEmpty)
+        if (Methods.IsDefaultOrEmpty && (!IsData || name != "Equals"))
         {
             return System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty;
         }
@@ -1174,6 +1207,15 @@ public sealed class StructSymbol : TypeSymbol
             if (m.Name == name)
             {
                 builder.Add(m);
+            }
+        }
+
+        if (IsData && name == "Equals")
+        {
+            builder.Add(DataEqualsSelf);
+            if (DataEqualsBase is { } baseEquals)
+            {
+                builder.Add(baseEquals);
             }
         }
 
@@ -1194,12 +1236,7 @@ public sealed class StructSymbol : TypeSymbol
         System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Builder? builder = null;
         foreach (var c in GetHierarchy())
         {
-            if (c.Methods.IsDefaultOrEmpty)
-            {
-                continue;
-            }
-
-            foreach (var m in c.Methods)
+            foreach (var m in c.GetMethods(name))
             {
                 if (m.Name != name)
                 {
