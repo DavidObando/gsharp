@@ -1228,6 +1228,219 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         TranslationTestValidation.AssertBinds(resolver, printed);
     }
 
+    [Theory]
+    [InlineData("new object() as string")]
+    [InlineData("(new object() as string)")]
+    [InlineData("checked(new object() as string)")]
+    [InlineData("unchecked(new object() as string)")]
+    [InlineData("choose ? new object() as string : \"keep\"")]
+    [InlineData("choose switch { true => new object() as string, false => \"keep\" }")]
+    public void TryCastResult_PromotesTupleScalarAndLaterAssignment(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (string Value, string Keep, int Code) Row(bool choose) => ({{value}}, "keep", 1);
+                public static (string Value, string Keep, int Code) Forward(bool choose) => Row(choose);
+                public static string Scalar(bool choose) => {{value}};
+                public static string Later(bool choose) {
+                    string text = "keep";
+                    text = {{value}};
+                    return text;
+                }
+                public static int Run() {
+                    var row = Forward(true);
+                    return row.Value == null && row.Keep == "keep" && row.Code == 1
+                        && Scalar(true) == null && Later(true) == null ? 1 : -1;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Row(choose bool) (Value string?, Keep string, Code int32)", printed);
+        Assert.Contains("func Forward(choose bool) (Value string?, Keep string, Code int32)", printed);
+        Assert.Contains("func Scalar(choose bool) string?", printed);
+        Assert.Contains("func Later(choose bool) string?", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void TryCastInsideNonNullableUnboxing_PreservesValueResultAndException()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            public static class Obj {
+                public static (object Value, int Code) Row() => ((int)(new object() as System.IConvertible), 1);
+                public static object Scalar() => (int)(new object() as System.IConvertible);
+            }
+            """, fixture);
+        Assert.Contains("func Row() (Value object, Code int32)", printed);
+        Assert.Contains("func Scalar() object", printed);
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Row()");
+    }
+
+    [Theory]
+    [InlineData("(MaybeBox?)\"x\"", false)]
+    [InlineData("((MaybeBox?)\"x\")", false)]
+    [InlineData("checked((MaybeBox?)\"x\")", false)]
+    [InlineData("\"x\"", false)]
+    [InlineData("(MaybeBox?)\"x\"", true)]
+    [InlineData("((MaybeBox?)\"x\")", true)]
+    [InlineData("checked((MaybeBox?)\"x\")", true)]
+    [InlineData("\"x\"", true)]
+    public void NullableOperatorConvertedResult_RetainsNonNullSinkAssertion(string value, bool initialize)
+    {
+        string make = initialize ? $"{{ MaybeBox result = {value}; return result; }}" : $"=> {value};";
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            #nullable enable
+            using Issue4719Fixture;
+            public static class Obj {
+                public static MaybeBox Make() {{make}}
+            }
+            """, fixture);
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Make()");
+        Assert.Contains("func Make() MaybeBox", printed);
+        Assert.Contains("!!", printed);
+    }
+
+    [Fact]
+    public void NullableOperatorConvertedResult_PromotedTupleSinkStillAcceptsNull()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (MaybeBox Value, int Code) Row(string value) => (value, 1);
+                public static int Run() {
+                    Probe.Reset();
+                    var row = Row("x");
+                    return row.Value == null && row.Code == 1 && Probe.Calls == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Row(value string) (Value MaybeBox?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData(false, "return Text;")]
+    [InlineData(false, "StrictBox result = Text; return result;")]
+    [InlineData(false, "StrictBox result = new StrictBox(); result = Text; return result;")]
+    [InlineData(true, "return Text;")]
+    [InlineData(true, "StrictBox result = Text; return result;")]
+    [InlineData(true, "StrictBox result = new StrictBox(); result = Text; return result;")]
+    public void GuardedSettablePropertyOperatorInput_UsesTheActualParameterContract(bool acceptsNull, string body)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            #nullable enable
+            using Issue4719Fixture;
+            public sealed class StrictBox {
+                public static implicit operator StrictBox(string{{(acceptsNull ? "?" : "")}} value) {
+                    Probe.Calls++;
+                    return new StrictBox();
+                }
+            }
+            public static class Obj {
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static StrictBox Read() {
+                    if (Text != null) { {{body}} }
+                    return new StrictBox();
+                }
+                {{(acceptsNull ? "public static StrictBox Bare() => Text;" : string.Empty)}}
+                public static int Run() {
+                    Text = "keep";
+                    Probe.Reset();
+                    Reads = 0;
+                    var result = Read();
+                    if (result == null || Probe.Calls != 1 || Reads != 2) { return -1; }
+                    {{(acceptsNull ? "Text = null; return Bare() != null && Probe.Calls == 2 && Reads == 3 ? 1 : -2;" : "return 1;")}}
+                }
+            }
+            """, fixture);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+        if (acceptsNull)
+        {
+            Assert.DoesNotContain("Text!!", printed);
+        }
+        else
+        {
+            Assert.Contains("Text!!", printed);
+        }
+    }
+
+    [Theory]
+    [InlineData("(NullableResultBox?)\"keep\"")]
+    [InlineData("\"keep\"")]
+    public void TryCastAndOperatorAssertionBoundaries_RealDriverVerifiesAndExecutesOnce(string result)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            #nullable enable
+            public sealed class StrictBox {
+                public static implicit operator StrictBox(string value) {
+                    Probe.Calls++;
+                    return new StrictBox();
+                }
+            }
+            public static class Obj {
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static StrictBox Read() {
+                    if (Text != null) { return Text; }
+                    return new StrictBox();
+                }
+                public static NullableResultBox Make() => {{result}};
+                #nullable disable
+                public static (string Value, int Code) Row() => (new object() as string, 1);
+                public static string Later() {
+                    string value = "keep";
+                    value = new object() as string;
+                    return value;
+                }
+                #nullable enable
+                public static void Main() {
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    Console.WriteLine(Make() != null && Read() != null && Reads == 2
+                        && Probe.Calls == 2 && Row().Value == null && Later() == null ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Row() (Value string?, Code int32)", printed);
+        Assert.Contains("func Later() string?", printed);
+        Assert.Contains("Text!!", printed);
+        Assert.Contains("func Make() NullableResultBox", printed);
+        Assert.Contains("NullableResultBox?(\"keep\")!!", printed);
+        string source = Path.Combine(this.fixtureDirectory, "Boundaries.gs");
+        string assembly = Path.Combine(this.fixtureDirectory, "Boundaries.dll");
+        string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
+        File.WriteAllText(source, printed);
+        var compiled = RunDotnet(compiler, "/target:exe", "/targetframework:net10.0", $"/reference:{fixture}", $"/out:{assembly}", source);
+        Assert.True(compiled.Exit == 0, compiled.Output);
+        Assert.True(IlVerifyRunner.IsEnabled);
+        IlVerifyResult verified = new IlVerifyRunner().Verify(assembly, new[] { fixture });
+        Assert.Equal(IlVerifyStatus.Passed, verified.Status);
+        Assert.Empty(verified.Errors);
+        File.WriteAllText(
+            Path.ChangeExtension(assembly, ".runtimeconfig.json"),
+            "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}");
+        var executed = RunDotnet(assembly);
+        Assert.Equal(0, executed.Exit);
+        Assert.Equal("15" + Environment.NewLine, executed.Output);
+    }
+
     public void Dispose()
     {
         try
@@ -1266,6 +1479,12 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                 #nullable enable
                     public sealed class MaybeBox {
                         public static implicit operator MaybeBox?(string value) { Probe.Calls++; return null; }
+                    }
+                    public sealed class NullableResultBox {
+                        public static implicit operator NullableResultBox?(string value) {
+                            Probe.Calls++;
+                            return value == "keep" ? new NullableResultBox() : null;
+                        }
                     }
                 #nullable disable
                     public struct Token {
@@ -1313,7 +1532,7 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         EmittedOracleResult result = EmittedOracle.Evaluate(
             printed + Environment.NewLine + "Obj.Run()",
             new[] { fixture });
-        Assert.False(result.Diagnostics.Any(diagnostic => diagnostic.IsError), string.Join(Environment.NewLine, result.Diagnostics));
+        Assert.False(result.Diagnostics.Any(diagnostic => diagnostic.IsError), printed + Environment.NewLine + string.Join(Environment.NewLine, result.Diagnostics));
         Assert.Null(result.UnhandledException);
         Assert.Equal(expected, result.Value);
     }

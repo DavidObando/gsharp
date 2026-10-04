@@ -796,6 +796,10 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.context.SemanticModel
                         .GetEnclosingSymbol(returnStatement.SpanStart) as IMethodSymbol;
 
+                case YieldStatementSyntax yieldStatement:
+                    return this.context.SemanticModel
+                        .GetEnclosingSymbol(yieldStatement.SpanStart) as IMethodSymbol;
+
                 case ArrowExpressionClauseSyntax arrow:
                     return this.context.SemanticModel.GetDeclaredSymbol(arrow.Parent);
 

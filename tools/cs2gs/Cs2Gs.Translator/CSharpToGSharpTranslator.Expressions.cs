@@ -2691,16 +2691,14 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateValueWithNullForgiveness(ExpressionSyntax value)
         {
             GExpression translated = this.TranslateExpression(value);
-
-            if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
-                || this.PlatformTypedImportNeedsNoBridge(value)
-                || this.FlowsThroughUserDefinedConversion(value))
+            (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
+            if (this.GetUserDefinedConversionInputOperator(value, targetType, out _) != null)
             {
-                return translated;
+                return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol);
             }
 
-            (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
-            if (ObliviousNullabilityAnalyzer.GetContextualOperator(value, this.context.SemanticModel, targetType) != null)
+            if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
+                || this.PlatformTypedImportNeedsNoBridge(value))
             {
                 return translated;
             }
@@ -2780,14 +2778,48 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression translated,
             ITypeSymbol targetType,
             ISymbol targetSymbol,
-            bool includePromotedValue)
+            bool includePromotedValue,
+            bool operatorInput = false)
         {
+            if (!operatorInput
+                && this.GetFixedElementDestinationType(value, targetSymbol) is { } projectedTarget
+                && SymbolEqualityComparer.Default.Equals(projectedTarget, targetType))
+            {
+                targetType = projectedTarget;
+            }
+
+            if (!operatorInput
+                && this.GetUserDefinedConversionInputOperator(value, targetType, out bool convertsValue) is { } conversionOperator)
+            {
+                IParameterSymbol parameter = conversionOperator.Parameters[0];
+                GExpression operatorOperand = this.ForgiveNullableReferenceValueCore(
+                    value, translated, parameter.Type, parameter, includePromotedValue, operatorInput: true);
+                if (convertsValue && this.TargetWillRemainNonNullableReference(targetType, targetSymbol))
+                {
+                    GTypeReference resultType = this.MapDelegateLikeReturnType(
+                        conversionOperator, isAsync: false, value.GetLocation());
+                    if (ObliviousNullabilityAnalyzer.IsDirectlyNullable(
+                        ObliviousNullabilityAnalyzer.GetResultConversion(value, this.context.SemanticModel),
+                        this.context.SemanticModel,
+                        respectNullGuards: true))
+                    {
+                        resultType = MakeNullable(resultType);
+                    }
+
+                    if (resultType.IsNullable)
+                    {
+                        // Assert the converted result, never its null-accepting input.
+                        return EnsureNonNullAssertion(new ConversionExpression(resultType, operatorOperand));
+                    }
+                }
+
+                return operatorOperand;
+            }
+
             // ADR-0186 step 6 (PR 0): a `T!` value flowing into a non-null
             // target is checked by gsc at that coercion (§4).
             if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
-                || this.PlatformTypedImportNeedsNoBridge(value)
-                || this.FlowsThroughUserDefinedConversion(value)
-                || ObliviousNullabilityAnalyzer.GetContextualOperator(value, this.context.SemanticModel, targetType) != null)
+                || this.PlatformTypedImportNeedsNoBridge(value))
             {
                 return translated;
             }
@@ -4073,6 +4105,50 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return false;
+        }
+
+        private IMethodSymbol GetUserDefinedConversionInputOperator(
+            ExpressionSyntax value,
+            ITypeSymbol resultType,
+            out bool convertsValue)
+        {
+            convertsValue = true;
+            for (IConversionOperation conversion = ObliviousNullabilityAnalyzer.GetResultConversion(
+                    value, this.context.SemanticModel);
+                conversion is { IsImplicit: true };
+                conversion = conversion.Operand as IConversionOperation)
+            {
+                if (conversion.OperatorMethod is { Parameters.Length: 1 } method)
+                {
+                    return method;
+                }
+            }
+
+            ExpressionSyntax current = value;
+            while (current.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
+            {
+                current = (ExpressionSyntax)current.Parent;
+            }
+
+            if (current.Parent is CastExpressionSyntax cast && cast.Expression == current)
+            {
+                for (IConversionOperation conversion = ObliviousNullabilityAnalyzer.GetResultConversion(
+                        cast, this.context.SemanticModel);
+                    conversion != null;
+                    conversion = conversion.Operand as IConversionOperation)
+                {
+                    if (conversion.OperatorMethod is { Parameters.Length: 1 } method)
+                    {
+                        convertsValue = false;
+                        return method;
+                    }
+                }
+            }
+
+            return ObliviousNullabilityAnalyzer.GetContextualOperator(
+                value, this.context.SemanticModel, resultType) is { Parameters.Length: 1 } contextualOperator
+                    ? contextualOperator
+                    : null;
         }
 
         // Whether `node` reaches its sink through a conversion that calls a

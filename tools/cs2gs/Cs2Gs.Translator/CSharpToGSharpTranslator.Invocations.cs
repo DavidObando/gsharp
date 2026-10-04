@@ -6872,6 +6872,14 @@ public sealed partial class CSharpToGSharpTranslator
             sinkType ??= node is TupleExpressionSyntax containingTuple
                 ? this.context.GetTypeInfo(containingTuple).ConvertedType
                 : null;
+            var path = new List<int>();
+            if (node.Parent is YieldStatementSyntax
+                && sinkType is INamedTypeSymbol { TypeArguments.Length: 1 } envelope)
+            {
+                sinkType = envelope.TypeArguments[0];
+                path.Add(0);
+            }
+
             for (int i = tupleIndices.Count - 1; i >= 0; i--)
             {
                 if (sinkType is not INamedTypeSymbol { IsTupleType: true } tupleType
@@ -6883,11 +6891,17 @@ public sealed partial class CSharpToGSharpTranslator
                 IFieldSymbol tupleElement =
                     tupleType.TupleElements[tupleIndices[i]];
                 sinkType = tupleElement.Type;
+                path.Add(tupleIndices[i]);
             }
 
             if (tupleIndices.Count != 0)
             {
-                return sinkType;
+                return sinkType is { IsReferenceType: true }
+                    && !this.TargetContractIsFrozenInMetadata(sink)
+                    && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                        this.context.Compilation, sink, path, this.context.SiblingCompilations)
+                            ? sinkType.WithNullableAnnotation(NullableAnnotation.Annotated)
+                            : sinkType;
             }
 
             if (node.Parent is InitializerExpressionSyntax

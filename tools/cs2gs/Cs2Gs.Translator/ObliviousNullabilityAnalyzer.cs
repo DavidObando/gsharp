@@ -1088,6 +1088,24 @@ internal static class ObliviousNullabilityAnalyzer
         return conversion.IsUserDefined ? conversion.MethodSymbol : null;
     }
 
+    internal static bool IsDirectlyNullable(IOperation value, SemanticModel model, bool respectNullGuards)
+    {
+        if (value is IConversionOperation conversion)
+        {
+            // Read the converted result before the operand, including contextual
+            // implicit operators. Only genuinely lifted inputs can bypass them.
+            return conversion.IsTryCast
+                || (CanForwardCastOperandNullability(conversion)
+                    && IsDirectlyNullable(conversion.Operand, model, respectNullGuards))
+                || (conversion.OperatorMethod != null
+                    && !IsNonNullableValueType(conversion.Type)
+                    && IsDeclaredNullablePosition(conversion.OperatorMethod.ReturnType));
+        }
+
+        return value?.Syntax is ExpressionSyntax expression
+            && IsDirectlyNullable(expression, model, respectNullGuards, readConversion: false);
+    }
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,
@@ -4975,6 +4993,12 @@ internal static class ObliviousNullabilityAnalyzer
     {
         if (value is IConversionOperation conversion)
         {
+            if (IsDirectlyNullable(conversion, model, respectNullGuards: false))
+            {
+                tainted.Add(target);
+                return;
+            }
+
             if (CanForwardCastOperandNullability(conversion))
             {
                 CollectScalarValueFlow(target, conversion.Operand, model, tainted, edges, scalarTupleEdges, scope);
@@ -5640,23 +5664,6 @@ internal static class ObliviousNullabilityAnalyzer
         };
 
         return IsDeclaredNullablePosition(symbolType ?? info.Type);
-    }
-
-    private static bool IsDirectlyNullable(IOperation value, SemanticModel model, bool respectNullGuards)
-    {
-        if (value is IConversionOperation conversion)
-        {
-            // Read the converted result before the operand, including contextual
-            // implicit operators. Only genuinely lifted inputs can bypass them.
-            return (CanForwardCastOperandNullability(conversion)
-                    && IsDirectlyNullable(conversion.Operand, model, respectNullGuards))
-                || (conversion.OperatorMethod != null
-                    && !IsNonNullableValueType(conversion.Type)
-                    && IsDeclaredNullablePosition(conversion.OperatorMethod.ReturnType));
-        }
-
-        return value?.Syntax is ExpressionSyntax expression
-            && IsDirectlyNullable(expression, model, respectNullGuards, readConversion: false);
     }
 
     private static bool IsDeclaredNullablePosition(ITypeSymbol type) =>
