@@ -71,8 +71,8 @@ class NormalizePinsTests(unittest.TestCase):
             rewritten = packer.normalize_pins(tree)
 
             self.assertEqual(
-                ["src/Compiler/Compiler.gsproj", "src/Core/Core.gsproj",
-                 "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"],
+                ["src/Compiler/Compiler.gsproj", "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj",
+                 "src/Core/Core.gsproj"],
                 rewritten)
             core = (tree / "src/Core/Core.gsproj").read_bytes()
             self.assertTrue(core.startswith(b"\xef\xbb\xbf"), "BOM must be preserved")
@@ -156,8 +156,10 @@ class PrepareTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             tree = make_tree(root)
-            # This sorts after Compiler and Core, which have already been rewritten.
+            # Compiler is rewritten before this read fails; Core must still carry the generated pin.
             bad = tree / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"
+            original = bad.read_bytes()
+            core = (tree / packer.CORE_PROJECT).read_bytes()
             bad.write_bytes(b"\xff")
             bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
             report: dict = {}
@@ -165,11 +167,17 @@ class PrepareTreeTests(unittest.TestCase):
             with self.assertRaises(UnicodeError):
                 packer.prepare_tree(tree, bootstrap, report)
 
-            expected = ["src/Compiler/Compiler.gsproj", "src/Core/Core.gsproj"]
+            expected = ["src/Compiler/Compiler.gsproj"]
             self.assertEqual(expected, report.get("rewrittenPins", []))
             for relative in expected:
                 self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / relative).read_text(encoding="utf-8-sig")))
+            self.assertEqual(core, (tree / packer.CORE_PROJECT).read_bytes())
             self.assertNotIn("globalJsonUpdated", report)
+            bad.write_bytes(original)
+            retried = packer.prepare_tree(tree, bootstrap)
+            self.assertEqual(["src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "src/Core/Core.gsproj"],
+                             retried["rewrittenPins"])
+            packer.check_no_versioned_toolchain_pins(tree)
 
     def test_mid_staging_failure_retains_completed_copies_in_the_driver_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -217,10 +225,15 @@ class PrepareTreeTests(unittest.TestCase):
 
             self.assertEqual(1, code)
             self.assertIn("injected Core write failure", report["error"])
-            self.assertEqual(["src/Compiler/Compiler.gsproj"], report.get("rewrittenPins", []))
+            self.assertEqual(["src/Compiler/Compiler.gsproj", "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"],
+                             report.get("rewrittenPins", []))
             self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / "src/Compiler/Compiler.gsproj").read_text()))
+            self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / packer.SDK_PROJECT).read_text()))
             self.assertNotEqual(packer.SDK_ID, packer.project_sdk((tree / packer.CORE_PROJECT).read_text(encoding="utf-8-sig")))
             self.assertNotIn("globalJsonUpdated", report)
+            retried = packer.prepare_tree(tree, bootstrap)
+            self.assertEqual(["src/Core/Core.gsproj"], retried["rewrittenPins"])
+            packer.check_no_versioned_toolchain_pins(tree)
 
     def test_prepare_stages_the_bootstrap_and_its_sibling_and_pins_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -443,6 +456,103 @@ class PrepareTreeTests(unittest.TestCase):
             self.assertTrue(report["globalJsonUpdated"])
             self.assertIn("src/Core/Core.gsproj", report["rewrittenPins"])
             self.assertNotIn("stagedPackages", report)
+
+
+class NormalizationRetryTests(unittest.TestCase):
+    def prepare(self, tree: Path, bootstrap: Path, out: Path) -> tuple[int, dict]:
+        import contextlib
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = packer.main(["--tree", str(tree), "--bootstrap", str(bootstrap),
+                                "--out", str(out), "--prepare-only"])
+        return code, json.loads((out / "work/stage1-report.json").read_text())
+
+    def test_a_repaired_read_failure_allows_a_real_second_prepare(self) -> None:
+        for relative in ("src/Compiler/Compiler.gsproj", "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                damaged = tree / relative
+                original = damaged.read_bytes()
+                bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+                damaged.write_bytes(b"\xff")
+
+                code, failed = self.prepare(tree, bootstrap, root / "failed")
+                self.assertEqual(1, code)
+                self.assertIn("error", failed)
+                completed = failed["rewrittenPins"]
+                for path in completed:
+                    self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / path).read_text(encoding="utf-8-sig")))
+                damaged.write_bytes(original)
+
+                code, retried = self.prepare(tree, bootstrap, root / "retried")
+                self.assertEqual(0, code, retried)
+                self.assertNotIn("error", retried)
+                self.assertEqual({bootstrap.name}, {p.name for p in (tree / ".nugs").iterdir()})
+                for path in ("src/Compiler/Compiler.gsproj", packer.CORE_PROJECT, packer.SDK_PROJECT):
+                    self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / path).read_text(encoding="utf-8-sig")))
+                self.assertEqual(3, len(completed) + len(retried["rewrittenPins"]))
+                self.assertFalse(set(completed) & set(retried["rewrittenPins"]))
+                self.assertEqual("1.0.0", json.loads((tree / "global.json").read_text())["msbuild-sdks"][packer.SDK_ID])
+
+    def test_a_repaired_write_failure_allows_a_real_second_prepare(self) -> None:
+        for relative in ("src/Compiler/Compiler.gsproj", "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj",
+                         packer.CORE_PROJECT):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                failed_path = tree / relative
+                original = failed_path.read_bytes()
+                bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+                write_bytes = Path.write_bytes
+
+                def fail_write(path, data):
+                    if path == failed_path:
+                        raise OSError("injected normalization write failure")
+                    return write_bytes(path, data)
+
+                with mock.patch.object(Path, "write_bytes", fail_write):
+                    code, failed = self.prepare(tree, bootstrap, root / "failed")
+                self.assertEqual(1, code)
+                self.assertIn("injected normalization write failure", failed["error"])
+                self.assertEqual(original, failed_path.read_bytes())
+                completed = failed["rewrittenPins"]
+                for path in completed:
+                    self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / path).read_text(encoding="utf-8-sig")))
+
+                code, retried = self.prepare(tree, bootstrap, root / "retried")
+                self.assertEqual(0, code, retried)
+                self.assertNotIn("error", retried)
+                self.assertEqual(3, len(completed) + len(retried["rewrittenPins"]))
+                self.assertFalse(set(completed) & set(retried["rewrittenPins"]))
+                self.assertEqual(bootstrap.read_bytes(), (tree / ".nugs" / bootstrap.name).read_bytes())
+                self.assertTrue((tree / packer.CORE_PROJECT).read_bytes().startswith(b"\xef\xbb\xbf"))
+                for path in ("src/Compiler/Compiler.gsproj", packer.CORE_PROJECT, packer.SDK_PROJECT):
+                    self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / path).read_text(encoding="utf-8-sig")))
+                code, again = self.prepare(tree, bootstrap, root / "again")
+                self.assertEqual(0, code, again)
+                self.assertEqual([], again["rewrittenPins"])
+                self.assertFalse(again["globalJsonUpdated"])
+
+    def test_already_bare_source_still_rejects_unsupported_toolchain_pins(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root, core_sdk='Sdk="Gsharp.NET.Sdk"')
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            code, valid = self.prepare(tree, bootstrap, root / "valid")
+            self.assertEqual(0, code, valid)
+            self.assertEqual([], valid["rewrittenPins"])
+            unsupported = tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj"
+            write(unsupported, project('Sdk="Gsharp.NET.Sdk/0.4.7"'))
+            original = unsupported.read_bytes()
+            core = (tree / packer.CORE_PROJECT).read_bytes()
+
+            code, rejected = self.prepare(tree, bootstrap, root / "rejected")
+
+            self.assertEqual(1, code)
+            self.assertIn("src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", rejected["error"])
+            self.assertEqual([], rejected["rewrittenPins"])
+            self.assertEqual(core, (tree / packer.CORE_PROJECT).read_bytes())
+            self.assertEqual(original, unsupported.read_bytes())
 
 
 class VersionTests(unittest.TestCase):

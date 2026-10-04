@@ -125,7 +125,8 @@ def normalize_pins(tree: Path, rewritten: list[str] | None = None) -> list[str]:
         return []
 
     rewritten = [] if rewritten is None else rewritten
-    for path in sorted(project_files(tree)):
+    # Core carries the generated pin needed to retry after another project's I/O failure.
+    for path in sorted(project_files(tree), key=lambda path: (path == core, path)):
         raw = path.read_bytes()
         bom = raw.startswith(b"\xef\xbb\xbf")
         text = raw.decode("utf-8-sig")
