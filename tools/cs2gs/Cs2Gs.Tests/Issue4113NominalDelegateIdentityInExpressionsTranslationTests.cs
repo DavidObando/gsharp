@@ -121,7 +121,7 @@ namespace Demo
     [Fact]
     public void TypeOfOrdinaryActionDelegate_StillCanonicalizesToStructuralForm()
     {
-        // Precision guard: Func/Action/Predicate are the canonical structural
+        // Precision guard: Func/Action are the canonical structural
         // spelling's own identity (issue #2835's own exclusion) — typeof over
         // one of those must keep collapsing to the arrow form, unlike
         // EventHandler above.

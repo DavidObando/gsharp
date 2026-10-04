@@ -24,8 +24,8 @@ namespace Cs2Gs.Tests;
 /// <para>
 /// A source-declared delegate now keeps its nominal name in every type
 /// position — cs2gs already emits a real <c>delegate X(…) </c>;
-/// declaration for it. Imported/BCL delegates (<c>Func</c>, <c>Action</c>,
-/// <c>Predicate</c>) still render in arrow form (ADR-0115 §B.8).
+/// declaration for it. Imported/BCL delegates retain arrow form only for
+/// <c>Func</c>/<c>Action</c> (ADR-0115 §B.8).
 /// </para>
 /// </summary>
 public class Issue2835NominalDelegateTypeTranslationTests
@@ -98,13 +98,13 @@ namespace Corpus.Delegates
     }
 
     [Fact]
-    public void CanonicalBclDelegates_StillRenderInArrowForm()
+    public void FuncAndAction_RenderInArrowForm_WhilePredicateKeepsNominalName()
     {
         string rendered = Render();
 
         Assert.Contains("length (string) -> int32", rendered, StringComparison.Ordinal);
         Assert.Contains("sink (string) -> void", rendered, StringComparison.Ordinal);
-        Assert.Contains("test (string) -> bool", rendered, StringComparison.Ordinal);
+        Assert.Contains("test Predicate[string]", rendered, StringComparison.Ordinal);
     }
 
     [Fact]
