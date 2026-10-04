@@ -1346,9 +1346,21 @@ public partial class TypeSymbol : Symbol
                 rightDelegate.TypeArguments);
         }
 
+        if (left is ImportedTypeSymbol { OpenDefinition: not null } leftImported
+            && !leftImported.TypeArguments.IsDefaultOrEmpty
+            && right is ImportedTypeSymbol { OpenDefinition: not null } rightImported
+            && !rightImported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return ClrTypeUtilities.AreSame(leftImported.OpenDefinition, rightImported.OpenDefinition)
+                && leftImported.TypeArguments.Length == rightImported.TypeArguments.Length
+                && leftImported.TypeArguments.Zip(rightImported.TypeArguments)
+                    .All(pair => AreRuntimeEquivalentIgnoringReferenceNullability(pair.First, pair.Second));
+        }
+
         if (left.GetType() != right.GetType())
         {
-            return false;
+            return CodeAnalysis.Binding.MemberLookup.IsNaturalStructuralDelegateTarget(left, right)
+                || CodeAnalysis.Binding.MemberLookup.IsNaturalStructuralDelegateTarget(right, left);
         }
 
         if (left is ArrayTypeSymbol leftArray

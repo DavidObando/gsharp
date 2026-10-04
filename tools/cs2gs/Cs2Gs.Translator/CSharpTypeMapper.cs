@@ -1348,6 +1348,15 @@ public sealed class CSharpTypeMapper
         return string.Join("_", parts);
     }
 
+    /// <summary>Whether a source delegate is emitted with a lifted top-level name.</summary>
+    /// <param name="named">The candidate type.</param>
+    /// <returns>Whether the delegate's nominal containing chain is flattened.</returns>
+    internal static bool IsLiftedNestedDelegate(INamedTypeSymbol named) =>
+        named != null
+        && named.TypeKind == TypeKind.Delegate
+        && named.ContainingType != null
+        && IsSourceDeclaredDelegate(named);
+
     /// <summary>
     /// Issue #2222: strips a leading `global::` alias-qualifier from a
     /// dotted namespace/type name (e.g. <c>using global::Foo.Bar;</c> yields
@@ -2066,7 +2075,7 @@ public sealed class CSharpTypeMapper
         TranslationContext context,
         Location location)
     {
-        return IsSourceDeclaredDelegate(named) && named.ContainingType != null
+        return IsLiftedNestedDelegate(named)
             ? this.LiftedNestedDelegateName(named, context)
             : this.QualifiedTypeName(named, context, location);
     }
