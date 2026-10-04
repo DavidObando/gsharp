@@ -6,6 +6,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Emit;
+using GSharp.Core.CodeAnalysis.Lowering.Iterators;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Lowering;
@@ -40,7 +41,7 @@ internal static class InitializationPlanner
                 }
 
                 var arguments = constructor.BaseInitializer?.Arguments ?? ImmutableArray<BoundExpression>.Empty;
-                if (!HasRequest(fields.Concat(arguments)) && !HasRequest(body))
+                if (!type.HasPrimaryConstructor && !HasRequest(fields.Concat(arguments)) && !HasRequest(body))
                 {
                     continue;
                 }
@@ -129,6 +130,18 @@ internal static class InitializationPlanner
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var receiver = Invariant.Required(function.ThisParameter, "instance initialization has its constructor receiver");
+
+        // Authored constructors have their own parameter scope; declaration
+        // initializers read primary inputs from the already-owned storage.
+        var storedPrimaryInputs = !primaryStores && owner.HasPrimaryConstructor
+            ? new HoistedFieldRewriter(owner, receiver, owner.PrimaryConstructorParameters.ToDictionary(
+                parameter => (VariableSymbol)parameter,
+                parameter =>
+                {
+                    ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(owner, parameter.Name, out var field);
+                    return Invariant.Required(field, "primary constructor parameters have corresponding fields");
+                }))
+            : null;
         if (primaryStores)
         {
             foreach (var parameter in function.Parameters)
@@ -147,9 +160,10 @@ internal static class InitializationPlanner
         {
             if (owner.InstanceFieldInitializers.TryGetValue(field, out var expression))
             {
-                statements.Add(new BoundExpressionStatement(
+                var assignment = new BoundExpressionStatement(
                     expression.Syntax,
-                    new BoundFieldAssignmentExpression(expression.Syntax, receiver, owner, field, expression)));
+                    new BoundFieldAssignmentExpression(expression.Syntax, receiver, owner, field, expression));
+                statements.Add(storedPrimaryInputs?.RewriteStatement(assignment) ?? assignment);
             }
         }
 

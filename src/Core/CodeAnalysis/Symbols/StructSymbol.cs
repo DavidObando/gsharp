@@ -713,11 +713,20 @@ public sealed class StructSymbol : TypeSymbol
         : !IsClass
         && !IsInline
         && !InstanceFieldInitializers.IsEmpty
-        && (ExplicitConstructors.IsDefaultOrEmpty || !ExplicitConstructors.Any(ctor => ctor.Parameters.Length == 0))
         && (IsGenericDefinition
             || HasPrimaryConstructor
             || !CollectEnclosingTypeParameters(this).IsDefaultOrEmpty
             || InstanceFieldInitializers.Keys.Any(member => member.Accessibility != Accessibility.Public));
+
+    /// <summary>
+    /// Gets the hidden literal initializer's marker count when an authored
+    /// parameterless constructor must remain distinct. Its total arity exceeds
+    /// every authored signature, avoiding a collision without a source overload.
+    /// </summary>
+    internal int LiteralInitializerMarkerCount => NeedsSynthesizedValueStructDefaultCtor && !HasPrimaryConstructor
+        && ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty)
+        ? ExplicitConstructors.Max(constructor => constructor.Parameters.Length) + 1
+        : 0;
 
     /// <summary>Sets <see cref="Symbol.ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>

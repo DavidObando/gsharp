@@ -35,6 +35,13 @@ public sealed class BoundStructLiteralExpression : BoundExpression
 
     internal ImmutableArray<(FieldSymbol Field, BoundExpression Value, bool IsSupplied)> GetPrimaryConstructorArguments()
     {
+        // Imported positional literals already carry their CLR constructor's
+        // property arguments; they do not have compiler-owned storage fields.
+        if (StructType.ClrType != null)
+        {
+            return ImmutableArray<(FieldSymbol Field, BoundExpression Value, bool IsSupplied)>.Empty;
+        }
+
         var arguments = ImmutableArray.CreateBuilder<(FieldSymbol Field, BoundExpression Value, bool IsSupplied)>(
             StructType.PrimaryConstructorParameters.Length);
         foreach (var parameter in StructType.PrimaryConstructorParameters)

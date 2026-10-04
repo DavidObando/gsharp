@@ -1052,7 +1052,11 @@ The semantics match C#:
   nested aggregates and nonempty fixed arrays) reports `GS0604`, just like an
   explicit `default` of that type. Nullable handles remain legal defaults.
   Other public-only, non-generic literals retain inline
-  initialization for omitted fields. Raw `default(T)` and array element
+  initialization for omitted fields. Braces do not execute an authored
+  constructor body; calling `T(...)` still does. Compiler-owned initialization
+  remains distinct when an authored parameterless constructor exists. Braced
+  member/content population runs after primary inputs and declaration
+  initializers. Raw `default(T)` and array element
   zero-initialization do not invoke these constructors.
 
 ## Expressions

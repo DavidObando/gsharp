@@ -1549,6 +1549,8 @@ internal sealed class TypeDefEmitter
     /// field initializers in-type, so struct-literal sites can construct
     /// through it instead of storing private fields from the call site.
     /// A primary struct retains its parameterized signature (#4747).
+    /// With an authored parameterless constructor, a distinct assembly-only
+    /// signature initializes literals without executing the authored body.
     /// </summary>
     /// <param name="structSym">The struct whose synthesized default constructor is being emitted.</param>
     /// <returns>The emitted constructor's MethodDef handle.</returns>
@@ -1564,9 +1566,10 @@ internal sealed class TypeDefEmitter
         }
 
         var ctorSig = new BlobBuilder();
+        var markerCount = structSym.LiteralInitializerMarkerCount;
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(
-                parameters.Length,
+                parameters.Length + markerCount,
                 r => r.Void(),
                 ps =>
                 {
@@ -1574,12 +1577,17 @@ internal sealed class TypeDefEmitter
                     {
                         this.encodeTypeSymbol(ps.AddParameter().Type(isByRef: parameter.RefKind != RefKind.None), parameter.Type);
                     }
+
+                    for (var marker = 0; marker < markerCount; marker++)
+                    {
+                        this.encodeTypeSymbol(ps.AddParameter().Type(), TypeSymbol.Bool);
+                    }
                 });
 
         var firstParameter = this.AddPrimaryCtorParameterRows(parameters, out var parameterHandles);
 
         var constructor = this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+            attributes: (markerCount == 0 ? MethodAttributes.Public : MethodAttributes.Assembly) | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),

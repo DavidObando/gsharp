@@ -394,7 +394,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         }
 
         if ((type.ExplicitConstructors.IsDefaultOrEmpty && type.IsClass)
-            || type.NeedsSynthesizedValueStructDefaultCtor)
+            || (type.NeedsSynthesizedValueStructDefaultCtor && type.LiteralInitializerMarkerCount == 0))
         {
             this.CheckImplicitConstructorPath(type, fields);
         }
@@ -483,7 +483,8 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     private void CheckConstruction(StructSymbol type, BoundExpression node, IEnumerable<FieldSymbol?> initialized, bool explicitConstructor)
     {
         type = this.initializerOwner?.SubstituteMemberType(type) as StructSymbol ?? type;
-        if (explicitConstructor || type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty))
+        if (explicitConstructor || (type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty)
+            && node is not BoundStructLiteralExpression { StructType.NeedsSynthesizedValueStructDefaultCtor: true }))
         {
             return;
         }

@@ -16,6 +16,250 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue4755GenericStructInitializerEmitTests
 {
     [Fact]
+    public void OrderedPrimaryMembers_ReachTheInitializerBeforeCollectionPopulation()
+    {
+        InDirectory(directory =>
+        {
+            var native = EmitCSharp(directory, "NativeOrdered4755", """
+                namespace NativeOrdered4755;
+                public static class Effects
+                {
+                    public static string Trace = "";
+                    public static int Mark(string label, int value) { Trace += label; return value; }
+                }
+                public struct Pair<T>(T first, T second)
+                {
+                    public T First = first;
+                    public T Second = second;
+                    public T Copy = Observe(first);
+                    public System.Collections.Generic.List<int> Items = new();
+                    private static T Observe(T value) { Effects.Trace += "I"; return value; }
+                    public Pair() : this(default, default) { }
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var item = new Pair<int>(second: Effects.Mark("B", 2), first: Effects.Mark("A", 7))
+                            { Items = { Effects.Mark("E", 1) }, Copy = Effects.Mark("S", 9) };
+                        return item.First + "/" + item.Second + "/" + item.Copy + "/" + item.Items.Count + "/" + Effects.Trace;
+                    }
+                }
+                """);
+            Assert.Equal("7/2/9/1/BAIES", Invoke(EmittedFixture.Load(native), "NativeOrdered4755.Oracle"));
+            var emitted = Compile(directory, """
+                package Ordered4755
+                import System.Collections.Generic
+                class Effects {
+                    shared {
+                        public var Trace string = ""
+                        public func Mark(label string, value int32) int32 { Trace += label return value }
+                    }
+                }
+                struct Pair[T](First T, Second T) {
+                    public var Copy T = Observe(First)
+                    public var Items List[int32] = List[int32]()
+                    public init() { }
+                    shared {
+                        private func Observe(value T) T { Effects.Trace += "I" return value }
+                    }
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let item = Pair[int32]{Second: Effects.Mark("B", 2), Items: {Effects.Mark("E", 1)},
+                                First: Effects.Mark("A", 7), Copy: Effects.Mark("S", 9)}
+                            return item.First.ToString() + "/" + item.Second.ToString() + "/" + item.Copy.ToString() +
+                                "/" + item.Items.Count.ToString() + "/" + Effects.Trace
+                        }
+                        public func Original() string {
+                            let item = Pair[int32]{First: 7, Second: 2, Items: {1}}
+                            return item.First.ToString() + "/" + item.Copy.ToString() + "/" + item.Items.Count.ToString()
+                        }
+                        public func Reference() string {
+                            let item = Pair[string]{First: "text", Second: "right", Items: {1}}
+                            return item.First + "/" + item.Copy + "/" + item.Items.Count.ToString()
+                        }
+                    }
+                }
+                """);
+            IlVerifier.Verify(emitted);
+            AssertNativeConsumer(directory, emitted, "Ordered4755.Api", "7/2/9/1/BAIES");
+            Assert.Equal("7/7/1", Invoke(EmittedFixture.Load(emitted), "Ordered4755.Api", "Original"));
+            Assert.Equal("text/text/1", Invoke(EmittedFixture.Load(emitted), "Ordered4755.Api", "Reference"));
+            var pair = EmittedFixture.Load(emitted).GetType("Ordered4755.Pair`1", throwOnError: true);
+            Assert.Equal(2, pair.GetConstructors().Length);
+            Assert.Empty(pair.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
+            var consumer = EmitCSharp(directory, "DirectOrdered4755", """
+                public static class DirectOrdered4755
+                {
+                    public static string Run()
+                    {
+                        var value = new Ordered4755.Pair<int>(7, 2);
+                        var zero = new Ordered4755.Pair<int>();
+                        return value.First + "/" + value.Copy + ";" + zero.First + "/" + zero.Copy;
+                    }
+                }
+                """, emitted);
+            Assert.Equal("7/7;0/0", Invoke(EmittedFixture.LoadTogether(emitted, consumer).Last(), "DirectOrdered4755"));
+        });
+    }
+
+    [Fact]
+    public void AuthoredDefaultConstructor_LiteralsInitializeWithoutExecutingItsBody()
+    {
+        InDirectory(directory =>
+        {
+            var native = EmitCSharp(directory, "NativeAuthored4755", """
+                namespace NativeAuthored4755;
+                public static class Effects { public static string Trace = ""; }
+                public struct User<T>
+                {
+                    private readonly int hidden = Next();
+                    public int Read() => hidden;
+                    private static int Next() { Effects.Trace += "I"; return 7; }
+                    public User() { Effects.Trace += "C"; }
+                    public User(bool first, bool second) { Effects.Trace += "A"; }
+                    internal User(bool first, bool second, bool marker) { }
+                    public static User<T> Literal() => new(false, false, false);
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var first = User<int>.Literal();
+                        var second = new User<int>();
+                        var third = User<string>.Literal();
+                        var fourth = new User<string>(false, false);
+                        User<int> zero = default;
+                        var zeros = new User<string>[1];
+                        return first.Read() + "/" + second.Read() + "/" + third.Read() + "/" + fourth.Read() +
+                            "/" + zero.Read() + "/" + zeros[0].Read() + "/" + Effects.Trace;
+                    }
+                }
+                """);
+            Assert.Equal("7/7/7/7/0/0/IICIIA", Invoke(EmittedFixture.Load(native), "NativeAuthored4755.Oracle"));
+            var emitted = Compile(directory, """
+                package Authored4755
+                class Effects { shared { public var Trace string = "" } }
+                struct User[T] {
+                    private let Hidden int32 = Next()
+                    public func Read() int32 -> Hidden
+                    public init() { Effects.Trace += "C" }
+                    public init(first bool, second bool) { Effects.Trace += "A" }
+                    shared { private func Next() int32 { Effects.Trace += "I" return 7 } }
+                }
+                data struct Data[T](Value T) {
+                    public var Copy T = Value
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let first = User[int32]{}
+                            let second = User[int32]()
+                            let third = User[string]{}
+                            let fourth = User[string](false, false)
+                            let zero User[int32] = default
+                            let zeros = System.GC.AllocateArray[User[string]](1)
+                            return first.Read().ToString() + "/" + second.Read().ToString() + "/" +
+                                third.Read().ToString() + "/" + fourth.Read().ToString() + "/" +
+                                zero.Read().ToString() + "/" + zeros[0].Read().ToString() + "/" + Effects.Trace
+                        }
+                        public func DataRead() string {
+                            let number = Data[int32]{Value: 7}
+                            let text = Data[string]("text")
+                            return number.Value.ToString() + "/" + number.Copy.ToString() + ";" + text.Value + "/" + text.Copy
+                        }
+                    }
+                }
+                """);
+            IlVerifier.Verify(emitted);
+            var type = EmittedFixture.Load(emitted).GetType("Authored4755.User`1", throwOnError: true);
+            Assert.Equal(2, type.GetConstructors().Length);
+            var initializer = Assert.Single(type.GetConstructors(BindingFlags.NonPublic | BindingFlags.Instance));
+            Assert.True(initializer.IsAssembly);
+            Assert.Equal(3, initializer.GetParameters().Length);
+            Assert.All(initializer.GetParameters(), parameter => Assert.Equal(typeof(bool), parameter.ParameterType));
+            var field = type.GetField("Hidden", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.True(field.IsPrivate);
+            Assert.True(field.IsInitOnly);
+            Assert.Equal(type, field.DeclaringType);
+            AssertNativeConsumer(directory, emitted, "Authored4755.Api", "7/7/7/7/0/0/IICIIA");
+            Assert.Equal("7/7;text/text", Invoke(EmittedFixture.Load(emitted), "Authored4755.Api", "DataRead"));
+            var data = EmittedFixture.Load(emitted).GetType("Authored4755.Data`1", throwOnError: true);
+            Assert.Single(data.GetConstructors());
+            Assert.Empty(data.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
+            var consumer = EmitCSharp(directory, "DirectAuthored4755", """
+                public static class DirectAuthored4755
+                {
+                    public static string Run()
+                    {
+                        var value = new Authored4755.User<int>();
+                        var data = new Authored4755.Data<string>("text");
+                        return value.Read() + "/" + Authored4755.Effects.Trace + ";" + data.Value + "/" + data.Copy;
+                    }
+                }
+                """, emitted);
+            Assert.Equal("7/IC;text/text", Invoke(EmittedFixture.LoadTogether(emitted, consumer).Last(), "DirectAuthored4755"));
+        });
+    }
+
+    [Fact]
+    public void OrderedRequiredPrimaryInputs_AreProvidedOnceBeforePopulation()
+    {
+        InDirectory(directory =>
+        {
+            var values = typeof(Gsharp.Values.ReadOnlyManagedRef<>).Assembly.Location;
+            var native = EmitCSharp(directory, "RequiredOrdered4755", """
+                namespace RequiredOrdered4755;
+                public static class Factory
+                {
+                    public static int Calls;
+                    public static Gsharp.Values.ReadOnlyManagedRef<int> Make()
+                    {
+                        Calls++;
+                        return Gsharp.Values.ReadOnlyManagedRef<int>.FromArray(new[] { 7 }, 0);
+                    }
+                }
+                public struct Holder<T>(T value)
+                {
+                    public T Value = value;
+                    public T Copy = value;
+                    public System.Collections.Generic.List<int> Items = new();
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var value = new Holder<Gsharp.Values.ReadOnlyManagedRef<int>>(Factory.Make()) { Items = { 1 } };
+                        return value.Value.Borrow() + "/" + value.Copy.Borrow() + "/" + value.Items.Count + "/" + Factory.Calls;
+                    }
+                }
+                """, values);
+            Assert.Equal("7/7/1/1", Invoke(EmittedFixture.LoadTogether(values, native).Last(), "RequiredOrdered4755.Oracle"));
+            var emitted = Compile(directory, """
+                package RequiredOrdered4755Controls
+                import RequiredOrdered4755
+                struct Holder[T](Value T) {
+                    public var Copy T = Value
+                    public var Items System.Collections.Generic.List[int32] = System.Collections.Generic.List[int32]()
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let value = Holder[readonly managed[int32]]{Items: {1}, Value: Factory.Make()}
+                            return value.Value.Borrow().ToString() + "/" + value.Copy.Borrow().ToString() +
+                                "/" + value.Items.Count.ToString() + "/" + Factory.Calls.ToString()
+                        }
+                    }
+                }
+                """, native, values);
+            IlVerifier.Verify(emitted, new[] { native, values });
+            AssertNativeConsumer(directory, emitted, "RequiredOrdered4755Controls.Api", "7/7/1/1", native, values);
+        });
+    }
+
+    [Fact]
     public void PublicScalarInitializer_MatchesNativeRoslynRuntime()
     {
         InDirectory(directory =>
@@ -69,6 +313,120 @@ public sealed class Issue4755GenericStructInitializerEmitTests
                 """);
             IlVerifier.Verify(emitted);
             AssertNativeConsumer(directory, emitted, "GenericScalar4755.Api", "7/1");
+        });
+    }
+
+    [Fact]
+    public void AuthoredRequiredStorage_PreservesConstructorCallsAndValidatesLiteralInputs()
+    {
+        InDirectory(directory =>
+        {
+            var values = typeof(Gsharp.Values.ReadOnlyManagedRef<>).Assembly.Location;
+            var native = EmitCSharp(directory, "RequiredAuthored4755", """
+                namespace RequiredAuthored4755;
+                public static class Factory
+                {
+                    public static int Calls;
+                    public static Gsharp.Values.ReadOnlyManagedRef<int> Make()
+                    {
+                        Calls++;
+                        return Gsharp.Values.ReadOnlyManagedRef<int>.FromArray(new[] { 7 }, 0);
+                    }
+                }
+                public struct Owner<T>
+                {
+                    public Gsharp.Values.ReadOnlyManagedRef<int> Handle;
+                    private readonly int seed = 7;
+                    public Owner() { Handle = Factory.Make(); }
+                    internal Owner(bool marker) { Handle = default; }
+                    public int Read() => seed;
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var called = new Owner<int>();
+                        var literal = new Owner<string>(false) { Handle = Factory.Make() };
+                        return called.Handle.Borrow() + "/" + called.Read() + ";" +
+                            literal.Handle.Borrow() + "/" + literal.Read() + ";" + Factory.Calls;
+                    }
+                }
+                """, values);
+            Assert.Equal("7/7;7/7;2", Invoke(EmittedFixture.LoadTogether(values, native).Last(), "RequiredAuthored4755.Oracle"));
+            const string declarations = """
+                package RequiredAuthored4755Controls
+                import RequiredAuthored4755
+                struct Owner[T] {
+                    public var Handle readonly managed[int32]
+                    private let Seed int32 = 7
+                    public init() { Handle = Factory.Make() }
+                    public func Read() int32 -> Seed
+                }
+                """;
+            var emitted = Compile(directory, declarations + """
+
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let called = Owner[int32]()
+                            let literal = Owner[string]{Handle: Factory.Make()}
+                            return called.Handle.Borrow().ToString() + "/" + called.Read().ToString() + ";" +
+                                literal.Handle.Borrow().ToString() + "/" + literal.Read().ToString() + ";" + Factory.Calls.ToString()
+                        }
+                    }
+                }
+                """, native, values);
+            IlVerifier.Verify(emitted, new[] { native, values });
+            AssertNativeConsumer(directory, emitted, "RequiredAuthored4755Controls.Api", "7/7;7/7;2", native, values);
+            var rejectedDirectory = Directory.CreateDirectory(Path.Combine(directory, "Rejected")).FullName;
+            var rejected = TryCompile(rejectedDirectory, declarations + "\nfunc Bad() { let value = Owner[int32]{} }", native, values);
+            Assert.Equal(1, rejected.Code);
+            Assert.Contains("error GS0604:", rejected.Output, StringComparison.Ordinal);
+            Assert.Contains("construction must initialize non-null managed-reference field 'Handle'", rejected.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", rejected.Output, StringComparison.Ordinal);
+            Assert.False(File.Exists(rejected.AssemblyPath));
+        });
+    }
+
+    [Fact]
+    public void ImportedPositionalRecords_RetainTheirClrPropertyConstructorContract()
+    {
+        InDirectory(directory =>
+        {
+            var native = EmitCSharp(directory, "Positional4755", """
+                namespace Positional4755;
+                public record Box<T>(T Value);
+                public readonly record struct Cell<T>(T Value);
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var value = new Box<int>(7);
+                        var copied = value with { Value = 8 };
+                        var text = new Cell<string>("text");
+                        var textCopy = text with { Value = "copy" };
+                        return value.Value + "/" + copied.Value + ";" + text.Value + "/" + textCopy.Value;
+                    }
+                }
+                """);
+            Assert.Equal("7/8;text/copy", Invoke(EmittedFixture.Load(native), "Positional4755.Oracle"));
+            var emitted = Compile(directory, """
+                package Positional4755Controls
+                import Positional4755
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let value = Box[int32](7)
+                            let copied = value with { Value = 8 }
+                            let text = Cell[string]("text")
+                            let textCopy = text with { Value = "copy" }
+                            return value.Value.ToString() + "/" + copied.Value.ToString() + ";" + text.Value + "/" + textCopy.Value
+                        }
+                    }
+                }
+                """, native);
+            IlVerifier.Verify(emitted, new[] { native });
+            AssertNativeConsumer(directory, emitted, "Positional4755Controls.Api", "7/8;text/copy", native);
         });
     }
 
@@ -576,6 +934,9 @@ public sealed class Issue4755GenericStructInitializerEmitTests
     [InlineData("Container[Holder[readonly managed[int32]]]{Value: Holder[readonly managed[int32]]{}}", false)]
     [InlineData("Pair[readonly managed[int32]]{First: Factory.Make()}", false)]
     [InlineData("Nested[readonly managed[int32]]{Value: Factory.Make()}", false)]
+    [InlineData("Authored[readonly managed[int32]]{}", false)]
+    [InlineData("Authored[readonly managed[int32]]{}", true)]
+    [InlineData("Ordered[readonly managed[int32]]{Items: {1}}", false)]
     public void MissingRequiredPrimaryInputs_ReportDefaultDiagnosticAtTheLiteral(string expression, bool declaredInitializer)
     {
         InDirectory(directory =>
@@ -604,6 +965,14 @@ public sealed class Issue4755GenericStructInitializerEmitTests
                 struct Aggregate[T](Item T) { }
                 struct Container[T](Value T) { }
                 struct Pair[T](First T, Second T) { }
+                struct Authored[T](Value T) {
+                    {{(declaredInitializer ? "public var Copy T = Value" : string.Empty)}}
+                    public init() { }
+                }
+                struct Ordered[T](Value T) {
+                    public var Copy T = Value
+                    public var Items System.Collections.Generic.List[int32] = System.Collections.Generic.List[int32]()
+                }
                 class Outer[T] { public struct Inner(Value T) { } }
                 struct Nested[T](Value T) {
                     private var Storage Holder[T] = Holder[T]{}
@@ -730,8 +1099,8 @@ public sealed class Issue4755GenericStructInitializerEmitTests
         });
     }
 
-    private static object Invoke(Assembly assembly, string typeName) =>
-        assembly.GetType(typeName, throwOnError: true).GetMethod("Run").Invoke(null, null);
+    private static object Invoke(Assembly assembly, string typeName, string methodName = "Run") =>
+        assembly.GetType(typeName, throwOnError: true).GetMethod(methodName).Invoke(null, null);
 
     private static string Compile(string directory, string source, params string[] references)
     {

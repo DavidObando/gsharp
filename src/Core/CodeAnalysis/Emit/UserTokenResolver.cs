@@ -2520,7 +2520,13 @@ internal sealed class UserTokenResolver
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob)
             .MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
+            .Parameters(ctorKey.LiteralInitializerMarkerCount, r => r.Void(), ps =>
+            {
+                for (var marker = 0; marker < ctorKey.LiteralInitializerMarkerCount; marker++)
+                {
+                    this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), TypeSymbol.Bool);
+                }
+            });
         return this.GetUserStructMethodRef(structType, defaultDef, ".ctor", sigBlob);
     }
 

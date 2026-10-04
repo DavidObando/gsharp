@@ -1325,6 +1325,11 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocalAddress(slot);
         if (declaredInitializerValues != null)
         {
+            for (var marker = 0; marker < structDefinition.LiteralInitializerMarkerCount; marker++)
+            {
+                this.il.LoadConstantI4(0);
+            }
+
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType));
         }
