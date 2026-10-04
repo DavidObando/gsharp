@@ -2895,9 +2895,10 @@ public sealed partial class CSharpToGSharpTranslator
                 && !this.IsObliviousCompilation()
                 && this.IsGeneratedDeclarationPromotedValue(value);
 
-            // Conversion operands and branch-local coercions are not result stores.
+            // A fixed reference-type parameter can still receive a known-nil result.
             bool directlyNullableResult = !operatorInput
                 && targetSymbol != null
+                && targetType is ITypeParameterSymbol { IsReferenceType: true }
                 && ObliviousNullabilityAnalyzer.IsDirectlyNullable(
                     this.context.SemanticModel.GetOperation(value),
                     this.context.SemanticModel,
