@@ -251,7 +251,8 @@ namespace Demo
             context.Diagnostics,
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-        Assert.Contains("(map_[key] = Next())", printed, StringComparison.Ordinal);
+        Assert.Contains("GetOrAdd($map ", printed, StringComparison.Ordinal);
+        Assert.Contains("($map[key] = Next())", printed, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(printed, "= Next()"));
 
         Assert.Equal("1,1,42,42,42", CompileAndRun(printed, "C.Run()").Trim());
