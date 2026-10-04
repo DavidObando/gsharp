@@ -161,6 +161,11 @@ public sealed class Issue4755GenericStructInitializerEmitTests
                     public int Value = Effects.Mark("P", 5);
                     public Plain() { }
                 }
+                public struct User<T>
+                {
+                    public int Value = Effects.Mark("U", 4);
+                    public User() { }
+                }
                 public static class Oracle
                 {
                     public static string Run()
@@ -169,13 +174,16 @@ public sealed class Issue4755GenericStructInitializerEmitTests
                         var hidden = new Hidden<string>();
                         var readOnly = new Open<string>();
                         var plain = new Plain();
+                        var user = new User<int>();
                         var zeros = new Open<string>[1];
+                        Open<string> zero = default;
                         return item.First + "/" + item.Second + "/" + hidden.Read() + "/" +
-                            readOnly.Value + "/" + plain.Value + "/" + zeros[0].Value + "/" + Effects.Trace;
+                            readOnly.Value + "/" + plain.Value + "/" + user.Value + "/" +
+                            zeros[0].Value + "/" + zero.Value + "/" + Effects.Trace;
                     }
                 }
                 """);
-            Assert.Equal("1/2/9/6/5/0/ABSFHRP", Invoke(EmittedFixture.Load(native), "NativeControls4755.Oracle"));
+            Assert.Equal("1/2/9/6/5/4/0/0/ABSFHRPU", Invoke(EmittedFixture.Load(native), "NativeControls4755.Oracle"));
             var emitted = Compile(directory, """
                 package GenericControls4755
                 class Effects {
@@ -201,6 +209,10 @@ public sealed class Issue4755GenericStructInitializerEmitTests
                 struct Plain {
                     public var Value int32 = Effects.Mark("P", 5)
                 }
+                struct User[T] {
+                    public var Value int32 = Effects.Mark("U", 4)
+                    public init() { }
+                }
                 class Api {
                     shared {
                         public func Run() string {
@@ -208,10 +220,12 @@ public sealed class Issue4755GenericStructInitializerEmitTests
                             let hidden = Hidden[string]{}
                             let readonly = Open[string]{}
                             let plain = Plain{}
+                            let user = User[int32]()
                             let zeros = System.GC.AllocateArray[Open[string]](1)
+                            let zero Open[string] = default
                             return item.First.ToString() + "/" + item.Second.ToString() + "/" + hidden.Read().ToString() +
-                                "/" + readonly.Value.ToString() + "/" + plain.Value.ToString() + "/" +
-                                zeros[0].Value.ToString() + "/" + Effects.Trace
+                                "/" + readonly.Value.ToString() + "/" + plain.Value.ToString() + "/" + user.Value.ToString() + "/" +
+                                zeros[0].Value.ToString() + "/" + zero.Value.ToString() + "/" + Effects.Trace
                         }
                     }
                 }
@@ -224,13 +238,14 @@ public sealed class Issue4755GenericStructInitializerEmitTests
             Assert.Equal(open, open.GetField("Value").DeclaringType);
             Assert.Single(open.GetConstructors());
             Assert.Empty(assembly.GetType("GenericControls4755.Plain", throwOnError: true).GetConstructors());
+            Assert.Single(assembly.GetType("GenericControls4755.User`1", throwOnError: true).GetConstructors());
             var box = assembly.GetType("GenericControls4755.Hidden`1", throwOnError: true);
             var hidden = box.GetField("Hidden", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.NotNull(hidden);
             Assert.True(hidden.IsPrivate);
             Assert.True(hidden.IsInitOnly);
             Assert.Equal(box, hidden.DeclaringType);
-            AssertNativeConsumer(directory, emitted, "GenericControls4755.Api", "1/2/9/6/5/0/ABSFHRP");
+            AssertNativeConsumer(directory, emitted, "GenericControls4755.Api", "1/2/9/6/5/4/0/0/ABSFHRPU");
         });
     }
 
