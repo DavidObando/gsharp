@@ -5951,14 +5951,19 @@ internal sealed class MemberLookup
             effectiveMethodTypeArguments = merged.MoveToImmutable();
         }
 
-        // A CLR-inferred closure carries runtime types, not the caller's
-        // reference annotations. It cannot invent a mandatory method-slot
-        // contract when no symbolic method arguments were inferred.
+        // A CLR-inferred closure carries runtime types, not caller annotations.
+        // Only the recovered symbolic argument for this slot supplies its contract.
         if (layout.IsGenericParameter
-            && layout.DeclaringMethod != null
-            && effectiveMethodTypeArguments.IsDefaultOrEmpty)
+            && layout.DeclaringMethod != null)
         {
-            return null;
+            var slot = layout.GenericParameterPosition;
+            if (effectiveMethodTypeArguments.IsDefaultOrEmpty
+                || slot >= effectiveMethodTypeArguments.Length
+                || effectiveMethodTypeArguments[slot] == null
+                || effectiveMethodTypeArguments[slot] == TypeSymbol.Error)
+            {
+                return null;
+            }
         }
 
         if ((effectiveMethodTypeArguments.IsDefaultOrEmpty

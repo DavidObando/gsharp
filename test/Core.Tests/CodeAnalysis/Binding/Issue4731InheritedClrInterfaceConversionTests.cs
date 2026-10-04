@@ -18,15 +18,27 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public sealed class Issue4731InheritedClrInterfaceConversionTests
 {
     [Theory]
-    [InlineData(typeof(object), false)]
-    [InlineData(typeof(object), true)]
-    [InlineData(typeof(string), false)]
-    [InlineData(typeof(string), true)]
-    [InlineData(typeof(int), false)]
-    [InlineData(typeof(int), true)]
+    [InlineData(typeof(object), "absent")]
+    [InlineData(typeof(object), "present")]
+    [InlineData(typeof(object), "null-slot")]
+    [InlineData(typeof(object), "error-slot")]
+    [InlineData(typeof(object), "short-vector")]
+    [InlineData(typeof(object), "missing-unrelated-slot")]
+    [InlineData(typeof(string), "absent")]
+    [InlineData(typeof(string), "present")]
+    [InlineData(typeof(string), "null-slot")]
+    [InlineData(typeof(string), "error-slot")]
+    [InlineData(typeof(string), "short-vector")]
+    [InlineData(typeof(string), "missing-unrelated-slot")]
+    [InlineData(typeof(int), "absent")]
+    [InlineData(typeof(int), "present")]
+    [InlineData(typeof(int), "null-slot")]
+    [InlineData(typeof(int), "error-slot")]
+    [InlineData(typeof(int), "short-vector")]
+    [InlineData(typeof(int), "missing-unrelated-slot")]
     public void ClosedClrInference_DoesNotInventSymbolicMethodSlotAnnotations(
         Type contextType,
-        bool symbolicArguments)
+        string symbolicArguments)
     {
         var definition = typeof(MethodDefinition).GetMethods()
             .Single(method => method.Name == nameof(MethodDefinition.DecodeSignature));
@@ -36,16 +48,23 @@ public sealed class Issue4731InheritedClrInterfaceConversionTests
             ClrNullabilityState.NotAnnotated,
             ClrNullability.GetParameterDeclaredState(definition.GetParameters()[1]));
         var contextSymbol = TypeSymbol.FromClrType(contextType);
-        var arguments = symbolicArguments
-            ? ImmutableArray.Create<TypeSymbol>(TypeSymbol.String, contextSymbol)
-            : default;
+        var arguments = symbolicArguments switch
+        {
+            "absent" => default,
+            "present" => ImmutableArray.Create<TypeSymbol>(TypeSymbol.String, contextSymbol),
+            "null-slot" => ImmutableArray.Create<TypeSymbol>(TypeSymbol.String, null),
+            "error-slot" => ImmutableArray.Create<TypeSymbol>(TypeSymbol.String, TypeSymbol.Error),
+            "short-vector" => ImmutableArray.Create<TypeSymbol>(TypeSymbol.String),
+            "missing-unrelated-slot" => ImmutableArray.Create<TypeSymbol>(null, contextSymbol),
+            _ => throw new ArgumentOutOfRangeException(nameof(symbolicArguments)),
+        };
         var target = MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
             TypeSymbol.FromClrType(typeof(MethodDefinition)),
             closed,
             1,
             arguments);
 
-        if (symbolicArguments)
+        if (symbolicArguments is "present" or "missing-unrelated-slot")
         {
             Assert.Equal(contextSymbol, target);
         }
