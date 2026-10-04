@@ -360,9 +360,10 @@ public sealed class ValidationManifest
         // every primary C# unit. Namespace splits/resx output are not anchors.
         // Never search by basename or choose a root because a file exists there.
         var roots = new HashSet<string>(StringComparer.Ordinal);
-        var owners = RepositoryExcludedScope.Compute(sourceRoot, new[] { context.App.ProjectPath });
+        string projectPath = CanonicalRootPath.Resolve(context.App.ProjectPath);
+        var owners = RepositoryExcludedScope.Compute(sourceRoot, new[] { projectPath });
         bool ownsCorpusRoot = string.Equals(
-            CanonicalRootPath.Resolve(Path.GetDirectoryName(context.App.ProjectPath)),
+            Path.GetDirectoryName(projectPath),
             sourceRoot,
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         bool hasOwnedAnchor = false;

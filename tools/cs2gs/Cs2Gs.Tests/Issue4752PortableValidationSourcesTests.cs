@@ -268,14 +268,16 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Validate_SymlinkSpelledCorpusPreservesCapturedProjectOwnership(bool legacy)
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task Validate_SymlinkSpelledCorpusPreservesCapturedProjectOwnership(bool legacy, bool rootProject)
     {
-        Fixture fixture = this.CreateFixture(legacy: false, rootProject: true);
+        Fixture fixture = this.CreateFixture(legacy: false, rootProject);
         Observation control = await this.Validate(fixture, fixture.Source);
-        Assert.Equal(400, control.Facts);
-        Assert.Equal(TimeSpan.FromMinutes(15), control.Budget);
+        Assert.Equal(rootProject ? 400 : 403, control.Facts);
+        Assert.Equal(TimeSpan.FromMinutes(rootProject ? 15 : 16), control.Budget);
         string alias = Path.Combine(this.root, "source-alias");
         Directory.CreateSymbolicLink(alias, fixture.Source);
         CorpusApp app = RepositoryDiscovery.Discover(alias).Single(app => app.Id == fixture.AppId);
@@ -314,14 +316,20 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
 
         Assert.Equal(control.Facts, replay.Facts);
         Assert.Equal(control.Budget, replay.Budget);
-        Assert.Equal(3, replay.Files.Count);
+        Assert.Equal(rootProject ? 3 : 5, replay.Files.Count);
         Assert.Single(replay.Files, file => file.IsFromReferencedProject);
         Assert.All(replay.Files, file => Assert.StartsWith(
             fixture.Source + Path.DirectorySeparatorChar, file.CsFilePath));
+        if (!rootProject)
+        {
+            Assert.Equal(2, replay.Files.Count(file => file.CsFilePath == Path.Combine(
+                fixture.Source, "test", "Shared", "Linked.cs")));
+        }
+
         if (!legacy)
         {
             Assert.Equal(fixture.Source, manifest.SourceRoot);
-            Assert.Equal("Own.csproj", manifest.SourceProjectPath);
+            Assert.Equal(fixture.AppId, manifest.SourceProjectPath);
         }
     }
 

@@ -96,6 +96,8 @@ no files were emitted. A valid modern project identity can represent no emitted
 or only referenced files; it does not manufacture own-source Facts or verification.
 Source roots and owning project paths are canonicalized consistently, including
 when the checkout is reached through a directory symlink.
+Legacy ownership uses that same canonical project identity for nested project
+directories and their explicit linked compile inputs.
 
 Older manifests without these additive fields use the exact full
 corpus-relative primary C# output mapping to establish one owning producing
