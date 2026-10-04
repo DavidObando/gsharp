@@ -555,6 +555,122 @@ class NormalizationRetryTests(unittest.TestCase):
             self.assertEqual(original, unsupported.read_bytes())
 
 
+class GlobalJsonFailureTests(unittest.TestCase):
+    def prepare(self, tree: Path, bootstrap: Path, out: Path) -> tuple[int, dict, str]:
+        import contextlib
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+            code = packer.main(["--tree", str(tree), "--bootstrap", str(bootstrap),
+                                "--out", str(out), "--prepare-only"])
+        return code, json.loads((out / "work/stage1-report.json").read_text()), stderr.getvalue()
+
+    def assert_parse_failure(self, tree: Path, report: dict, stderr: str, invalid: bytes,
+                             rewritten: list[str]) -> None:
+        self.assertIn("global.json", report["error"])
+        self.assertIn("invalid JSON", report["error"])
+        self.assertIn("line", report["error"])
+        self.assertIn("column", report["error"])
+        self.assertTrue(stderr.strip())
+        self.assertNotIn("Traceback", stderr)
+        self.assertEqual(rewritten, report["rewrittenPins"])
+        self.assertEqual(invalid, (tree / "global.json").read_bytes())
+        self.assertNotIn("globalJsonUpdated", report)
+        self.assertNotIn("stagedPackages", report)
+        for relative in rewritten:
+            self.assertEqual(packer.SDK_ID, packer.project_sdk((tree / relative).read_text(encoding="utf-8-sig")))
+
+    def test_malformed_json_after_completed_pin_changes_is_structured_and_repairable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            valid = (tree / "global.json").read_bytes()
+            invalid = b'\xef\xbb\xbf{"sdk": {'
+            (tree / "global.json").write_bytes(invalid)
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+
+            code, failed, stderr = self.prepare(tree, bootstrap, root / "failed")
+
+            self.assertEqual(1, code)
+            self.assert_parse_failure(tree, failed, stderr, invalid,
+                                      ["src/Compiler/Compiler.gsproj", packer.SDK_PROJECT.as_posix(),
+                                       packer.CORE_PROJECT.as_posix()])
+            (tree / "global.json").write_bytes(valid)
+            code, repaired, stderr = self.prepare(tree, bootstrap, root / "repaired")
+            self.assertEqual(0, code, repaired)
+            self.assertEqual("", stderr)
+            self.assertNotIn("error", repaired)
+            self.assertEqual([], repaired["rewrittenPins"])
+            self.assertTrue(repaired["globalJsonUpdated"])
+            self.assertEqual(bootstrap.read_bytes(), (tree / ".nugs" / bootstrap.name).read_bytes())
+            packer.check_no_versioned_toolchain_pins(tree)
+            code, again, stderr = self.prepare(tree, bootstrap, root / "again")
+            self.assertEqual(0, code, again)
+            self.assertEqual("", stderr)
+            self.assertEqual([], again["rewrittenPins"])
+            self.assertFalse(again["globalJsonUpdated"])
+
+    def test_malformed_json_after_partial_prior_normalization_keeps_only_actual_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            valid = (tree / "global.json").read_bytes()
+            invalid = b'{"msbuild-sdks": '
+            (tree / "global.json").write_bytes(invalid)
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            write_bytes = Path.write_bytes
+
+            def fail_sdk(path, data):
+                if path == tree / packer.SDK_PROJECT:
+                    raise OSError("injected pre-parse SDK write failure")
+                return write_bytes(path, data)
+
+            with mock.patch.object(Path, "write_bytes", fail_sdk):
+                code, partial, stderr = self.prepare(tree, bootstrap, root / "partial")
+            self.assertEqual(1, code)
+            self.assertIn("injected pre-parse SDK write failure", partial["error"])
+            self.assertEqual(["src/Compiler/Compiler.gsproj"], partial["rewrittenPins"])
+            self.assertEqual(invalid, (tree / "global.json").read_bytes())
+            self.assertNotIn("Traceback", stderr)
+
+            code, failed, stderr = self.prepare(tree, bootstrap, root / "malformed")
+
+            self.assertEqual(1, code)
+            self.assert_parse_failure(tree, failed, stderr, invalid,
+                                      [packer.SDK_PROJECT.as_posix(), packer.CORE_PROJECT.as_posix()])
+            (tree / "global.json").write_bytes(valid)
+            code, repaired, stderr = self.prepare(tree, bootstrap, root / "repaired")
+            self.assertEqual(0, code, repaired)
+            self.assertEqual("", stderr)
+            self.assertNotIn("error", repaired)
+            self.assertEqual([], repaired["rewrittenPins"])
+            packer.check_no_versioned_toolchain_pins(tree)
+            code, again, stderr = self.prepare(tree, bootstrap, root / "again")
+            self.assertEqual(0, code, again)
+            self.assertEqual("", stderr)
+            self.assertEqual([], again["rewrittenPins"])
+            self.assertFalse(again["globalJsonUpdated"])
+
+    def test_existing_unsupported_json_shapes_fail_without_replacing_configuration(self) -> None:
+        for invalid in (b"null", b"[]", b'{"msbuild-sdks": []}', b'{"msbuild-sdks": "Other/1.0.0"}'):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                (tree / "global.json").write_bytes(invalid)
+                bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+
+                code, failed, stderr = self.prepare(tree, bootstrap, root / "failed")
+
+                self.assertEqual(1, code)
+                self.assertIn("global.json", failed["error"])
+                self.assertIn("not a JSON object", failed["error"])
+                self.assertNotIn("Traceback", stderr)
+                self.assertEqual(invalid, (tree / "global.json").read_bytes())
+                self.assertEqual(["src/Compiler/Compiler.gsproj", packer.SDK_PROJECT.as_posix(),
+                                  packer.CORE_PROJECT.as_posix()], failed["rewrittenPins"])
+                self.assertNotIn("globalJsonUpdated", failed)
+                self.assertNotIn("stagedPackages", failed)
+
+
 class VersionTests(unittest.TestCase):
     def test_versions(self) -> None:
         self.assertEqual("0.4.1129-g6c4824cbc0",

@@ -206,7 +206,10 @@ def pin_global_json(tree: Path, version: str) -> bool:
     path = tree / "global.json"
     raw = path.read_bytes() if path.exists() else b""
     bom = raw.startswith(b"\xef\xbb\xbf")
-    document = json.loads(strip_json_comments(raw.decode("utf-8-sig"))) if path.exists() else {}
+    try:
+        document = json.loads(strip_json_comments(raw.decode("utf-8-sig"))) if path.exists() else {}
+    except json.JSONDecodeError as error:
+        raise SelfHostError(f"{path}: invalid JSON: {error}") from error
     if not isinstance(document, dict):
         raise SelfHostError(f"{path} is not a JSON object")
     sdks = document.setdefault("msbuild-sdks", {})
