@@ -56,6 +56,7 @@ public sealed class Issue4779NullableReflectionArgumentsSelfMigrationTests
             string guardPath = Path.Combine(directory, "Issue4779NullableReflectionArgumentsSelfMigrationTests.gs");
             File.WriteAllText(guardPath, GSharpPrinter.Print(
                 new CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(guardDocument, guardContext)));
+            Assert.DoesNotContain(guardContext.Diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
             File.Copy(guardDocument.FilePath, Path.ChangeExtension(guardPath, ".cs"));
             // Internal source helpers accompany the verbatim test unit instead
             // of relaxing their imported CLR visibility.
