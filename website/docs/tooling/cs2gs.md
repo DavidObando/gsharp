@@ -91,6 +91,9 @@ ownership. Hydration resolves original sources only under the supplied
 generated G# or an unrelated checkout. This preserves the source-declared
 `[Fact]` count used by the existing parity budget, not the larger discovered
 per-name/theory oracle count (issue #4752).
+An explicitly empty or whitespace producing `sourceRoot` is invalid, even when
+no files were emitted. A valid modern project identity can represent no emitted
+or only referenced files; it does not manufacture own-source Facts or verification.
 
 Older manifests without these additive fields use the exact full
 corpus-relative primary C# output mapping to establish one owning producing

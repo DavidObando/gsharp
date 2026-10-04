@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Cs2Gs.Pipeline;
@@ -137,6 +138,132 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
         ValidationManifest.Write(manifest, Path.GetDirectoryName(fixture.ManifestPath));
         var probe = new SourceEvidenceStage();
         await Assert.ThrowsAsync<InvalidOperationException>(() => this.Validate(fixture, fixture.Source, probe));
+        Assert.Null(probe.Observation);
+    }
+
+    [Theory]
+    [InlineData("", false)]
+    [InlineData("", true)]
+    [InlineData(" \t\r\n", false)]
+    [InlineData(" \t\r\n", true)]
+    public async Task Validate_BlankModernSourceRootFailsBeforeHydration(string producingRoot, bool empty)
+    {
+        Fixture fixture = this.CreateFixture(legacy: false);
+        Observation control = await this.Validate(fixture, fixture.Source);
+        Assert.Equal(403, control.Facts);
+        Assert.Equal(TimeSpan.FromMinutes(16), control.Budget);
+        ValidationManifest manifest = ValidationManifest.Read(Path.GetDirectoryName(fixture.ManifestPath));
+        Assert.NotNull(manifest);
+        manifest.SourceRoot = producingRoot;
+        manifest.RootNamespace = "MustNotHydrate";
+        manifest.GeneratedFriendAssemblies.Add("MustNotHydrate");
+        if (empty)
+        {
+            manifest.EmittedFiles.Clear();
+        }
+
+        Console.WriteLine("blank modern source identity: " + JsonSerializer.Serialize(manifest));
+        ValidationManifest.Write(manifest, Path.GetDirectoryName(fixture.ManifestPath));
+        var probe = new SourceEvidenceStage();
+        Exception driverError = await Record.ExceptionAsync(() => this.Validate(fixture, fixture.Source, probe));
+        CorpusApp app = RepositoryDiscovery.Discover(fixture.Source).Single(app => app.Id == fixture.AppId);
+        var context = new StageExecutionContext(
+            app, new PipelineOptions { SourceRoot = fixture.Source },
+            new GscInvoker(Compiler()), fixture.Migrated,
+            new TriageBuilder("hydrate", "ts", "gsc", app.Id));
+        context.RootNamespace = "BeforeHydration";
+        Exception hydrationError = Record.Exception(() => manifest.Hydrate(context, fixture.Migrated));
+
+        Assert.True(
+            driverError is InvalidOperationException,
+            $"Blank modern root replay reached validation with {probe.Observation?.Files.Count} files, " +
+            $"{probe.Observation?.Facts} Facts and {probe.Observation?.Budget} budget.");
+        Assert.Contains("non-empty producing corpus source root", driverError.Message, StringComparison.Ordinal);
+        Assert.IsType<InvalidOperationException>(hydrationError);
+        Assert.Contains("non-empty producing corpus source root", hydrationError.Message, StringComparison.Ordinal);
+        Assert.False(context.IsTestProject);
+        Assert.Equal("BeforeHydration", context.RootNamespace);
+        Assert.Empty(context.GeneratedFriendAssemblies);
+        Assert.Empty(context.EmittedFiles);
+        Assert.Null(probe.Observation);
+    }
+
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("no-inputs")]
+    [InlineData("referenced-only")]
+    public async Task Validate_ModernProjectIdentitySupportsSourceSetsWithoutOwnAnchor(string sourceSet)
+    {
+        Fixture fixture = this.CreateFixture(legacy: false, rootProject: true);
+        ValidationManifest original = ValidationManifest.Read(Path.GetDirectoryName(fixture.ManifestPath));
+        Assert.NotNull(original);
+        if (sourceSet == "no-inputs")
+        {
+            File.Delete(Path.Combine(fixture.Source, "Program.cs"));
+            File.Delete(Path.Combine(fixture.Source, "Strings.resx"));
+        }
+
+        CorpusApp app = RepositoryDiscovery.Discover(fixture.Source).Single(app => app.Id == fixture.AppId);
+        var capture = new StageExecutionContext(
+            app, new PipelineOptions { SourceRoot = fixture.Source },
+            new GscInvoker(Compiler()), fixture.Migrated,
+            new TriageBuilder("capture", "ts", "gsc", app.Id));
+        capture.IsTestProject = true;
+        if (sourceSet == "referenced-only")
+        {
+            ValidationManifestFile file = Assert.Single(original.EmittedFiles, file => file.FromReferencedProject);
+            capture.EmittedFiles.Add(new EmittedGsFile(
+                Path.Combine(fixture.Migrated, file.Path), file.RelativeGsPath, file.CsFilePath, "package Fixture\n")
+            {
+                IsFromReferencedProject = true,
+            });
+        }
+
+        ValidationManifest.Write(
+            ValidationManifest.Capture(capture, translated: true, fixture.Migrated),
+            Path.GetDirectoryName(fixture.ManifestPath));
+        ValidationManifest manifest = ValidationManifest.Read(Path.GetDirectoryName(fixture.ManifestPath));
+        Assert.NotNull(manifest);
+        Console.WriteLine(sourceSet + " captured modern source identity: " + JsonSerializer.Serialize(manifest));
+
+        Observation replay = await this.Validate(fixture, fixture.Source);
+        var hydrated = new StageExecutionContext(
+            app, capture.Options, capture.Gsc, fixture.Migrated,
+            new TriageBuilder("hydrate", "ts", "gsc", app.Id));
+        manifest.Hydrate(hydrated, fixture.Migrated);
+
+        Assert.Equal(fixture.Source, manifest.SourceRoot);
+        Assert.Equal("Own.csproj", manifest.SourceProjectPath);
+        Assert.Equal(sourceSet == "referenced-only" ? 1 : 0, replay.Files.Count);
+        Assert.Equal(replay.Files.Count, hydrated.EmittedFiles.Count);
+        Assert.True(hydrated.IsTestProject);
+        Assert.Equal(0, replay.Facts);
+        Assert.Equal(TimeSpan.FromMinutes(10), replay.Budget);
+        Assert.Equal(replay.Facts, TestParityStage.CountCSharpFactMethods(hydrated));
+        Assert.Equal(replay.Budget, SdkCompileRunner.MirroredTestRunTimeoutFor(replay.Facts));
+        if (sourceSet == "referenced-only")
+        {
+            EmittedGsFile file = Assert.Single(replay.Files);
+            Assert.True(file.IsFromReferencedProject);
+            Assert.Equal(Path.Combine(fixture.Source, "src", "Lib", "Tests.cs"), file.CsFilePath);
+            Assert.Contains("Case899", File.ReadAllText(file.CsFilePath), StringComparison.Ordinal);
+        }
+
+        manifest.SourceRoot = null;
+        manifest.SourceProjectPath = null;
+        foreach (ValidationManifestFile file in manifest.EmittedFiles)
+        {
+            file.RelativeCsPath = null;
+        }
+
+        ValidationManifest.Write(manifest, Path.GetDirectoryName(fixture.ManifestPath));
+        var probe = new SourceEvidenceStage();
+        Exception legacyError = await Record.ExceptionAsync(() => this.Validate(fixture, fixture.Source, probe));
+        Assert.True(
+            legacyError is InvalidOperationException,
+            $"Legacy {sourceSet} replay reached validation with {probe.Observation?.Files.Count} files, " +
+            $"{probe.Observation?.Facts} Facts and {probe.Observation?.Budget} budget.");
+        Assert.Contains("unambiguous owning corpus source root", legacyError.Message, StringComparison.Ordinal);
         Assert.Null(probe.Observation);
     }
 

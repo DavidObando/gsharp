@@ -260,6 +260,12 @@ public sealed class ValidationManifest
         string producingRoot = this.SourceRoot;
         if (producingRoot is not null)
         {
+            if (string.IsNullOrWhiteSpace(producingRoot))
+            {
+                throw new InvalidOperationException(
+                    "Validation manifest requires a non-empty producing corpus source root.");
+            }
+
             string projectPath = ResolveWithinRoot(sourceRoot, this.SourceProjectPath);
             if (!string.Equals(
                 projectPath,
