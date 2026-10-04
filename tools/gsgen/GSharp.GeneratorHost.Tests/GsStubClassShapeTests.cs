@@ -36,6 +36,12 @@ public class GsStubClassShapeTests
     [InlineData("partial class Target {}", "abstract partial class Target { func Visit() int32 { return 1 } }", true, false, MethodAttributes.Family, false)]
     [InlineData("open partial class Target {}", "open partial class Target { open func Visit() int32; }", true, false, MethodAttributes.Public, false)]
     [InlineData("open partial class Target {}", "", false, false, MethodAttributes.Public, true)]
+    [InlineData("open partial data class Target {}", "", false, false, MethodAttributes.Public, true)]
+    [InlineData("open partial data class Target {}", "", false, false, MethodAttributes.Public, false)]
+    [InlineData("abstract partial data class Target {}", "", true, false, MethodAttributes.Family, false)]
+    [InlineData("open partial data class Target { open func Visit() int32; }", "", true, false, MethodAttributes.Public, false)]
+    [InlineData("open class Base {}\nopen partial data class Target : Base {}", "", false, false, MethodAttributes.Public, true)]
+    [InlineData("open class Base {}\nopen partial data class Target : Base {}", "", false, false, MethodAttributes.Public, false)]
     public void LoadedGenerator_ObservesSemanticAbstractness_AndGeneratedPartPreservesEmittedShape(
         string declaration,
         string secondPart,
@@ -53,7 +59,7 @@ public class GsStubClassShapeTests
         Assert.DoesNotContain(gs.GlobalScope.Diagnostics.Concat(gs.BoundProgram.Diagnostics), diagnostic => diagnostic.IsError);
         var target = Assert.Single(gs.GlobalScope.Structs, type => type.Name == "Target");
         Assert.Equal(expectedAbstract, target.IsAbstract);
-        AssertEmittedShape(gs, expectedAbstract, expectedStatic, expectedConstructorAccess);
+        AssertEmittedShape(gs, expectedAbstract, expectedStatic, expectedConstructorAccess, expectedData: target.IsData);
 
         var workspace = Directory.CreateTempSubdirectory("gsgen_abstract_shape_").FullName;
         try
@@ -62,6 +68,17 @@ public class GsStubClassShapeTests
             // depend on the test assembly still being C# after self-migration.
             var generatorPath = Path.Combine(workspace, "AbstractShapeGenerator.dll");
             CompileShapeGenerator(generatorPath, generatedAbstract);
+            string stub = GsToCSharpProjection.ProjectToCSharp(gs);
+            var nativeRun = GeneratorRunner.RunFromAnalyzerPaths(
+                stub,
+                CSharpProjectLoader.RuntimeReferences(),
+                new[] { generatorPath });
+            Assert.Empty(nativeRun.Failures);
+            var native = BindStub(stub).AddSyntaxTrees(nativeRun.Documents
+                .Select(document => CSharpSyntaxTree.ParseText(document.SourceText)));
+            using var nativeImage = new MemoryStream();
+            var nativeEmit = native.Emit(nativeImage);
+            Assert.True(nativeEmit.Success, string.Join("\n", nativeEmit.Diagnostics));
             var result = GeneratorHostRunner.RunFromAnalyzerPaths(
                 gs,
                 CSharpProjectLoader.RuntimeReferences(),
@@ -76,6 +93,11 @@ public class GsStubClassShapeTests
             var expectedRoslynAbstract = expectedAbstract && !expectedStatic;
             Assert.Equal($"App.Target|abstract={expectedRoslynAbstract}|static={expectedStatic}", observation.GetMessage());
             var expectedConstructors = expectedStatic ? string.Empty : ConstructorAccessName(expectedConstructorAccess) + "()";
+            if (target.IsData && native.GetTypeByMetadataName("App.Target").IsRecord)
+            {
+                expectedConstructors = string.Join(";", new[] { expectedConstructors, "Protected(Target)" }
+                    .OrderBy(signature => signature, StringComparer.Ordinal));
+            }
             var constructors = Assert.Single(result.GeneratorDiagnostics, diagnostic => diagnostic.Id == "GSCTOR001");
             Assert.Equal($"App.Target|constructors={expectedConstructors}", constructors.GetMessage());
             var generated = Assert.Single(result.GeneratedGsFiles);
@@ -86,12 +108,16 @@ public class GsStubClassShapeTests
                 IsLibrary = true,
             };
             Assert.DoesNotContain(combined.GlobalScope.Diagnostics.Concat(combined.BoundProgram.Diagnostics), diagnostic => diagnostic.IsError);
+            var combinedTarget = Assert.Single(combined.GlobalScope.Structs, type => type.Name == "Target");
+            Assert.Equal(target.IsData, combinedTarget.IsData);
             AssertEmittedShape(
                 combined,
                 expectedAbstract || generatedAbstract,
                 expectedStatic,
                 generatedAbstract ? MethodAttributes.Family : expectedConstructorAccess,
-                expectedRoslynAbstract);
+                expectedRoslynAbstract,
+                target.IsData);
+            Assert.Equal(expectedAbstract || generatedAbstract, combinedTarget.IsAbstract);
         }
         finally
         {
@@ -205,7 +231,8 @@ class Plain {
         bool expectedAbstract,
         bool expectedSealed,
         MethodAttributes expectedConstructorAccess,
-        bool? observedAbstract = null)
+        bool? observedAbstract = null,
+        bool expectedData = false)
     {
         using var pe = new MemoryStream();
         var emit = compilation.Emit(pe);
@@ -218,8 +245,16 @@ class Plain {
             var type = Assert.Single(assembly.GetTypes(), type => type.FullName == "App.Target");
             Assert.Equal(expectedAbstract, type.IsAbstract);
             Assert.Equal(expectedSealed, type.IsSealed);
-            var constructor = Assert.Single(type.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance));
+            var constructors = type.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.Equal(expectedData ? 2 : 1, constructors.Length);
+            var constructor = Assert.Single(constructors, candidate => candidate.GetParameters().Length == 0);
             Assert.Equal(expectedConstructorAccess, constructor.Attributes & MethodAttributes.MemberAccessMask);
+            if (expectedData)
+            {
+                var copy = Assert.Single(constructors, candidate => candidate.GetParameters().Length == 1);
+                Assert.Equal(type, Assert.Single(copy.GetParameters()).ParameterType);
+                Assert.Equal(MethodAttributes.Family, copy.Attributes & MethodAttributes.MemberAccessMask);
+            }
             if (observedAbstract.HasValue)
             {
                 var property = type.GetProperty("ObservedAbstract", BindingFlags.Public | BindingFlags.Static);
@@ -321,7 +356,7 @@ class Plain {
                         var name = symbol.Name + (symbol.TypeParameters.Length == 0
                             ? "" : "<" + string.Join(", ", symbol.TypeParameters.Select(parameter => parameter.Name)) + ">");
                         output.AddSource("Target.g.cs",
-                            "namespace App { public " + modifier + "partial class " + name + " { " +
+                            "namespace App { public " + modifier + "partial " + (symbol.IsRecord ? "record " : "class ") + name + " { " +
                             "public static bool ObservedAbstract => " +
                             (symbol.IsAbstract ? "true" : "false") + "; " +
                             "public static string ObservedConstructors => \"" + constructors + "\"; } }");
