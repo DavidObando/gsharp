@@ -50,6 +50,15 @@ def make_tree(root: Path, core_sdk: str = GENERATED) -> Path:
 
 def nupkg(path: Path, entries: dict[str, bytes]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Synthetic ZIP fixtures need honest package metadata for identity admission.
+    if path.suffix == ".nupkg" and not any(name.endswith(".nuspec") for name in entries):
+        package_id = next((name for name in (packer.SDK_ID, packer.ANALYZER_VERIFIER_ID)
+                           if path.name.startswith(name + ".")), None)
+        if package_id is not None:
+            version = path.name[len(package_id) + 1:-len(".nupkg")]
+            entries = {**entries, package_id + ".nuspec": (
+                f"<package><metadata><id>{package_id}</id><version>{version}</version>"
+                "</metadata></package>").encode()}
     with zipfile.ZipFile(path, "w") as archive:
         for name, data in entries.items():
             archive.writestr(name, data)
@@ -1140,6 +1149,173 @@ class RevisionVersionTests(unittest.TestCase):
             self.assertEqual(["1.2.3.4"], report["requiredAnalyzerVerifierVersions"])
             self.assertEqual(["GSharp.CodeAnalysis.Analyzers.Testing.1.2.3.4.nupkg"], report["missingSiblings"])
             self.assertNotIn("stagedPackages", report)
+
+
+class NuGetIdentityTests(unittest.TestCase):
+    def prepare(self, tree: Path, bootstrap: Path, out: Path) -> tuple[int, dict]:
+        return NormalizationRetryTests.prepare(self, tree, bootstrap, out)
+
+    def package(self, path: Path, package_id: str, version: str, data: bytes = b"fixture") -> Path:
+        return nupkg(path, {"x": data, package_id + ".nuspec": (
+            f"<package><metadata><id>{package_id}</id><version>{version}</version>"
+            "</metadata></package>").encode()})
+
+    def reference(self, tree: Path, versions: list[str]) -> None:
+        body = "".join(f'<PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" Version="{v}" />'
+                       for v in versions)
+        write(tree / "test/Verifier.gsproj", f"<Project><ItemGroup>{body}</ItemGroup></Project>")
+
+    def test_supported_identity_matches_sdk_nuget_versioning_domain(self) -> None:
+        for literal, identity in (
+            ("1.2.3", "1.2.3"), ("01.002.0003", "1.2.3"),
+            ("1.2.3.0", "1.2.3"), ("01.02.003.000", "1.2.3"),
+            ("1.2.3.4", "1.2.3.4"), ("1.2.3.0-BETA.1", "1.2.3-beta.1"),
+            ("1.2.3-a-01", "1.2.3-a-01"), ("1.2.3-01a", "1.2.3-01a"),
+            ("2147483647.1.2", "2147483647.1.2"),
+        ):
+            with self.subTest(literal=literal):
+                self.assertEqual(identity, packer.nuget_version(literal))
+        for literal in ("1.2", "1.2.3+metadata", "1.2.3-alpha.01", "2147483648.1.2",
+                        "$(Version)", "[1.2.3,2.0.0)", "1.2.3.4.5"):
+            with self.subTest(literal=literal), self.assertRaises(packer.SelfHostError):
+                packer.nuget_version(literal)
+
+    def test_real_main_accepts_canonical_zero_revision_and_retains_requested_literals(self) -> None:
+        for sdk_version, verifier_version, sdk_filename, verifier_filename in (
+            ("1.0.0", "3.4.5.0", "1.0.0", "3.4.5"),
+            ("3.4.5.0", "3.4.5.0", "3.4.5", "3.4.5"),
+            ("01.02.003.000", "03.004.0005.000", "1.2.3", "3.4.5"),
+            ("1.0.0", "3.4.5.0-BETA", "1.0.0", "3.4.5-beta"),
+        ):
+            with self.subTest(sdk=sdk_version, verifier=verifier_version), (
+                tempfile.TemporaryDirectory()) as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                self.reference(tree, [verifier_version])
+                bootstrap = self.package(root / f"feed/{packer.SDK_ID}.{sdk_filename}.nupkg",
+                                         packer.SDK_ID, sdk_version)
+                sibling = self.package(root / f"feed/{packer.ANALYZER_VERIFIER_ID}.{verifier_filename}.nupkg",
+                                       packer.ANALYZER_VERIFIER_ID, verifier_version)
+                code, report = self.prepare(tree, bootstrap, root / "out")
+                self.assertEqual(0, code, report)
+                self.assertEqual(sdk_version, report["bootstrapVersion"])
+                self.assertEqual(sdk_version.split("-", 1)[0] + "-stage1", report["stage1Version"])
+                self.assertEqual([verifier_version], report["requiredAnalyzerVerifierVersions"])
+                self.assertEqual([], report["missingSiblings"])
+                self.assertEqual([bootstrap.name, sibling.name], [p["package"] for p in report["stagedPackages"]])
+                self.assertEqual(sdk_version, json.loads((tree / "global.json").read_text())["msbuild-sdks"][packer.SDK_ID])
+                self.assertEqual(sibling.read_bytes(), (tree / ".nugs" / sibling.name).read_bytes())
+                code, repeated = self.prepare(tree, bootstrap, root / "repeat")
+                self.assertEqual(0, code, repeated)
+                self.assertEqual([], repeated["rewrittenPins"])
+                self.assertFalse(repeated["globalJsonUpdated"])
+
+    def test_real_main_rejects_stage1_equivalent_identity_before_mutating_tree(self) -> None:
+        import contextlib
+        for bootstrap_version, stage1 in (
+            ("1.2.3", "1.2.3.0"), ("1.2.3.0", "01.02.003"),
+            ("1.2.3-BETA", "1.2.3.0-beta"), ("01.02.003.0-BETA.1", "1.2.3-beta.1"),
+        ):
+            with self.subTest(bootstrap=bootstrap_version, stage1=stage1), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                before = {p.relative_to(tree): p.read_bytes() for p in tree.rglob("*") if p.is_file()}
+                bootstrap = nupkg(root / f"feed/{packer.SDK_ID}.{bootstrap_version}.nupkg", {"x": b"fixture"})
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    code = packer.main(["--tree", str(tree), "--bootstrap", str(bootstrap),
+                                        "--version", stage1, "--out", str(root / "out"), "--prepare-only"])
+                report = json.loads((root / "out/work/stage1-report.json").read_text())
+                self.assertEqual(1, code, report)
+                self.assertIn("must differ", report.get("error", ""))
+                self.assertEqual(before, {p.relative_to(tree): p.read_bytes() for p in tree.rglob("*") if p.is_file()})
+
+    def test_real_main_rejects_filename_or_id_metadata_mismatch(self) -> None:
+        for package_id, metadata_id, metadata_version in (
+            (packer.SDK_ID, packer.SDK_ID, "1.2.3.4"),
+            (packer.SDK_ID, "Other.Package", "1.2.3"),
+            (packer.ANALYZER_VERIFIER_ID, packer.ANALYZER_VERIFIER_ID, "1.2.3.4"),
+            (packer.ANALYZER_VERIFIER_ID, "Other.Package", "1.2.3"),
+        ):
+            with self.subTest(package_id=package_id, metadata=metadata_version, id=metadata_id), (
+                tempfile.TemporaryDirectory()) as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                self.reference(tree, ["1.2.3"])
+                bootstrap = nupkg(root / f"feed/{packer.SDK_ID}.1.2.3.nupkg", {"x": b"sdk"})
+                target = root / f"feed/{package_id}.1.2.3.nupkg"
+                self.package(target, metadata_id, metadata_version)
+                code, report = self.prepare(tree, bootstrap, root / "out")
+                self.assertEqual(1, code, report)
+                self.assertTrue(report.get("error"), report)
+                self.assertIn("nuspec", report["error"])
+                self.assertNotIn("stagedPackages", report)
+                if package_id == packer.SDK_ID:
+                    self.assertIn(b"Gsharp.NET.Sdk/0.4.1129", (tree / packer.CORE_PROJECT).read_bytes())
+                else:
+                    self.assertEqual(["src/Compiler/Compiler.gsproj", packer.SDK_PROJECT.as_posix(),
+                                      packer.CORE_PROJECT.as_posix()], report["rewrittenPins"])
+
+    def test_real_main_rejects_byte_different_equivalent_input_archives(self) -> None:
+        for package_id in (packer.SDK_ID, packer.ANALYZER_VERIFIER_ID):
+            with self.subTest(package_id=package_id), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                self.reference(tree, ["1.2.3"])
+                bootstrap = nupkg(root / f"feed/{packer.SDK_ID}.1.2.3.nupkg", {"x": b"sdk"})
+                nupkg(root / f"feed/{package_id}.1.2.3.nupkg", {"x": b"first"})
+                nupkg(root / f"feed/{package_id}.01.02.003.0.nupkg", {"x": b"other"})
+                code, report = self.prepare(tree, bootstrap, root / "out")
+                self.assertEqual(1, code, report)
+                self.assertIn("ambiguous", report.get("error", ""))
+                self.assertNotIn("stagedPackages", report)
+
+    def test_real_main_equivalent_references_and_identical_aliases_stage_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            versions = ["3.4.5.0", "03.004.0005.000", "3.4.5"]
+            self.reference(tree, versions)
+            bootstrap = nupkg(root / f"feed/{packer.SDK_ID}.1.0.0.nupkg", {"x": b"sdk"})
+            sibling = nupkg(root / f"feed/{packer.ANALYZER_VERIFIER_ID}.3.4.5.nupkg", {"x": b"verifier"})
+            alias = sibling.with_name(f"{packer.ANALYZER_VERIFIER_ID}.3.4.5.0.nupkg")
+            alias.write_bytes(sibling.read_bytes())
+            code, report = self.prepare(tree, bootstrap, root / "out")
+            self.assertEqual(0, code, report)
+            self.assertEqual(sorted(versions), report["requiredAnalyzerVerifierVersions"])
+            self.assertEqual([bootstrap.name, sibling.name], [p["package"] for p in report["stagedPackages"]])
+            self.assertFalse((tree / ".nugs" / alias.name).exists())
+
+    def test_real_main_detects_differing_alias_already_in_feed_without_publishing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            self.reference(tree, ["3.4.5.0"])
+            bootstrap = nupkg(root / f"feed/{packer.SDK_ID}.1.0.0.nupkg", {"x": b"sdk"})
+            sibling = nupkg(root / f"feed/{packer.ANALYZER_VERIFIER_ID}.3.4.5.nupkg", {"x": b"verifier"})
+            alias = nupkg(tree / f".nugs/{packer.ANALYZER_VERIFIER_ID}.3.4.5.0.nupkg", {"x": b"conflicting"})
+            before = alias.read_bytes()
+            code, report = self.prepare(tree, bootstrap, root / "out")
+            self.assertEqual(1, code, report)
+            self.assertIn("ambiguous", report.get("error", ""))
+            self.assertEqual(before, alias.read_bytes())
+            self.assertFalse((tree / ".nugs" / sibling.name).exists())
+            self.assertEqual([bootstrap.name], [p["package"] for p in report["stagedPackages"]])
+
+    def test_produced_filename_is_normalized_but_stamped_literal_is_retained(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            produced = nupkg(root / f"{packer.SDK_ID}.0.4.0-g.nupkg", {"x": b"producer fixture"})
+            nupkg(produced.with_suffix(".snupkg"), {
+                packer.SDK_ID + ".nuspec": b"<package><metadata><version>0.4.0-g</version></metadata></package>"})
+            stamped = packer.reversion(produced, "03.004.0005.000-BETA")
+            self.assertEqual(f"{packer.SDK_ID}.3.4.5-beta.nupkg", stamped.name)
+            self.assertTrue(stamped.with_suffix(".snupkg").exists())
+            with zipfile.ZipFile(stamped) as archive:
+                self.assertIn(b"<version>03.004.0005.000-BETA</version>", archive.read(packer.SDK_ID + ".nuspec"))
+            bootstrap = nupkg(root / f"{packer.SDK_ID}.1.2.3.nupkg", complete_payload(".cs"))
+            alias = nupkg(root / f"{packer.SDK_ID}.01.02.003.0.nupkg", complete_payload(".gs"))
+            with self.assertRaisesRegex(packer.SelfHostError, "must differ"):
+                packer.verify(alias, bootstrap)
 
 
 class VersionTests(unittest.TestCase):
