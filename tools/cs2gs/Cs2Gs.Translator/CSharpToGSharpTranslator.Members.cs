@@ -900,6 +900,26 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                 }
 
+                // Issue #4684: gsc gives a bare, non-nullable `[]T` instance field of a
+                // class a synthesized zero value (ADR-0159): a fresh zero-length array
+                // allocated in every constructor prologue, BEFORE the constructor body
+                // assigns the real value. C# leaves such a field null, so the migrated
+                // type allocated 24 extra bytes per instance (the redundant array made
+                // `ManagedLocationKey` 64 bytes instead of 40, tripping the array-location
+                // allocation bound under self-host stage 2). Cache the empty value
+                // only when every constructor overwrites it
+                // before observation; otherwise its fresh identity must be retained.
+                if (initializer == null
+                    && binding != BindingKind.Const
+                    && symbol is { IsStatic: false }
+                    && symbol.ContainingType?.TypeKind == TypeKind.Class
+                    && type is ArrayTypeReference { Rank: 1, IsNullable: false } emptyArrayType
+                    && CanUseCachedEmptyArray(emptyArrayType.ElementType)
+                    && this.IsArrayFieldOverwrittenBeforeObservation(symbol))
+                {
+                    initializer = MakeArrayEmptyInvocation(emptyArrayType.ElementType);
+                }
+
                 var declaration = new FieldDeclaration(
                     binding,
                     this.EmittedName(symbol, declarator.Identifier.ValueText),
