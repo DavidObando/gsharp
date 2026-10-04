@@ -1187,6 +1187,7 @@ internal static class ObliviousNullabilityAnalyzer
         HashSet<ScalarQuery> scalarVisited,
         HashSet<TupleElementQuery> tupleVisited)
     {
+        symbol = OwningMember(symbol);
         if (!CanPromoteTuplePosition(compilation, symbol, path))
         {
             return false;
@@ -1199,6 +1200,16 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         TaintResult result = Cache.GetValue(compilation, Compute);
+        if (IsTupleContractFixedCore(
+                compilation,
+                symbol,
+                path,
+                siblingCompilations,
+                new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance)))
+        {
+            return false;
+        }
+
         if (result.TupleTainted.Contains(key))
         {
             return true;
@@ -1252,6 +1263,57 @@ internal static class ObliviousNullabilityAnalyzer
                         siblingCompilations,
                         scalarVisited,
                         tupleVisited))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsTupleContractFixedCore(
+        CSharpCompilation compilation,
+        ISymbol symbol,
+        string path,
+        IReadOnlyList<CSharpCompilation> siblingCompilations,
+        HashSet<TupleElementQuery> visited)
+    {
+        symbol = OwningMember(symbol);
+        var key = new TupleElementKey(symbol, path);
+        if (!visited.Add(new TupleElementQuery(compilation, key)))
+        {
+            return false;
+        }
+
+        TaintResult result = Cache.GetValue(compilation, Compute);
+        if (result.FixedTupleContracts.Contains(key))
+        {
+            return true;
+        }
+
+        foreach ((TupleElementKey target, TupleElementKey source) in result.TupleContractEdges)
+        {
+            if (TupleElementKeyComparer.Instance.Equals(target, key)
+                && IsTupleContractFixedCore(
+                    compilation, source.ContractSymbol, source.ContractPath, siblingCompilations, visited))
+            {
+                return true;
+            }
+        }
+
+        if (siblingCompilations != null)
+        {
+            foreach (CSharpCompilation sibling in siblingCompilations)
+            {
+                if (sibling == null || ReferenceEquals(sibling, compilation))
+                {
+                    continue;
+                }
+
+                ISymbol remapped = RemapToCompilation(sibling, symbol);
+                if (remapped != null
+                    && IsTupleContractFixedCore(sibling, remapped, path, siblingCompilations, visited))
                 {
                     return true;
                 }
@@ -2177,6 +2239,8 @@ internal static class ObliviousNullabilityAnalyzer
         return new TaintResult(
             tainted,
             tupleTainted,
+            fixedTupleContracts,
+            tupleContractEdges,
             tupleEdges,
             tupleScalarEdges,
             scalarTupleEdges,
@@ -4006,6 +4070,19 @@ internal static class ObliviousNullabilityAnalyzer
             }
         }
 
+        if (symbol is IPropertySymbol partialProperty)
+        {
+            if (partialProperty.PartialDefinitionPart != null)
+            {
+                yield return partialProperty.PartialDefinitionPart;
+            }
+
+            if (partialProperty.PartialImplementationPart != null)
+            {
+                yield return partialProperty.PartialImplementationPart;
+            }
+        }
+
         if (symbol is not (IMethodSymbol or IPropertySymbol))
         {
             yield break;
@@ -4649,6 +4726,17 @@ internal static class ObliviousNullabilityAnalyzer
                         SymbolValueType(property),
                         positionalParameter,
                         SymbolValueType(positionalParameter),
+                        tupleTainted,
+                        tupleEdges);
+                }
+
+                if (property.PartialImplementationPart is IPropertySymbol implementation)
+                {
+                    AddTupleContractPair(
+                        property,
+                        SymbolValueType(property),
+                        implementation,
+                        SymbolValueType(implementation),
                         tupleTainted,
                         tupleEdges);
                 }
@@ -6118,6 +6206,8 @@ internal static class ObliviousNullabilityAnalyzer
         public TaintResult(
             HashSet<ISymbol> tainted,
             HashSet<TupleElementKey> tupleTainted,
+            HashSet<TupleElementKey> fixedTupleContracts,
+            List<(TupleElementKey Target, TupleElementKey Source)> tupleContractEdges,
             List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
             List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges,
             List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges,
@@ -6127,6 +6217,8 @@ internal static class ObliviousNullabilityAnalyzer
         {
             this.Tainted = tainted;
             this.TupleTainted = tupleTainted;
+            this.FixedTupleContracts = fixedTupleContracts;
+            this.TupleContractEdges = tupleContractEdges;
             this.TupleEdges = tupleEdges;
             this.TupleScalarEdges = tupleScalarEdges;
             this.ScalarTupleEdges = scalarTupleEdges;
@@ -6138,6 +6230,10 @@ internal static class ObliviousNullabilityAnalyzer
         public HashSet<ISymbol> Tainted { get; }
 
         public HashSet<TupleElementKey> TupleTainted { get; }
+
+        public HashSet<TupleElementKey> FixedTupleContracts { get; }
+
+        public List<(TupleElementKey Target, TupleElementKey Source)> TupleContractEdges { get; }
 
         public List<(TupleElementKey Target, TupleElementKey Source)> TupleEdges { get; }
 

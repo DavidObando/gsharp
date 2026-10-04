@@ -2782,6 +2782,7 @@ public sealed partial class CSharpToGSharpTranslator
             bool operatorInput = false)
         {
             bool convertsValue = false;
+            bool resultAcceptsNil = !operatorInput && this.BranchResultAcceptsNil(value, out _);
             IMethodSymbol conversionOperator = operatorInput
                 ? null
                 : this.GetUserDefinedConversionInputOperator(value, targetType, out convertsValue);
@@ -2803,7 +2804,9 @@ public sealed partial class CSharpToGSharpTranslator
                         value, translated, parameter.Type, parameter, includePromotedValue, operatorInput: true),
                     parameter,
                     parameter.Type);
-                if (convertsValue && this.TargetWillRemainNonNullableReference(targetType, targetSymbol))
+                if (convertsValue
+                    && !resultAcceptsNil
+                    && this.TargetWillRemainNonNullableReference(targetType, targetSymbol))
                 {
                     GTypeReference resultType = this.MapDelegateLikeReturnType(
                         conversionOperator, isAsync: false, value.GetLocation());
@@ -2862,6 +2865,7 @@ public sealed partial class CSharpToGSharpTranslator
                     || (!this.IsObliviousCompilation()
                         && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull));
             if (translated is NonNullAssertionExpression
+                || resultAcceptsNil
                 || IsNullOrSuppressedNull(value)
                 || value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }

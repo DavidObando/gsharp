@@ -836,6 +836,23 @@ public sealed partial class CSharpToGSharpTranslator
         {
             Location location = expression.GetLocation();
             GTypeReference target = this.typeMapper.Map(targetType, this.context, location);
+            IMethodSymbol conversionOperator = this.GetUserDefinedConversionInputOperator(
+                expression, targetType, out bool convertsValue);
+            if (conversionOperator != null
+                && convertsValue
+                && this.BranchResultAcceptsNil(expression, out _))
+            {
+                GTypeReference convertedType = this.MapDelegateLikeReturnType(
+                    conversionOperator, isAsync: false, location);
+                GExpression converted = new ConversionExpression(convertedType, translated);
+                return SymbolEqualityComparer.Default.Equals(conversionOperator.ReturnType, targetType)
+                    ? converted
+                    : new ConversionExpression(
+                        convertedType.IsNullable ? MakeNullable(target) : target,
+                        converted,
+                        isCheckedReferenceCast: true);
+            }
+
             bool nullableValue =
                 translated is not NonNullAssertionExpression
                 && (this.context.GetTypeInfo(expression).Type?.NullableAnnotation == NullableAnnotation.Annotated

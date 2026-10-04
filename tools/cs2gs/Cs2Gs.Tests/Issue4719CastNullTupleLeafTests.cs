@@ -2479,6 +2479,405 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         Assert.Contains("func Read() (Value T?, Code int32)", printed);
     }
 
+    [Theory]
+    [InlineData("Sync", false, false)]
+    [InlineData("Sync", true, false)]
+    [InlineData("Sync", false, true)]
+    [InlineData("Sync", true, true)]
+    [InlineData("Iterator", false, false)]
+    [InlineData("Iterator", true, false)]
+    [InlineData("Iterator", false, true)]
+    [InlineData("Iterator", true, true)]
+    [InlineData("Task", false, false)]
+    [InlineData("Task", true, false)]
+    [InlineData("Task", false, true)]
+    [InlineData("Task", true, true)]
+    [InlineData("ValueTask", false, false)]
+    [InlineData("ValueTask", true, false)]
+    [InlineData("ValueTask", false, true)]
+    [InlineData("ValueTask", true, true)]
+    public void TupleContractBoundary_CoalescingConvertedArmsObserveNilBeforeTheStrictSink(
+        string envelope,
+        bool switchArm,
+        bool explicitConversion)
+    {
+        string fixture = this.EmitFixture();
+        string converted = explicitConversion ? "(MaybeBox)Value" : "Value";
+        string branch = switchArm
+            ? $"Choose(choose) switch {{ true => {converted}, false => new MaybeBox() }}"
+            : $"Choose(choose) ? {converted} : new MaybeBox()";
+        string value = $"({branch}) ?? Fallback()";
+        string tuple = "(MaybeBox Value, int Code)";
+        string method = envelope switch
+        {
+            "Sync" => $"public static {tuple} Rows(bool choose) => ({value}, 1);",
+            "Iterator" => $"public static IEnumerable<{tuple}> Rows(bool choose) {{ yield return ({value}, 1); }}",
+            _ => $"public static async {envelope}<{tuple}> Rows(bool choose) {{ await Task.Delay(1); return ({value}, 1); }}",
+        };
+        string consume = envelope switch
+        {
+            "Sync" => "valid = FrozenTupleContract.Accept(Rows(choose)) == 1;",
+            "Iterator" => "foreach (var row in Rows(choose)) { valid = FrozenTupleContract.Accept(row) == 1; }",
+            _ => "valid = FrozenTupleContract.Accept(Rows(choose).GetAwaiter().GetResult()) == 1;",
+        };
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Decisions;
+                public static int Reads;
+                public static int Fallbacks;
+                public static string Value { get { Reads++; return "x"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static MaybeBox Fallback() { Fallbacks++; return new MaybeBox(); }
+                {{method}}
+                public static bool Check(bool choose) {
+                    bool valid = false;
+                    {{consume}}
+                    return valid && Decisions == 1 && Reads == (choose ? 1 : 0)
+                        && Fallbacks == (choose ? 1 : 0) && Probe.Calls == (choose ? 1 : 0);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Decisions = Reads = Fallbacks = 0;
+                    bool missing = Check(true);
+                    Probe.Reset();
+                    Decisions = Reads = Fallbacks = 0;
+                    bool present = Check(false);
+                    Console.WriteLine(missing && present ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value MaybeBox,", printed);
+        Assert.DoesNotContain("Value MaybeBox?", printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractBoundary_ConvertedCoalescingArmRetainsItsWiderReferenceTarget(bool missing)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Decisions;
+                public static int Fallbacks;
+                public static ReferenceInput Value { get { Reads++; return new ReferenceInput({{(missing ? "true" : "false")}}); } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static ReferenceBase Fallback() { Fallbacks++; return new ReferenceBase(); }
+                public static (ReferenceBase Value, int Code) Row(bool choose) =>
+                    ((Choose(choose) ? Value : new ReferenceBase()) ?? Fallback(), 1);
+                public static bool Check(bool choose) {
+                    var row = Row(choose);
+                    return row.Value != null && row.Code == 1 && Decisions == 1
+                        && Reads == (choose ? 1 : 0) && Probe.Calls == (choose ? 1 : 0)
+                        && Fallbacks == (choose && {{(missing ? "true" : "false")}} ? 1 : 0);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Reads = Decisions = Fallbacks = 0;
+                    bool converted = Check(true);
+                    Probe.Reset();
+                    Reads = Decisions = Fallbacks = 0;
+                    Console.WriteLine(converted && Check(false) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value ReferenceBase,", printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractBoundary_CoalescingResultsKeepTheirOwnOperatorInputContract(bool strictInput)
+    {
+        string fixture = this.EmitFixture();
+        string box = strictInput ? "MaybeStrictInputBox<string>" : "NullAcceptingBox";
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Fallbacks;
+                public static string? Value { get { Reads++; return null; } }
+                public static {{box}} Fallback() { Fallbacks++; return new {{box}}(); }
+                public static ({{box}} Value, int Code) Row(bool choose) =>
+                    ((choose ? Value : new {{box}}()) ?? Fallback(), 1);
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Row(true).Value != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(Reads == 1 && {{(strictInput
+                        ? "asserted && Probe.Calls == 0 && Fallbacks == 0"
+                        : "!asserted && present && Probe.Calls == 1 && Fallbacks == 1")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToArray();
+        if (strictInput)
+        {
+            TranslationDiagnostic site = Assert.Single(sites);
+            Assert.Contains("target=MaybeStrictInputBox<string>.implicit operator", site.Message);
+            Assert.Contains("parameter 'value'", site.Message);
+            Assert.Contains("slot-type=string (NotAnnotated)", site.Message);
+        }
+        else
+        {
+            Assert.Empty(sites);
+            Assert.DoesNotContain("Value!!", printed);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public void TupleContractBoundary_GettersQueryTheirPropertyContract(bool indexer, bool arrow, bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string declaration = indexer
+            ? "public (NullableResultBox Value, int Code) this[int code]"
+            : "public (NullableResultBox Value, int Code) Row";
+        string value = indexer ? "(Value, code)" : "(Value, 1)";
+        string body = arrow ? $" => {value};" : $" {{ get {{ return {value}; }} }}";
+        string consume = indexer ? "rows[NextIndex()]" : "rows.Row";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public sealed class Rows {
+                public static int Reads;
+                public static string Input = "keep";
+                public string Value { get { Reads++; return Input; } }
+                #nullable {{(strict ? "enable" : "disable")}}
+                {{declaration}}{{body}}
+            }
+            #nullable disable
+            public static class Obj {
+                public static int Indices;
+                public static int NextIndex() { Indices++; return 1; }
+                public static bool Check(bool missing) {
+                    Probe.Reset();
+                    Rows.Reads = Indices = 0;
+                    Rows.Input = missing ? "miss" : "keep";
+                    var rows = new Rows();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        var row = {{consume}};
+                        nil = row.Value == null && row.Code == 1;
+                        if (row.Code != 1) { return false; }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = missing ? {{(strict ? "asserted" : "!asserted && nil")}} : !asserted && !nil;
+                    return valid && Probe.Calls == 1 && Rows.Reads == 1 && Indices == {{(indexer ? 1 : 0)}};
+                }
+                public static void Main() { Console.WriteLine(Check(true) && Check(false) ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value NullableResultBox," : "Value NullableResultBox?", printed);
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    public void TupleContractBoundary_PartialPropertyPreservesBothDeclarationContracts(
+        bool strictDefinition,
+        bool strictImplementation,
+        bool forwarded)
+    {
+        bool strict = strictDefinition || strictImplementation;
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static partial class Obj {
+                public static int Reads;
+                public static string Value { get { Reads++; return "x"; } }
+                #nullable {{(strictDefinition ? "enable" : "disable")}}
+                public static partial (MaybeBox Value, NullAcceptingBox? Optional, int Code) Row { get; }
+                #nullable {{(strictImplementation ? "enable" : "disable")}}
+                public static partial (MaybeBox Value, NullAcceptingBox? Optional, int Code) Row {
+                    get { return (Value, (string)null, 1); }
+                }
+                #nullable disable
+                {{(forwarded ? "public static (MaybeBox Value, NullAcceptingBox? Optional, int Code) Forward() => Row;" : string.Empty)}}
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        var row = {{(forwarded ? "Forward()" : "Row")}};
+                        nil = row.Value == null && row.Optional == null && row.Code == 1;
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(Reads == 1 && {{(strict
+                        ? "asserted && Probe.Calls == 1"
+                        : "!asserted && nil && Probe.Calls == 2")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value MaybeBox," : "Value MaybeBox?", printed);
+        Assert.Contains("Optional NullAcceptingBox?", printed);
+        if (forwarded)
+        {
+            Assert.Contains(strict ? "func Forward() (Value MaybeBox," : "func Forward() (Value MaybeBox?,", printed);
+        }
+    }
+
+    [Theory]
+    [InlineData("Task", false, false)]
+    [InlineData("Task", true, false)]
+    [InlineData("ValueTask", false, false)]
+    [InlineData("ValueTask", true, false)]
+    [InlineData("Task", false, true)]
+    [InlineData("Task", true, true)]
+    [InlineData("ValueTask", false, true)]
+    [InlineData("ValueTask", true, true)]
+    public void TupleContractBoundary_SiblingSourceComponentsShareNativeLocks(
+        string envelope,
+        bool nativeLock,
+        bool reverseOrder)
+    {
+        string fixture = this.EmitFixture();
+        string inherited = nativeLock ? $"RowsBase{envelope}, ISourceRows" : "ISourceRows";
+        string modifiers = nativeLock ? "public override async" : "public async";
+        // Issue #4772 tracks tuple-label metadata separately from the CLR leaf contract.
+        string[] sources =
+        {
+            $$"""
+                using System.Threading.Tasks;
+                using Issue4719Fixture;
+                public interface ISourceRows {
+                    {{envelope}}<(NullableResultBox Required, int Code)> Read(string value);
+                }
+                """,
+            $$"""
+                using System.Threading.Tasks;
+                using Issue4719Fixture;
+                public sealed class Locked : {{inherited}} {
+                    {{modifiers}} {{envelope}}<(NullableResultBox Required, int Code)> Read(string value) {
+                        await Task.Delay(1);
+                        return (value, 1);
+                    }
+                }
+                """,
+            $$"""
+                using System;
+                using System.Threading.Tasks;
+                using Issue4719Fixture;
+                public sealed class Other : ISourceRows {
+                    public async {{envelope}}<(NullableResultBox Required, int Code)> Read(string value) {
+                        await Task.Delay(1);
+                        return (value, 1);
+                    }
+                }
+                public static class Obj {
+                    public static void Main() {
+                        Probe.Reset();
+                        ISourceRows locked = new Locked();
+                        ISourceRows other = new Other();
+                        bool valid = locked.Read("keep").GetAwaiter().GetResult().Item1 != null
+                            && other.Read("keep").GetAwaiter().GetResult().Item1 != null && Probe.Calls == 2;
+                        Probe.Reset();
+                        bool nil = false;
+                        bool asserted = false;
+                        try { nil = other.Read("miss").GetAwaiter().GetResult().Item1 == null; }
+                        catch (NullReferenceException) { asserted = true; }
+                        Console.WriteLine(valid && {{(nativeLock ? "asserted" : "!asserted && nil")}}
+                            && Probe.Calls == 1 ? 15 : -1);
+                    }
+                }
+                """,
+        };
+        Directory.CreateDirectory(Path.Combine(this.fixtureDirectory, "csharp"));
+        var projects = new LoadedCSharpProject[sources.Length];
+        var sourceReferences = new[] { MetadataReference.CreateFromFile(fixture) }.Cast<MetadataReference>().ToList();
+        for (int i = 0; i < sources.Length; i++)
+        {
+            string name = "Sibling" + i + Guid.NewGuid().ToString("N");
+            projects[i] = CSharpProjectLoader.LoadInMemory(
+                new[] { (name + ".cs", sources[i]) },
+                CSharpProjectLoader.RuntimeReferences().Concat(sourceReferences).ToArray(),
+                name);
+            Assert.True(projects[i].BoundWithoutErrors, string.Join(Environment.NewLine, projects[i].ErrorDiagnostics));
+            string assembly = Path.Combine(this.fixtureDirectory, "csharp", name + ".dll");
+            var emitted = projects[i].Compilation.Emit(assembly);
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+            sourceReferences.Add(MetadataReference.CreateFromFile(assembly));
+        }
+
+        var siblings = projects.Select(project => project.Compilation).ToArray();
+        if (reverseOrder)
+        {
+            Array.Reverse(siblings);
+        }
+
+        string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
+        var translatedReferences = new[] { fixture }.ToList();
+        var printedProjects = new string[projects.Length];
+        for (int i = 0; i < projects.Length; i++)
+        {
+            LoadedDocument document = Assert.Single(projects[i].Documents);
+            var context = new TranslationContext(
+                projects[i].Compilation, document.SemanticModel, document.FilePath, siblings);
+            string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+            printedProjects[i] = printed;
+            string assembly = Path.Combine(this.fixtureDirectory, projects[i].Compilation.AssemblyName + ".dll");
+            string source = Path.ChangeExtension(assembly, ".gs");
+            File.WriteAllText(source, printed);
+            var arguments = new[]
+            {
+                compiler, i == projects.Length - 1 ? "/target:exe" : "/target:library",
+                "/targetframework:net10.0", $"/assemblyname:{projects[i].Compilation.AssemblyName}",
+                $"/out:{assembly}", source,
+            }.Concat(translatedReferences.Select(reference => "/reference:" + reference)).ToArray();
+            var compiled = RunDotnet(arguments);
+            Assert.True(compiled.Exit == 0, printed + Environment.NewLine + compiled.Output);
+            Assert.True(IlVerifyRunner.IsEnabled);
+            IlVerifyResult verified = new IlVerifyRunner().Verify(assembly, translatedReferences);
+            Assert.True(verified.Status == IlVerifyStatus.Passed, verified.Output);
+            Assert.Empty(verified.Errors);
+            translatedReferences.Add(assembly);
+        }
+
+        string program = translatedReferences.Last();
+        File.WriteAllText(
+            Path.ChangeExtension(program, ".runtimeconfig.json"),
+            "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}");
+        var executed = RunDotnet(program);
+        Assert.True(executed.Exit == 0, executed.Output);
+        Assert.True(
+            executed.Output == "15" + Environment.NewLine,
+            string.Join(Environment.NewLine, printedProjects) + Environment.NewLine + executed.Output);
+        Assert.NotEmpty(printedProjects);
+        Assert.All(printedProjects, printed =>
+            Assert.Contains(nativeLock ? "Required NullableResultBox," : "Required NullableResultBox?", printed));
+    }
+
     public void Dispose()
     {
         try
@@ -2539,6 +2938,16 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                 #nullable enable
                     public sealed class MaybeBox {
                         public static implicit operator MaybeBox?(string value) { Probe.Calls++; return null; }
+                    }
+                    public class ReferenceBase { }
+                    public sealed class DerivedReference : ReferenceBase { }
+                    public sealed class ReferenceInput {
+                        public ReferenceInput(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator DerivedReference?(ReferenceInput value) {
+                            Probe.Calls++;
+                            return value.Missing ? null : new DerivedReference();
+                        }
                     }
                     public sealed class NullableResultBox {
                         public static implicit operator NullableResultBox?(string value) {
