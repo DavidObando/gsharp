@@ -1645,8 +1645,11 @@ internal sealed partial class MethodBodyEmitter
         this.il.Branch(ILOpCode.Br, end);
 
         this.il.MarkLabel(nullBranch);
-        if (NullableLifting.IsAnyValueTypeNullable(targetNullable))
+        if (NullableLifting.IsAnyValueTypeNullable(targetNullable)
+            || targetNullable.UnderlyingType is TypeParameterSymbol)
         {
+            // A class-constrained type parameter still needs a typed default
+            // at the join, just as in EmitDefault (#814).
             this.il.LoadLocalAddress(resultSlot);
             this.il.OpCode(ILOpCode.Initobj);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(targetNullable));

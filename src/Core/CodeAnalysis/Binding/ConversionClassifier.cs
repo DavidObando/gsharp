@@ -4025,7 +4025,7 @@ internal sealed class ConversionClassifier
         methodOwner = null;
         var targetUnderlying = target is NullableTypeSymbol nullable ? nullable.UnderlyingType : target;
         return NullableLifting.IsAnyValueTypeNullable(source)
-            && (target is NullableTypeSymbol || !target.IsValueType)
+            && BoundClrConversionCallExpression.CanLiftTo(target)
             && !TypeSymbol.IsByRefLike(source)
             && !TypeSymbol.IsByRefLike(target)
             && TryResolveUserDefinedSymbolConversion(

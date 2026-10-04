@@ -56,7 +56,7 @@ public sealed class BoundClrConversionCallExpression : BoundExpression
         FunctionOwnerType = functionOwnerType;
         Type = resultType;
         IsLifted = ComputeIsLifted();
-        if (IsLifted && !resultType.IsValueType)
+        if (IsLifted && resultType is not NullableTypeSymbol)
         {
             // The effective conversion can return nil even when op_Explicit
             // itself promises a non-null reference result (#4741).
@@ -78,11 +78,17 @@ public sealed class BoundClrConversionCallExpression : BoundExpression
 
     internal bool IsLifted { get; }
 
+    internal static bool CanLiftTo(TypeSymbol target)
+        => target is NullableTypeSymbol nullable
+            ? NullableLifting.IsAnyValueTypeNullable(nullable)
+                || Conversion.IsReferenceLikeTarget(nullable.UnderlyingType)
+            : Conversion.IsReferenceLikeTarget(target);
+
     private bool ComputeIsLifted()
     {
         if (Source.Type is not NullableTypeSymbol source
             || !NullableLifting.IsAnyValueTypeNullable(source)
-            || (Type.IsValueType && Type is not NullableTypeSymbol))
+            || !CanLiftTo(Type))
         {
             return false;
         }

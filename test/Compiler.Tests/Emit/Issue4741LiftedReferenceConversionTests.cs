@@ -103,6 +103,100 @@ public sealed class Issue4741LiftedReferenceConversionTests
             """);
     }
 
+    [Fact]
+    public void ReferenceConstrainedResult_PreservesTheLiftAndOperatorReturn()
+    {
+        RunPair(
+            """
+            struct RefWrapper[T class] {
+                shared {
+                    func operator explicit(value RefWrapper[T]) T {
+                        Probe.Calls += 1
+                        return T(object(Box()))
+                    }
+                }
+            }
+            func OpenConvert[T class](value RefWrapper[T]?) T? -> T?(value)
+            func Convert(present bool) Box? -> OpenConvert[Box](Probe.Read[RefWrapper[Box]](present))
+            """,
+            """
+            public struct RefWrapper<T> where T : class {
+                public static explicit operator T(RefWrapper<T> value) {
+                    Probe.Calls++;
+                    return (T)(object)new Box();
+                }
+            }
+            static T? OpenConvert<T>(RefWrapper<T>? value) where T : class => (T?)value;
+            static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(present));
+            """);
+    }
+
+    [Fact]
+    public void UnconstrainedNullableResult_IsNotMisclassifiedAsAReferenceLift()
+    {
+        const string result = "T?";
+        var directory = Path.Combine(AppContext.BaseDirectory, "issue4741-fixtures", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var fixturePath = Path.Combine(directory, "Unknown4741.dll");
+            EmitCSharp(
+                $$"""
+                #nullable enable
+                using System;
+                public struct Wrapper<T> {
+                    public T Value;
+                    public static explicit operator T(Wrapper<T> value) {
+                        Oracle.Calls++;
+                        return value.Value;
+                    }
+                }
+                public static class Oracle {
+                    public static int Calls;
+                    static {{result}} Convert<T>(Wrapper<T>? value) => ({{result}})value;
+                    public static string Run() {
+                        Calls = 0;
+                        try { Convert<int>(null); return "did not unwrap"; }
+                        catch (InvalidOperationException) {}
+                        var missing = 100 + 10 * Calls;
+                        Calls = 0;
+                        var present = Convert<int>(new Wrapper<int> { Value = 7 });
+                        return $"{missing},{present + 10 * Calls}";
+                    }
+                }
+                """,
+                fixturePath);
+            var oracle = EmittedFixture.Load(fixturePath).GetType("Oracle", throwOnError: true)
+                ?? throw new InvalidOperationException("Roslyn oracle type missing.");
+            Assert.Equal("100,17", oracle.GetMethod("Run")?.Invoke(null, null));
+
+            var sourcePath = Path.Combine(directory, "Unknown.gs");
+            var assemblyPath = Path.Combine(directory, "Unknown.dll");
+            File.WriteAllText(
+                sourcePath,
+                $$"""
+                package Unknown4741
+                struct Wrapper[T] {
+                    var Value T
+                    shared {
+                        func operator explicit(value Wrapper[T]) T -> value.Value
+                    }
+                }
+                func Convert[T](value Wrapper[T]?) {{result}} -> {{result}}(value)
+                """);
+            var compilation = CompileGSharp(sourcePath, assemblyPath, fixturePath);
+            Assert.NotEqual(0, compilation.Exit);
+            var errors = compilation.Diagnostics.Split('\n')
+                .Where(line => line.Contains(": error ", StringComparison.Ordinal)).ToArray();
+            Assert.NotEmpty(errors);
+            Assert.All(errors, error => Assert.Contains("GS0155", error, StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static void RunPair(string gsharpConversion, string csharpConversion)
     {
         var directory = Path.Combine(AppContext.BaseDirectory, "issue4741-fixtures", Guid.NewGuid().ToString("N"));
@@ -230,32 +324,8 @@ public sealed class Issue4741LiftedReferenceConversionTests
             var sourcePath = Path.Combine(directory, "App.gs");
             var assemblyPath = Path.Combine(directory, "App.dll");
             File.WriteAllText(sourcePath, source);
-            var arguments = new List<string>
-            {
-                "/target:library",
-                "/targetframework:net10.0",
-                "/out:" + assemblyPath,
-                "/reference:" + fixturePath,
-                sourcePath,
-            };
-            using var stdout = new StringWriter();
-            using var stderr = new StringWriter();
-            var previousOut = Console.Out;
-            var previousErr = Console.Error;
-            int exit;
-            Console.SetOut(stdout);
-            Console.SetError(stderr);
-            try
-            {
-                exit = Program.Main(arguments.ToArray());
-            }
-            finally
-            {
-                Console.SetOut(previousOut);
-                Console.SetError(previousErr);
-            }
-
-            Assert.True(exit == 0, stdout.ToString() + stderr);
+            var compilation = CompileGSharp(sourcePath, assemblyPath, fixturePath);
+            Assert.True(compilation.Exit == 0, compilation.Diagnostics);
             var assembly = EmittedFixture.Load(assemblyPath);
             var program = assembly.GetTypes().Single(type => type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static) != null);
             var actual = program.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
@@ -265,6 +335,33 @@ public sealed class Issue4741LiftedReferenceConversionTests
         finally
         {
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static (int Exit, string Diagnostics) CompileGSharp(string sourcePath, string assemblyPath, string fixturePath)
+    {
+        var arguments = new List<string>
+        {
+            "/target:library",
+            "/targetframework:net10.0",
+            "/out:" + assemblyPath,
+            "/reference:" + fixturePath,
+            sourcePath,
+        };
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var previousOut = Console.Out;
+        var previousErr = Console.Error;
+        Console.SetOut(stdout);
+        Console.SetError(stderr);
+        try
+        {
+            return (Program.Main(arguments.ToArray()), stdout.ToString() + stderr);
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousErr);
         }
     }
 

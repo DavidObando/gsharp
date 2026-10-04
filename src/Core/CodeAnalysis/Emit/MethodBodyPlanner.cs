@@ -718,8 +718,9 @@ internal sealed class MethodBodyPlanner
         // initobj a default value on the null branch). The slot index of the
         // source is stored in receiverSpillSlots (already an aggregate of
         // distinct-by-node scratch-slot kinds); the emitter derives the result
-        // slot as source + 1. Reference-result lifts share the source spill
-        // but produce ldnull directly. Skip nodes already owned by another collector.
+        // slot as source + 1. Reference-result lifts share the source spill;
+        // type-parameter results use a typed default, others produce ldnull.
+        // Skip nodes already owned by another collector.
         foreach (var conversion in this.CollectNullableValueTypeConversions(body))
         {
             if (receiverSpillSlots.ContainsKey(conversion))
