@@ -781,13 +781,33 @@ namespace Demo
         // The field itself carries no (invalid) hoisted initializer. Issue #4684: the
         // only initializer it may carry is the allocation-free `Array.Empty` one that
         // replaces gsc's synthesized zero-value array.
-        Assert.Contains("var buffer []TInput", printed);
-        Assert.DoesNotContain("var buffer []TInput = [", printed);
-        Assert.DoesNotContain("var buffer []TInput = InputBufferSize", printed);
+        AssertArrayFieldInitializer(printed, "var buffer []TInput", "TInput");
 
         // The static-RHS sibling remains in the same explicit constructor.
-        Assert.Contains("let cache []int32", printed);
-        Assert.DoesNotContain("let cache []int32 = [", printed);
+        AssertArrayFieldInitializer(printed, "let cache []int32", "int32");
+    }
+
+    [Theory]
+    [InlineData("SomeCall()")]
+    [InlineData("System.Array.Empty[int32]()")]
+    [InlineData("System.Array.Empty[TInput](1)")]
+    [InlineData("[8]TInput")]
+    [InlineData("[]TInput{}")]
+    public void CtorAssignment_ArrayFieldInitializerOracleRejectsOtherInitializers(string initializer)
+    {
+        Assert.Throws<Xunit.Sdk.TrueException>(() =>
+            AssertArrayFieldInitializer(
+                "private var buffer []TInput = " + initializer,
+                "var buffer []TInput",
+                "TInput"));
+    }
+
+    [Theory]
+    [InlineData("private var buffer []TInput")]
+    [InlineData("private var buffer []TInput = System.Array.Empty[TInput]()")]
+    public void CtorAssignment_ArrayFieldInitializerOracleAcceptsOnlyPermittedForms(string declaration)
+    {
+        AssertArrayFieldInitializer(declaration, "var buffer []TInput", "TInput");
     }
 
     /// <summary>
@@ -1099,6 +1119,17 @@ namespace Demo
 
         Assert.Contains("return (a,", printed);
         Assert.DoesNotContain("a!!", printed);
+    }
+
+    private static void AssertArrayFieldInitializer(string printed, string declaration, string elementType)
+    {
+        string line = Assert.Single(
+            printed.Split('\n'),
+            line => line.Contains(declaration, StringComparison.Ordinal)).Trim();
+        Assert.True(
+            line == "private " + declaration
+                || line == $"private {declaration} = System.Array.Empty[{elementType}]()",
+            "Expected no initializer or a correctly typed, argument-free Array.Empty call, got: " + line);
     }
 
     private static string TranslateUnit(string source, string roundTripOnlyReason = null)

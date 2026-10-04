@@ -3951,6 +3951,14 @@ public sealed partial class CSharpToGSharpTranslator
             return new NamedTypeReference("object");
         }
 
+        private static InvocationExpression MakeArrayEmptyInvocation(GTypeReference elementType)
+            => new InvocationExpression(
+                new MemberAccessExpression(
+                    new MemberAccessExpression(new IdentifierExpression("System"), "Array"),
+                    "Empty"),
+                new List<GExpression>(),
+                new List<GTypeReference> { elementType });
+
         private GExpression TranslateCollectionExpression(CollectionExpressionSyntax collection)
         {
             // An empty collection expression (`[]`) targeting a concrete
@@ -4112,12 +4120,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && target is IArrayTypeSymbol { Rank: 1 }
                 && !TryGetCollectionBuilder(target, out _, out _))
             {
-                return new InvocationExpression(
-                    new MemberAccessExpression(
-                        new MemberAccessExpression(new IdentifierExpression("System"), "Array"),
-                        "Empty"),
-                    new List<GExpression>(),
-                    new List<GTypeReference> { sliceElementType });
+                return MakeArrayEmptyInvocation(sliceElementType);
             }
 
             var slice = new ArrayLiteralExpression(sliceElementType, elements);

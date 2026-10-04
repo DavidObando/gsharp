@@ -915,12 +915,7 @@ public sealed partial class CSharpToGSharpTranslator
                     && symbol.ContainingType?.TypeKind == TypeKind.Class
                     && type is ArrayTypeReference { Rank: 1, IsNullable: false } emptyArrayType)
                 {
-                    initializer = new InvocationExpression(
-                        new MemberAccessExpression(
-                            new MemberAccessExpression(new IdentifierExpression("System"), "Array"),
-                            "Empty"),
-                        new List<GExpression>(),
-                        new List<GTypeReference> { emptyArrayType.ElementType });
+                    initializer = MakeArrayEmptyInvocation(emptyArrayType.ElementType);
                 }
 
                 var declaration = new FieldDeclaration(
