@@ -23,7 +23,9 @@ python3 build/selfhost-pack-stage1.py \
 
 The script changes the tree in place, idempotently, and records every change in `<work>/stage1-report.json`:
 
-- It stages the stage-0 nupkg, plus its `GSharp.CodeAnalysis.Analyzers.Testing` sibling, into the tree's `.nugs` feed.
+- It stages the stage-0 nupkg and each version of `GSharp.CodeAnalysis.Analyzers.Testing` referenced by the tree into `.nugs`. Each required archive must be beside the bootstrap, under its original package ID and version; the verifier version is independent of the SDK version. Without a reference, the bootstrap-version sibling remains optional and its absence is only reported.
+- Verifier references must use an unconditional `PackageReference Include` with a literal `Version` attribute or child element. Namespaced XML is supported. The preparation scan includes in-tree projects, `.props` and `.targets`; it is not an MSBuild evaluator. Updates/removals, item defaults, version overrides, central/property/range versions, unresolved item identities and conditional/target contexts fail explicitly rather than guessing a version. A self-contained migrated tree is required; references introduced only by out-of-tree imports are not certified by this scan.
+- The repository's simple item aliases for unrelated packages remain supported when all their in-tree definitions identify literal package IDs. An alias that can carry the verifier, or an unresolved alias, is rejected; the script does not infer verifier versions from item definitions.
 - It pins `Gsharp.NET.Sdk` once, under `msbuild-sdks` in `global.json`. The file is rewritten as plain JSON, so comments and formatting are not kept (the repository's `global.json` has none). A BOM is kept. A tree migrated with `cs2gs migrate --sdk-pin global-json` is already bare. In a per-project tree, the generated pin is the one on `src/Core/Core.gsproj`, and it is rewritten to the bare name wherever it appears. Pins on samples and templates are intentional and are left alone.
 - MSBuild lets a versioned `Sdk` attribute silently override `global.json`, so the script fails if a toolchain project still carries one.
 

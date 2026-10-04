@@ -49,6 +49,7 @@ import re
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
@@ -62,7 +63,6 @@ CORE_PROJECT = Path("src/Core/Core.gsproj")
 NESTED_PROJECTS = ("src/Compiler/Compiler.gsproj", "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj",
                    "tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj", "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj")
 ANALYZER_VERIFIER_ID = "GSharp.CodeAnalysis.Analyzers.Testing"
-SIBLING_PACKAGES = (ANALYZER_VERIFIER_ID,)
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$")
 # Only the Project element's own Sdk attribute; never an <Import Sdk=...>.
 PROJECT_SDK_RE = re.compile(r'(<Project\b[^>]*?\bSdk=")([^"]*)(")', re.DOTALL)
@@ -102,8 +102,8 @@ def project_sdk(text: str) -> str | None:
     return match.group(2) if match else None
 
 
-def project_files(tree: Path):
-    for pattern in ("*.gsproj", "*.csproj"):
+def project_files(tree: Path, patterns=("*.gsproj", "*.csproj")):
+    for pattern in patterns:
         for path in tree.rglob(pattern):
             if any(part in ("bin", "obj", "node_modules", ".git") for part in path.relative_to(tree).parts):
                 continue
@@ -238,25 +238,76 @@ def stage_feed(tree: Path, nupkgs: list[Path]) -> list[dict]:
     return staged
 
 
-def sibling_nupkgs(bootstrap: Path, version: str) -> list[Path]:
-    found = [bootstrap]
-    for package_id in SIBLING_PACKAGES:
-        candidate = bootstrap.with_name(f"{package_id}.{version}.nupkg")
-        if candidate.exists():
-            found.append(candidate)
-    return found
-
-
-def needs_analyzer_verifier(tree: Path) -> bool:
-    """Whether a project in the tree restores the analyzer-testing package from a feed."""
-    pattern = re.compile(r'<PackageReference\s[^>]*Include="' + re.escape(ANALYZER_VERIFIER_ID) + '"')
-    return any(pattern.search(path.read_text(encoding="utf-8-sig")) for path in project_files(tree))
-
-
-def missing_siblings(bootstrap: Path, version: str) -> list[str]:
-    """The sibling packages expected beside the bootstrap that are absent."""
-    return [f"{package_id}.{version}.nupkg" for package_id in SIBLING_PACKAGES
-            if not bootstrap.with_name(f"{package_id}.{version}.nupkg").exists()]
+def analyzer_verifier_versions(tree: Path) -> list[str]:
+    """Read literal, unconditional references; never guess an evaluated MSBuild version."""
+    versions = set()
+    unevaluated_defaults = []
+    documents = []
+    aliases = {}
+    for path in sorted(project_files(tree, ("*.gsproj", "*.csproj", "*.props", "*.targets"))):
+        try:
+            root = ET.parse(path).getroot()
+        except ET.ParseError as error:
+            raise SelfHostError(f"{path.relative_to(tree)}: invalid project XML: {error}") from error
+        documents.append((path, root))
+        for item in root.iter():
+            tag = item.tag.rsplit("}", 1)[-1]
+            if tag != "PackageReference" and any(name in item.attrib for name in ("Include", "Update", "Remove")):
+                aliases.setdefault(tag.lower(), []).append(item.get("Include", ""))
+    for path, root in documents:
+        parents = {child: parent for parent in root.iter() for child in parent}
+        for item in root.iter():
+            tag = item.tag.rsplit("}", 1)[-1]
+            if tag == "ManagePackageVersionsCentrally" and (item.text or "").strip().lower() != "false":
+                unevaluated_defaults.append(f"{path.relative_to(tree)}: central package versions are unsupported")
+            if tag != "PackageReference":
+                continue
+            identifiers = [item.get(name, "") for name in ("Include", "Update", "Remove")]
+            if not any(identifiers):
+                unevaluated_defaults.append(
+                    f"{path.relative_to(tree)}: PackageReference defaults without an identity are unsupported")
+                continue
+            for index, value in enumerate(identifiers):
+                if not any(token in value for token in ("$(", "@(", "%(")):
+                    continue
+                alias = re.fullmatch(r"@\(([A-Za-z_][\w.]*)\)", value)
+                values = aliases.get(alias.group(1).lower(), []) if alias else []
+                # The repository uses item aliases for unrelated package IDs.
+                # Admit only their literal identities, not MSBuild expressions or verifier versions.
+                if values and all(v and not any(token in v for token in ("$(", "@(", "%(")) for v in values):
+                    identifiers[index] = ";".join(values)
+                else:
+                    raise SelfHostError(
+                        f"{path.relative_to(tree)}: unresolved PackageReference identity; "
+                        f"cannot determine whether it requires {ANALYZER_VERIFIER_ID}")
+            if not any(ANALYZER_VERIFIER_ID.lower() in (part.strip().lower() for part in value.split(";"))
+                       for value in identifiers):
+                continue
+            problem = (
+                f"{path.relative_to(tree)}: {ANALYZER_VERIFIER_ID} requires an unconditional "
+                "PackageReference Include with one literal Version; "
+                "Update/Remove, central/property versions and conditional contexts are unsupported")
+            if (item.get("Include", "").lower() != ANALYZER_VERIFIER_ID.lower()
+                    or item.get("Update") is not None or item.get("Remove") is not None
+                    or item.get("VersionOverride") is not None):
+                raise SelfHostError(problem)
+            current = item
+            while current is not None:
+                if (current.get("Condition") is not None
+                        or current.tag.rsplit("}", 1)[-1] in ("Target", "Choose", "When", "Otherwise")):
+                    raise SelfHostError(problem)
+                current = parents.get(current)
+            metadata = [child for child in item if child.tag.rsplit("}", 1)[-1] == "Version"]
+            values = ([item.get("Version")] if item.get("Version") is not None else []) + [
+                child.text or "" for child in metadata]
+            if (len(values) != 1 or not VERSION_RE.fullmatch(values[0])
+                    or any(child.attrib for child in metadata)
+                    or any(child.tag.rsplit("}", 1)[-1] == "VersionOverride" for child in item)):
+                raise SelfHostError(problem)
+            versions.add(values[0])
+    if versions and unevaluated_defaults:
+        raise SelfHostError(f"{ANALYZER_VERIFIER_ID}: " + "; ".join(unevaluated_defaults))
+    return sorted(versions)
 
 
 def prepare_tree(tree: Path, bootstrap: Path, report: dict | None = None) -> dict:
@@ -273,16 +324,19 @@ def prepare_tree(tree: Path, bootstrap: Path, report: dict | None = None) -> dic
     report["rewrittenPins"] = normalize_pins(tree)
     report["globalJsonUpdated"] = pin_global_json(tree, version)
     check_no_versioned_toolchain_pins(tree)
-    missing = missing_siblings(bootstrap, version)
+    required_versions = analyzer_verifier_versions(tree)
+    report["requiredAnalyzerVerifierVersions"] = required_versions
+    # With no reference, keep the bootstrap-version sibling optional as before.
+    siblings = [bootstrap.with_name(f"{ANALYZER_VERIFIER_ID}.{v}.nupkg")
+                for v in (required_versions or [version])]
+    missing = [path.name for path in siblings if not path.is_file()]
     report["missingSiblings"] = missing
-    if missing and needs_analyzer_verifier(tree):
-        # The tree's analyzer test project restores the package from the feed;
-        # without it, a later stage-2 test run fails far from the cause.
+    if missing and required_versions:
         raise SelfHostError(
             f"{ANALYZER_VERIFIER_ID} is referenced as a PackageReference in the tree but "
             f"{', '.join(missing)} is not beside the bootstrap {bootstrap.name}")
     report["feed"] = str(tree / ".nugs")
-    report["stagedPackages"] = stage_feed(tree, sibling_nupkgs(bootstrap, version))
+    report["stagedPackages"] = stage_feed(tree, [bootstrap] + [path for path in siblings if path.is_file()])
     return report
 
 

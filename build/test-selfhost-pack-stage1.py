@@ -18,7 +18,12 @@ if SPEC is None or SPEC.loader is None:
 packer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(packer)
 
-GENERATED = 'Sdk="Gsharp.NET.Sdk/0.4.1129"'
+def sdk_pin(version: str) -> str:
+    # Synthetic versions are test data, not published-release references.
+    return f'Sdk="{packer.SDK_ID}/{version}"'
+
+
+GENERATED = sdk_pin("0.4.1129")
 
 
 def project(sdk_attribute: str, body: str = "") -> str:
@@ -35,7 +40,7 @@ def make_tree(root: Path, core_sdk: str = GENERATED) -> Path:
     write(tree / "src/Core/Core.gsproj", project(core_sdk), bom=True)
     write(tree / "src/Compiler/Compiler.gsproj", project(core_sdk))
     write(tree / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj",
-          project(core_sdk, '  <Import Sdk="Gsharp.NET.Sdk/9.9.9" Project="x" />\n'))
+          project(core_sdk, f'  <Import {sdk_pin("9.9.9")} Project="x" />\n'))
     write(tree / "samples/Trail/Trail.gsproj", project('Sdk="Gsharp.NET.Sdk/0.4.591"'))
     write(tree / "global.json",
           '{\n  // keep me\n  "sdk": { "version": "10.0.300", "rollForward": "latestFeature", },\n}\n')
@@ -77,7 +82,7 @@ class NormalizePinsTests(unittest.TestCase):
             self.assertTrue(core.startswith(b"\xef\xbb\xbf"), "BOM must be preserved")
             self.assertIn(b'<Project Sdk="Gsharp.NET.Sdk">', core)
             sdk_project = (tree / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj").read_text()
-            self.assertIn('<Import Sdk="Gsharp.NET.Sdk/9.9.9"', sdk_project, "only the Project element is rewritten")
+            self.assertIn(f'<Import {sdk_pin("9.9.9")}', sdk_project, "only the Project element is rewritten")
             self.assertIn('Sdk="Gsharp.NET.Sdk/0.4.591"', (tree / "samples/Trail/Trail.gsproj").read_text())
 
     def test_global_json_tree_is_left_alone(self) -> None:
@@ -93,7 +98,7 @@ class NormalizePinsTests(unittest.TestCase):
     def test_a_leftover_versioned_toolchain_pin_is_an_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tree = make_tree(Path(temp), core_sdk='Sdk="Gsharp.NET.Sdk"')
-            write(tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", project('Sdk="Gsharp.NET.Sdk/0.4.7"'))
+            write(tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", project(sdk_pin("0.4.7")))
             with self.assertRaises(packer.SelfHostError) as raised:
                 packer.check_no_versioned_toolchain_pins(tree)
             self.assertIn("src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", str(raised.exception))
@@ -103,7 +108,7 @@ class NormalizePinsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             tree = make_tree(root)
-            write(tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", project('Sdk="Gsharp.NET.Sdk/0.4.7"'))
+            write(tree / "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", project(sdk_pin("0.4.7")))
             bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.0.4.1129.nupkg", {"x": b""})
             report: dict = {}
 
@@ -121,11 +126,12 @@ class GlobalJsonTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             tree = make_tree(Path(temp))
             (tree / "global.json").write_text(
-                '{ "sdk": { "version": "10.0.300" }, "msbuild-sdks": { "gsharp.net.sdk": "0.0.1", "X": "1.0.0" }, }')
+                json.dumps({"sdk": {"version": "10.0.300"},
+                            "msbuild-sdks": {packer.SDK_ID.lower(): "0.0.1", "X": "1.0.0"}}))
             packer.pin_global_json(tree, "0.4.1129-g6c4824cbc0")
             document = json.loads((tree / "global.json").read_text())
             self.assertEqual("10.0.300", document["sdk"]["version"])
-            self.assertEqual({"X": "1.0.0", "Gsharp.NET.Sdk": "0.4.1129-g6c4824cbc0"}, document["msbuild-sdks"])
+            self.assertEqual({"X": "1.0.0", packer.SDK_ID: "0.4.1129-g6c4824cbc0"}, document["msbuild-sdks"])
 
     def test_a_bom_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -188,6 +194,191 @@ class PrepareTreeTests(unittest.TestCase):
             self.assertEqual([True], [s["replacedExisting"] for s in report["stagedPackages"]])
             self.assertTrue(bootstrap.exists())
 
+    def test_cross_version_reference_stages_only_its_actual_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            write(tree / "test/Verifier.gsproj", project(
+                'Sdk="Gsharp.NET.Sdk"',
+                f'<ItemGroup><PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" '
+                'Version="2.0.0" /></ItemGroup>'))
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            sibling = nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.2.0.0.nupkg", {"actual": b"v2"})
+
+            report = packer.prepare_tree(tree, bootstrap)
+
+            self.assertEqual(["2.0.0"], report["requiredAnalyzerVerifierVersions"])
+            self.assertEqual([], report["missingSiblings"])
+            self.assertEqual({bootstrap.name, sibling.name}, {p.name for p in (tree / ".nugs").iterdir()})
+            self.assertEqual(sibling.read_bytes(), (tree / ".nugs" / sibling.name).read_bytes())
+
+    def test_multiple_literal_versions_namespace_and_metadata_are_staged(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            write(tree / "test/Verifier.csproj",
+                  '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">'
+                  f'<ItemGroup><PackageReference Include="{packer.ANALYZER_VERIFIER_ID.lower()}">'
+                  '<Version>2.0.0</Version></PackageReference></ItemGroup></Project>')
+            write(tree / "test/Other.gsproj", project(
+                'Sdk="Gsharp.NET.Sdk"',
+                f"<ItemGroup><PackageReference Version='3.0.0' Include='{packer.ANALYZER_VERIFIER_ID}' /></ItemGroup>"))
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            for version in ("2.0.0", "3.0.0"):
+                nupkg(root / f"feed/{packer.ANALYZER_VERIFIER_ID}.{version}.nupkg", {"x": version.encode()})
+
+            report = packer.prepare_tree(tree, bootstrap)
+
+            self.assertEqual(["2.0.0", "3.0.0"], report["requiredAnalyzerVerifierVersions"])
+            self.assertEqual(3, len(report["stagedPackages"]))
+
+    def test_non_reference_mentions_keep_the_sibling_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            write(tree / "test/Other.gsproj", project(
+                'Sdk="Gsharp.NET.Sdk"',
+                f'<!-- <PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" Version="2.0.0" /> -->'
+                f'<ItemGroup><ProjectReference Include="{packer.ANALYZER_VERIFIER_ID}.csproj" />'
+                f'<PackageReference Include="{packer.ANALYZER_VERIFIER_ID}.Other" Version="2.0.0" /></ItemGroup>'))
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+
+            report = packer.prepare_tree(tree, bootstrap)
+
+            self.assertEqual([], report["requiredAnalyzerVerifierVersions"])
+            self.assertEqual([bootstrap.name], [p["package"] for p in report["stagedPackages"]])
+            self.assertEqual([f"{packer.ANALYZER_VERIFIER_ID}.1.0.0.nupkg"], report["missingSiblings"])
+
+    def test_unevaluated_reference_shapes_fail_explicitly(self) -> None:
+        reference = f'<PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" Version="2.0.0" />'
+        cases = [
+            reference.replace('Include=', 'Update='),
+            reference.replace('Include=', 'Remove='),
+            reference.replace(' Version="2.0.0"', ''),
+            reference.replace('Version="2.0.0"', 'Version="$(VerifierVersion)"'),
+            reference.replace('Version="2.0.0"', 'Version="[2.0.0,3.0.0)"'),
+            reference.replace('Version="2.0.0"', 'Version="2.*"'),
+            reference.replace('Version=', 'VersionOverride='),
+            reference.replace('/>', 'Condition="true" />'),
+            f'<ItemGroup Condition="false">{reference}</ItemGroup>',
+            f'<Target Name="Later"><ItemGroup>{reference}</ItemGroup></Target>',
+            f'<Choose><When Condition="true"><ItemGroup>{reference}</ItemGroup></When></Choose>',
+            reference.replace('/>', '><Version>3.0.0</Version></PackageReference>'),
+            reference.replace(' Version="2.0.0" />', '><Version Condition="true">2.0.0</Version></PackageReference>'),
+            reference.replace('/>', '><VersionOverride>3.0.0</VersionOverride></PackageReference>'),
+            reference.replace(packer.ANALYZER_VERIFIER_ID, '$(VerifierPackage)'),
+            reference.replace(packer.ANALYZER_VERIFIER_ID, '@(UnknownVerifierPackage)'),
+        ]
+        for body in cases:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                write(tree / "test/Verifier.gsproj", project(
+                    'Sdk="Gsharp.NET.Sdk"', f'<ItemGroup>{body}</ItemGroup>'))
+                bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+                nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg", {"x": b""})
+                report: dict = {}
+
+                with self.assertRaises(packer.SelfHostError) as raised:
+                    packer.prepare_tree(tree, bootstrap, report)
+
+                self.assertIn("test/Verifier.gsproj", str(raised.exception))
+                self.assertIn("PackageReference", str(raised.exception))
+                self.assertTrue(report["globalJsonUpdated"])
+                self.assertIn("src/Core/Core.gsproj", report["rewrittenPins"])
+                self.assertNotIn("stagedPackages", report)
+
+    def test_imported_in_tree_update_is_not_silently_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            write(tree / "test/Verifier.gsproj", project(
+                'Sdk="Gsharp.NET.Sdk"',
+                f'<ItemGroup><PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" '
+                'Version="2.0.0" /></ItemGroup>'))
+            write(tree / "Directory.Build.targets",
+                  f'<Project><ItemGroup><PackageReference Update="{packer.ANALYZER_VERIFIER_ID}" '
+                  'Version="3.0.0" /></ItemGroup></Project>')
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+
+            with self.assertRaises(packer.SelfHostError) as raised:
+                packer.prepare_tree(tree, bootstrap)
+
+            self.assertIn("Directory.Build.targets", str(raised.exception))
+            self.assertIn("Update/Remove", str(raised.exception))
+
+    def test_central_management_and_item_defaults_are_not_evaluated(self) -> None:
+        cases = [
+            '<PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>',
+            '<PropertyGroup><ManagePackageVersionsCentrally>$(Central)</ManagePackageVersionsCentrally></PropertyGroup>',
+            '<ItemDefinitionGroup><PackageReference><VersionOverride>3.0.0</VersionOverride>'
+            '</PackageReference></ItemDefinitionGroup>',
+        ]
+        for defaults in cases:
+            with self.subTest(defaults=defaults), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                write(tree / "Directory.Build.props", f'<Project>{defaults}</Project>')
+                write(tree / "test/Verifier.gsproj", project(
+                    'Sdk="Gsharp.NET.Sdk"',
+                    f'<ItemGroup><PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" '
+                    'Version="2.0.0" /></ItemGroup>'))
+                bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+
+                with self.assertRaises(packer.SelfHostError) as raised:
+                    packer.prepare_tree(tree, bootstrap)
+
+                self.assertIn("Directory.Build.props", str(raised.exception))
+                self.assertIn("unsupported", str(raised.exception))
+
+    def test_known_unrelated_item_aliases_do_not_block_literal_verifier_references(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            write(tree / "Directory.Build.props",
+                  '<Project><ItemGroup><OtherPackage Include="Unrelated.Package" Version="3.0.0" />'
+                  '<PackageReference Include="@(OtherPackage)" /></ItemGroup></Project>')
+            write(tree / "test/Verifier.gsproj", project(
+                'Sdk="Gsharp.NET.Sdk"',
+                f'<ItemGroup><PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" '
+                'Version="2.0.0" /></ItemGroup>'))
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.2.0.0.nupkg", {"x": b""})
+
+            self.assertEqual(["2.0.0"], packer.prepare_tree(tree, bootstrap)["requiredAnalyzerVerifierVersions"])
+            # An alias that can carry the verifier cannot supply a guessed version.
+            write(tree / "Directory.Build.props",
+                  f'<Project><ItemGroup><OtherPackage Include="{packer.ANALYZER_VERIFIER_ID}" Version="3.0.0" />'
+                  '<PackageReference Include="@(OtherPackage)" /></ItemGroup></Project>')
+            with self.assertRaises(packer.SelfHostError) as raised:
+                packer.prepare_tree(tree, bootstrap)
+            self.assertIn("Directory.Build.props", str(raised.exception))
+            self.assertIn("literal Version", str(raised.exception))
+
+    def test_missing_actual_version_leaves_the_main_failure_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            write(tree / "test/Verifier.gsproj", project(
+                'Sdk="Gsharp.NET.Sdk"',
+                f'<ItemGroup><PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" '
+                'Version="2.0.0" /></ItemGroup>'))
+            bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+            nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg", {"x": b""})
+            import contextlib
+            with contextlib.redirect_stderr(io.StringIO()):
+                code = packer.main(["--tree", str(tree), "--bootstrap", str(bootstrap),
+                                    "--out", str(root / "out"), "--prepare-only"])
+            report = json.loads((root / "out/work/stage1-report.json").read_text())
+
+            self.assertEqual(1, code)
+            self.assertEqual(["2.0.0"], report["requiredAnalyzerVerifierVersions"])
+            self.assertEqual([f"{packer.ANALYZER_VERIFIER_ID}.2.0.0.nupkg"], report["missingSiblings"])
+            self.assertIn(report["missingSiblings"][0], report["error"])
+            self.assertTrue(report["globalJsonUpdated"])
+            self.assertIn("src/Core/Core.gsproj", report["rewrittenPins"])
+            self.assertNotIn("stagedPackages", report)
+
 
 class VersionTests(unittest.TestCase):
     def test_versions(self) -> None:
@@ -212,13 +403,18 @@ class VersionTests(unittest.TestCase):
             root = Path(temp)
             tree = make_tree(root)
             write(tree / "test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj",
-                  project('Sdk="Gsharp.NET.Sdk"', '<ItemGroup><PackageReference Include="GSharp.CodeAnalysis.Analyzers.Testing" Version="0.4.1129" /></ItemGroup>'))
+                  project('Sdk="Gsharp.NET.Sdk"',
+                          f'<ItemGroup><PackageReference Include="{packer.ANALYZER_VERIFIER_ID}" Version="0.4.1129" /></ItemGroup>'))
             bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
             with self.assertRaises(packer.SelfHostError) as raised:
                 packer.prepare_tree(tree, bootstrap)
-            self.assertIn("GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg", str(raised.exception))
-            # With the sibling beside the bootstrap, the same tree prepares.
+            self.assertIn("GSharp.CodeAnalysis.Analyzers.Testing.0.4.1129.nupkg", str(raised.exception))
+            # A bootstrap-version sibling does not satisfy the actual reference.
             nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg", {"x": b""})
+            with self.assertRaises(packer.SelfHostError) as raised:
+                packer.prepare_tree(tree, bootstrap)
+            self.assertIn("GSharp.CodeAnalysis.Analyzers.Testing.0.4.1129.nupkg", str(raised.exception))
+            nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.0.4.1129.nupkg", {"x": b""})
             self.assertEqual([], packer.prepare_tree(tree, bootstrap)["missingSiblings"])
 
     def test_stage1_version_equal_to_bootstrap_is_refused(self) -> None:
