@@ -4,8 +4,12 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Reflection;
+using System.Text;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Tests;
@@ -15,6 +19,43 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 public class Issue4675RecordReviewRegressionTests
 {
+    [Theory]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(12)]
+    public void SharedChildInitializers_VisitEachOwnerExpressionOnce(int depth)
+    {
+        var source = new StringBuilder("""
+            class Flags { shared { public var Recurse bool } }
+            class Node0 { public var Marker int32 = 1 }
+
+            """);
+        for (var i = 1; i <= depth; i++)
+        {
+            source.AppendLine($"class Node{i} {{");
+            source.AppendLine($"public var First Node{i - 1}? = Flags.Recurse ? Node{i - 1}{{}} : nil");
+            source.AppendLine($"public var Second Node{i - 1}? = Flags.Recurse ? Node{i - 1}{{}} : nil");
+            source.AppendLine("public var Marker int32 = 1");
+            source.AppendLine("}");
+        }
+
+        source.AppendLine($"func Main() {{ let item = Node{depth}{{}} }}");
+        var compilation = new Compilation(SyntaxTree.Parse(source.ToString()));
+        Assert.Empty(compilation.GlobalScope.Diagnostics.Where(d => d.IsError));
+        var program = compilation.BoundProgram;
+        Assert.Empty(program.Diagnostics.Where(d => d.IsError));
+        var analyzerType = typeof(BoundTreeWalker).Assembly.GetType("GSharp.Core.CodeAnalysis.Binding.ManagedReferenceSafetyAnalyzer");
+        Assert.NotNull(analyzerType);
+        var diagnostics = new DiagnosticBag();
+        var analyzer = Assert.IsAssignableFrom<BoundTreeWalker>(Activator.CreateInstance(
+            analyzerType, BindingFlags.Instance | BindingFlags.NonPublic, binder: null, args: new object[] { diagnostics }, culture: null));
+        analyzer.Visit(program.Functions.Single(pair => pair.Key.Name == "Main").Value);
+        Assert.Empty(diagnostics);
+        var counter = analyzerType.GetProperty("InitializerVisitCount", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(counter);
+        Assert.Equal((3 * depth) + 1, Assert.IsType<int>(counter.GetValue(analyzer)));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

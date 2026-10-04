@@ -29,6 +29,8 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private ManagedReferenceSafetyAnalyzer(DiagnosticBag diagnostics) => this.diagnostics = diagnostics;
 
+    internal int InitializerVisitCount { get; private set; }
+
     public static void Analyze(
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functions,
         ImmutableArray<StructSymbol> types,
@@ -736,6 +738,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         this.overwrittenInitializerResult = resultOverwritten ? initializer : null;
         try
         {
+            this.InitializerVisitCount++;
             this.VisitExpression(initializer);
 
             // Diagnostics already belong to this anchor; other sites must validate separately.
