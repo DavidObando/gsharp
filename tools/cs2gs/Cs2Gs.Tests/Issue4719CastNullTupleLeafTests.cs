@@ -1324,6 +1324,124 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
+    [InlineData("Task", "value")]
+    [InlineData("Task", "(MaybeBox?)value")]
+    [InlineData("ValueTask", "value")]
+    [InlineData("ValueTask", "(MaybeBox?)value")]
+    public void AsyncNullableOperatorConvertedResult_PromotedTupleSinkExecutesWithoutAssertion(
+        string envelope,
+        string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static async {{envelope}}<(MaybeBox Value, int Code)> Row(string value) {
+                    await Task.Delay(1);
+                    return ({{value}}, 1);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    var row = Row("x").GetAwaiter().GetResult();
+                    Console.WriteLine(row.Value == null && row.Code == 1 && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        string tuple = "(Value MaybeBox?, Code int32)";
+        Assert.Contains("async func Row(value string) " + (envelope == "ValueTask" ? $"ValueTask[{tuple}]" : tuple), printed);
+        Assert.DoesNotContain("MaybeBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void AsyncTupleOperatorContracts_PreserveNilInputsStrictSinksAndPropertyCounts(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable enable
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static async {{envelope}}<MaybeBox> StrictResult(string value) {
+                    await Task.Delay(1);
+                    return value;
+                }
+                #nullable disable
+                public static async {{envelope}}<(MaybeBox Value, int Code)> Guarded() {
+                    await Task.Delay(1);
+                    if (Text != null) { return (Text, 2); }
+                    return ((MaybeBox)null, 2);
+                }
+                public static async {{envelope}}<(NullAcceptingBox Value, int Code)> Accepting() {
+                    await Task.Delay(1);
+                    return (Text, 1);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Text = null;
+                    Reads = 0;
+                    var accepting = Accepting().GetAwaiter().GetResult();
+                    bool accepts = accepting.Value == null && accepting.Code == 1
+                        && Probe.Calls == 1 && Reads == 1;
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    var guarded = Guarded().GetAwaiter().GetResult();
+                    bool guards = guarded.Value == null && guarded.Code == 2
+                        && Probe.Calls == 1 && Reads == 2;
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { StrictResult("x").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(accepts && guards && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Text!!", printed);
+        Assert.Contains("MaybeBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void AsyncTupleOperatorResult_FrozenParameterContractRetainsAssertion(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static async {{envelope}}<int> Read(string value) {
+                    await Task.Delay(1);
+                    return FrozenTupleContract.Accept((value, 1));
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { Read("x").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("MaybeBox?(value)!!", printed);
+    }
+
+    [Theory]
     [InlineData(false, "return Text;")]
     [InlineData(false, "StrictBox result = Text; return result;")]
     [InlineData(false, "StrictBox result = new StrictBox(); result = Text; return result;")]
@@ -1425,22 +1543,7 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         Assert.Contains("Text!!", printed);
         Assert.Contains("func Make() NullableResultBox", printed);
         Assert.Contains("NullableResultBox?(\"keep\")!!", printed);
-        string source = Path.Combine(this.fixtureDirectory, "Boundaries.gs");
-        string assembly = Path.Combine(this.fixtureDirectory, "Boundaries.dll");
-        string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
-        File.WriteAllText(source, printed);
-        var compiled = RunDotnet(compiler, "/target:exe", "/targetframework:net10.0", $"/reference:{fixture}", $"/out:{assembly}", source);
-        Assert.True(compiled.Exit == 0, compiled.Output);
-        Assert.True(IlVerifyRunner.IsEnabled);
-        IlVerifyResult verified = new IlVerifyRunner().Verify(assembly, new[] { fixture });
-        Assert.Equal(IlVerifyStatus.Passed, verified.Status);
-        Assert.Empty(verified.Errors);
-        File.WriteAllText(
-            Path.ChangeExtension(assembly, ".runtimeconfig.json"),
-            "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}");
-        var executed = RunDotnet(assembly);
-        Assert.Equal(0, executed.Exit);
-        Assert.Equal("15" + Environment.NewLine, executed.Output);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
     }
 
     public void Dispose()
@@ -1460,6 +1563,28 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         {
             // Best-effort cleanup, as above.
         }
+    }
+
+    private void AssertRealDriverVerifiesAndRuns(string printed, string fixture, string expected)
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixture });
+        TranslationTestValidation.AssertBinds(resolver, printed);
+        string source = Path.Combine(this.fixtureDirectory, "Boundaries.gs");
+        string assembly = Path.Combine(this.fixtureDirectory, "Boundaries.dll");
+        string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
+        File.WriteAllText(source, printed);
+        var compiled = RunDotnet(compiler, "/target:exe", "/targetframework:net10.0", $"/reference:{fixture}", $"/out:{assembly}", source);
+        Assert.True(compiled.Exit == 0, printed + Environment.NewLine + compiled.Output);
+        Assert.True(IlVerifyRunner.IsEnabled);
+        IlVerifyResult verified = new IlVerifyRunner().Verify(assembly, new[] { fixture });
+        Assert.Equal(IlVerifyStatus.Passed, verified.Status);
+        Assert.Empty(verified.Errors);
+        File.WriteAllText(
+            Path.ChangeExtension(assembly, ".runtimeconfig.json"),
+            "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}");
+        var executed = RunDotnet(assembly);
+        Assert.True(executed.Exit == 0, printed + Environment.NewLine + executed.Output);
+        Assert.True(executed.Output == expected + Environment.NewLine, printed + Environment.NewLine + executed.Output);
     }
 
     private string EmitFixture()
@@ -1487,6 +1612,15 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                             Probe.Calls++;
                             return value == "keep" ? new NullableResultBox() : null;
                         }
+                    }
+                    public sealed class NullAcceptingBox {
+                        public static implicit operator NullAcceptingBox?(string? value) {
+                            Probe.Calls++;
+                            return value == null ? null : new NullAcceptingBox();
+                        }
+                    }
+                    public static class FrozenTupleContract {
+                        public static int Accept((MaybeBox Value, int Code) row) => row.Code;
                     }
                 #nullable disable
                     public struct Token {

@@ -6860,15 +6860,7 @@ public sealed partial class CSharpToGSharpTranslator
                 node = tuple;
             }
 
-            ITypeSymbol sinkType = sink switch
-            {
-                IFieldSymbol field => field.Type,
-                ILocalSymbol local => local.Type,
-                IParameterSymbol parameter => parameter.Type,
-                IPropertySymbol property => property.Type,
-                IMethodSymbol method => method.ReturnType,
-                _ => null,
-            };
+            ITypeSymbol sinkType = ObliviousNullabilityAnalyzer.SymbolValueType(sink);
             sinkType ??= node is TupleExpressionSyntax containingTuple
                 ? this.context.GetTypeInfo(containingTuple).ConvertedType
                 : null;
