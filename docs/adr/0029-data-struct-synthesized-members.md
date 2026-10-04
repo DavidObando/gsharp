@@ -134,6 +134,11 @@ Compiler-owned typed slots participate in the shared declared-member projection
 used by normal calls, named arguments, method groups and completion, not only
 interface conformance and emission. Imported CLR members retain their actual
 signatures without additional synthetic duplicates.
+The same projection includes the already synthesized `Equals(object? obj)`
+override, so exposing typed equality does not hide object calls or object-typed
+method groups. Its parameter name and nullability use the existing CLR
+signature reader and parameter emitter, consistently in implementation and
+reference images; its body and virtual-slot finality are unchanged.
 Lazy equality signatures are materialized against source generic vectors before
 emission reifies nested owners. Implementation/reference emission must leave
 later source queries and repeated emits with the same declared generic shape.

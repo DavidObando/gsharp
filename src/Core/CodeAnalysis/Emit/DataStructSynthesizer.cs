@@ -993,13 +993,14 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
 
-        this.emitCtx.Metadata.AddMethodDefinition(
+        var handle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: DataObjectOverrideAttributes(structSym),
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.nextParameterHandle());
+            parameterList: this.EmitEqualityParameter(structSym.DataEqualsObject.Parameters[0]));
+        this.cache.MethodHandles[structSym.DataEqualsObject] = handle;
     }
 
     /// <summary>

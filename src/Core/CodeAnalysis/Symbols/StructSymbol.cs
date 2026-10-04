@@ -101,6 +101,7 @@ public sealed class StructSymbol : TypeSymbol
     private TypeArraySnapshot? substitutedImplementedClrInterfaces;
     private TypeSnapshot? substitutedImportedBaseType;
     private FunctionSymbol? dataEqualsSelf;
+    private FunctionSymbol? dataEqualsObject;
     private FunctionSymbol? dataEqualsBase;
     private StructSymbol? dataEqualsBaseOwner;
 
@@ -687,6 +688,9 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>Gets the compiler-owned self equality signature on this exact construction.</summary>
     internal FunctionSymbol DataEqualsSelf => dataEqualsSelf ??= DataEqualityMemberModel.Create(this, this, isOverride: false);
+
+    /// <summary>Gets the compiler-owned override of the nullable object equality slot.</summary>
+    internal FunctionSymbol DataEqualsObject => dataEqualsObject ??= DataEqualityMemberModel.CreateObject(this);
 
     /// <summary>Gets the compiler-owned override of a direct data base's typed equality slot.</summary>
     internal FunctionSymbol? DataEqualsBase
@@ -1758,6 +1762,7 @@ public sealed class StructSymbol : TypeSymbol
             builder.Add(baseEquals);
         }
 
+        builder.Add(DataEqualsObject);
         return builder.ToImmutable();
     }
 

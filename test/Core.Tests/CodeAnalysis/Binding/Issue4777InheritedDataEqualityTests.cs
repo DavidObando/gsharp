@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -16,6 +17,115 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 public class Issue4777InheritedDataEqualityTests
 {
+    [Theory]
+    [InlineData("Leaf")]
+    [InlineData("Root")]
+    public void SourceObjectCallsAndMethodGroups_PreserveMostDerivedEquality(string owner)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            import System
+            open data class Root(Tag int32)
+            data class Leaf(Tag int32, Extra int32) : Root(Tag)
+            let receiver {{owner}} = Leaf(1, 2)
+            let same Object = Leaf(1, 2)
+            let different Object = Leaf(1, 3)
+            let wrong Object = Root(1)
+            let missing Object? = nil
+            let equals Func[Object?, bool] = receiver.Equals
+            receiver.Equals(same) && !receiver.Equals(different)
+                && !receiver.Equals(wrong) && !receiver.Equals(missing)
+                && receiver.Equals(obj: same)
+                && equals(same) && !equals(different) && !equals(wrong) && !equals(nil)
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericValueData_ObjectCallsAndMethodGroupsPreserveBoxedEquality()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+            data struct Payload[T any](Value T)
+            let receiver = Payload[int32]{Value: 1}
+            let same Object = Payload[int32]{Value: 1}
+            let different Object = Payload[int32]{Value: 2}
+            let wrong Object = Payload[string]{Value: "1"}
+            let equals Func[Object?, bool] = receiver.Equals
+            receiver.Equals(same) && !receiver.Equals(different)
+                && !receiver.Equals(wrong) && !receiver.Equals(nil)
+                && receiver.Equals(obj: same)
+                && equals(same) && !equals(different) && !equals(wrong) && !equals(nil)
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
+    public void SourceNestedGenericData_ObjectAndTypedMethodGroupsRetainConstructedOwner()
+    {
+        var compilation = new Compilation(SyntaxTree.Parse("""
+            package NestedCalls
+            import System
+            public class Owner[T any] {
+                public open data class Root[U any](Value U)
+                public data class Leaf[U any](Value U, Extra U) : Root[U](Value)
+            }
+            public func Compare(receiver Owner[int32].Root[string],
+                same Owner[int32].Root[string], different Owner[int32].Root[string]) bool {
+                let sameObject Object = same
+                let differentObject Object = different
+                let objectEquals Func[Object?, bool] = receiver.Equals
+                let typedEquals Func[Owner[int32].Root[string]?, bool] = receiver.Equals
+                return receiver.Equals(sameObject) && !receiver.Equals(differentObject)
+                    && objectEquals(same) && !objectEquals(different) && !objectEquals(nil)
+                    && typedEquals(same) && !typedEquals(different) && !typedEquals(nil)
+            }
+            """)) { IsLibrary = true };
+        using var image = new MemoryStream();
+        var result = compilation.Emit(image);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics));
+        image.Position = 0;
+        var context = new AssemblyLoadContext(nameof(SourceNestedGenericData_ObjectAndTypedMethodGroupsRetainConstructedOwner), isCollectible: true);
+        try
+        {
+            var assembly = context.LoadFromStream(image);
+            var leaf = assembly.GetType("NestedCalls.Owner`1+Leaf`1", throwOnError: true).MakeGenericType(typeof(int), typeof(string));
+            var first = Activator.CreateInstance(leaf, "value", "extra");
+            var same = Activator.CreateInstance(leaf, "value", "extra");
+            var different = Activator.CreateInstance(leaf, "value", "different");
+            var compare = assembly.GetTypes().SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                .Single(method => method.Name == "Compare");
+            Assert.Equal(true, compare.Invoke(null, new[] { first, same, different }));
+        }
+        finally
+        {
+            context.Unload();
+        }
+    }
+
+    [Fact]
+    public void SourceObjectMethodGroup_UsesTheSynthesizedNullableObjectSlot()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+            data class Payload(Value int32)
+            let receiver = Payload(1)
+            let equals Func[Object?, bool] = receiver.Equals
+            equals
+            """);
+        Assert.Empty(result.Diagnostics);
+        var method = Assert.IsAssignableFrom<Delegate>(result.Value).Method;
+        Assert.Equal("Payload", method.DeclaringType.Name);
+        var parameter = Assert.Single(method.GetParameters());
+        Assert.Equal(typeof(object), parameter.ParameterType);
+        Assert.Equal("obj", parameter.Name);
+        Assert.Equal(NullabilityState.Nullable, new NullabilityInfoContext().Create(parameter).ReadState);
+        Assert.True(method.IsVirtual);
+        Assert.True(method.IsFinal);
+        Assert.Equal(typeof(object), method.GetBaseDefinition().DeclaringType);
+    }
+
     [Fact]
     public void NativeNestedGenericData_EmitThenQueryRetainsSourceEqualityShape()
     {
@@ -45,6 +155,13 @@ public class Issue4777InheritedDataEqualityTests
                 Assert.NotEmpty(methods);
                 foreach (var method in methods)
                 {
+                    if (method.Parameters[0].Type.StripToBareShape() == TypeSymbol.Object)
+                    {
+                        Assert.Equal("obj", method.Parameters[0].Name);
+                        Assert.True(TypeSymbol.ContainsReferenceNullableAnnotation(method.Parameters[0].Type));
+                        continue;
+                    }
+
                     var parameter = Assert.IsType<StructSymbol>(Assert.Single(method.Parameters).Type.StripToBareShape());
                     Assert.Single(parameter.TypeArguments);
                     Assert.Equal("U", parameter.TypeArguments[0].Name);
@@ -88,7 +205,7 @@ public class Issue4777InheritedDataEqualityTests
         var leaf = Assert.Single(compilation.GlobalScope.Structs, s => s.Name == "Leaf");
         var query = new MemberQuery(true, false, false, MemberKinds.Method);
         var slots = leaf.GetMethods("Equals");
-        Assert.Equal(2, slots.Length);
+        Assert.Equal(3, slots.Length);
         Assert.Equal<FunctionSymbol>(slots, TypeMemberModel.GetMethods(leaf, "Equals", query));
         Assert.Same(slots[0], TypeMemberModel.LookupMember(leaf, "Equals", query));
         Assert.Equal(slots, TypeMemberModel.EnumerateMembers(leaf, query).OfType<FunctionSymbol>());

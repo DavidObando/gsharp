@@ -961,6 +961,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 _ = symbol.DataEqualsSelf;
                 _ = symbol.DataEqualsBase;
+                _ = symbol.DataEqualsObject;
             }
         }
 
@@ -2220,6 +2221,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.cache.DataClassCopyConstructorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 1);
                 this.cache.DataClassCloneHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 2);
                 this.cache.MethodHandles[c.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow + 3);
+                this.cache.MethodHandles[c.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 4);
                 if (c.DataEqualsBase is { } baseEquals)
                 {
                     this.cache.MethodHandles[baseEquals] = MetadataTokens.MethodDefinitionHandle(methodRow + 5);
@@ -2396,6 +2398,7 @@ internal sealed class ReflectionMetadataEmitter
             else if (s.IsData)
             {
                 this.cache.MethodHandles[s.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow);
+                this.cache.MethodHandles[s.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 1);
 
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,

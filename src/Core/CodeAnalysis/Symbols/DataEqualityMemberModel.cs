@@ -39,4 +39,27 @@ internal static class DataEqualityMemberModel
             isOpen: owner.IsClass && (owner.IsOpen || owner.IsSealedHierarchy) && !isOverride,
             isOverride: isOverride);
     }
+
+    /// <summary>Creates the existing synthesized override of object equality.</summary>
+    /// <param name="owner">The declaring data type.</param>
+    /// <returns>The compiler-owned object equality signature.</returns>
+    internal static FunctionSymbol CreateObject(StructSymbol owner)
+    {
+        var method = Invariant.Required(
+            typeof(object).GetMethod("Equals", new[] { typeof(object) }),
+            "System.Object declares instance Equals");
+        var parameter = method.GetParameters()[0];
+        return new FunctionSymbol(
+            "Equals",
+            ImmutableArray.Create(new ParameterSymbol(
+                Invariant.Required(parameter.Name, "System.Object.Equals has a named parameter"),
+                MemberLookup.GetClrOpenParameterTypeSymbol(parameter, typeof(object), ImmutableArray<TypeSymbol>.Empty))),
+            TypeSymbol.Bool,
+            declaration: null,
+            package: null,
+            accessibility: Accessibility.Public,
+            receiverType: owner,
+            isOpen: owner.IsClass && (owner.IsOpen || owner.IsSealedHierarchy),
+            isOverride: true);
+    }
 }

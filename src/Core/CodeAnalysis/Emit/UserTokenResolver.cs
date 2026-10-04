@@ -1657,6 +1657,10 @@ internal sealed class UserTokenResolver
             {
                 method = definition.DataEqualsSelf;
             }
+            else if (ReferenceEquals(method, containingType.DataEqualsObject))
+            {
+                method = definition.DataEqualsObject;
+            }
             else if (ReferenceEquals(method, containingType.DataEqualsBase))
             {
                 method = Invariant.Required(definition.DataEqualsBase, "a constructed typed-base slot has a definition");
