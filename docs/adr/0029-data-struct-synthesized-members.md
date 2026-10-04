@@ -134,6 +134,9 @@ Compiler-owned typed slots participate in the shared declared-member projection
 used by normal calls, named arguments, method groups and completion, not only
 interface conformance and emission. Imported CLR members retain their actual
 signatures without additional synthetic duplicates.
+Lazy equality signatures are materialized against source generic vectors before
+emission reifies nested owners. Implementation/reference emission must leave
+later source queries and repeated emits with the same declared generic shape.
 
 A declared `IEquatable[Self]` is implemented by the compiler-owned self slot;
 cs2gs preserves the interface advertised by the native record. This does **not**

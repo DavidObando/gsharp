@@ -17,6 +17,67 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class Issue4777InheritedDataEqualityTests
 {
     [Fact]
+    public void NativeNestedGenericData_EmitThenQueryRetainsSourceEqualityShape()
+    {
+        var compilation = new Compilation(SyntaxTree.Parse("""
+            package NativeNested
+            public class Outer[T any] {
+                public open data class Root[U any](Value U)
+                public data class Leaf[U any](Value U, Extra U) : Root[U](Value)
+                public data struct Payload[U any](Value U)
+            }
+            """)) { IsLibrary = true };
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
+        var dataTypes = compilation.GlobalScope.Structs.Where(s => s.IsData).ToArray();
+        Assert.Equal(3, dataTypes.Length);
+        Assert.All(dataTypes, s => Assert.Single(s.TypeParameters));
+        for (var emission = 0; emission < 2; emission++)
+        {
+            using var image = new MemoryStream();
+            using var reference = new MemoryStream();
+            var result = compilation.Emit(image, refStream: reference);
+            Assert.True(result.Success, string.Join("\n", result.Diagnostics));
+            Assert.True(reference.Length > 0);
+            foreach (var type in dataTypes)
+            {
+                Assert.Single(type.TypeParameters);
+                var methods = TypeMemberModel.GetMethods(type, "Equals", new MemberQuery(true, false, false, MemberKinds.Method));
+                Assert.NotEmpty(methods);
+                foreach (var method in methods)
+                {
+                    var parameter = Assert.IsType<StructSymbol>(Assert.Single(method.Parameters).Type.StripToBareShape());
+                    Assert.Single(parameter.TypeArguments);
+                    Assert.Equal("U", parameter.TypeArguments[0].Name);
+                }
+            }
+
+            image.Position = 0;
+            var context = new AssemblyLoadContext(nameof(NativeNestedGenericData_EmitThenQueryRetainsSourceEqualityShape), isCollectible: true);
+            try
+            {
+                var assembly = context.LoadFromStream(image);
+                var root = assembly.GetType("NativeNested.Outer`1+Root`1", throwOnError: true).MakeGenericType(typeof(int), typeof(string));
+                var leaf = assembly.GetType("NativeNested.Outer`1+Leaf`1", throwOnError: true).MakeGenericType(typeof(int), typeof(string));
+                var first = Activator.CreateInstance(leaf, "value", "extra");
+                var same = Activator.CreateInstance(leaf, "value", "extra");
+                var different = Activator.CreateInstance(leaf, "value", "different");
+                foreach (var owner in new[] { root, leaf })
+                {
+                    var method = owner.GetMethod("Equals", new[] { owner });
+                    Assert.NotNull(method);
+                    Assert.Equal(false, method.Invoke(first, new[] { different }));
+                    Assert.Equal(true, method.Invoke(first, new[] { same }));
+                    Assert.Equal(false, method.Invoke(first, new object[] { null }));
+                }
+            }
+            finally
+            {
+                context.Unload();
+            }
+        }
+    }
+
+    [Fact]
     public void SourceMemberQueriesAndCompletion_ExposeTheSameTypedSlots()
     {
         var compilation = new Compilation(SyntaxTree.Parse("""

@@ -953,6 +953,17 @@ internal sealed class ReflectionMetadataEmitter
         emitter.emitCtx.DebugInformation = debugInformation ?? new DebugInformationOptions();
         emitter.emitCtx.PdbStream = pdbStream;
 
+        // Lazy data signatures must use source vectors, not emission-scoped
+        // enclosing+own vectors installed by nested generic reification.
+        foreach (var symbol in program.Structs)
+        {
+            if (symbol.IsData && symbol.ClrType == null)
+            {
+                _ = symbol.DataEqualsSelf;
+                _ = symbol.DataEqualsBase;
+            }
+        }
+
         // Nested generic reification belongs to this emission. A following
         // reference-assembly emission must start from the same source vector.
         var structParameters = program.Structs.Select(s => (Symbol: s, Parameters: s.TypeParameters)).ToArray();
