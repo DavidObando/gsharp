@@ -2577,6 +2577,14 @@ public sealed class Conversion
             return removesReferenceNullability;
         }
 
+        // Slice covariance must be explicitly spelled, including when either
+        // array reference is nullable. Reuse the same element relationship as
+        // the bare-array cast; lifting it preserves nil and reference identity.
+        if (IsCovariantArrayUpcast(from, to))
+        {
+            return true;
+        }
+
         // A checked downcast exists whenever the target widens back to the
         // source. Disable this same explicit-reference fallback during the
         // reverse probe so unrelated reference pairs cannot recurse forever.
@@ -2686,8 +2694,8 @@ public sealed class Conversion
     /// <returns><see langword="true"/> for a covariant one-dimensional array upcast.</returns>
     internal static bool IsCovariantArrayUpcast(TypeSymbol? from, TypeSymbol? to)
     {
-        var sourceElement = OneDimensionalArrayElement(from);
-        var targetElement = OneDimensionalArrayElement(to);
+        var sourceElement = UnwrapReferenceNullable(OneDimensionalArrayElement(from));
+        var targetElement = UnwrapReferenceNullable(OneDimensionalArrayElement(to));
         if (sourceElement == null
             || targetElement == null
             || !IsReferenceLikeTarget(sourceElement)
