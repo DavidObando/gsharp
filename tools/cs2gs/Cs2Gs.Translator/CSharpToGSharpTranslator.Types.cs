@@ -8,7 +8,6 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
-using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -273,7 +272,11 @@ public sealed partial class CSharpToGSharpTranslator
                     expressionBody = this.TranslateExpression(bodyExpression);
                     if (this.IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(bodyExpression))
                     {
-                        expressionBody = new NonNullAssertionExpression(expressionBody);
+                        expressionBody = this.ReportStoreBridge(
+                            bodyExpression,
+                            expressionBody,
+                            new NonNullAssertionExpression(expressionBody),
+                            this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod);
                     }
                     else if (this.IsGSharpNullableAnalyzerExpression(bodyExpression)
                         && this.AnalyzerBridgeTargetIsNonNull(GetEffectiveReturnType(
@@ -285,7 +288,11 @@ public sealed partial class CSharpToGSharpTranslator
                         // the `T` of an async `Task<T>`, never the envelope — the
                         // same bridge a `return` statement takes. (gsc erases the
                         // reference `!!` inside an expression tree.)
-                        expressionBody = EnsureNonNullAssertion(expressionBody);
+                        expressionBody = this.ReportStoreBridge(
+                            bodyExpression,
+                            expressionBody,
+                            EnsureNonNullAssertion(expressionBody),
+                            this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod);
                     }
                 }
                 finally
@@ -1057,6 +1064,46 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression subject = this.TranslateExpression(node.Expression);
             var cases = new List<SwitchStatementCase>();
+            var sectionByLocalFunction = new Dictionary<IMethodSymbol, SwitchSectionSyntax>(
+                SymbolEqualityComparer.Default);
+            var declarationByLocalFunction = new Dictionary<IMethodSymbol, LocalFunctionStatementSyntax>(
+                SymbolEqualityComparer.Default);
+            var orderedBySection = new Dictionary<SwitchSectionSyntax, IReadOnlyList<StatementSyntax>>();
+            foreach (SwitchSectionSyntax section in node.Sections)
+            {
+                orderedBySection.Add(
+                    section,
+                    this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span));
+                foreach (LocalFunctionStatementSyntax localFunction in section.Statements
+                    .OfType<LocalFunctionStatementSyntax>())
+                {
+                    using IDisposable modelScope = this.context.UseSemanticModelFor(localFunction.SyntaxTree);
+                    if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol symbol)
+                    {
+                        sectionByLocalFunction[symbol] = section;
+                        declarationByLocalFunction[symbol] = localFunction;
+                    }
+                }
+            }
+
+            this.RegisterRecursiveLocalFunctionLifts(
+                node.Sections.SelectMany(section => section.Statements),
+                component => component
+                    .Select(symbol => sectionByLocalFunction[symbol])
+                    .Distinct()
+                    .Skip(1)
+                    .Any()
+                    || component.Any(symbol =>
+                        this.IsLocalFunctionReferencedFromAnotherSwitchSection(
+                            symbol,
+                            declarationByLocalFunction[symbol])),
+                processOnlyForcedGroups: true);
+            foreach (SwitchSectionSyntax section in node.Sections)
+            {
+                IReadOnlyList<StatementSyntax> ordered = orderedBySection[section];
+                this.RegisterCapturingRecursiveLocalFunctions(ordered);
+                this.RegisterRecursiveLocalFunctionLifts(ordered);
+            }
 
             // Issue #1884: a `goto case K;` / `goto default;` anywhere in this
             // switch (but not in a nested switch, whose own gotos target its
@@ -1101,7 +1148,7 @@ public sealed partial class CSharpToGSharpTranslator
                     var constantLabels = labels.Cast<CaseSwitchLabelSyntax>().ToList();
                     var mergedArm = new SwitchStatementCase(
                         new ConstantPattern(this.TranslateExpression(constantLabels[0].Value)),
-                        this.TranslateSwitchSectionBody(section))
+                        this.TranslateSwitchSectionBody(section, orderedBySection[section]))
                     {
                         AdditionalPatterns = constantLabels
                             .Skip(1)
@@ -1162,7 +1209,9 @@ public sealed partial class CSharpToGSharpTranslator
                                     guards,
                                     mutableBindings);
                                 this.UseMutableSwitchPatternLocals(mutableBindings);
-                                patternBody = this.TranslateSwitchSectionBody(section);
+                                patternBody = this.TranslateSwitchSectionBody(
+                                    section,
+                                    orderedBySection[section]);
                                 patternBody = this.MaterializeMutableSwitchPatternLocals(
                                     patternBody,
                                     mutableBindings,
@@ -1189,6 +1238,7 @@ public sealed partial class CSharpToGSharpTranslator
                                 new ConstantPattern(this.TranslateExpression(valueLabel.Value)),
                                 this.TranslateSwitchSectionBody(
                                     section,
+                                    orderedBySection[section],
                                     gotoTargets.Contains(valueLabel) ? this.GotoCaseOrDefaultLabelName(valueLabel) : null)));
                             break;
 
@@ -1197,6 +1247,7 @@ public sealed partial class CSharpToGSharpTranslator
                                 null,
                                 this.TranslateSwitchSectionBody(
                                     section,
+                                    orderedBySection[section],
                                     gotoTargets.Contains(defaultLabel) ? this.GotoCaseOrDefaultLabelName(defaultLabel) : null)));
                             break;
 
@@ -1306,10 +1357,16 @@ public sealed partial class CSharpToGSharpTranslator
                 && binary.IsKind(SyntaxKind.OrPattern)
                 && (IsTotalPattern(binary.Left) || IsTotalPattern(binary.Right)));
 
-        private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section, string injectLabel = null)
+        private BlockStatement TranslateSwitchSectionBody(
+            SwitchSectionSyntax section,
+            IReadOnlyList<StatementSyntax> ordered,
+            string injectLabel = null)
         {
             var statements = new List<GStatement>();
 
+            // Recursive local-function state for every section is registered
+            // once, up front, by TranslateSwitchStatement (the only caller), so
+            // cross-section references see each section's lifts.
             // Issue #4262 follow-up (item 2): mirrors TranslateBlock's own
             // per-statement guarded-field-local-capture loop — a direct
             // early-return guard in a switch-section body leaks to the
@@ -1317,7 +1374,7 @@ public sealed partial class CSharpToGSharpTranslator
             // (AddFollowingStatements explicitly supports SwitchSectionSyntax).
             var activeGuardCaptures = new Dictionary<ISymbol, IfStatementSyntax>(SymbolEqualityComparer.Default);
             var capturedNamesInScope = new HashSet<string>();
-            foreach (StatementSyntax statement in section.Statements)
+            foreach (StatementSyntax statement in ordered)
             {
                 statements.AddRange(this.TranslateStatement(statement));
 
@@ -1487,7 +1544,8 @@ public sealed partial class CSharpToGSharpTranslator
                         tupleLiteral.Elements[i],
                         tupleTarget.TupleElements[i].Type,
                         enclosingIterator,
-                        includePromotedValue: true));
+                        includePromotedValue: true,
+                        reportedSlotType: tupleTarget.TupleElements[i].Type));
                 }
 
                 value = new TupleLiteralExpression(bridged);
@@ -1502,7 +1560,76 @@ public sealed partial class CSharpToGSharpTranslator
                     includePromotedValue: true);
             }
 
+            // At statement position the parser reads `yield (` as a tuple
+            // yield, not as an arbitrary parenthesized expression. Keep the
+            // expression's target type and iterator-time evaluation by
+            // materializing it immediately before the yield.
+            if (value is not TupleLiteralExpression
+                && !IsUnambiguousYieldValue(value))
+            {
+                string name = this.FreshYieldedValueName(node);
+                GTypeReference type = null;
+                if (typeInfo.ConvertedType is { } yieldType)
+                {
+                    type = this.typeMapper.Map(yieldType, this.context, node.Expression.GetLocation());
+                    type = this.PromoteTupleDeclarationIfTainted(type, yieldType, enclosingIterator);
+                    type = this.PromoteAwaitedReturnIfTainted(type, yieldType, enclosingIterator);
+                }
+
+                return new GStatement[]
+                {
+                    new LocalDeclarationStatement(
+                        BindingKind.Let,
+                        name,
+                        type,
+                        initializer: value),
+                    new YieldStatement(new IdentifierExpression(name)),
+                };
+            }
+
             return new[] { (GStatement)new YieldStatement(value) };
+        }
+
+        // ponytail: only known grammar-safe heads stay inline. A binary
+        // expression can require grouping for G# precedence even without C#
+        // parentheses, and a string literal can become a spliced concatenation.
+        // Materialize them rather than duplicating printer rules.
+        private static bool IsUnambiguousYieldValue(GExpression value) => value switch
+        {
+            LiteralExpression { Kind: LiteralKind.Int or LiteralKind.Float or LiteralKind.Bool or LiteralKind.Char or LiteralKind.Null } => true,
+            IdentifierExpression or ThisExpression
+                or UnaryExpression or CheckedExpression or TypeOfExpression
+                or DefaultValueExpression => true,
+            ConversionExpression { TargetType: NamedTypeReference } => true,
+            MemberAccessExpression member => IsUnambiguousYieldValue(member.Target),
+            InvocationExpression invocation => IsUnambiguousYieldValue(invocation.Target),
+            IndexExpression index => IsUnambiguousYieldValue(index.Target),
+            NonNullAssertionExpression assertion => IsUnambiguousYieldValue(assertion.Operand),
+            _ => false,
+        };
+
+        private string FreshYieldedValueName(YieldStatementSyntax node)
+        {
+            if (!this.state.YieldedValueNamesByTree.TryGetValue(
+                node.SyntaxTree,
+                out HashSet<string> usedNames))
+            {
+                usedNames = new HashSet<string>(
+                    node.SyntaxTree.GetRoot().DescendantTokens()
+                        .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
+                        .Select(token => token.ValueText),
+                    StringComparer.Ordinal);
+                this.state.YieldedValueNamesByTree.Add(node.SyntaxTree, usedNames);
+            }
+
+            string name;
+            do
+            {
+                name = $"__yielded{this.state.YieldedValueCounter++}";
+            }
+            while (!usedNames.Add(name));
+
+            return name;
         }
 
         private static SyntaxNode GetBreakTarget(YieldStatementSyntax node)
@@ -2279,10 +2406,6 @@ public sealed partial class CSharpToGSharpTranslator
             // `List<int>`), and sanitized like every other declared/synthesized
             // name so a keyword-colliding designator agrees with its references
             // (issue #1734).
-            string designator = recursive.Designation is SingleVariableDesignationSyntax named
-                ? this.EmittedName(named, named.Identifier)
-                : SanitizeIdentifier(LowerCamel(GetRightmostTypeName(recursive.Type)));
-
             // Issue #1839 (N3): two typed recursive subpatterns within the SAME
             // arm/scope (e.g. `Ns.Circle or Other.Circle`) can synthesize the
             // identical designator from their distinct rightmost simple names,
@@ -2290,7 +2413,9 @@ public sealed partial class CSharpToGSharpTranslator
             // Uniquify on collision within this arm's shared `usedDesignators`
             // scope (threaded alongside `bindings`) rather than emitting a
             // colliding declaration.
-            designator = Uniquify(designator, usedDesignators);
+            string designator = recursive.Designation is SingleVariableDesignationSyntax named
+                ? Uniquify(this.EmittedName(named, named.Identifier), usedDesignators)
+                : this.SynthesizePatternDesignator(recursive, usedDesignators);
 
             if (recursive.PropertyPatternClause != null)
             {
@@ -2543,6 +2668,37 @@ public sealed partial class CSharpToGSharpTranslator
             return char.ToLowerInvariant(name[0]) + name.Substring(1);
         }
 
+        // A designator synthesized from the pattern type (`circle` for
+        // `Circle { }`) is a readable local, so it must not capture a name the
+        // arm already refers to: a source identifier in the arm, or a lifted
+        // local-function helper (issue #4302), whose references print bare.
+        private string SynthesizePatternDesignator(
+            RecursivePatternSyntax recursive,
+            HashSet<string> usedDesignators)
+        {
+            string stem = SanitizeIdentifier(LowerCamel(GetRightmostTypeName(recursive.Type)));
+            SyntaxNode arm = recursive.Ancestors()
+                .FirstOrDefault(node => node is SwitchSectionSyntax
+                    or SwitchExpressionArmSyntax
+                    or StatementSyntax)
+                ?? recursive;
+            var occupied = new HashSet<string>(usedDesignators, StringComparer.Ordinal);
+            occupied.UnionWith(this.state.LiftedStaticLocalFunctions.Values);
+            occupied.UnionWith(this.state.LiftedRecursiveLocalFunctions.Values.Select(lift => lift.Name));
+            occupied.UnionWith(
+                arm.DescendantTokens()
+                    .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
+                    .Select(token => this.nameAllocator.GetName(token.ValueText)));
+
+            INamedTypeSymbol owner = this.state.CurrentEmittedAggregate
+                ?? this.context.SemanticModel.GetEnclosingSymbol(recursive.SpanStart)?.ContainingType;
+            string designator = LiftedLocalFunctionNameAllocator
+                .For(this.context.Compilation)
+                .ClaimDesignator(owner, stem, occupied.Contains);
+            usedDesignators.Add(designator);
+            return designator;
+        }
+
         // Issue #1839 (N3): appends a numeric suffix (`circle_2`, `circle_3`, …)
         // when `name` was already used earlier in the same arm/scope, so two
         // typed recursive subpatterns that happen to collapse to the same
@@ -2578,7 +2734,8 @@ public sealed partial class CSharpToGSharpTranslator
                 || rootPattern.DescendantNodesAndSelf()
                     .OfType<SingleVariableDesignationSyntax>()
                     .Any(designation =>
-                        this.EmittedName(designation, designation.Identifier) == candidate));
+                        this.EmittedName(designation, designation.Identifier) == candidate)
+                || !this.TryClaimSynthesizedLocalName(candidate, pattern));
 
             usedDesignators.Add(candidate);
             return candidate;

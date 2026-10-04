@@ -971,13 +971,15 @@ public sealed class LambdaExpression : GExpression
     /// renders as the idiomatic arrow form <c>(params) -&gt; { … }</c> (ADR-0128 /
     /// issue #1172), whose statement-block body reaches parity with func literals.
     /// </param>
+    /// <param name="isRefReturn">Whether the function literal returns by reference.</param>
     public LambdaExpression(
         IReadOnlyList<Parameter> parameters,
         GExpression expressionBody = null,
         BlockStatement blockBody = null,
         bool isAsync = false,
         GTypeReference returnType = null,
-        bool isFunctionLiteral = false)
+        bool isFunctionLiteral = false,
+        bool isRefReturn = false)
     {
         Parameters = parameters ?? new List<Parameter>();
         ExpressionBody = expressionBody;
@@ -985,6 +987,7 @@ public sealed class LambdaExpression : GExpression
         IsAsync = isAsync;
         ReturnType = returnType;
         IsFunctionLiteral = isFunctionLiteral;
+        IsRefReturn = isRefReturn;
     }
 
     /// <summary>Gets the lambda parameters.</summary>
@@ -1013,6 +1016,9 @@ public sealed class LambdaExpression : GExpression
     /// (false, the default — ADR-0128 / issue #1172).
     /// </summary>
     public bool IsFunctionLiteral { get; }
+
+    /// <summary>Gets a value indicating whether a function literal returns by reference.</summary>
+    public bool IsRefReturn { get; }
 }
 
 /// <summary>

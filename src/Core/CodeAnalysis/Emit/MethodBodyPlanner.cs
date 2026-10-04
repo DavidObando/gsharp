@@ -843,7 +843,9 @@ internal sealed class MethodBodyPlanner
     public void RegisterConstructedTypeAliases()
     {
         var collector = new ClosureEmitter.ConstructedTypeCollector();
-        foreach (var kvp in this.emitCtx.Program.Functions)
+
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var kvp in BoundProgramOrder.Functions(this.emitCtx.Program))
         {
             collector.RewriteStatement(kvp.Value);
         }

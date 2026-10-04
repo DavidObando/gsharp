@@ -91,7 +91,9 @@ internal static class CaptureBoxingRewriter
         var changed = false;
         var allLambdaUpdates = new Dictionary<FunctionSymbol, BoundBlockStatement>();
 
-        foreach (var pair in program.Functions)
+        // Issue #4663: box classes are numbered in this loop, so it must not
+        // follow the identity-hash order of program.Functions.
+        foreach (var pair in BoundProgramOrder.Functions(program))
         {
             var prepared = ManagedAliasPlanner.Prepare(pair.Value);
             var (newBody, lambdaUpdates) = RewriteFunctionBody(
@@ -114,7 +116,7 @@ internal static class CaptureBoxingRewriter
         }
 
         var initializers = program.Initializers.ToBuilder();
-        foreach (var pair in program.Initializers)
+        foreach (var pair in BoundProgramOrder.Initializers(program))
         {
             var plan = pair.Value;
             var prepared = ManagedAliasPlanner.Prepare(plan.Body);

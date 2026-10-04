@@ -192,6 +192,25 @@ internal static class RepositoryMirror
         return written;
     }
 
+    /// <summary>Rebinds mirrored G# SDK declarations in projects and shared MSBuild files.</summary>
+    /// <param name="destinationRoot">The mirrored repository root.</param>
+    /// <param name="sdkMoniker">The run's SDK moniker.</param>
+    internal static void RebindMirroredSdkFiles(string destinationRoot, string sdkMoniker)
+    {
+        foreach (string path in SdkPin.BuildableSdkFilePaths(destinationRoot))
+        {
+            XDocument project = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+            if (project.Root is null || !SdkPin.ProjectSdkNames(project.Root)
+                .Any(name => string.Equals(name, SdkPin.PackageId, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            SdkPin.RebindProjectSdk(project.Root, sdkMoniker);
+            project.Save(path, SaveOptions.DisableFormatting);
+        }
+    }
+
     internal static void ValidateCompleted(
         string sourceRoot,
         string destinationRoot,
@@ -406,22 +425,36 @@ internal static class RepositoryMirror
             return;
         }
 
-        if (project.Root.Attribute("Sdk") is not null)
+        // Bootstrap projects can explicitly import Microsoft.NET.Sdk before
+        // their bootstrap targets; both imports must still be replaced.
+        XElement[] bootstrapImports = project.Root.Descendants().Where(element =>
+                element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase)
+                && element.Attribute("Project")?.Value?.Contains(
+                    "Gsharp.NET.Sdk.Bootstrap", StringComparison.OrdinalIgnoreCase) == true)
+            .ToArray();
+        bool bootstrapProject = bootstrapImports.Length > 0;
+        if (!bootstrapProject && SdkPin.RebindProjectSdk(project.Root, sdkMoniker))
         {
             return;
         }
-
-        // The Sdk ATTRIBUTE, not <Import Sdk="…"/>: only the attribute form
-        // carries a "Name/Version" moniker, and the mirror has to pin the exact
-        // package it built the rest of the tree against.
-        project.Root.SetAttributeValue("Sdk", sdkMoniker);
 
         foreach (XElement import in project.Root.Descendants()
             .Where(element => element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase))
             .ToList())
         {
+            string importedSdk = import.Attribute("Sdk")?.Value;
+            if (!bootstrapImports.Contains(import)
+                && (string.IsNullOrWhiteSpace(importedSdk)
+                    || (!SdkPin.IsGsharpSdkAttribute(importedSdk)
+                        && !string.Equals(importedSdk.Trim(), "Microsoft.NET.Sdk", StringComparison.OrdinalIgnoreCase))))
+            {
+                continue;
+            }
+
             import.Remove();
         }
+
+        SdkPin.RebindProjectSdk(project.Root, sdkMoniker, migrateCSharpSdk: true);
 
         foreach (XElement reference in project.Root.Descendants()
             .Where(element =>

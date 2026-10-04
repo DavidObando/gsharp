@@ -30,11 +30,11 @@ namespace Cs2Gs.Tests;
 /// the arrow form.
 /// </para>
 /// <para>
-/// Preserving every imported delegate's nominal name would rewrite
-/// <c>Func</c>/<c>Action</c> across the corpus for no benefit, so the rule is
-/// scoped to the members that actually collide. The
+/// Imported delegates retain their nominal names, except canonical
+/// <c>System.Func</c>/<c>System.Action</c>, which retain arrow form unless
+/// overload collisions require their nominal identity. The
 /// <c>NonCollidingCanonicalDelegates_StillRenderInArrowForm</c> test is the guard on
-/// that scoping.
+/// canonical-delegate exception.
 /// </para>
 /// </summary>
 public class Issue3841DelegateOverloadSetTranslationTests
