@@ -2520,6 +2520,80 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        private bool IsArrayFieldOverwrittenBeforeObservation(IFieldSymbol field)
+        {
+            INamedTypeSymbol owner = field.ContainingType;
+
+            // ponytail: prove only straight-line constructor prefixes on sealed,
+            // object-based types without finalizers; all other shapes keep fresh zeros.
+            if (!owner.IsSealed
+                || owner.BaseType?.SpecialType != SpecialType.System_Object
+                || owner.GetMembers().OfType<IMethodSymbol>().Any(method => method.MethodKind == MethodKind.Destructor))
+            {
+                return false;
+            }
+
+            foreach (IMethodSymbol constructor in owner.InstanceConstructors)
+            {
+                if (constructor.DeclaringSyntaxReferences.Length != 1
+                    || constructor.DeclaringSyntaxReferences[0].GetSyntax() is not ConstructorDeclarationSyntax syntax
+                    || syntax.Body == null
+                    || syntax.Initializer != null)
+                {
+                    return false;
+                }
+
+                using IDisposable modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree);
+                bool overwritten = false;
+                foreach (StatementSyntax statement in syntax.Body.Statements)
+                {
+                    if (statement is not ExpressionStatementSyntax expression)
+                    {
+                        return false;
+                    }
+
+                    if (expression.Expression is AssignmentExpressionSyntax assignment
+                        && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                    {
+                        ExpressionSyntax left = StripParentheses(assignment.Left);
+                        bool directReceiver = left is IdentifierNameSyntax
+                            || (left is MemberAccessExpressionSyntax access
+                                && StripParentheses(access.Expression) is ThisExpressionSyntax);
+                        if (directReceiver
+                            && this.context.GetSymbolInfo(left).Symbol is IFieldSymbol assigned
+                            && !assigned.IsStatic
+                            && SymbolEqualityComparer.Default.Equals(assigned.ContainingType, owner))
+                        {
+                            if (this.ReferencesInstanceMember(assignment.Right, owner))
+                            {
+                                return false;
+                            }
+
+                            if (SymbolEqualityComparer.Default.Equals(assigned, field))
+                            {
+                                overwritten = true;
+                                break;
+                            }
+
+                            continue;
+                        }
+                    }
+
+                    if (this.ReferencesInstanceMember(expression.Expression, owner))
+                    {
+                        return false;
+                    }
+                }
+
+                if (!overwritten)
+                {
+                    return false;
+                }
+            }
+
+            return owner.InstanceConstructors.Length > 0;
+        }
+
         /// <summary>
         /// Issue #1729 (mode 5): determines whether hoisting <paramref name="expression"/>
         /// to a field's declaration position could change observable behavior versus

@@ -3951,6 +3951,9 @@ public sealed partial class CSharpToGSharpTranslator
             return new NamedTypeReference("object");
         }
 
+        private static bool CanUseCachedEmptyArray(GTypeReference elementType)
+            => elementType is not (PointerTypeReference or FunctionPointerTypeReference);
+
         private static InvocationExpression MakeArrayEmptyInvocation(GTypeReference elementType)
             => new InvocationExpression(
                 new MemberAccessExpression(
@@ -4118,6 +4121,7 @@ public sealed partial class CSharpToGSharpTranslator
             // distinct expression that keeps its literal.
             if (collection.Elements.Count == 0
                 && target is IArrayTypeSymbol { Rank: 1 }
+                && CanUseCachedEmptyArray(sliceElementType)
                 && !TryGetCollectionBuilder(target, out _, out _))
             {
                 return MakeArrayEmptyInvocation(sliceElementType);

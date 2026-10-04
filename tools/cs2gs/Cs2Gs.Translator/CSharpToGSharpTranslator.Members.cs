@@ -906,14 +906,16 @@ public sealed partial class CSharpToGSharpTranslator
                 // assigns the real value. C# leaves such a field null, so the migrated
                 // type allocated 24 extra bytes per instance (the redundant array made
                 // `ManagedLocationKey` 64 bytes instead of 40, tripping the array-location
-                // allocation bound under self-host stage 2). An explicit
-                // `Array.Empty[T]()` initializer is the same sound empty value without an
-                // allocation, and the constructor's assignment still overrides it.
+                // allocation bound under self-host stage 2). Cache the empty value
+                // only when every constructor overwrites it
+                // before observation; otherwise its fresh identity must be retained.
                 if (initializer == null
                     && binding != BindingKind.Const
                     && symbol is { IsStatic: false }
                     && symbol.ContainingType?.TypeKind == TypeKind.Class
-                    && type is ArrayTypeReference { Rank: 1, IsNullable: false } emptyArrayType)
+                    && type is ArrayTypeReference { Rank: 1, IsNullable: false } emptyArrayType
+                    && CanUseCachedEmptyArray(emptyArrayType.ElementType)
+                    && this.IsArrayFieldOverwrittenBeforeObservation(symbol))
                 {
                     initializer = MakeArrayEmptyInvocation(emptyArrayType.ElementType);
                 }
