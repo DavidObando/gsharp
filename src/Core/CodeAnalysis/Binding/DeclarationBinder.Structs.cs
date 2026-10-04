@@ -2270,11 +2270,6 @@ internal sealed partial class DeclarationBinder
 
                 if (replacesPositionalProperty)
                 {
-                    if (propertySymbol.IsAutoProperty)
-                    {
-                        propertySymbol.BackingField = propertiesBuilder[positionalPropertyIndex].BackingField;
-                    }
-
                     propertiesBuilder[positionalPropertyIndex] = propertySymbol;
                     positionalPropertyIndices.Remove(propName);
                 }

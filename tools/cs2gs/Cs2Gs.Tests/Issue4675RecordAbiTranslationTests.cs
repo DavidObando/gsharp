@@ -26,6 +26,126 @@ namespace Cs2Gs.Tests;
 /// </summary>
 public sealed class Issue4675RecordAbiTranslationTests
 {
+    [Theory]
+    [InlineData("record", "", " = Seed(Value)", 21)]
+    [InlineData("record", "private", " = Seed(Value)", 21)]
+    [InlineData("record struct", "", " = Seed(Value)", 21)]
+    [InlineData("record struct", "private", " = Seed(Value)", 21)]
+    [InlineData("record", "", "", 0)]
+    [InlineData("record struct", "", "", 0)]
+    [InlineData("record", "", " = Value", 10)]
+    [InlineData("record struct", "", " = Value", 10)]
+    [InlineData("record", "private", " = Value", 10)]
+    [InlineData("record struct", "private", " = Value", 10)]
+    public void ExplicitPositionalProperty_PreservesRuntimeAndAccessorMetadata(
+        string kind, string accessorVisibility, string initializer, int expected)
+    {
+        var source = $$"""
+            namespace PositionalProperty {
+                public {{kind}} Item(int Value) {
+                    public int Value { get; {{accessorVisibility}} init; }{{initializer}}{{(initializer.Length == 0 ? "" : ";")}}
+                    private static int Calls;
+                    private static int Seed(int value) { Calls++; return value + 1; }
+                    public static int Run() => new Item(1).Value * 10 + Calls;
+                }
+            }
+            """;
+        VerifyExplicitPositionalProperty(source, "Value", expected);
+    }
+
+    [Theory]
+    [InlineData("record", "package", "", false, 0)]
+    [InlineData("record struct", "package", "", false, 0)]
+    [InlineData("record", "package", " = package", false, 7)]
+    [InlineData("record struct", "package", " = package", false, 7)]
+    [InlineData("record", "Value", " = null", true, 0)]
+    [InlineData("record struct", "Value", " = null", true, 0)]
+    [InlineData("record", "package", " = null", true, 0)]
+    [InlineData("record struct", "package", " = null", true, 0)]
+    [InlineData("record", "Value", " = Value", true, 1)]
+    [InlineData("record struct", "Value", " = Value", true, 1)]
+    [InlineData("record", "Value", "", true, 0)]
+    [InlineData("record struct", "Value", "", true, 0)]
+    public void ExplicitPositionalProperty_EscapedAndNullableStorage_PreservesBaseline(
+        string kind, string name, string initializer, bool nullable, int expected)
+    {
+        var source = $$"""
+            #nullable enable
+            namespace PositionalProperty {
+                public {{kind}} Item({{(nullable ? "string?" : "int")}} {{name}}) {
+                    public {{(nullable ? "string?" : "int")}} {{name}} { get; init; }{{initializer}}{{(initializer.Length == 0 ? "" : ";")}}
+                    public static int Run() => {{(nullable ? "new Item(\"input\")." + name + " is null ? 0 : 1" : "new Item(7)." + name)}};
+                }
+            }
+            """;
+        VerifyExplicitPositionalProperty(source, name, expected);
+    }
+
+    private static void VerifyExplicitPositionalProperty(string source, string name, int expected)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Item.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        string root = Path.Combine(AppContext.BaseDirectory, "record-property-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string baselinePath = Path.Combine(root, "Baseline.dll");
+            using (var output = File.Create(baselinePath))
+            {
+                Assert.True(project.Compilation.WithAssemblyName("Baseline" + Guid.NewGuid().ToString("N")).Emit(output).Success);
+            }
+
+            Assembly baseline = Assembly.LoadFile(baselinePath);
+            Type original = baseline.GetType("PositionalProperty.Item", throwOnError: true);
+            Assert.Equal(expected, original.GetMethod("Run").Invoke(null, null));
+            LoadedDocument document = Assert.Single(project.Documents);
+            var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+            string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+            string sourcePath = Path.Combine(root, "Translated.gs");
+            string dll = Path.Combine(root, "Translated.dll");
+            File.WriteAllText(sourcePath, translated + "\nfunc Main() { System.Console.WriteLine(Item.Run()) }\n");
+            string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
+            Assert.True(File.Exists(compiler), compiler);
+            var compile = ProcessRunner.Run("dotnet", new[]
+            {
+                compiler, "/target:exe", "/targetframework:net10.0",
+                "/reference:" + baselinePath, "/out:" + dll, sourcePath,
+            });
+            Assert.True(compile.ExitCode == 0, compile.Output);
+            Assert.True(File.Exists(dll), compile.Output);
+            string repo = GsharpTestProjectRunner.FindRepoRoot();
+            Assert.NotNull(repo);
+            string runtime = Path.GetDirectoryName(typeof(object).Assembly.Location);
+            var verifierArguments = new[] { "tool", "run", "ilverify", "--", dll, "-s", "System.Private.CoreLib", "-r", baselinePath }
+                .Concat(Directory.EnumerateFiles(runtime, "*.dll").SelectMany(path => new[] { "-r", path })).ToArray();
+            var verified = ProcessRunner.Run("dotnet", verifierArguments, repo);
+            Assert.True(verified.ExitCode == 0, verified.Output);
+            File.WriteAllText(Path.ChangeExtension(dll, ".runtimeconfig.json"), System.Text.Json.JsonSerializer.Serialize(new
+            {
+                runtimeOptions = new
+                {
+                    tfm = "net10.0",
+                    framework = new { name = "Microsoft.NETCore.App", version = Environment.Version.ToString() },
+                },
+            }));
+            var run = ProcessRunner.Run("dotnet", new[] { dll });
+            Assert.Equal(0, run.ExitCode);
+            Assert.Equal(expected + "\n", run.Stdout.Replace("\r\n", "\n", StringComparison.Ordinal));
+            Type migrated = Assembly.LoadFile(dll).GetType("PositionalProperty.Item", throwOnError: true);
+            MethodInfo originalSetter = original.GetProperty(name).SetMethod;
+            MethodInfo migratedSetter = migrated.GetProperty(name).SetMethod;
+            Assert.Equal(originalSetter.IsPrivate, migratedSetter.IsPrivate);
+            Assert.Equal(originalSetter.IsPublic, migratedSetter.IsPublic);
+            Assert.Equal(
+                originalSetter.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName),
+                migratedSetter.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private const string Source = @"
 namespace Corpus.Issue4675
 {

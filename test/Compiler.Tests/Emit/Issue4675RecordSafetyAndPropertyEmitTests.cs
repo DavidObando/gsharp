@@ -5,12 +5,48 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue4675RecordSafetyAndPropertyEmitTests
 {
+    [Theory]
+    [InlineData("data struct", false)]
+    [InlineData("data class", false)]
+    [InlineData("data struct", true)]
+    [InlineData("data class", true)]
+    public void ExplicitPositionalAutoProperty_RetainsPrivateReadonlyStorage(string kind, bool hasSetter)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package PositionalStorage
+            import System
+            KIND Box(Value int32) {
+                public prop Value int32 { get; SETTER }
+            }
+            func Main() {
+                let item = Box(7)
+                Console.WriteLine(item.Value)
+            }
+            """.Replace("KIND", kind, StringComparison.Ordinal)
+                .Replace("SETTER", hasSetter ? "init;" : string.Empty, StringComparison.Ordinal),
+            "PositionalStorage", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n", fixture.Run(dll));
+        var type = Assembly.LoadFile(dll).GetType("PositionalStorage.Box", throwOnError: true);
+        Assert.NotNull(type);
+        var field = Assert.Single(type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly));
+        Assert.Equal("<Value>k__BackingField", field.Name);
+        Assert.True(field.IsPrivate);
+        Assert.Equal(!hasSetter, field.IsInitOnly);
+        var property = type.GetProperty("Value");
+        Assert.NotNull(property);
+        Assert.NotNull(property.GetMethod);
+        Assert.Equal(hasSetter, property.SetMethod != null);
+    }
+
     [Theory]
     [InlineData("data struct", "Box{Items: {1}}")]
     [InlineData("data class", "Box{Items: {1}}")]

@@ -1553,6 +1553,10 @@ public sealed partial class CSharpToGSharpTranslator
                 : this.MapPrimaryConstructor(node);
             var primaryCtorParamNames = new HashSet<string>(
                 primaryCtor?.Select(p => p.Name) ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
+            var primaryCtorSemanticParamNames = new HashSet<string>(
+                node.ParameterList?.Parameters.Select(parameter => parameter.Identifier.ValueText)
+                    ?? Enumerable.Empty<string>(),
+                StringComparer.Ordinal);
 
             // Issue #4350 (review): allocate every lowered get-only
             // auto-property's backing field NOW, with the primary-constructor
@@ -1634,7 +1638,8 @@ public sealed partial class CSharpToGSharpTranslator
                     propertyCtorInits,
                     primaryCtorParamNames,
                     callSiteLoweredStructConstructors,
-                    ownedExtensionTarget))
+                    ownedExtensionTarget,
+                    primaryCtorSemanticParamNames))
                 {
                     // Issue #3469: the member's leading comments ride on the
                     // FIRST G# member it translates to, wherever that member
