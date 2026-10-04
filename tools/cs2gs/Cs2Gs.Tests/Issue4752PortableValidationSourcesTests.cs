@@ -18,7 +18,7 @@ namespace Cs2Gs.Tests;
 public sealed class Issue4752PortableValidationSourcesTests : IDisposable
 {
     private readonly string root = Path.Combine(
-        Path.GetFullPath(Path.GetTempPath()), "cs2gs-4752-" + Guid.NewGuid().ToString("N"));
+        CanonicalRootPath.Resolve(Path.GetTempPath()), "cs2gs-4752-" + Guid.NewGuid().ToString("N"));
 
     [Theory]
     [InlineData(false)]
@@ -265,6 +265,64 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
             $"{probe.Observation?.Facts} Facts and {probe.Observation?.Budget} budget.");
         Assert.Contains("unambiguous owning corpus source root", legacyError.Message, StringComparison.Ordinal);
         Assert.Null(probe.Observation);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Validate_SymlinkSpelledCorpusPreservesCapturedProjectOwnership(bool legacy)
+    {
+        Fixture fixture = this.CreateFixture(legacy: false, rootProject: true);
+        Observation control = await this.Validate(fixture, fixture.Source);
+        Assert.Equal(400, control.Facts);
+        Assert.Equal(TimeSpan.FromMinutes(15), control.Budget);
+        string alias = Path.Combine(this.root, "source-alias");
+        Directory.CreateSymbolicLink(alias, fixture.Source);
+        CorpusApp app = RepositoryDiscovery.Discover(alias).Single(app => app.Id == fixture.AppId);
+        Assert.StartsWith(alias + Path.DirectorySeparatorChar, app.ProjectPath);
+        var capture = new StageExecutionContext(
+            app, new PipelineOptions { SourceRoot = alias },
+            new GscInvoker(Compiler()), fixture.Migrated,
+            new TriageBuilder("capture", "ts", "gsc", app.Id));
+        capture.IsTestProject = true;
+        ValidationManifest original = ValidationManifest.Read(Path.GetDirectoryName(fixture.ManifestPath));
+        Assert.NotNull(original);
+        foreach (ValidationManifestFile file in original.EmittedFiles)
+        {
+            capture.EmittedFiles.Add(new EmittedGsFile(
+                Path.Combine(fixture.Migrated, file.Path), file.RelativeGsPath,
+                Path.Combine(alias, Path.GetRelativePath(fixture.Source, file.CsFilePath)), "package Fixture\n")
+            {
+                IsFromReferencedProject = file.FromReferencedProject,
+            });
+        }
+
+        ValidationManifest manifest = ValidationManifest.Capture(capture, translated: true, fixture.Migrated);
+        Console.WriteLine("symlink corpus captured source identity: " + JsonSerializer.Serialize(manifest));
+        if (legacy)
+        {
+            manifest.SourceRoot = null;
+            manifest.SourceProjectPath = null;
+            foreach (ValidationManifestFile file in manifest.EmittedFiles)
+            {
+                file.RelativeCsPath = null;
+            }
+        }
+
+        ValidationManifest.Write(manifest, Path.GetDirectoryName(fixture.ManifestPath));
+        Observation replay = await this.Validate(fixture, alias);
+
+        Assert.Equal(control.Facts, replay.Facts);
+        Assert.Equal(control.Budget, replay.Budget);
+        Assert.Equal(3, replay.Files.Count);
+        Assert.Single(replay.Files, file => file.IsFromReferencedProject);
+        Assert.All(replay.Files, file => Assert.StartsWith(
+            fixture.Source + Path.DirectorySeparatorChar, file.CsFilePath));
+        if (!legacy)
+        {
+            Assert.Equal(fixture.Source, manifest.SourceRoot);
+            Assert.Equal("Own.csproj", manifest.SourceProjectPath);
+        }
     }
 
     [Fact]

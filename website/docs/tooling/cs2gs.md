@@ -94,6 +94,8 @@ per-name/theory oracle count (issue #4752).
 An explicitly empty or whitespace producing `sourceRoot` is invalid, even when
 no files were emitted. A valid modern project identity can represent no emitted
 or only referenced files; it does not manufacture own-source Facts or verification.
+Source roots and owning project paths are canonicalized consistently, including
+when the checkout is reached through a directory symlink.
 
 Older manifests without these additive fields use the exact full
 corpus-relative primary C# output mapping to establish one owning producing

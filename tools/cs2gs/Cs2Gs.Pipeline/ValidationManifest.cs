@@ -140,7 +140,7 @@ public sealed class ValidationManifest
             RootNamespace = context.RootNamespace,
             AssemblyName = context.AssemblyName,
             SourceRoot = sourceRoot,
-            SourceProjectPath = Relativize(sourceRoot, context.App.ProjectPath),
+            SourceProjectPath = Relativize(sourceRoot, CanonicalRootPath.Resolve(context.App.ProjectPath)),
         };
         ResolveWithinRoot(sourceRoot, manifest.SourceProjectPath);
 
