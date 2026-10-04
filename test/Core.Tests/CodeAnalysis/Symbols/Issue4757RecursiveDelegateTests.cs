@@ -10,11 +10,31 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Symbols;
 
 public sealed class Issue4757RecursiveDelegateTests
 {
+    private readonly ITestOutputHelper output;
+
+    public Issue4757RecursiveDelegateTests(ITestOutputHelper output)
+    {
+        this.output = output;
+    }
+
+    [Fact]
+    public void DelegateArgumentSlots_ShareFormalAndFallbackVisits()
+        => this.AssertLinearDelegateArgumentWalks(4);
+
+    [Theory]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(12)]
+    [InlineData(18)]
+    public void DelegateArgumentSlots_ScaleLinearly(int depth)
+        => this.AssertLinearDelegateArgumentWalks(depth);
+
     [Fact]
     public void MutualRecursion_QueriesStillFindTheNonRecursiveOpenBranch()
     {
@@ -359,6 +379,53 @@ public sealed class Issue4757RecursiveDelegateTests
         Assert.True(TypeSymbol.AnyTypeParameter(closed, candidate => candidate == parameter));
         TypeSymbol.CollectReferencedTypeParameters(closed, sink);
         Assert.Equal(new[] { parameter }, sink);
+    }
+
+    private void AssertLinearDelegateArgumentWalks(int depth)
+    {
+        var formal = Tp("T");
+        var definition = ShellWithParameter("Finite", formal);
+        definition.SetSignature(Parameters(formal), TypeSymbol.Void);
+        var actual = Tp("Actual");
+        TypeSymbol nested = actual;
+        for (var index = 0; index < depth; index++)
+        {
+            nested = Construct(definition, nested);
+        }
+
+        var sink = new List<TypeParameterSymbol>();
+        var visits = 0;
+        TypeSymbol.CollectReferencedTypeParameters(nested, sink, _ => visits++);
+        this.output.WriteLine($"single depth={depth}; delegate visits={visits}; expected={depth}");
+        Assert.Equal(depth, visits);
+        Assert.Equal(new[] { actual }, sink);
+        Assert.True(TypeSymbol.ContainsOuterMethodTypeParameter(nested, ImmutableArray.Create(actual)));
+
+        var unusedFormal = Tp("Unused");
+        var repeated = Shell("Repeated");
+        repeated.SetTypeParameters(ImmutableArray.Create(formal, unusedFormal));
+        repeated.SetSignature(
+            ImmutableArray.Create(
+                new ParameterSymbol("first", formal, false),
+                new ParameterSymbol("second", formal, false)),
+            formal);
+        var expected = new List<TypeParameterSymbol> { actual };
+        nested = actual;
+        for (var index = 0; index < depth; index++)
+        {
+            var unusedActual = Tp("Unused" + index);
+            expected.Add(unusedActual);
+            nested = DelegateTypeSymbol.Construct(
+                repeated, ImmutableArray.Create<TypeSymbol>(nested, PlatformTypeSymbol.Get(unusedActual)));
+        }
+
+        sink.Clear();
+        visits = 0;
+        TypeSymbol.CollectReferencedTypeParameters(nested, sink, _ => visits++);
+        this.output.WriteLine($"repeated/unused depth={depth}; delegate visits={visits}; expected={depth}");
+        Assert.Equal(depth, visits);
+        Assert.Equal(expected, sink);
+        Assert.False(TypeSymbol.AnyTypeParameter(nested, candidate => candidate == formal || candidate == unusedFormal));
     }
 
     private static TypeParameterSymbol Tp(string name)

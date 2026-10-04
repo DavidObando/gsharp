@@ -251,6 +251,65 @@ public sealed class Issue4757RecursiveDelegateDriverTests
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "negative4757.dll")));
     }
 
+    [Fact]
+    public void RealDriver_DeepFiniteDelegateCaptureEmitsAndInvokes()
+    {
+        var nativeType = "T";
+        var sourceType = "X";
+        var closedType = "int";
+        for (var depth = 0; depth < 18; depth++)
+        {
+            nativeType = $"D<{nativeType}>";
+            sourceType = $"D[{sourceType}]";
+            closedType = $"D<{closedType}>";
+        }
+
+        var nativeSource = $$"""
+            using System;
+            namespace Finite4757;
+            public delegate void D<T>(T value);
+            public static class Owner {
+                public static Func<{{nativeType}}> Capture<T>({{nativeType}} value) => () => value;
+            }
+            """;
+        var source = $$"""
+            package Finite4757
+            delegate D[T](value T);
+            shared class Owner {
+                func Capture[X](value {{sourceType}}) (() -> {{sourceType}}) { return () -> value }
+            }
+            """;
+        var consumerSource = $$"""
+            using System;
+            using Finite4757;
+            public static class Consumer {
+                public static string Run() {
+                    var calls = 0;
+                    {{closedType}} callback = value => { calls++; };
+                    var capture = Owner.Capture<int>(callback);
+                    if (!ReferenceEquals(callback, capture())) throw new Exception("capture identity");
+                    capture()(ignored => { });
+                    if (calls != 1) throw new Exception("once-only effect");
+                    return "finite:18;capture:identity;effect:1";
+                }
+            }
+            """;
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var native = fixture.CompileCSharp(nativeSource, "nativeFinite4757");
+        var emitted = Compile(fixture.Directory, source, "Finite4757");
+        foreach (var producer in new[] { native, emitted })
+        {
+            IlVerifier.Verify(producer);
+            var consumer = fixture.CompileCSharp(
+                consumerSource, Path.GetFileNameWithoutExtension(producer) + "Consumer", producer);
+            IlVerifier.Verify(consumer, new[] { producer });
+            var pair = EmittedFixture.LoadTogether(producer, consumer);
+            var entry = pair[1].GetType("Consumer", throwOnError: true).GetMethod("Run");
+            Assert.NotNull(entry);
+            Assert.Equal("finite:18;capture:identity;effect:1", entry.Invoke(null, null));
+        }
+    }
+
     private static string Compile(string directory, string source, string name)
     {
         var (exit, output) = TryCompile(directory, source, name);
