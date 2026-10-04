@@ -154,6 +154,100 @@ public sealed class Issue4757RecursiveDelegateTests
     }
 
     [Fact]
+    public void NestedActualArguments_PreserveSignatureOrderInTheirContainingContext()
+    {
+        var t = Tp("T");
+        var u = Tp("U");
+        var definition = Shell("SwapNested");
+        definition.SetTypeParameters(ImmutableArray.Create(t, u));
+        definition.SetSignature(Parameters(u), t);
+        var x = Tp("X");
+        var y = Tp("Y");
+        var z = Tp("Z");
+        var w = Tp("W");
+        var first = DelegateTypeSymbol.Construct(
+            definition, ImmutableArray.Create<TypeSymbol>(x, y));
+        var second = DelegateTypeSymbol.Construct(
+            definition, ImmutableArray.Create<TypeSymbol>(z, w));
+        var sink = new List<TypeParameterSymbol>();
+        TypeSymbol.CollectReferencedTypeParameters(
+            DelegateTypeSymbol.Construct(definition, ImmutableArray.Create<TypeSymbol>(first, z)),
+            sink);
+        Assert.Equal(new[] { z, y, x }, sink);
+        sink.Clear();
+        TypeSymbol.CollectReferencedTypeParameters(
+            DelegateTypeSymbol.Construct(definition, ImmutableArray.Create<TypeSymbol>(first, second)),
+            sink);
+        Assert.Equal(new[] { w, z, y, x }, sink);
+
+        var list = ImportedTypeSymbol.GetConstructed(
+            typeof(List<object>),
+            typeof(List<>),
+            ImmutableArray.Create<TypeSymbol>(NullableTypeSymbol.Get(first)));
+        var tuple = TupleTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(PlatformTypeSymbol.Get(second), TypeSymbol.Int32));
+        var wrapped = DelegateTypeSymbol.Construct(
+            definition, ImmutableArray.Create<TypeSymbol>(list, tuple));
+        sink.Clear();
+        TypeSymbol.CollectReferencedTypeParameters(wrapped, sink);
+        Assert.Equal(new[] { w, z, y, x }, sink);
+        foreach (var parameter in sink)
+        {
+            Assert.True(TypeSymbol.AnyTypeParameter(wrapped, candidate => candidate == parameter));
+        }
+
+        Assert.False(TypeSymbol.AnyTypeParameter(wrapped, candidate => candidate == t || candidate == u));
+    }
+
+    [Fact]
+    public void MutualGrowingWrapperSignatures_KeepClosedAndOpenArgumentsDistinct()
+    {
+        var t = Tp("T");
+        var u = Tp("U");
+        var first = ShellWithParameter("WrappedFirst", t);
+        var second = ShellWithParameter("WrappedSecond", u);
+        var openFirst = Construct(first, u);
+        var list = ImportedTypeSymbol.GetConstructed(
+            typeof(List<object>),
+            typeof(List<>),
+            ImmutableArray.Create<TypeSymbol>(openFirst));
+        first.SetSignature(Parameters(Construct(second, t)), Construct(second, Construct(first, t)));
+        second.SetSignature(
+            Parameters(PlatformTypeSymbol.Get(openFirst)),
+            TupleTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(list, TypeSymbol.Int32)));
+        var closed = Construct(first, TypeSymbol.Int32);
+        var closedSecond = Assert.IsType<DelegateTypeSymbol>(Assert.Single(closed.Parameters).Type);
+        Assert.Same(closed, Assert.IsType<PlatformTypeSymbol>(Assert.Single(closedSecond.Parameters).Type).UnderlyingType);
+        var projected = Assert.IsType<TupleTypeSymbol>(closedSecond.ReturnType);
+        Assert.Same(
+            closed,
+            Assert.Single(Assert.IsType<ImportedTypeSymbol>(projected.ElementTypes[0]).TypeArguments));
+        var growing = Assert.IsType<DelegateTypeSymbol>(closed.ReturnType);
+        Assert.Same(closed, Assert.Single(growing.TypeArguments));
+        Assert.False(TypeSymbol.ContainsTypeParameter(closed));
+        Assert.False(TypeSymbol.ContainsTypeParameter(growing));
+        var sink = new List<TypeParameterSymbol>();
+        TypeSymbol.CollectReferencedTypeParameters(growing, sink);
+        Assert.Empty(sink);
+
+        var actual = Tp("Actual");
+        var open = Construct(first, actual);
+        Assert.True(TypeSymbol.ContainsOuterMethodTypeParameter(open, ImmutableArray.Create(actual)));
+        Assert.False(TypeSymbol.AnyTypeParameter(open, candidate => candidate == t || candidate == u));
+        TypeSymbol.CollectReferencedTypeParameters(open, sink);
+        Assert.Equal(new[] { actual }, sink);
+
+        var outer = Tp("Outer");
+        second.SetSignature(
+            second.Parameters,
+            TupleTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(list, PlatformTypeSymbol.Get(outer))));
+        sink.Clear();
+        TypeSymbol.CollectReferencedTypeParameters(closed, sink);
+        Assert.Equal(new[] { outer }, sink);
+        Assert.True(TypeSymbol.AnyTypeParameter(closed, candidate => candidate == outer));
+    }
+
+    [Fact]
     public void SignatureSubstitution_PreservesNullableAndPlatformWrappersAndParameterMetadata()
     {
         var parameter = Tp("T");
