@@ -114,6 +114,46 @@ public sealed class Issue4757RecursiveDelegateTests
     }
 
     [Fact]
+    public void SiblingConstructions_PreserveEachSignaturesParameterOrder()
+    {
+        var t = Tp("T");
+        var u = Tp("U");
+        var definition = Shell("Swap");
+        definition.SetTypeParameters(ImmutableArray.Create(t, u));
+        definition.SetSignature(Parameters(u), t);
+        var x = Tp("X");
+        var y = Tp("Y");
+        var z = Tp("Z");
+        var w = Tp("W");
+        var closed = DelegateTypeSymbol.Construct(
+            definition, ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32, TypeSymbol.String));
+        var first = DelegateTypeSymbol.Construct(
+            definition, ImmutableArray.Create<TypeSymbol>(x, y));
+        var second = DelegateTypeSymbol.Construct(
+            definition, ImmutableArray.Create<TypeSymbol>(z, w));
+        var sink = new List<TypeParameterSymbol>();
+        TypeSymbol.CollectReferencedTypeParameters(
+            FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(closed, first), TypeSymbol.Void),
+            sink);
+        Assert.Equal(new[] { y, x }, sink);
+        sink.Clear();
+        TypeSymbol.CollectReferencedTypeParameters(
+            FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(first, second), TypeSymbol.Void),
+            sink);
+        Assert.Equal(new[] { y, x, w, z }, sink);
+
+        definition.SetSignature(
+            Parameters(DelegateTypeSymbol.Construct(
+                definition, ImmutableArray.Create<TypeSymbol>(u, t))),
+            t);
+        sink.Clear();
+        TypeSymbol.CollectReferencedTypeParameters(
+            FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(first, second), TypeSymbol.Void),
+            sink);
+        Assert.Equal(new[] { y, x, w, z }, sink);
+    }
+
+    [Fact]
     public void SignatureSubstitution_PreservesNullableAndPlatformWrappersAndParameterMetadata()
     {
         var parameter = Tp("T");

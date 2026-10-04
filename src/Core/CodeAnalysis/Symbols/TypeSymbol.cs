@@ -1087,7 +1087,8 @@ public partial class TypeSymbol : Symbol
                     var definition = del.Definition ?? del;
                     var boundParameters = Math.Min(definition.TypeParameters.Length, del.TypeArguments.Length);
                     visitedDelegates ??= new HashSet<(DelegateTypeSymbol, int)>();
-                    if (visitedDelegates.Add((definition, boundParameters)))
+                    var walkSignature = visitedDelegates.Add((definition, boundParameters));
+                    if (walkSignature)
                     {
                         // Resolve only formal leaves, retaining signature order without
                         // constructing types. An argument uses its containing mapping;
@@ -1116,6 +1117,13 @@ public partial class TypeSymbol : Symbol
                     foreach (var arg in del.TypeArguments)
                     {
                         CollectReferencedTypeParameters(arg, visitParameter);
+                    }
+
+                    // Guard the whole active walk, including arguments, but let
+                    // sibling constructions retain their own signature ordering.
+                    if (walkSignature)
+                    {
+                        visitedDelegates.Remove((definition, boundParameters));
                     }
 
                     return;
