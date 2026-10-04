@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Inherited generic CLR calls preserve source-typed tuple arguments** (issue #4738). Argument conversion now projects through the inherited member's actual generic owner, including reordered base arguments, rather than constructing an erased `ValueTuple<object, …>` for a source-typed slot. Nested and long tuples retain their physical element types and evaluation order; genuine object slots still use their intended conversions.
+
 - **cs2gs artifact replay preserves original source identity across checkout relocation** (issue #4752). Validation manifests now export corpus-relative C# source and project metadata; legacy manifests recover only an unambiguous full-path repository mapping. Missing or invalid authoritative sources fail explicitly instead of silently reducing the source-declared Fact count to zero. Linked-source and referenced-project ownership, original per-name oracles and the existing parity budget policy are unchanged; this does not establish a runtime hang cause or test-suite completion.
 
 - **cs2gs preserves null-observing local stores before `??` fallbacks** (issue [#4770](https://github.com/DavidObando/gsharp/issues/4770)). The shared nullable-usage scan now recognizes coalescing, including parenthesized observations, so an intentionally null params-slot classification reaches its `"not-reported"` fallback instead of throwing at an inserted assertion. Defensive coalescing does not widen fixed parameter or member contracts; explicit non-null bridges and generic-store diagnostics retain their existing policy.
