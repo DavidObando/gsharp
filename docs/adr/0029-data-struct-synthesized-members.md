@@ -130,6 +130,11 @@ emission. Typed parameters are named `other`: reference-data parameters admit
 null, while value-data parameters are passed by value. Generic/nested owner
 mapping and parameter nullability use the existing shared services.
 
+Compiler-owned typed slots participate in the shared declared-member projection
+used by normal calls, named arguments, method groups and completion, not only
+interface conformance and emission. Imported CLR members retain their actual
+signatures without additional synthetic duplicates.
+
 A declared `IEquatable[Self]` is implemented by the compiler-owned self slot;
 cs2gs preserves the interface advertised by the native record. This does **not**
 add an interface to a G# data declaration that did not name it, nor satisfy a

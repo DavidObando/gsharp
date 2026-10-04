@@ -4,8 +4,10 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Tests;
 using Xunit;
@@ -14,6 +16,69 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 public class Issue4777InheritedDataEqualityTests
 {
+    [Fact]
+    public void SourceMemberQueriesAndCompletion_ExposeTheSameTypedSlots()
+    {
+        var compilation = new Compilation(SyntaxTree.Parse("""
+            open data class Root(Tag int32)
+            data class Leaf(Tag int32, Extra int32) : Root(Tag)
+            """)) { IsLibrary = true };
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
+        var leaf = Assert.Single(compilation.GlobalScope.Structs, s => s.Name == "Leaf");
+        var query = new MemberQuery(true, false, false, MemberKinds.Method);
+        var slots = leaf.GetMethods("Equals");
+        Assert.Equal(2, slots.Length);
+        Assert.Equal<FunctionSymbol>(slots, TypeMemberModel.GetMethods(leaf, "Equals", query));
+        Assert.Same(slots[0], TypeMemberModel.LookupMember(leaf, "Equals", query));
+        Assert.Equal(slots, TypeMemberModel.EnumerateMembers(leaf, query).OfType<FunctionSymbol>());
+        Assert.Equal(slots, leaf.GetMembers().OfType<FunctionSymbol>());
+        Assert.Empty(TypeMemberModel.GetMethods(leaf, "Equals", MemberQuery.Static()));
+    }
+
+    [Fact]
+    public void SourceNamedCallsAndMethodGroups_UseCompilerOwnedTypedSlots()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+            open data class Root(Tag int32)
+            data class Leaf(Tag int32, Extra int32) : Root(Tag)
+            let first = Leaf(1, 2)
+            let different = Leaf(1, 3)
+            let same = Leaf(1, 2)
+            let root Root = first
+            let selfEquals Func[Leaf?, bool] = first.Equals
+            let baseEquals Func[Root?, bool] = root.Equals
+            !first.Equals(other: different)
+                && first.Equals(other: same)
+                && !root.Equals(other: different)
+                && root.Equals(other: same)
+                && !selfEquals(different) && selfEquals(same) && !selfEquals(nil)
+                && !baseEquals(different) && baseEquals(same) && !baseEquals(nil)
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Theory]
+    [InlineData("Leaf")]
+    [InlineData("Root")]
+    public void SourceTypedMethodGroups_SelectTypedParameterNotObjectFallback(string owner)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            import System
+            open data class Root(Tag int32)
+            data class Leaf(Tag int32, Extra int32) : Root(Tag)
+            let receiver {{owner}} = Leaf(1, 2)
+            let equals Func[{{owner}}?, bool] = receiver.Equals
+            equals
+            """);
+        Assert.Empty(result.Diagnostics);
+        var method = Assert.IsAssignableFrom<Delegate>(result.Value).Method;
+        var parameter = Assert.Single(method.GetParameters());
+        Assert.Equal(owner, parameter.ParameterType.Name);
+        Assert.Equal("other", parameter.Name);
+    }
+
     [Fact]
     public void NativeClrTypedCallsWithoutInterface_CompareMostDerivedFieldsAndPreservePlainMethods()
     {

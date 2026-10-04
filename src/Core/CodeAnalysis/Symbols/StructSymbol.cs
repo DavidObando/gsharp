@@ -755,7 +755,7 @@ public sealed class StructSymbol : TypeSymbol
         builder.AddRange(ConstFields);
         builder.AddRange(Properties);
         builder.AddRange(StaticProperties);
-        builder.AddRange(Methods);
+        builder.AddRange(GetDeclaredInstanceMethods());
         builder.AddRange(StaticMethods);
         builder.AddRange(Events);
         builder.AddRange(StaticEvents);
@@ -1179,7 +1179,7 @@ public sealed class StructSymbol : TypeSymbol
             }
         }
 
-        if (IsData && name == "Equals")
+        if (IsData && ClrType == null && name == "Equals")
         {
             method = DataEqualsSelf;
             return true;
@@ -1196,26 +1196,12 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns>The overload set; empty if none.</returns>
     public System.Collections.Immutable.ImmutableArray<FunctionSymbol> GetMethods(string name)
     {
-        if (Methods.IsDefaultOrEmpty && (!IsData || name != "Equals"))
-        {
-            return System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty;
-        }
-
         var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<FunctionSymbol>();
-        foreach (var m in Methods)
+        foreach (var m in GetDeclaredInstanceMethods())
         {
             if (m.Name == name)
             {
                 builder.Add(m);
-            }
-        }
-
-        if (IsData && name == "Equals")
-        {
-            builder.Add(DataEqualsSelf);
-            if (DataEqualsBase is { } baseEquals)
-            {
-                builder.Add(baseEquals);
             }
         }
 
@@ -1752,6 +1738,27 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Gets declared source or imported instance methods, including compiler-owned data slots.
+    /// </summary>
+    /// <returns>The declared instance method set.</returns>
+    internal ImmutableArray<FunctionSymbol> GetDeclaredInstanceMethods()
+    {
+        if (!IsData || ClrType != null)
+        {
+            return Methods;
+        }
+
+        var builder = Methods.ToBuilder();
+        builder.Add(DataEqualsSelf);
+        if (DataEqualsBase is { } baseEquals)
+        {
+            builder.Add(baseEquals);
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>
