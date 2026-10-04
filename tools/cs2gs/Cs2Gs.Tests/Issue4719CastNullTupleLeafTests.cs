@@ -1442,6 +1442,148 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
+    [InlineData("Text")]
+    [InlineData("(MaybeBox?)Text")]
+    [InlineData("checked((MaybeBox?)Text)")]
+    [InlineData("choose ? Text : Text")]
+    public void ScalarYieldNullableOperatorResult_UsesTheEmittedElementContract(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable enable
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                #nullable disable
+                public static IEnumerable<MaybeBox> Rows(bool choose) {
+                    if (Text != null) { yield return {{value}}; }
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    int missing = 0;
+                    foreach (var item in Rows(true)) {
+                        if (item == null) { missing++; }
+                    }
+                    Console.WriteLine(missing == 1 && Probe.Calls == 1 && Reads == 2 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Rows(choose bool) sequence[MaybeBox?]", printed);
+        if (value == "Text" || value == "choose ? Text : Text")
+        {
+            Assert.Contains("Text!!", printed);
+        }
+
+        Assert.DoesNotContain("MaybeBox?(Text!!)!!", printed);
+    }
+
+    [Fact]
+    public void ScalarYieldNullableOperatorInput_RemainsBareAndExecutesOnce()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable enable
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return null; }
+                    set { }
+                }
+                #nullable disable
+                public static IEnumerable<NullAcceptingBox> Rows() {
+                    yield return Text;
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Reads = 0;
+                    int missing = 0;
+                    foreach (var item in Rows()) {
+                        if (item == null) { missing++; }
+                    }
+                    Console.WriteLine(missing == 1 && Probe.Calls == 1 && Reads == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Rows() sequence[NullAcceptingBox?]", printed);
+        Assert.DoesNotContain("Text!!", printed);
+    }
+
+    [Theory]
+    [InlineData("value")]
+    [InlineData("(MaybeBox?)value")]
+    public void ScalarYieldNullableOperatorResult_AnnotatedElementRetainsAssertion(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            #nullable enable
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<MaybeBox> Rows(string value) {
+                    yield return {{value}};
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    try {
+                        foreach (var item in Rows("x")) { }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Rows(value string) sequence[MaybeBox]", printed);
+        Assert.Contains("MaybeBox?(value)!!", printed);
+    }
+
+    [Fact]
+    public void ScalarYieldNullableOperatorResult_FrozenParameterContractRetainsAssertion()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<MaybeBox> Rows() {
+                    yield return "x";
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    try {
+                        foreach (var item in Rows()) {
+                            FrozenTupleContract.Accept((item, 1));
+                        }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Rows() sequence[MaybeBox?]", printed);
+        Assert.Contains("FrozenTupleContract.Accept((item!!, 1))", printed);
+    }
+
+    [Theory]
     [InlineData(true, "return")]
     [InlineData(true, "array")]
     [InlineData(true, "list")]

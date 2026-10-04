@@ -4370,6 +4370,13 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            if (current.Parent is YieldStatementSyntax
+                && this.context.SemanticModel.GetEnclosingSymbol(value.SpanStart) is IMethodSymbol iterator
+                && this.GetIteratorStoreSlot(value, iterator) is { } iteratorSlot)
+            {
+                return (iteratorSlot, iterator);
+            }
+
             ISymbol target = current.Parent switch
             {
                 ReturnStatementSyntax => this.context.SemanticModel.GetEnclosingSymbol(value.SpanStart),

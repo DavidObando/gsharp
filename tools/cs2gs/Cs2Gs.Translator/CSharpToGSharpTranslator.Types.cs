@@ -1552,6 +1552,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else if (typeInfo.ConvertedType is { } elementType)
             {
+                elementType = enclosingIterator == null
+                    ? elementType
+                    : this.GetIteratorStoreSlot(node.Expression, enclosingIterator) ?? elementType;
                 value = this.ForgiveNullableReferenceValue(
                     node.Expression,
                     value,

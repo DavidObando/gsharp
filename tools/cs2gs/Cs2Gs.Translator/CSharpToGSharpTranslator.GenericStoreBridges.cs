@@ -665,12 +665,18 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // A bound generic iterator returns one of the enumerable/enumerator
-            // envelopes. Unwrap its declared element contract before following
-            // the tuple path; the forgiven operand may have a different type.
+            // envelopes. Use MapReturnType's emitted scalar element contract
+            // before following the tuple path; the operand may have another type.
             ITypeSymbol slotType = iterator.ReturnType is INamedTypeSymbol returnType
                 && returnType.TypeArguments.Length == 1
                     ? returnType.TypeArguments[0]
                     : this.context.GetTypeInfo(yielded.Expression).ConvertedType;
+            if (iterator.ReturnType is INamedTypeSymbol { Name: "IEnumerable" }
+                && this.AwaitedReturnIsTainted(slotType, iterator))
+            {
+                slotType = slotType.WithNullableAnnotation(NullableAnnotation.Annotated);
+            }
+
             return GetTupleSlot(slotType, tupleIndices);
         }
 
