@@ -33,7 +33,12 @@ public sealed class DelegateTypeSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<(DelegateTypeSymbol Definition, TypeArgsKey ArgsKey), DelegateTypeSymbol> ConstructedCache = new();
 
+    private readonly object signatureLock = new();
+
     private FunctionTypeSymbol? equivalentFunctionType;
+    private ImmutableArray<ParameterSymbol> parameters;
+    private TypeSymbol returnType;
+    private int signatureVersion;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DelegateTypeSymbol"/> class.
@@ -55,8 +60,8 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     {
         PackageName = packageName;
         Accessibility = accessibility;
-        Parameters = parameters.IsDefault ? ImmutableArray<ParameterSymbol>.Empty : parameters;
-        ReturnType = returnType ?? Void;
+        this.parameters = parameters.IsDefault ? ImmutableArray<ParameterSymbol>.Empty : parameters;
+        this.returnType = returnType ?? Void;
         Declaration = declaration;
     }
 
@@ -67,10 +72,24 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     public Accessibility Accessibility { get; }
 
     /// <summary>Gets the delegate's named parameters in declaration order.</summary>
-    public ImmutableArray<ParameterSymbol> Parameters { get; private set; }
+    public ImmutableArray<ParameterSymbol> Parameters
+    {
+        get
+        {
+            EnsureSignature();
+            return parameters;
+        }
+    }
 
     /// <summary>Gets the delegate's return type (<see cref="TypeSymbol.Void"/> for a void delegate).</summary>
-    public TypeSymbol ReturnType { get; private set; }
+    public TypeSymbol ReturnType
+    {
+        get
+        {
+            EnsureSignature();
+            return returnType;
+        }
+    }
 
     /// <summary>Gets the declaring syntax node.</summary>
     public DelegateDeclarationSyntax Declaration { get; }
@@ -122,6 +141,7 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     {
         get
         {
+            EnsureSignature();
             if (equivalentFunctionType == null)
             {
                 var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(Parameters.Length);
@@ -165,8 +185,9 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     /// <param name="returnType">The delegate return type.</param>
     public void SetSignature(ImmutableArray<ParameterSymbol> parameters, TypeSymbol returnType)
     {
-        Parameters = parameters.IsDefault ? ImmutableArray<ParameterSymbol>.Empty : parameters;
-        ReturnType = returnType ?? Void;
+        this.parameters = parameters.IsDefault ? ImmutableArray<ParameterSymbol>.Empty : parameters;
+        this.returnType = returnType ?? Void;
+        signatureVersion++;
         equivalentFunctionType = null;
     }
 
@@ -209,10 +230,51 @@ public sealed class DelegateTypeSymbol : TypeSymbol
 
     private static DelegateTypeSymbol CreateConstructed(DelegateTypeSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
     {
-        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(definition.TypeParameters.Length);
-        for (var i = 0; i < definition.TypeParameters.Length && i < typeArguments.Length; i++)
+        // Cache nominal identity before projecting Invoke. Eager projection expands
+        // recursive signatures such as D[T] -> D[D[T]] without a finite endpoint.
+        return new DelegateTypeSymbol(
+            definition.Name,
+            definition.PackageName,
+            definition.Accessibility,
+            ImmutableArray<ParameterSymbol>.Empty,
+            Void,
+            definition.Declaration)
         {
-            subst[definition.TypeParameters[i]] = typeArguments[i];
+            TypeParameters = definition.TypeParameters,
+            TypeArguments = typeArguments,
+            Definition = definition,
+            signatureVersion = -1,
+        };
+    }
+
+    private void EnsureSignature()
+    {
+        if (Definition is not { } definition)
+        {
+            return;
+        }
+
+        lock (signatureLock)
+        {
+            if (signatureVersion == definition.signatureVersion)
+            {
+                return;
+            }
+
+            // Declaration shells may be constructed before SetSignature runs.
+            // Reproject those instances when the definition's signature changes.
+            ProjectSignature(definition);
+            signatureVersion = definition.signatureVersion;
+            equivalentFunctionType = null;
+        }
+    }
+
+    private void ProjectSignature(DelegateTypeSymbol definition)
+    {
+        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(definition.TypeParameters.Length);
+        for (var i = 0; i < definition.TypeParameters.Length && i < TypeArguments.Length; i++)
+        {
+            subst[definition.TypeParameters[i]] = TypeArguments[i];
         }
 
         var substitutedParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(definition.Parameters.Length);
@@ -231,21 +293,7 @@ public sealed class DelegateTypeSymbol : TypeSymbol
             substitutedParameters.Add(clone);
         }
 
-        var substitutedReturn = StructSymbol.SubstituteTypeParameters(definition.ReturnType, subst);
-
-        var constructed = new DelegateTypeSymbol(
-            definition.Name,
-            definition.PackageName,
-            definition.Accessibility,
-            substitutedParameters.MoveToImmutable(),
-            substitutedReturn,
-            definition.Declaration)
-        {
-            TypeParameters = definition.TypeParameters,
-            TypeArguments = typeArguments,
-            Definition = definition,
-        };
-
-        return constructed;
+        parameters = substitutedParameters.MoveToImmutable();
+        returnType = StructSymbol.SubstituteTypeParameters(definition.ReturnType, subst);
     }
 }
