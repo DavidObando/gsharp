@@ -18,7 +18,7 @@ public static class WorkspaceInitializer
     /// Discovers projects under the workspace root and loads their source files into state.
     /// </summary>
     /// <param name="workspaceState"><see cref="WorkspaceState"/> instance.</param>
-    /// <param name="rootPath">The workspace root path.</param>
+    /// <param name="rootPath">The workspace root path, or null for a single-file session without a workspace.</param>
     /// <param name="cancellationToken">Cancelled when the server shuts down mid-load.</param>
     /// <param name="tryGetOpenBuffer">Returns the client's current buffer text for a file
     /// path if the client already has it open, or null. When the caller races this method
@@ -30,7 +30,7 @@ public static class WorkspaceInitializer
     /// <param name="waitForWarmUp">Waits for project binding warm-up before returning.</param>
     public static void Initialize(
         WorkspaceState workspaceState,
-        string rootPath,
+        string? rootPath,
         CancellationToken cancellationToken = default,
         Func<string, string?>? tryGetOpenBuffer = null,
         Action<Action>? withGate = null,

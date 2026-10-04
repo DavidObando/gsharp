@@ -1874,6 +1874,15 @@ internal sealed partial class StatementBinder
             receiver = block.Expression;
         }
 
+        // The constructor receiver is stable across the RHS. Keep its identity:
+        // readonly backing-field stores must use this, not a captured alias.
+        if (getCurrentFunction() is { Name: ".ctor", ThisParameter: { } thisParameter }
+            && receiver is BoundVariableExpression variableReceiver
+            && ReferenceEquals(variableReceiver.Variable, thisParameter))
+        {
+            return receiver;
+        }
+
         var receiverType = receiver.Type is NullableTypeSymbol nullable
             ? nullable.UnderlyingType
             : receiver.Type;

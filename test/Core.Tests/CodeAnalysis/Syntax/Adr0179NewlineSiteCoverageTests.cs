@@ -84,7 +84,11 @@ public sealed class Adr0179NewlineSiteCoverageTests
                 && prefix.OperatorToken.ValueText == "!";
             string arguments = string.Join(", ", invocation.ArgumentList.Arguments.Select(argument =>
                 FromTokens(argument.DescendantTokens().Select(token => (token.Text, token.SpanStart)).ToList())));
-            yield return (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
+            // Built first: G# reads `yield (` as a call to `yield` unless a
+            // tuple follows, so a yielded expression must not open with a
+            // parenthesis (#4703).
+            string site = (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
+            yield return site;
         }
     }
 
@@ -111,7 +115,11 @@ public sealed class Adr0179NewlineSiteCoverageTests
             bool negated = outer.Parent is UnaryExpressionSyntax unary && unary.OperatorToken.Text == "!";
             string arguments = string.Join(", ", call.Arguments.Select(argument =>
                 FromTokens(Tokens(argument).Select(token => (token.Text, token.Span.Start)).ToList())));
-            yield return (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
+            // Built first: G# reads `yield (` as a call to `yield` unless a
+            // tuple follows, so a yielded expression must not open with a
+            // parenthesis (#4703).
+            string site = (negated ? "!" : string.Empty) + name + "(" + arguments + ")";
+            yield return site;
         }
     }
 

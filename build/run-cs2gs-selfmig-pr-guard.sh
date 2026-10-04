@@ -273,6 +273,7 @@ started=$(date +%s)
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$repo_root" \
+  --sdk-pin global-json \
   --out "$work_root/migrated" \
   --artifacts "$work_root/runs" \
   --config Release \

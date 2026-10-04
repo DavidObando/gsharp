@@ -28,12 +28,9 @@ namespace Cs2Gs.Tests;
 /// observably hit the original storage, matching C#'s aliasing semantics
 /// exactly (no value-copy divergence).
 ///
-/// One shape remains unsupported HERE and must gap loudly rather than emit
-/// non-compiling or semantically-wrong G#: a ref-returning LOCAL function —
-/// it lowers to a G# `func` literal. Issue #4219 later gave gsc a genuine
-/// non-generic ref-returning function-literal form (`let f = func (...) ref
-/// T { ... }`), but this translator has not been updated to emit it, so the
-/// gap below stands.
+/// Issue #4302 now emits gsc's native non-generic ref-returning function
+/// literal form for static local functions. Generic, ref-readonly, capturing,
+/// and delegate-value shapes remain loud gaps.
 ///
 /// Re-aliasing a ref-returning CALL's result (<c>ref int q = ref F(x)</c>)
 /// used to gap the same way — gsc's ref-alias/ref-return lvalue check
@@ -158,7 +155,7 @@ namespace Corpus.Issue1900
     }
 
     [Fact]
-    public void RefReturningLocalFunction_StaysLoudGap()
+    public void StaticRefReturningLocalFunction_UsesNativeLiteral()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
@@ -183,10 +180,12 @@ namespace Corpus.Issue1900
         Assert.True(project.BoundWithoutErrors);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Message.Contains("ref-returning local function", StringComparison.Ordinal));
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("let Pick = func (a []int32, i int32) ref int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("return ref a[i]", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
     }
 
     [Fact]

@@ -2327,7 +2327,12 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
-        Assert.DoesNotContain(context.Diagnostics, diagnostic => diagnostic.Severity != TranslationSeverity.Info);
+        // Issue #4612: a `default!` on a type parameter is reported as a
+        // generic-store bridge; that report is expected here.
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity != TranslationSeverity.Info
+                && diagnostic.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
         return printed;
     }
 

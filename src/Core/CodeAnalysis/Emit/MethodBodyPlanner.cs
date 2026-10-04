@@ -711,14 +711,16 @@ internal sealed class MethodBodyPlanner
             liftedBinarySlots[lifted] = new LiftedBinarySlots(lhsSlot, rhsSlot, resultSlot);
         }
 
-        // Issues #1236/#3518: each lifted Nullable<T1> -> Nullable<T2>
+        // Issues #1236/#3518/#4741: each lifted Nullable<T1> -> Nullable<T2>
         // conversion needs two consecutive scratch slots — the source
         // Nullable<T1> (spilled so the emitter can take its address for
         // get_HasValue / get_Value) and a result Nullable<T2> (to
         // initobj a default value on the null branch). The slot index of the
         // source is stored in receiverSpillSlots (already an aggregate of
         // distinct-by-node scratch-slot kinds); the emitter derives the result
-        // slot as source + 1. Skip nodes already owned by another collector.
+        // slot as source + 1. Reference-result lifts share the source spill;
+        // type-parameter results use a typed default, others produce ldnull.
+        // Skip nodes already owned by another collector.
         foreach (var conversion in this.CollectNullableValueTypeConversions(body))
         {
             if (receiverSpillSlots.ContainsKey(conversion))
@@ -843,7 +845,9 @@ internal sealed class MethodBodyPlanner
     public void RegisterConstructedTypeAliases()
     {
         var collector = new ClosureEmitter.ConstructedTypeCollector();
-        foreach (var kvp in this.emitCtx.Program.Functions)
+
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var kvp in BoundProgramOrder.Functions(this.emitCtx.Program))
         {
             collector.RewriteStatement(kvp.Value);
         }
