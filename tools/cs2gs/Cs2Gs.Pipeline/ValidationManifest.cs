@@ -263,7 +263,8 @@ public sealed class ValidationManifest
         {
             string projectPath = ResolveWithinRoot(sourceRoot, this.SourceProjectPath);
             if (!string.Equals(
-                projectPath, CanonicalRootPath.Resolve(context.App.ProjectPath),
+                projectPath,
+                CanonicalRootPath.Resolve(context.App.ProjectPath),
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
