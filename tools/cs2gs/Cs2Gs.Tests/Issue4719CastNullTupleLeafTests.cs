@@ -2205,6 +2205,122 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         Assert.Contains(strict ? "sequence[MaybeBox]" : "sequence[MaybeBox?]", printed);
     }
 
+    [Theory]
+    [InlineData("Iterator", false, false)]
+    [InlineData("Iterator", true, false)]
+    [InlineData("Iterator", false, true)]
+    [InlineData("Iterator", true, true)]
+    [InlineData("Task", true, false)]
+    [InlineData("ValueTask", true, false)]
+    public void TupleContractProjection_ParenthesizedDestinationPreservesTheLeaf(
+        string envelope,
+        bool nested,
+        bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string tuple = nested ? "((MaybeBox Value, string Keep) Pair, int Code)" : "(MaybeBox Value, int Code)";
+        string value = nested ? "((((value, \"keep\")), 1))" : "((value, 1))";
+        string check = nested ? "row.Pair.Value == null && row.Pair.Keep == \"keep\"" : "row.Value == null";
+        string method = envelope == "Iterator"
+            ? $"public static IEnumerable<{tuple}> Rows(string value) {{ yield return {value}; }}"
+            : $"public static async {envelope}<{tuple}> Rows(string value) {{ await Task.Delay(1); return {value}; }}";
+        string consume = envelope == "Iterator"
+            ? $"foreach (var row in Rows(\"x\")) {{ nil = {check} && row.Code == 1; }}"
+            : $"var row = Rows(\"x\").GetAwaiter().GetResult(); nil = {check} && row.Code == 1;";
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable {{(strict ? "enable" : "disable")}}
+                {{method}}
+                #nullable disable
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try { {{consume}} }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(strict ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value MaybeBox," : "Value MaybeBox?", printed);
+    }
+
+    [Theory]
+    [InlineData("interface", false)]
+    [InlineData("interface", true)]
+    [InlineData("base", false)]
+    [InlineData("base", true)]
+    public void TupleContractProjection_WholeNativeTypeArgumentRemainsCallerOwned(string contract, bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string inherited = contract == "interface" ? "IWholeRows" : "WholeRowsBase";
+        string modifiers = contract == "base" ? "public override" : "public";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            #nullable {{(strict ? "enable" : "disable")}}
+            public sealed class Rows : {{inherited}}<(MaybeBox Value, int Code)> {
+                {{modifiers}} (MaybeBox Value, int Code) Read(string value) => (value, 1);
+            }
+            #nullable disable
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    {{inherited}}<(MaybeBox Value, int Code)> rows = new Rows();
+                    try {
+                        var row = NativeRows.Read(rows, "x");
+                        nil = row.Value == null && row.Code == 1;
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(strict ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value MaybeBox," : "Value MaybeBox?", printed);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void TupleContractProjection_UnrelatedTupleArgumentDoesNotUnlockNativeReferenceSlot(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public sealed class Rows : IMixedRows{{envelope}}<MaybeBox, (string Text, int Code)> {
+                public async {{envelope}}<(MaybeBox Value, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    IMixedRows{{envelope}}<MaybeBox, (string Text, int Code)> rows = new Rows();
+                    try { rows.Read("x").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value MaybeBox,", printed);
+        Assert.Contains("MaybeBox?(value)!!", printed);
+    }
+
     public void Dispose()
     {
         try
@@ -2314,6 +2430,18 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                     public interface IAlwaysRowsTask {
                         System.Threading.Tasks.Task<(MaybeBox Value, int Code)> Read(string value);
                     }
+                    public interface IWholeRows<T> {
+                        T Read(string value);
+                    }
+                    public abstract class WholeRowsBase<T> {
+                        public abstract T Read(string value);
+                    }
+                    public interface IMixedRowsTask<T, TUnrelated> where T : class {
+                        System.Threading.Tasks.Task<(T Value, int Code)> Read(string value);
+                    }
+                    public interface IMixedRowsValueTask<T, TUnrelated> where T : class {
+                        System.Threading.Tasks.ValueTask<(T Value, int Code)> Read(string value);
+                    }
                     public interface IAlwaysRowsValueTask {
                         System.Threading.Tasks.ValueTask<(MaybeBox Value, int Code)> Read(string value);
                     }
@@ -2342,6 +2470,8 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                         public abstract System.Threading.Tasks.ValueTask<(T Required, int Code)> Read(string value);
                     }
                     public static class NativeRows {
+                        public static T Read<T>(IWholeRows<T> rows, string value) => rows.Read(value);
+                        public static T Read<T>(WholeRowsBase<T> rows, string value) => rows.Read(value);
                         public static System.Threading.Tasks.Task<(MaybeBox Value, int Code)> Read(IAlwaysRowsTask rows, string value) => rows.Read(value);
                         public static System.Threading.Tasks.ValueTask<(MaybeBox Value, int Code)> Read(IAlwaysRowsValueTask rows, string value) => rows.Read(value);
                         public static System.Threading.Tasks.Task<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(IRowsTask rows, string value) => rows.Read(value);

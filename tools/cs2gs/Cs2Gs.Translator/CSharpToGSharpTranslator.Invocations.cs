@@ -6859,6 +6859,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 tupleIndices.Add(index);
                 node = tuple;
+                while (node.Parent is ParenthesizedExpressionSyntax)
+                {
+                    node = node.Parent;
+                }
             }
 
             ITypeSymbol sinkType = ObliviousNullabilityAnalyzer.SymbolValueType(sink);

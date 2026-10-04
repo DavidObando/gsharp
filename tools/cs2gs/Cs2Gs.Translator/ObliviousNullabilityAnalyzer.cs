@@ -3877,7 +3877,10 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         symbol = OwningMember(symbol);
-        ITypeSymbol position = TuplePositionType(symbol, path);
+        (symbol, path) = ProjectTupleContractPosition(symbol, path);
+
+        // A caller owns nested tuple leaves, not a native reference slot itself.
+        ITypeSymbol position = TuplePositionType(symbol, path, requireTuple: symbol is INamedTypeSymbol);
         if (!IsEligibleTupleLeaf(position))
         {
             return false;
@@ -3918,9 +3921,10 @@ internal static class ObliviousNullabilityAnalyzer
         return true;
     }
 
-    private static ITypeSymbol TuplePositionType(ISymbol symbol, string path)
+    private static ITypeSymbol TuplePositionType(ISymbol symbol, string path, bool requireTuple = false)
     {
         ITypeSymbol type = SymbolValueType(symbol) ?? symbol as INamedTypeSymbol;
+        bool crossesTuple = false;
         foreach (string component in path.Split('.'))
         {
             if (type is not INamedTypeSymbol named
@@ -3932,6 +3936,7 @@ internal static class ObliviousNullabilityAnalyzer
 
             if (named.IsTupleType && index < named.TupleElements.Length)
             {
+                crossesTuple = true;
                 type = named.TupleElements[index].Type;
             }
             else if (!named.IsTupleType && index < named.TypeArguments.Length)
@@ -3944,7 +3949,7 @@ internal static class ObliviousNullabilityAnalyzer
             }
         }
 
-        return type;
+        return !requireTuple || crossesTuple ? type : null;
     }
 
     private static IEnumerable<ISymbol> TupleContractDeclarations(Compilation compilation, ISymbol symbol)
