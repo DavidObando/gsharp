@@ -2910,7 +2910,7 @@ public sealed partial class CSharpToGSharpTranslator
                     this.context.SemanticModel,
                     respectNullGuards: true);
             if (!flowRequiresAssertion
-                && !this.NullableReferenceValueMayBeNull(value)
+                && !this.NullableReferenceValueMayBeNull(value, respectDeclaredAnnotations: targetSymbol != null)
                 && !directlyNullableResult
                 && !generatedPromotedValue
                 && !(includePromotedValue
@@ -4025,7 +4025,7 @@ public sealed partial class CSharpToGSharpTranslator
                     || declaredType?.NullableAnnotation == NullableAnnotation.Annotated);
         }
 
-        private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
+        private bool NullableReferenceValueMayBeNull(ExpressionSyntax value, bool respectDeclaredAnnotations = false)
         {
             bool nullableForEachBinding = this.IsNullableForEachBindingUse(value);
             bool managedArrayGenericResult =
@@ -4082,17 +4082,17 @@ public sealed partial class CSharpToGSharpTranslator
             bool nullableByShape = value switch
             {
                 ParenthesizedExpressionSyntax parenthesized =>
-                    this.NullableReferenceValueMayBeNull(parenthesized.Expression),
+                    this.NullableReferenceValueMayBeNull(parenthesized.Expression, respectDeclaredAnnotations),
                 CastExpressionSyntax cast =>
-                    this.NullableReferenceValueMayBeNull(cast.Expression),
+                    this.NullableReferenceValueMayBeNull(cast.Expression, respectDeclaredAnnotations),
                 ConditionalExpressionSyntax conditional =>
-                    this.NullableReferenceValueMayBeNull(conditional.WhenTrue)
-                        || this.NullableReferenceValueMayBeNull(conditional.WhenFalse),
+                    this.NullableReferenceValueMayBeNull(conditional.WhenTrue, respectDeclaredAnnotations)
+                        || this.NullableReferenceValueMayBeNull(conditional.WhenFalse, respectDeclaredAnnotations),
                 SwitchExpressionSyntax switchExpression => switchExpression.Arms.Any(arm =>
-                    this.NullableReferenceValueMayBeNull(arm.Expression)),
+                    this.NullableReferenceValueMayBeNull(arm.Expression, respectDeclaredAnnotations)),
                 BinaryExpressionSyntax coalesce
                     when coalesce.IsKind(SyntaxKind.CoalesceExpression) =>
-                        this.NullableReferenceValueMayBeNull(coalesce.Right),
+                        this.NullableReferenceValueMayBeNull(coalesce.Right, respectDeclaredAnnotations),
                 AssignmentExpressionSyntax assignment =>
                     this.PatternLocalUsesNullableStorage(assignment.Left),
                 _ => false,
@@ -4101,7 +4101,8 @@ public sealed partial class CSharpToGSharpTranslator
             return nullableByShape
                 || type.NullableAnnotation == NullableAnnotation.Annotated
                 || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated
-                || this.GetDeclaredValueType(value)?.NullableAnnotation == NullableAnnotation.Annotated;
+                || (respectDeclaredAnnotations
+                    && this.GetDeclaredValueType(value)?.NullableAnnotation == NullableAnnotation.Annotated);
         }
 
         private bool IsImportedObliviousCollectionElement(
