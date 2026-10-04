@@ -4829,12 +4829,22 @@ public sealed partial class CSharpToGSharpTranslator
         // it already matches the result type is a no-op (skipped below), so
         // this also covers left-wider-than-right (right coerced up, as
         // before) and equal-kind operands (no coercion, unchanged).
-        // Non-numeric coalescing (reference types, tasks) is left untouched.
+        // Reference arrays need the same explicit covariance spelling as
+        // argument/return conversions because G# slices remain invariant.
         private GExpression TranslateNullCoalescing(
             BinaryExpressionSyntax binary, GExpression left, GExpression right)
         {
             ITypeSymbol leftType = this.context.GetTypeInfo(binary.Left).Type;
             ITypeSymbol rightType = this.context.GetTypeInfo(binary.Right).Type;
+            ITypeSymbol resultType = this.context.GetTypeInfo(binary).Type;
+
+            // The left conversion occurs BEFORE the nil probe, so its target
+            // must still admit nil even when the coalesce result is non-null.
+            left = this.CoerceCovariantArrayConversion(
+                binary.Left,
+                left,
+                resultType?.WithNullableAnnotation(NullableAnnotation.Annotated));
+            right = this.CoerceCovariantArrayConversion(binary.Right, right, resultType);
 
             if (TryGetNumericKind(leftType, out SpecialType leftUnderlying) &&
                 TryGetNumericKind(rightType, out SpecialType rightUnderlying) &&
@@ -4849,8 +4859,6 @@ public sealed partial class CSharpToGSharpTranslator
                 // expression; both operands already passed `TryGetNumericKind`
                 // above, meaning the semantic model fully resolved this `??`,
                 // so `.Type` is guaranteed non-null here.
-                ITypeSymbol resultType = this.context.GetTypeInfo(binary).Type;
-
                 if (TryGetNumericKind(resultType, out SpecialType resultUnderlying) &&
                     rightUnderlying != resultUnderlying)
                 {
@@ -5126,7 +5134,8 @@ public sealed partial class CSharpToGSharpTranslator
         //
         // Applied at the same argument / assignment / return / local-initializer
         // positions as CoercePointerConversion, and for the same reason: those
-        // are the positions where C# inserts a target-typed conversion. Rank and
+        // are the positions where C# inserts a target-typed conversion. Coalescing
+        // supplies its own result type instead of an enclosing converted type. Rank and
         // element-kind guards keep it to the one-dimensional reference-element
         // case the CLR actually widens; an annotation-only element difference
         // compares equal under SymbolEqualityComparer.Default and is left bare.
@@ -5138,15 +5147,23 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             TypeInfo info = this.context.GetTypeInfo(expression);
+            return this.CoerceCovariantArrayConversion(expression, translated, info.ConvertedType);
+        }
+
+        private GExpression CoerceCovariantArrayConversion(
+            ExpressionSyntax expression, GExpression translated, ITypeSymbol targetType)
+        {
+            TypeInfo info = this.context.GetTypeInfo(expression);
             if (info.Type is IArrayTypeSymbol source &&
-                info.ConvertedType is IArrayTypeSymbol target &&
+                targetType is IArrayTypeSymbol target &&
                 source.Rank == 1 &&
                 target.Rank == 1 &&
                 source.ElementType is { IsReferenceType: true } sourceElement &&
                 target.ElementType is { IsReferenceType: true } targetElement &&
                 sourceElement.TypeKind != TypeKind.Error &&
                 targetElement.TypeKind != TypeKind.Error &&
-                !SymbolEqualityComparer.Default.Equals(sourceElement, targetElement))
+                !SymbolEqualityComparer.Default.Equals(sourceElement, targetElement) &&
+                this.context.Compilation.ClassifyConversion(source, target).IsImplicit)
             {
                 GTypeReference targetRef = this.typeMapper.Map(target, this.context, expression.GetLocation());
                 return new ConversionExpression(targetRef, translated, isCheckedReferenceCast: true);
