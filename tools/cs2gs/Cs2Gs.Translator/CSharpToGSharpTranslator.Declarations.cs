@@ -1512,15 +1512,6 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool isStaticClass = symbol != null && symbol.IsStatic && kind == TypeDeclarationKind.Class;
 
-            if (isStaticClass)
-            {
-                this.context.Report(new TranslationDiagnostic(
-                    nameof(SyntaxKind.ClassDeclaration),
-                    $"C# 'static class {node.Identifier.Text}' is mapped to a G# 'shared class' whose members sit directly in its body, with no 'shared {{ }}' block (ADR-0195 / ADR-0115 §B.11).",
-                    node.GetLocation(),
-                    TranslationSeverity.Info));
-            }
-
             // Issue #1910: merge in every other partial part's members (from any
             // file) so the constructor-lift/static-initializer/property-inits
             // passes below and the main member loop see the FULL member set,
@@ -1953,6 +1944,15 @@ public sealed partial class CSharpToGSharpTranslator
                 !IsTypeOfReferenced(this.context.Compilation, symbol, this.retainedFilePaths))
             {
                 return null;
+            }
+
+            if (isStaticClass)
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.ClassDeclaration),
+                    $"C# 'static class {node.Identifier.Text}' is mapped to a G# 'shared class' whose members sit directly in its body, with no 'shared {{ }}' block (ADR-0195 / ADR-0115 §B.11).",
+                    node.GetLocation(),
+                    TranslationSeverity.Info));
             }
 
             (GTypeReference baseType, List<GTypeReference> interfaces) = this.MapBaseClause(symbol, node, kind.Value);

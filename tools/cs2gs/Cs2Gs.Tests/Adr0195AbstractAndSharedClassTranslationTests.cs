@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.IO;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -211,6 +212,50 @@ namespace Corpus.Adr0195
 
         Assert.True(inner.IsShared);
         Assert.False(outer.IsShared);
+    }
+
+    [Theory]
+    [InlineData("internal class Target { internal int Count; } internal static class Holder { internal static int Size(this Target value) => value.Count; }", false)]
+    [InlineData("internal class Target { internal int Count; } internal static class Holder { internal static int Size(this Target value) => value.Count; } internal class Use { System.Type Get() => typeof(Holder); }", true)]
+    [InlineData("public static class Holder { public static int Size(this string value) => value.Length; }", true)]
+    [InlineData("internal static class Holder {}", true)]
+    [InlineData("internal static class Holder { internal static int One() => 1; }", true)]
+    public void StaticClassMappingDiagnostic_DescribesOnlyARetainedSharedDeclaration(
+        string declaration,
+        bool retained)
+    {
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("Holder.cs", "namespace Corpus { " + declaration + " }") });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        using var image = new MemoryStream();
+        var emit = project.Compilation.Emit(image);
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.DoesNotContain(context.Diagnostics, diagnostic => diagnostic.IsUnsupported);
+        var holders = unit.Members.OfType<TypeDeclaration>().Where(type => type.Name == "Holder").ToArray();
+        var diagnostics = context.Diagnostics.Where(diagnostic =>
+            diagnostic.ConstructKind == "ClassDeclaration"
+            && diagnostic.Message.Contains("static class Holder", StringComparison.Ordinal)).ToArray();
+
+        if (retained)
+        {
+            var holder = Assert.Single(holders);
+            Assert.True(holder.IsShared);
+            Assert.DoesNotContain(holder.Members, member => member is SharedBlock);
+            var diagnostic = Assert.Single(diagnostics);
+            Assert.Equal(TranslationSeverity.Info, diagnostic.Severity);
+            Assert.Contains("'shared class'", diagnostic.Message, StringComparison.Ordinal);
+            Assert.NotNull(diagnostic.Location);
+            Assert.Equal(document.FilePath, diagnostic.Location.SourceTree.FilePath);
+        }
+        else
+        {
+            Assert.Empty(holders);
+            var target = Assert.Single(unit.Members.OfType<TypeDeclaration>(), type => type.Name == "Target");
+            Assert.Single(target.Members.OfType<MethodDeclaration>(), method => method.Name == "Size");
+            Assert.Empty(diagnostics);
+        }
     }
 
     [Fact]

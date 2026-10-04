@@ -329,12 +329,13 @@ public sealed class StructSymbol : TypeSymbol
     public bool IsOpen { get; }
 
     /// <summary>
-    /// Gets a value indicating whether this class is abstract — issue #987. A
-    /// class is abstract when its effective member set (own + inherited, after
-    /// override resolution) contains at least one abstract method (a no-body
-    /// <c>open func</c>), or when a non-data class inherits an abstract
-    /// synthesized record clone. Such a type cannot be instantiated and is
-    /// emitted with <c>TypeAttributes.Abstract</c>. Always <c>false</c> for
+    /// Gets a value indicating whether this class is abstract: an explicit <c>abstract</c> or
+    /// <c>shared</c> modifier (ADR-0195), an unimplemented abstract member in
+    /// its effective own/inherited member set after override resolution
+    /// (including imported CLR contracts), or a non-data descendant of an
+    /// abstract synthesized record-clone ancestor. Such a type cannot be
+    /// instantiated and is emitted with <c>TypeAttributes.Abstract</c>;
+    /// a <c>shared</c> class is also sealed. Always <c>false</c> for
     /// value-type structs.
     /// </summary>
     public bool IsAbstract
