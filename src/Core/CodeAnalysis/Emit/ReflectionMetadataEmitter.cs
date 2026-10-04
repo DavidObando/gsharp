@@ -3350,6 +3350,56 @@ internal sealed class ReflectionMetadataEmitter
         return new PackageMethodPlan(packages, functionsByPackage, entryPointPackage, packageCtorRows, entryHandle);
     }
 
+    /// <summary>
+    /// Issue #4676: the accessibility of a package's synthesized <c>&lt;Program&gt;</c>
+    /// host type. The host is how a package exposes its top-level functions to
+    /// other assemblies, so it stays <c>public</c> whenever it carries a function
+    /// another assembly can reach, and in an executable (every package of
+    /// an executable keeps its host public, to leave application behaviour alone).
+    /// A LIBRARY package that hosts no such member (every GSharp.Core
+    /// namespace whose code is all types, say) is a compiler-generated detail,
+    /// like the C# compiler's own generated types, and is emitted NotPublic so it
+    /// is not part of the assembly's API (reflection-based tooling such as an
+    /// analyzer-target enumeration no longer sees one <c>&lt;Program&gt;</c> per
+    /// namespace). An assembly granted InternalsVisibleTo still reaches the
+    /// host's internal members, since it can see the NotPublic type too.
+    /// </summary>
+    /// <param name="pkg">The package whose host is being emitted.</param>
+    /// <param name="hasEntryPoint">Whether the compilation has an entry point (an executable).</param>
+    /// <param name="packageMethods">The planned per-package functions.</param>
+    /// <returns>The type visibility flag for the host's TypeDef.</returns>
+    private static TypeAttributes ProgramHostAccessibility(
+        PackageSymbol pkg,
+        bool hasEntryPoint,
+        PackageMethodPlan packageMethods)
+    {
+        // A library has no globals (a top-level variable is a top-level statement, GS0285),
+        // so only an executable can host one, and an executable keeps every host public.
+        if (hasEntryPoint)
+        {
+            return TypeAttributes.Public;
+        }
+
+        static bool IsReachableFromOtherAssemblies(Accessibility accessibility)
+            => accessibility is Accessibility.Public or Accessibility.Protected;
+
+        // Only AUTHORED top-level functions count. The package's bucket also holds the
+        // zero-capture function literals and hoisted local functions the emitter hosts on
+        // `<Program>`, whose symbols default to public accessibility but which no other
+        // assembly can name.
+        if (packageMethods.FunctionsByPackage.TryGetValue(pkg, out var functions)
+            && functions.Any(function =>
+                !function.IsFunctionLiteral
+                && !function.IsLocalFunction
+                && function.LocalDeclaration is null
+                && IsReachableFromOtherAssemblies(function.Accessibility)))
+        {
+            return TypeAttributes.Public;
+        }
+
+        return TypeAttributes.NotPublic;
+    }
+
     private Dictionary<PackageSymbol, TypeDefinitionHandle> EmitProgramAndStateMachineTypeDefinitions(
         AggregateTypeLayout aggregateTypes,
         FieldRowPlan fieldRows,
@@ -3389,7 +3439,8 @@ internal sealed class ReflectionMetadataEmitter
             this.functions.EmitGlobalFieldDefs(globals);
 
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
-                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
+                attributes: TypeAttributes.Class | ProgramHostAccessibility(globalsHostPkg, this.emitCtx.Program.EntryPoint is not null, packageMethods)
+                    | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                     | TypeAttributes.Sealed | TypeAttributes.Abstract,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(globalsHostPkg.Name),
@@ -3413,7 +3464,8 @@ internal sealed class ReflectionMetadataEmitter
             // range so the monotone <Program> fieldList constraint holds.
             var fieldListRow = programFirstFieldRow + globals.Length;
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
-                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
+                attributes: TypeAttributes.Class | ProgramHostAccessibility(pkg, this.emitCtx.Program.EntryPoint is not null, packageMethods)
+                    | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                     | TypeAttributes.Sealed | TypeAttributes.Abstract,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(pkg.Name),
