@@ -192,6 +192,84 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
     }
 
     [Fact]
+    public async Task Validate_LegacyRootProjectDefaultCompileMatchesCapturedModernReplay()
+    {
+        Fixture fixture = this.CreateFixture(legacy: false, rootProject: true);
+        IReadOnlyList<CorpusApp> apps = RepositoryDiscovery.Discover(fixture.Source);
+        CorpusApp app = apps.Single(app => app.Id == "Own.csproj");
+        Assert.Equal(fixture.Source, Path.GetDirectoryName(app.ProjectPath));
+        var excluded = RepositoryExcludedScope.Compute(fixture.Source, new[] { app.ProjectPath });
+        Assert.False(excluded.IsExcluded("Program.cs"));
+        Assert.False(excluded.IsExcluded("src/Lib/Tests.cs"));
+        ValidationManifest manifest = ValidationManifest.Read(Path.GetDirectoryName(fixture.ManifestPath));
+        Assert.NotNull(manifest);
+        Assert.Equal("Own.csproj", manifest.SourceProjectPath);
+        Assert.Equal("Program.cs", manifest.EmittedFiles[0].RelativeCsPath);
+        Observation control = await this.Validate(fixture, fixture.Source);
+        Assert.Equal(400, control.Facts);
+        Assert.Equal(TimeSpan.FromMinutes(15), control.Budget);
+        manifest.SourceRoot = null;
+        manifest.SourceProjectPath = null;
+        foreach (ValidationManifestFile file in manifest.EmittedFiles)
+        {
+            file.RelativeCsPath = null;
+        }
+
+        ValidationManifest.Write(manifest, Path.GetDirectoryName(fixture.ManifestPath));
+        string relocated = Path.Combine(this.root, "relocated");
+        Directory.Move(fixture.Source, relocated);
+
+        Observation replay = await this.Validate(fixture, relocated);
+
+        Assert.Equal(control.Facts, replay.Facts);
+        Assert.Equal(control.Budget, replay.Budget);
+        Assert.Equal(3, replay.Files.Count);
+        Assert.Single(replay.Files, file => file.IsFromReferencedProject);
+        Assert.Contains(replay.Files, file => file.CsFilePath == Path.Combine(relocated, "Program.cs"));
+        Assert.Contains(replay.Files, file => file.CsFilePath == Path.Combine(relocated, "Strings.resx"));
+        Assert.All(replay.Files, file => Assert.StartsWith(relocated + Path.DirectorySeparatorChar, file.CsFilePath));
+    }
+
+    [Theory]
+    [InlineData("referenced-only")]
+    [InlineData("empty")]
+    [InlineData("resource-only")]
+    [InlineData("nested-project")]
+    public async Task Validate_LegacyRootProjectRequiresItsNonreferencedPrimaryAnchor(string invalid)
+    {
+        Fixture fixture = this.CreateFixture(legacy: true, rootProject: true);
+        ValidationManifest manifest = ValidationManifest.Read(Path.GetDirectoryName(fixture.ManifestPath));
+        Assert.NotNull(manifest);
+        switch (invalid)
+        {
+            case "referenced-only":
+                manifest.EmittedFiles.RemoveAll(file => !file.FromReferencedProject);
+                break;
+            case "empty":
+                manifest.EmittedFiles.Clear();
+                break;
+            case "resource-only":
+                manifest.EmittedFiles.RemoveAll(file => !file.CsFilePath.EndsWith(".resx", StringComparison.Ordinal));
+                break;
+            case "nested-project":
+                manifest.AppId = "src/Interop/Interop.csproj";
+                fixture = fixture with { AppId = manifest.AppId };
+                break;
+        }
+
+        ValidationManifest.Write(
+            manifest,
+            Path.Combine(fixture.Manifests, MigrationPipeline.ArtifactDirectoryName(fixture.AppId, MigrationOutputLayout.Repository)));
+        var probe = new SourceEvidenceStage();
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => this.Validate(fixture, fixture.Source, probe));
+
+        Assert.Contains("unambiguous owning corpus source root", error.Message, StringComparison.Ordinal);
+        Assert.Null(probe.Observation);
+    }
+
+    [Fact]
     public async Task Validate_LegacyLinkedSourceCanEstablishItsDeclaringProjectOwnership()
     {
         Fixture fixture = this.CreateFixture(legacy: true);
@@ -274,11 +352,23 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
         }
     }
 
-    private Fixture CreateFixture(bool legacy)
+    private Fixture CreateFixture(bool legacy, bool rootProject = false)
     {
         string source = Path.Combine(this.root, "source");
         string migrated = Path.Combine(this.root, "migrated");
-        Write(Path.Combine(source, "test", "Own", "Own.csproj"), """
+        string project = rootProject ? "Own.csproj" : "test/Own/Own.csproj";
+        string ownSource = rootProject ? "Program.cs" : "test/Own/Tests.cs";
+        string resource = rootProject ? "Strings.resx" : "test/Own/Strings.resx";
+        Write(Path.Combine(source, project), rootProject ? """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <ItemGroup>
+                <Compile Remove="src/**/*.cs" />
+                <ProjectReference Include="src/Lib/Lib.csproj" />
+                <ProjectReference Include="src/Interop/Interop.csproj" ReferenceOutputAssembly="false" />
+              </ItemGroup>
+            </Project>
+            """ : """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
               <ItemGroup>
@@ -292,22 +382,34 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
         Write(Path.Combine(source, "src", "Interop", "Interop.csproj"),
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
-        Write(Path.Combine(source, "test", "Own", "Tests.cs"), Facts(400));
-        Write(Path.Combine(source, "test", "Shared", "Linked.cs"), Facts(3));
-        Write(Path.Combine(source, "src", "Lib", "Tests.cs"), Facts(900));
-        Write(Path.Combine(source, "test", "Own", "Strings.resx"), "<root />");
+        Write(Path.Combine(source, ownSource), Facts(400));
+        if (!rootProject)
+        {
+            Write(Path.Combine(source, "test", "Shared", "Linked.cs"), Facts(3));
+        }
 
-        var app = RepositoryDiscovery.Discover(source).Single(app => app.Id == "test/Own/Own.csproj");
+        Write(Path.Combine(source, "src", "Lib", "Tests.cs"), Facts(900));
+        Write(Path.Combine(source, resource), "<root />");
+
+        var app = RepositoryDiscovery.Discover(source).Single(app => app.Id == project);
         var context = new StageExecutionContext(
             app, new PipelineOptions { SourceRoot = source },
             new GscInvoker(Compiler()), migrated,
             new TriageBuilder("capture", "ts", "gsc", app.Id));
         context.IsTestProject = true;
-        Add("test/Own/Tests.gs", "test/Own/Tests.cs", referenced: false);
-        Add("test/Shared/Linked.gs", "test/Shared/Linked.cs", referenced: false);
+        Add(Path.ChangeExtension(ownSource, ".gs"), ownSource, referenced: false);
+        if (!rootProject)
+        {
+            Add("test/Shared/Linked.gs", "test/Shared/Linked.cs", referenced: false);
+        }
+
         Add("src/Lib/Tests.gs", "src/Lib/Tests.cs", referenced: true);
-        Add("test/Shared/Linked.Second.gs", "test/Shared/Linked.cs", referenced: false);
-        Add("test/Own/Strings.Designer.gs", "test/Own/Strings.resx", referenced: false);
+        if (!rootProject)
+        {
+            Add("test/Shared/Linked.Second.gs", "test/Shared/Linked.cs", referenced: false);
+        }
+
+        Add(Path.ChangeExtension(resource, ".Designer.gs"), resource, referenced: false);
         string manifests = Path.Combine(this.root, "manifests");
         string artifact = Path.Combine(manifests, MigrationPipeline.ArtifactDirectoryName(app.Id, MigrationOutputLayout.Repository));
         ValidationManifest manifest = ValidationManifest.Capture(context, translated: true, migrated);

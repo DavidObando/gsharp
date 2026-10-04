@@ -98,6 +98,9 @@ root. Namespace splits are not guessed by filename. Missing sources, conflicting
 roots, incomplete identity metadata and paths escaping either authorized tree
 fail explicitly. An old manifest with no unambiguous owning C# anchor needs a
 new translate pass; replay does not silently accept an empty source count.
+For projects directly at the corpus root, non-referenced primary C# inputs
+can establish that anchor, including SDK-default implicit compile items.
+Referenced-project entries never establish ownership.
 Relocation repairs source evidence, not runtime failures: a restored budget
 alone does not prove the test suite completes.
 

@@ -355,6 +355,10 @@ public sealed class ValidationManifest
         // Never search by basename or choose a root because a file exists there.
         var roots = new HashSet<string>(StringComparer.Ordinal);
         var owners = RepositoryExcludedScope.Compute(sourceRoot, new[] { context.App.ProjectPath });
+        bool ownsCorpusRoot = string.Equals(
+            CanonicalRootPath.Resolve(Path.GetDirectoryName(context.App.ProjectPath)),
+            sourceRoot,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         bool hasOwnedAnchor = false;
         foreach (ValidationManifestFile file in this.EmittedFiles)
         {
@@ -377,7 +381,7 @@ public sealed class ValidationManifest
             roots.Add(ProducingPathComparison(producingRoot) == StringComparison.OrdinalIgnoreCase
                 ? producingRoot.ToUpperInvariant()
                 : producingRoot);
-            hasOwnedAnchor |= !file.FromReferencedProject && owners.IsExcluded(relative);
+            hasOwnedAnchor |= !file.FromReferencedProject && (ownsCorpusRoot || owners.IsExcluded(relative));
         }
 
         if (roots.Count != 1 || !hasOwnedAnchor)
