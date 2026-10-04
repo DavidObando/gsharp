@@ -897,8 +897,8 @@ internal static class ObliviousNullabilityAnalyzer
         RegisterSourceAssemblies(compilation, siblingCompilations);
         return IsTupleElementTaintedCore(
             compilation,
-            source.Symbol,
-            source.Path,
+            source.ContractSymbol,
+            source.ContractPath,
             siblingCompilations,
             new HashSet<ScalarQuery>(ScalarQueryComparer.Instance),
             new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance));
@@ -939,8 +939,8 @@ internal static class ObliviousNullabilityAnalyzer
         RegisterSourceAssemblies(compilation, siblingCompilations);
         return IsTupleElementTaintedCore(
             compilation,
-            source.Symbol,
-            source.Path,
+            source.ContractSymbol,
+            source.ContractPath,
             siblingCompilations,
             new HashSet<ScalarQuery>(ScalarQueryComparer.Instance),
             new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance));
@@ -1124,8 +1124,8 @@ internal static class ObliviousNullabilityAnalyzer
                 if (SymbolEqualityComparer.Default.Equals(target, query.Symbol)
                     && IsTupleElementTaintedCore(
                         compilation,
-                        source.Symbol,
-                        source.Path,
+                        source.ContractSymbol,
+                        source.ContractPath,
                         siblingCompilations,
                         scalarVisited,
                         tupleVisited))
@@ -1223,8 +1223,8 @@ internal static class ObliviousNullabilityAnalyzer
             if (TupleElementKeyComparer.Instance.Equals(target, key)
                 && IsTupleElementTaintedCore(
                     compilation,
-                    source.Symbol,
-                    source.Path,
+                    source.ContractSymbol,
+                    source.ContractPath,
                     siblingCompilations,
                     scalarVisited,
                     tupleVisited))
@@ -2186,13 +2186,13 @@ internal static class ObliviousNullabilityAnalyzer
 
         bool CanPromote(TupleElementKey key) =>
             !fixedTupleContracts.Contains(key)
-                && CanPromoteTuplePosition(compilation, key.Symbol, key.Path);
+                && CanPromoteTuplePosition(compilation, key.ContractSymbol, key.ContractPath);
 
         void FreezeNonNullableContract(TupleElementKey key)
         {
-            if (TuplePositionType(key.Symbol, key.Path) is { IsReferenceType: true } position
+            if (TuplePositionType(key.ContractSymbol, key.ContractPath) is { IsReferenceType: true } position
                 && !IsDeclaredNullablePosition(position)
-                && !CanPromoteTuplePosition(compilation, key.Symbol, key.Path))
+                && !CanPromoteTuplePosition(compilation, key.ContractSymbol, key.ContractPath))
             {
                 fixedTupleContracts.Add(key);
             }
@@ -3579,7 +3579,7 @@ internal static class ObliviousNullabilityAnalyzer
             {
                 if (TryResolveTupleElementSource(member.Expression, model, out TupleElementKey parent))
                 {
-                    source = new TupleElementKey(parent.Symbol, AppendTuplePath(parent.Path, index));
+                    source = new TupleElementKey(parent.ContractSymbol, AppendTuplePath(parent.ContractPath, index));
                     return true;
                 }
 
@@ -3877,42 +3877,49 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         symbol = OwningMember(symbol);
+        ISymbol contractSymbol = symbol;
+        string contractPath = path;
+        ITypeSymbol declaredPosition = TuplePositionType(Canonical(symbol), path);
         (symbol, path) = ProjectTupleContractPosition(symbol, path);
+        bool sourceOwnedContract = contractSymbol != null
+            && IsSourceAssembly(compilation, contractSymbol.ContainingAssembly);
 
         // A caller owns nested tuple leaves, not a native reference slot itself.
-        ITypeSymbol position = TuplePositionType(symbol, path, requireTuple: symbol is INamedTypeSymbol);
-        if (!IsEligibleTupleLeaf(position))
+        ITypeSymbol position = TuplePositionType(
+            symbol, path, requireTuple: symbol is INamedTypeSymbol && !sourceOwnedContract);
+        if (!IsEligibleTupleLeaf(position)
+            || (declaredPosition != null && !IsEligibleTupleLeaf(declaredPosition)))
         {
             return false;
         }
 
         // Constructed type arguments belong to their source use, not to the
         // imported generic definition. Member signatures retain their owner.
-        if (symbol is INamedTypeSymbol)
+        if (contractSymbol is INamedTypeSymbol
+            || (symbol is INamedTypeSymbol && !sourceOwnedContract))
         {
             return true;
         }
 
-        if (symbol == null
-            || !IsSourceAssembly(compilation, symbol.ContainingAssembly))
+        if (!sourceOwnedContract)
         {
             return false;
         }
 
-        if (!visited.Add(symbol))
+        if (!visited.Add(contractSymbol))
         {
             return true;
         }
 
-        foreach (ISymbol contract in TupleContractDeclarations(compilation, symbol))
+        foreach (ISymbol contract in TupleContractDeclarations(compilation, contractSymbol))
         {
-            ITypeSymbol contractPosition = TuplePositionType(contract, path);
+            ITypeSymbol contractPosition = TuplePositionType(contract, contractPath);
             if (contractPosition != null && IsDeclaredNullablePosition(contractPosition))
             {
                 continue;
             }
 
-            if (!CanPromoteTuplePosition(compilation, contract, path, visited))
+            if (!CanPromoteTuplePosition(compilation, contract, contractPath, visited))
             {
                 return false;
             }
@@ -6012,6 +6019,8 @@ internal static class ObliviousNullabilityAnalyzer
     {
         public TupleElementKey(ISymbol symbol, string path)
         {
+            this.ContractSymbol = symbol;
+            this.ContractPath = path;
             (ISymbol owner, string projectedPath) = ProjectTupleContractPosition(symbol, path);
             this.Symbol = owner is INamedTypeSymbol named
                 ? NormalizeContractTupleNames(named)
@@ -6022,6 +6031,10 @@ internal static class ObliviousNullabilityAnalyzer
         public ISymbol Symbol { get; }
 
         public string Path { get; }
+
+        public ISymbol ContractSymbol { get; }
+
+        public string ContractPath { get; }
     }
 
     private readonly struct ScalarQuery

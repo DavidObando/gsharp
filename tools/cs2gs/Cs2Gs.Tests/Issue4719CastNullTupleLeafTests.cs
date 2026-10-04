@@ -2321,6 +2321,164 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         Assert.Contains("MaybeBox?(value)!!", printed);
     }
 
+    [Theory]
+    [InlineData("Sync", false, false)]
+    [InlineData("Sync", true, false)]
+    [InlineData("Sync", false, true)]
+    [InlineData("Sync", true, true)]
+    [InlineData("Iterator", false, false)]
+    [InlineData("Iterator", true, false)]
+    [InlineData("Iterator", false, true)]
+    [InlineData("Iterator", true, true)]
+    [InlineData("Task", false, false)]
+    [InlineData("Task", true, false)]
+    [InlineData("Task", false, true)]
+    [InlineData("Task", true, true)]
+    [InlineData("ValueTask", false, false)]
+    [InlineData("ValueTask", true, false)]
+    [InlineData("ValueTask", false, true)]
+    [InlineData("ValueTask", true, true)]
+    public void TupleContractContext_MixedBranchArmsUseTheEmittedDestination(
+        string envelope,
+        bool switchArm,
+        bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string value = switchArm
+            ? "Choose(choose) switch { true => \"x\", false => new MaybeBox() }"
+            : "Choose(choose) ? \"x\" : new MaybeBox()";
+        string tuple = "(MaybeBox Value, int Code)";
+        string method = envelope switch
+        {
+            "Sync" => $"public static {tuple} Rows(bool choose) => ({value}, 1);",
+            "Iterator" => $"public static IEnumerable<{tuple}> Rows(bool choose) {{ yield return ({value}, 1); }}",
+            _ => $"public static async {envelope}<{tuple}> Rows(bool choose) {{ await Task.Delay(1); return ({value}, 1); }}",
+        };
+        string consume = envelope switch
+        {
+            "Sync" => "var row = Rows(choose); nil = row.Value == null && row.Code == 1;",
+            "Iterator" => "foreach (var row in Rows(choose)) { nil = row.Value == null && row.Code == 1; }",
+            _ => "var row = Rows(choose).GetAwaiter().GetResult(); nil = row.Value == null && row.Code == 1;",
+        };
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Decisions;
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                #nullable {{(strict ? "enable" : "disable")}}
+                {{method}}
+                #nullable disable
+                public static bool Check(bool choose) {
+                    bool nil = false;
+                    bool asserted = false;
+                    try { {{consume}} }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = choose ? {{(strict ? "asserted" : "!asserted && nil")}} : !asserted && !nil;
+                    return valid && Decisions == 1 && Probe.Calls == (choose ? 1 : 0);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Decisions = 0;
+                    bool missing = Check(true);
+                    Probe.Reset();
+                    Decisions = 0;
+                    bool present = Check(false);
+                    Console.WriteLine(missing && present ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value MaybeBox," : "Value MaybeBox?", printed);
+    }
+
+    [Theory]
+    [InlineData("Sync", "own", false)]
+    [InlineData("Sync", "own", true)]
+    [InlineData("Task", "own", false)]
+    [InlineData("Task", "own", true)]
+    [InlineData("ValueTask", "own", false)]
+    [InlineData("ValueTask", "own", true)]
+    [InlineData("Sync", "source", false)]
+    [InlineData("Sync", "source", true)]
+    public void TupleContractContext_SourceContainingGenericRetainsItsActualContract(
+        string envelope,
+        string contract,
+        bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string method = envelope == "Sync"
+            ? "public (T Value, int Code) Read(bool missing) => (missing ? null : (T)(object)\"keep\", 1);"
+            : $"public async {envelope}<(T Value, int Code)> Read(bool missing) {{ await Task.Delay(1); return (missing ? null : (T)(object)\"keep\", 1); }}";
+        string interfaceDeclaration = contract == "source"
+            ? $"#nullable {(strict ? "enable" : "disable")}\npublic interface IRows<T> where T : class {{ (T Value, int Code) Read(bool missing); }}"
+            : string.Empty;
+        string inherited = contract switch
+        {
+            "source" => " : IRows<T>",
+            _ => string.Empty,
+        };
+        string receiver = contract switch
+        {
+            "source" => "IRows<string>",
+            _ => "Rows<string>",
+        };
+        string read = envelope == "Sync"
+            ? "rows.Read(missing)"
+            : "rows.Read(missing).GetAwaiter().GetResult()";
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            {{interfaceDeclaration}}
+            #nullable {{(strict && contract == "own" ? "enable" : "disable")}}
+            public sealed class Rows<T>{{inherited}} where T : class {
+                {{method}}
+            }
+            #nullable disable
+            public static class Obj {
+                public static bool Check(bool missing) {
+                    {{receiver}} rows = new Rows<string>();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        var row = {{read}};
+                        nil = row.Value == null && row.Code == 1;
+                        if (!missing && (row.Value != "keep" || row.Code != 1)) { return false; }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    return missing ? {{(strict ? "asserted" : "!asserted && nil")}} : !asserted && !nil;
+                }
+                public static void Main() { Console.WriteLine(Check(true) && Check(false) ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value T," : "Value T?", printed);
+    }
+
+    [Fact]
+    public void TupleContractContext_SourceGenericLiteralUsesNullableLeaf()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System;
+            using Issue4719Fixture;
+            public sealed class Rows<T> where T : class {
+                public (T Value, int Code) Read() => (null, 1);
+            }
+            public static class Obj {
+                public static void Main() {
+                    var row = new Rows<string>().Read();
+                    Console.WriteLine(row.Value == null && row.Code == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Read() (Value T?, Code int32)", printed);
+    }
+
     public void Dispose()
     {
         try

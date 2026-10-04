@@ -6841,29 +6841,8 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax value,
             ISymbol sink)
         {
-            SyntaxNode node = value;
-            while (node.Parent is ParenthesizedExpressionSyntax)
-            {
-                node = node.Parent;
-            }
-
             var tupleIndices = new List<int>();
-            while (node.Parent is ArgumentSyntax tupleArgument
-                && tupleArgument.Parent is TupleExpressionSyntax tuple)
-            {
-                int index = tuple.Arguments.IndexOf(tupleArgument);
-                if (index < 0)
-                {
-                    break;
-                }
-
-                tupleIndices.Add(index);
-                node = tuple;
-                while (node.Parent is ParenthesizedExpressionSyntax)
-                {
-                    node = node.Parent;
-                }
-            }
+            SyntaxNode node = OutermostTransparentNode(value, tupleIndices);
 
             ITypeSymbol sinkType = ObliviousNullabilityAnalyzer.SymbolValueType(sink);
             sinkType ??= node is TupleExpressionSyntax containingTuple
@@ -6880,6 +6859,7 @@ public sealed partial class CSharpToGSharpTranslator
             for (int i = tupleIndices.Count - 1; i >= 0; i--)
             {
                 if (sinkType is not INamedTypeSymbol { IsTupleType: true } tupleType
+                    || tupleIndices[i] < 0
                     || tupleIndices[i] >= tupleType.TupleElements.Length)
                 {
                     return null;

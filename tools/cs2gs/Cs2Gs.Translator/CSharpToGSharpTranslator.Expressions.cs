@@ -2894,13 +2894,22 @@ public sealed partial class CSharpToGSharpTranslator
             bool generatedPromotedValue = !isFlowNarrowedLocal
                 && !this.IsObliviousCompilation()
                 && this.IsGeneratedDeclarationPromotedValue(value);
+
+            // Conversion operands and branch-local coercions are not result stores.
+            bool directlyNullableResult = !operatorInput
+                && targetSymbol != null
+                && ObliviousNullabilityAnalyzer.IsDirectlyNullable(
+                    this.context.SemanticModel.GetOperation(value),
+                    this.context.SemanticModel,
+                    respectNullGuards: true);
             if (!flowRequiresAssertion
                 && !this.NullableReferenceValueMayBeNull(value)
-                    && !generatedPromotedValue
-                    && !(includePromotedValue
-                        && !isFlowNarrowedLocal
-                        && this.IsObliviousCompilation()
-                        && this.IsNullablePromotedValue(value)))
+                && !directlyNullableResult
+                && !generatedPromotedValue
+                && !(includePromotedValue
+                    && !isFlowNarrowedLocal
+                    && this.IsObliviousCompilation()
+                    && this.IsNullablePromotedValue(value)))
             {
                 return translated;
             }
