@@ -168,7 +168,7 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         Assert.Contains("required = key!!", emitted, StringComparison.Ordinal);
         Assert.Contains("Required = key!!", emitted, StringComparison.Ordinal);
         Assert.Contains("Consume(key!!)", emitted, StringComparison.Ordinal);
-        Assert.Contains("map_[key!!]", emitted, StringComparison.Ordinal);
+        Assert.Contains("$map[key!!]", emitted, StringComparison.Ordinal);
         Assert.True(
             app.Succeeded,
             "Expected nullable-enabled warning boundaries to compile via gsc. Stages: " +

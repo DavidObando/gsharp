@@ -332,7 +332,7 @@ namespace Corpus.Issue1734
     }
 
     [Fact]
-    public void TypeParameterName_KeywordCollision_IsSanitizedConsistently()
+    public void TypeParameterName_KeywordCollision_IsEscapedConsistently()
     {
         string rendered = Render(@"
 namespace Corpus.Issue1734
@@ -346,7 +346,10 @@ namespace Corpus.Issue1734
 }
 ");
 
-        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("class Box[$defer]", rendered, StringComparison.Ordinal);
+        Assert.Contains("Value $defer", rendered, StringComparison.Ordinal);
+        Assert.Contains("Read() $defer", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("defer_", rendered, StringComparison.Ordinal);
         AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }

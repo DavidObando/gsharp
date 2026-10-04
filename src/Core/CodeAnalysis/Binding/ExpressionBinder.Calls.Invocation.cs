@@ -1441,7 +1441,7 @@ internal sealed partial class ExpressionBinder
             }
 
             names ??= new string?[call.Arguments.Count + offset];
-            names[sourceIndex + offset] = named.NameToken.Text;
+            names[sourceIndex + offset] = named.NameToken.ValueText;
         }
 
         return names;
@@ -1642,15 +1642,12 @@ internal sealed partial class ExpressionBinder
                  parameterIndex++)
             {
                 string? parameterName = parameters[parameterIndex].Name;
-                string argumentName = named.NameToken.Text;
+                string argumentName = named.NameToken.ValueText;
                 if (parameterName is not null
-                    && string.Equals(
-                        SyntaxFacts.GetEmittedIdentifier(
-                            parameterName,
-                            IdentifierNameContext.Parameter,
-                            parameters.Select(parameter => parameter.Name ?? string.Empty)),
+                    && OverloadResolver.ClrParameterNameMatches(
+                        parameterName,
                         argumentName,
-                        StringComparison.Ordinal))
+                        parameters.Select(parameter => parameter.Name ?? string.Empty)))
                 {
                     return parameterIndex;
                 }
