@@ -19,8 +19,10 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     private readonly Dictionary<TypeSymbol, TypeSymbol?> required = new();
     private readonly HashSet<VariableSymbol> managedLocations = new();
     private readonly HashSet<(FunctionSymbol Function, StructSymbol? InitializerOwner)> analyzedFunctions = new();
-    private readonly HashSet<StructSymbol> analyzedInitializerConstructions = new();
+    private readonly HashSet<(StructSymbol Owner, BoundExpression Initializer)> activeInitializers = new();
     private StructSymbol? initializerOwner;
+    private SyntaxNode? initializerAnchor;
+    private BoundExpression? overwrittenInitializerResult;
     private bool analyzingStateMachine;
 
     private ManagedReferenceSafetyAnalyzer(DiagnosticBag diagnostics) => this.diagnostics = diagnostics;
@@ -426,7 +428,8 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             this.diagnostics);
     }
 
-    private void CheckImplicitConstructorPath(StructSymbol type, ImmutableArray<FieldSymbol> fields, BoundStructLiteralExpression? zeroValue = null)
+    private void CheckImplicitConstructorPath(
+        StructSymbol type, ImmutableArray<FieldSymbol> fields, BoundStructLiteralExpression? zeroValue = null, bool requireInitializedResult = true)
     {
         if (zeroValue != null)
         {
@@ -438,7 +441,10 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             {
                 var writtenField = type.GetDefinitionField(storage.Key);
                 var declaredField = writtenField ?? storage.Key;
-                if (supplied.Contains(declaredField))
+                var resultOverwritten = supplied.Contains(declaredField);
+                var constructorInitialized = validatedInitializers
+                    && this.TryVisitConstructorInitializer(type, storage.Key, zeroValue, resultOverwritten);
+                if (resultOverwritten || constructorInitialized)
                 {
                     continue;
                 }
@@ -452,14 +458,6 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                     continue;
                 }
 
-                var hasDeclaredInitializer = validatedInitializers && writtenField != null
-                    && type.Definition.InstanceFieldInitializers.ContainsKey(writtenField);
-                if (hasDeclaredInitializer)
-                {
-                    this.VisitConstructedInitializer(type, zeroValue, type.Definition.InstanceFieldInitializers[declaredField]);
-                    continue;
-                }
-
                 if (this.RequiredHandle(storage.Value) != null)
                 {
                     // A validated ordinary constructor proves its definition's
@@ -470,7 +468,10 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                         continue;
                     }
 
-                    this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{storage.Key.Name}'; explicitly construct the aggregate");
+                    if (requireInitializedResult)
+                    {
+                        this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{storage.Key.Name}'; explicitly construct the aggregate");
+                    }
                 }
                 else if (storage.Key.Accessibility != Accessibility.Public
                     && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, storage.Value) != null
@@ -546,20 +547,60 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void CheckConstruction(StructSymbol type, BoundExpression node, IEnumerable<FieldSymbol?> initialized, bool explicitConstructor)
     {
+        var supplied = initialized.OfType<FieldSymbol>().Select(field => type.GetDefinitionField(field) ?? field).ToHashSet();
+        var requireInitializedResult = !ReferenceEquals(node, this.overwrittenInitializerResult);
+        type = (StructSymbol)this.InitializerType(type);
         if (node is BoundStructLiteralExpression { IsZeroInitialization: true } zeroValue)
         {
-            this.CheckImplicitConstructorPath(type, ImmutableArray<FieldSymbol>.Empty, zeroValue);
+            this.CheckImplicitConstructorPath(type, ImmutableArray<FieldSymbol>.Empty, zeroValue, requireInitializedResult);
             return;
         }
 
-        if (explicitConstructor || type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty))
+        var explicitPath = explicitConstructor || type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty);
+        var callsPrimary = node is BoundStructLiteralExpression { CallsPrimaryConstructor: true }
+            || (node is BoundConstructorCallExpression { SelectedConstructor: null } call && type.HasPrimaryConstructor
+                && call.Arguments.Length == type.PrimaryConstructorParameters.Length);
+        var constructorStores = new HashSet<FieldSymbol>();
+        if (callsPrimary)
+        {
+            foreach (var parameter in type.PrimaryConstructorParameters)
+            {
+                var field = BoundStructLiteralExpression.GetPrimaryMember(type, parameter.Name) switch
+                {
+                    FieldSymbol primaryField => primaryField,
+                    PropertySymbol property => property.BackingField,
+                    _ => null,
+                };
+                if (field != null)
+                {
+                    constructorStores.Add(type.GetDefinitionField(field) ?? field);
+                }
+            }
+        }
+
+        if (explicitPath || type.IsClass || callsPrimary
+            || (type.NeedsSynthesizedValueStructDefaultCtor && !type.ValueStructDefaultCtorIsZeroInitialization))
+        {
+            foreach (var field in type.Fields)
+            {
+                var declaredField = type.GetDefinitionField(field);
+                if (this.TryVisitConstructorInitializer(type, field, node, supplied.Contains(declaredField ?? field)))
+                {
+                    constructorStores.Add(Invariant.Required(declaredField, "a constructor initializer has definition-owned field storage"));
+                }
+            }
+        }
+
+        if (explicitPath)
         {
             return;
         }
 
         if (node is BoundStructLiteralExpression literal)
         {
-            foreach (var argument in literal.GetPrimaryConstructorArguments())
+            var declaredField = type.GetDefinitionField(storage.Key) ?? storage.Key;
+            if (requireInitializedResult && this.RequiredHandle(storage.Value) != null && !supplied.Contains(declaredField)
+                && !constructorStores.Contains(declaredField))
             {
                 if (!argument.IsSupplied)
                 {
@@ -648,6 +689,49 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         if ((node.Syntax ?? fallback?.Syntax) is { } syntax)
         {
             this.diagnostics.ReportManagedReference(syntax.Location, reason);
+        }
+    }
+
+    private TypeSymbol InitializerType(TypeSymbol type)
+        => this.initializerOwner?.SubstituteMemberType(type) ?? type;
+
+    private bool TryVisitConstructorInitializer(StructSymbol owner, FieldSymbol field, BoundExpression site, bool resultOverwritten = false)
+    {
+        var writtenField = owner.GetDefinitionField(field);
+        if (writtenField == null || !owner.Definition.InstanceFieldInitializers.TryGetValue(writtenField, out var initializer))
+        {
+            return false;
+        }
+
+        this.VisitConstructedInitializer(owner, site, initializer, resultOverwritten);
+        return true;
+    }
+
+    private void VisitConstructedInitializer(StructSymbol owner, BoundExpression site, BoundExpression initializer, bool resultOverwritten)
+    {
+        if (!this.activeInitializers.Add((owner, initializer)))
+        {
+            return;
+        }
+
+        var previousOwner = this.initializerOwner;
+        var previousAnchor = this.initializerAnchor;
+        var previousOverwrittenResult = this.overwrittenInitializerResult;
+        this.initializerOwner = owner;
+        this.initializerAnchor = previousAnchor ?? site.Syntax;
+
+        // A later store replaces this result, not the expressions executed to obtain it.
+        this.overwrittenInitializerResult = resultOverwritten ? initializer : null;
+        try
+        {
+            this.VisitExpression(initializer);
+        }
+        finally
+        {
+            this.initializerOwner = previousOwner;
+            this.initializerAnchor = previousAnchor;
+            this.overwrittenInitializerResult = previousOverwrittenResult;
+            this.activeInitializers.Remove((owner, initializer));
         }
     }
 

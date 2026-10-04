@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -1034,17 +1035,426 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
                 .Replace("CONSTRUCTION", construction, StringComparison.Ordinal)
                 .Replace("DEREFERENCE", dereference, StringComparison.Ordinal);
 
-    private static void Reject(string source, string anchor, string diagnostic = "GS0604")
+    [Theory]
+    [InlineData("public prop Handle U { get; init; }", false)]
+    [InlineData("public prop Handle U { get; init; }", true)]
+    [InlineData("public prop Handle U { get; set; }", false)]
+    [InlineData("public prop Handle U { get; set; }", true)]
+    [InlineData("private var Handle U = default(U)", false)]
+    [InlineData("private var Handle U = default(U)", true)]
+    [InlineData("public var Handle U = default(U)", false)]
+    [InlineData("public var Handle U = default(U)", true)]
+    public void NestedExplicitLiteral_RejectsUninitializedConstructedStorage(string storage, bool nested)
+    {
+        var declaration = nested ? "var item Envelope[readonly managed[int32]]" : "var item Outer[readonly managed[int32]]";
+        Reject(NestedExplicitLiteralSource(storage, "Inner[T]{}", declaration), declaration);
+    }
+
+    [Theory]
+    [InlineData("private var Handle U = Provider[U].Next()", "Inner[T]{}", false)]
+    [InlineData("private var Handle U = Provider[U].Next()", "Inner[T]{}", true)]
+    [InlineData("public var Handle U", "Inner[T]{Handle: Provider[T].Next()}", false)]
+    [InlineData("public var Handle U", "Inner[T]{Handle: Provider[T].Next()}", true)]
+    [InlineData("public prop Handle U { get; init; }", "Inner[T]{Handle: Provider[T].Next()}", false)]
+    [InlineData("public prop Handle U { get; init; }", "Inner[T]{Handle: Provider[T].Next()}", true)]
+    [InlineData("public prop Handle U { get; set; }", "Inner[T]{Handle: Provider[T].Next()}", false)]
+    [InlineData("public prop Handle U { get; set; }", "Inner[T]{Handle: Provider[T].Next()}", true)]
+    public void NestedExplicitLiteral_RetainsActualInitializerAndSuppliedStorage(string storage, string initializer, bool nested)
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
-        var (code, output) = fixture.TryCompile(source, "RejectedRecord", true);
+        var construction = """
+            var value = 7
+            Provider[readonly managed[int32]].Value = readonly managed(value)
+            var item CONTAINER[readonly managed[int32]]
+            """.Replace("CONTAINER", nested ? "Envelope" : "Outer", StringComparison.Ordinal);
+        var dll = fixture.Compile(NestedExplicitLiteralSource(storage, initializer, construction), "NestedExplicitLiteral", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n0\n1\n", fixture.Run(dll));
+    }
+
+    private static string NestedExplicitLiteralSource(string storage, string initializer, string construction)
+        => """
+            package NestedExplicitLiteral
+            import System
+            class Provider[T] {
+                shared {
+                    public var Value T
+                    public var Calls int32
+                    public func Next() T {
+                        Calls += 1
+                        return Value
+                    }
+                }
+            }
+            struct Inner[U] {
+                STORAGE
+                public func Read() U -> Handle
+            }
+            struct Outer[T] {
+                private var Nested Inner[T] = INITIALIZER
+                private var Items []int32
+                public func Read() T -> Nested.Read()
+                public func Length() int32 -> Items.Length
+            }
+            struct Envelope[T] {
+                private var Nested Outer[T]
+                private var Items []int32
+                public func Read() T -> Nested.Read()
+                public func Length() int32 -> Nested.Length()
+            }
+            func Main() {
+                CONSTRUCTION
+                Console.WriteLine(*item.Read())
+                Console.WriteLine(item.Length())
+                Console.WriteLine(Provider[readonly managed[int32]].Calls)
+            }
+            """.Replace("STORAGE", storage, StringComparison.Ordinal)
+                .Replace("INITIALIZER", initializer, StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InitializerFunctionCache_RejectsUnsafeConstructionRegardlessOfVisitOrder(bool safeFirst)
+    {
+        const string safe = "var safe Holder[int32]";
+        const string invalid = "var invalid Holder[readonly managed[int32]]";
+        Reject(InitializerFunctionSource(
+            "default(T)",
+            safeFirst ? safe + "\n" + invalid : invalid + "\n" + safe,
+            "Console.WriteLine(*invalid.Read())"), invalid);
+    }
+
+    [Fact]
+    public void InitializerFunctionCache_RetainsIndependentConstructedProviderValues()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(InitializerFunctionSource(
+            "Provider[T].Next()",
+            """
+            Provider[int32].Value = 3
+            var safe Holder[int32]
+            var value = 7
+            Provider[readonly managed[int32]].Value = readonly managed(value)
+            var item Holder[readonly managed[int32]]
+            """,
+            """
+            Console.WriteLine(safe.Read())
+            Console.WriteLine(*item.Read())
+            Console.WriteLine(safe.Length() + item.Length())
+            Console.WriteLine(Provider[int32].Calls)
+            Console.WriteLine(Provider[readonly managed[int32]].Calls)
+            """), "InitializerFunctionCache", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("3\n7\n0\n1\n1\n", fixture.Run(dll));
+    }
+
+    private static string InitializerFunctionSource(string value, string construction, string reads)
+        => """
+            package InitializerFunctionCache
+            import System
+            class Provider[T] {
+                shared {
+                    public var Value T
+                    public var Calls int32
+                    public func Next() T {
+                        Calls += 1
+                        return Value
+                    }
+                }
+            }
+            struct Holder[T] {
+                private var Saved T = (func() T { return VALUE })()
+                private var Items []int32
+                public func Read() T -> Saved
+                public func Length() int32 -> Items.Length
+            }
+            func Main() {
+                CONSTRUCTION
+                READS
+            }
+            """.Replace("VALUE", value, StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal)
+                .Replace("READS", reads, StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("data struct")]
+    [InlineData("data class")]
+    public void ConstructorInitializerExecution_RejectsUnsafeOverwrittenScalar(string kind)
+    {
+        const string construction = "Box[readonly managed[int32]]{Value: 7, Marker: 42}";
+        Reject(OverwrittenScalarSource(kind, "default(T)", true, construction), construction);
+    }
+
+    [Theory]
+    [InlineData("data struct", false)]
+    [InlineData("data class", false)]
+    [InlineData("data struct", true)]
+    [InlineData("data class", true)]
+    public void ConstructorInitializerExecution_RetainsSafeOverwrittenScalarOnce(string kind, bool handle)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var construction = $"Box[{(handle ? "readonly managed[int32]" : "int32")}]{{Value: 7, Marker: 42}}";
+        var dll = fixture.Compile(
+            OverwrittenScalarSource(kind, handle ? "Provider[T].Value" : "default(T)", handle, construction),
+            "OverwrittenScalar", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n42\n1\n", fixture.Run(dll));
+    }
+
+    private static string OverwrittenScalarSource(string kind, string argument, bool handle, string construction)
+        => """
+            package OverwrittenScalar
+            import System
+            class Provider[T] {
+                shared {
+                    public var Value T
+                    public var Callback func(T) int32
+                    public var Calls int32
+                    public func Consume(value T) int32 {
+                        Calls += 1
+                        return Callback(value)
+                    }
+                }
+            }
+            KIND Box[T](Value int32) {
+                public var Marker int32 = Provider[T].Consume(ARGUMENT)
+            }
+            func Main() {
+                SETUP
+                let item = CONSTRUCTION
+                Console.WriteLine(item.Value)
+                Console.WriteLine(item.Marker)
+                Console.WriteLine(Provider[TYPE].Calls)
+            }
+            """.Replace("KIND", kind, StringComparison.Ordinal)
+                .Replace("ARGUMENT", argument, StringComparison.Ordinal)
+                .Replace("SETUP", handle
+                    ? """
+                        var value = 11
+                        Provider[readonly managed[int32]].Value = readonly managed(value)
+                        Provider[readonly managed[int32]].Callback = (handle readonly managed[int32]) -> *handle
+                        """
+                    : "Provider[int32].Callback = (value int32) -> value", StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal)
+                .Replace("TYPE", handle ? "readonly managed[int32]" : "int32", StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("data struct", 1)]
+    [InlineData("data class", 1)]
+    [InlineData("data struct", 2)]
+    [InlineData("data class", 2)]
+    public void ConstructorInitializerExecution_RejectsOverwrittenArrayElementZeros(string kind, int length)
+    {
+        var construction = $"Box[readonly managed[int32]]{{Value: 7, Handles: [{length}]readonly managed[int32]{{{string.Join(", ", Enumerable.Repeat("readonly managed(value)", length))}}}}}";
+        Reject(OverwrittenArraySource(kind, length, false, construction), construction);
+    }
+
+    [Theory]
+    [InlineData("data struct", 0)]
+    [InlineData("data class", 0)]
+    [InlineData("data struct", 1)]
+    [InlineData("data class", 1)]
+    public void ConstructorInitializerExecution_RetainsSafeOverwrittenArraysOnce(string kind, int length)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var values = length == 0
+            ? "[0]readonly managed[int32]"
+            : "[1]readonly managed[int32]{readonly managed(value)}";
+        var construction = $"Box[readonly managed[int32]]{{Value: 7, Handles: {values}}}";
+        var dll = fixture.Compile(OverwrittenArraySource(kind, length, true, construction), "OverwrittenArray", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal($"7\n{length}\n{length}\n", fixture.Run(dll));
+    }
+
+    private static string OverwrittenArraySource(string kind, int length, bool initializeElements, string construction)
+        => """
+            package OverwrittenArray
+            import System
+            class Provider[T] {
+                shared {
+                    public var Value T
+                    public var Calls int32
+                    public func Next() T {
+                        Calls += 1
+                        return Value
+                    }
+                }
+            }
+            KIND Box[T](Value int32) {
+                public var Handles STORAGE_TYPE INITIALIZER
+            }
+            func Main() {
+                var value = 11
+                Provider[readonly managed[int32]].Value = readonly managed(value)
+                let item = CONSTRUCTION
+                Console.WriteLine(item.Value)
+                Console.WriteLine(item.Handles.Length)
+                Console.WriteLine(Provider[readonly managed[int32]].Calls)
+            }
+            """.Replace("KIND", kind, StringComparison.Ordinal)
+                .Replace("STORAGE_TYPE", length == 0 ? "[]T" : $"[{length}]T", StringComparison.Ordinal)
+                .Replace("INITIALIZER", initializeElements
+                    ? length == 0 ? "= [0]T" : $"= [{length}]T{{{string.Join(", ", Enumerable.Repeat("Provider[T].Next()", length))}}}"
+                    : string.Empty, StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal);
+
+    [Fact]
+    public void ConstructorInitializerRecursion_ConditionalClassConstructionTerminates()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        const string source = """
+            package ConditionalNode
+            import System
+            class Node {
+                public var Next Node? = Node.Recurse ? Node{} : nil
+                public var Marker int32 = Node.Count()
+                shared {
+                    public var Recurse bool
+                    public var Calls int32
+                    public func Count() int32 {
+                        Calls += 1
+                        return Calls
+                    }
+                }
+            }
+            func Main() {
+                let item = Node{}
+                Console.WriteLine(item.Next == nil)
+                Console.WriteLine(item.Marker)
+                Console.WriteLine(Node.Calls)
+            }
+            """;
+        var (code, output) = TryCompileIsolated(fixture, source, "ConditionalNode");
+        Assert.True(code == 0, output);
+        var dll = Path.Combine(fixture.Directory, "ConditionalNode.dll");
+        IlVerifier.Verify(dll);
+        Assert.Equal("True\n1\n1\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstructorInitializerRecursion_DistinctConstructedOwnersRemainValid(bool safeFirst)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        const string scalar = "let scalar = Node[int32]{}";
+        const string handle = "let handle = Node[readonly managed[int32]]{}";
+        var source = RecursiveInitializerSource(
+            "Provider[T].Next()", safeFirst ? scalar + "\n" + handle : handle + "\n" + scalar,
+            """
+            Console.WriteLine(scalar.Saved)
+            Console.WriteLine(*handle.Saved)
+            Console.WriteLine(scalar.Next == nil && handle.Next == nil)
+            Console.WriteLine(Provider[int32].Calls)
+            Console.WriteLine(Provider[readonly managed[int32]].Calls)
+            """);
+        var (code, output) = TryCompileIsolated(fixture, source, "RecursiveOwners");
+        Assert.True(code == 0, output);
+        var dll = Path.Combine(fixture.Directory, "RecursiveOwners.dll");
+        IlVerifier.Verify(dll);
+        Assert.Equal("3\n11\nTrue\n1\n1\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConstructorInitializerRecursion_DoesNotHideUnsafeLaterFields(bool safeFirst)
+    {
+        const string scalar = "let scalar = Node[int32]{}";
+        const string handle = "let handle = Node[readonly managed[int32]]{}";
+        Reject(RecursiveInitializerSource(
+            "default(T)", safeFirst ? scalar + "\n" + handle : handle + "\n" + scalar, string.Empty),
+            "Node[readonly managed[int32]]{}", isolated: true);
+    }
+
+    private static string RecursiveInitializerSource(string value, string construction, string reads)
+        => """
+            package RecursiveOwners
+            import System
+            class Provider[T] {
+                shared {
+                    public var Value T
+                    public var Calls int32
+                    public func Next() T {
+                        Calls += 1
+                        return Value
+                    }
+                }
+            }
+            class Node[T] {
+                public var Next Node[T]? = Node[T].Recurse ? Node[T]{} : nil
+                public var Saved T = VALUE
+                shared { public var Recurse bool }
+            }
+            func Main() {
+                Provider[int32].Value = 3
+                var value = 11
+                Provider[readonly managed[int32]].Value = readonly managed(value)
+                CONSTRUCTION
+                READS
+            }
+            """.Replace("VALUE", value, StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal)
+                .Replace("READS", reads, StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("public var Extra T")]
+    [InlineData("public prop Extra T { get; init; }")]
+    public void ConstructorInitializerRecursion_RechecksLaterResultConsumption(string storage)
+    {
+        const string invalid = "Outer[readonly managed[int32]](0)";
+        Reject(NestedConstructorSource("data struct", storage, true, """
+            var value = 11
+            let supplied = Inner[readonly managed[int32]]{Extra: readonly managed(value)}
+            let outer = Outer[readonly managed[int32]]{Nested: supplied}
+            let invalid = Outer[readonly managed[int32]](0)
+            """, "*"), invalid);
+    }
+
+    private static (int Code, string Output) TryCompileIsolated(NativeSliceLanguageTests.Fixture fixture, string source, string name)
+    {
+        var sourcePath = Path.Combine(fixture.Directory, name + ".gs");
+        File.WriteAllText(sourcePath, source);
+        var start = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = fixture.Directory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll")));
+        start.ArgumentList.Add("/out:" + Path.Combine(fixture.Directory, name + ".dll"));
+        start.ArgumentList.Add("/target:exe");
+        start.ArgumentList.Add("/targetframework:net10.0");
+        start.ArgumentList.Add(sourcePath);
+        using var process = Process.Start(start);
+        Assert.NotNull(process);
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            Assert.Fail("isolated compiler witness timed out");
+        }
+
+        return (process.ExitCode, output.GetAwaiter().GetResult() + error.GetAwaiter().GetResult());
+    }
+
+    private static void Reject(string source, string anchor, string diagnostic = "GS0604", bool isolated = false)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = isolated
+            ? TryCompileIsolated(fixture, source, "RejectedRecord")
+            : fixture.TryCompile(source, "RejectedRecord", true);
         Assert.NotEqual(0, code);
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "RejectedRecord.dll")), output);
         var offset = source.IndexOf(anchor, StringComparison.Ordinal);
         Assert.True(offset >= 0);
         var line = 1 + source[..offset].Count(c => c == '\n');
         var column = offset - source.LastIndexOf('\n', offset);
-        Assert.Contains($"({line},{column},{line},{column + anchor.Length}): error {diagnostic}:", output, StringComparison.Ordinal);
+        Assert.True(output.Contains($"({line},{column},{line},{column + anchor.Length}): error {diagnostic}:", StringComparison.Ordinal), output);
         var diagnostics = output.Split('\n').Where(line => line.Contains(": error ", StringComparison.Ordinal)).ToArray();
         Assert.NotEmpty(diagnostics);
         Assert.All(diagnostics, line => Assert.Contains($": error {diagnostic}:", line, StringComparison.Ordinal));
