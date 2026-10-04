@@ -188,8 +188,10 @@ private type, since at top level they cannot resolve; every other attribute is c
 description that follows applies to those two cases only. Source-declared nested
 delegates use the mapper's allocated lifted top-level name, so their original
 private nominal container is not itself an inaccessible type exposure. Their
-invoke signature, delegate constraints and generic containing type arguments are
-still checked for genuine private types, cycle-safely. Imported delegates retain
+original-definition invoke signature, delegate constraints and actual generic
+type arguments (including containing types) are still checked for genuine private
+types, cycle-safely; constructed invoke signatures can expand generic recursion.
+Imported delegates retain
 their nominal CLR accessibility and identity; they are not source-lifted.
 
 Issue #3413 adds one ownership-preserving exception: when the declaring static

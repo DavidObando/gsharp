@@ -233,6 +233,54 @@ public sealed class Issue4701LiftedDelegateOwnerTranslationTests
     }
 
     [Fact]
+    public void ExpandingGenericDelegate_PolicyVisitsDefinitionAndActualArguments()
+    {
+        const string source = """
+            using System;
+            namespace Issue4701
+            {
+                public sealed class MarkerAttribute : Attribute
+                {
+                    public MarkerAttribute(Type type) { }
+                }
+                public static class Owner
+                {
+                    private class Box { }
+                    private delegate Callback<Callback<T>> Callback<T>(Callback<T> other);
+                    [Marker(typeof(Callback<int>))]
+                    public static int Safe(this string value) => value.Length;
+                    [Marker(typeof(Callback<Box>))]
+                    public static int Unsafe(this string value) => value.Length;
+                }
+                public static class Probe
+                {
+                    public static int Run() => "abc".Safe() + "abc".Unsafe();
+                }
+            }
+            """;
+        LoadedCSharpProject project = Load(source);
+        using var native = new MemoryStream();
+        var emitted = project.Compilation.Emit(native);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        Assert.True(native.Length > 0);
+        Assembly original = EmittedFixture.Load(native.ToArray());
+        Assert.Equal(6, original.GetType("Issue4701.Probe").GetMethod("Run").Invoke(null, null));
+
+        // gsc's recursive-delegate typeof query is tracked in #4757. This
+        // native-valid control exercises the actual translator exposure policy.
+        CompilationUnit unit = Translate(project);
+        TypeDeclaration owner = Assert.Single(unit.Members.OfType<TypeDeclaration>(), type => type.Name == "Owner");
+        MethodDeclaration safe = Assert.Single(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "Safe");
+        Assert.Contains(safe.Attributes, attribute => attribute.Name == "ExtensionOwner");
+        Assert.Contains(safe.Attributes, attribute => attribute.Name.Contains("Marker", StringComparison.Ordinal));
+        Assert.DoesNotContain(owner.Members.OfType<MethodDeclaration>(), method => method.Name == "Safe");
+        Assert.Contains(owner.Members.OfType<MethodDeclaration>(), method => method.Name == "Unsafe");
+        MethodDeclaration unsafeCompanion = Assert.Single(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "Unsafe");
+        Assert.DoesNotContain(unsafeCompanion.Attributes, attribute => attribute.Name.Contains("Marker", StringComparison.Ordinal));
+        Assert.DoesNotContain(unsafeCompanion.Attributes, attribute => attribute.Name == "ExtensionOwner");
+    }
+
+    [Fact]
     public void ImportedPrivateDelegate_DoesNotAcquireSourceLiftingAccessibility()
     {
         LoadedCSharpProject source = Load(Source);

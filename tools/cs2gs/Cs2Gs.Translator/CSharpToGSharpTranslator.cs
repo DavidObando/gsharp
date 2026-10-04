@@ -1229,14 +1229,16 @@ public sealed partial class CSharpToGSharpTranslator
                 if (liftedDelegate)
                 {
                     // Lifting makes the nominal delegate reachable, not private types
-                    // exposed by its declaration. Visit that declaration cycle-safely.
-                    if (named.DelegateInvokeMethod is IMethodSymbol invoke
+                    // exposed by its declaration. Inspect the definition: constructed
+                    // signatures can expand generic recursion indefinitely.
+                    INamedTypeSymbol definition = named.OriginalDefinition;
+                    if (definition.DelegateInvokeMethod is IMethodSymbol invoke
                         && SignatureTypesNamePrivateNestedType(invoke, owner, visited))
                     {
                         return true;
                     }
 
-                    foreach (ITypeParameterSymbol parameter in named.TypeParameters)
+                    foreach (ITypeParameterSymbol parameter in definition.TypeParameters)
                     {
                         if (NamesPrivateNestedType(parameter, owner, visited))
                         {
