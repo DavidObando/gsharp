@@ -306,6 +306,263 @@ public sealed class Issue4755GenericStructInitializerEmitTests
         Assert.Equal(expected, Invoke(assemblies.Last(), "Consumer4755"));
     }
 
+    [Fact]
+    public void PrimaryGenericInitializer_UsesOwningParameterScopeAndNativeConstructor()
+    {
+        InDirectory(directory =>
+        {
+            var native = EmitCSharp(directory, "NativePrimary4755", """
+                namespace NativePrimary4755;
+                public static class Factory<T>
+                {
+                    public static int Calls;
+                    public static T Copy(T value) { Calls++; return value; }
+                }
+                public struct Box<T>(T value)
+                {
+                    public T Value = value;
+                    public T Copy = Factory<T>.Copy(value);
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var number = new Box<int>(7);
+                        var text = new Box<string>("text");
+                        return number.Value + "/" + number.Copy + "/" + Factory<int>.Calls + ";" +
+                            text.Value + "/" + text.Copy + "/" + Factory<string>.Calls;
+                    }
+                }
+                """);
+            Assert.Equal("7/7/1;text/text/1", Invoke(EmittedFixture.Load(native), "NativePrimary4755.Oracle"));
+            var emitted = Compile(directory, """
+                package PrimaryGeneric4755
+                import NativePrimary4755
+                struct Box[T](Value T) {
+                    public var Copy T = Factory[T].Copy(Value)
+                }
+                struct Simple[T](Value T) {
+                    public var Copy T = Value
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let number = Box[int32](7)
+                            let text = Box[string]{Value: "text"}
+                            return number.Value.ToString() + "/" + number.Copy.ToString() + "/" + Factory[int32].Calls.ToString() +
+                                ";" + text.Value + "/" + text.Copy + "/" + Factory[string].Calls.ToString()
+                        }
+                    }
+                }
+                """, native);
+            IlVerifier.Verify(emitted, new[] { native });
+            AssertNativeConsumer(directory, emitted, "PrimaryGeneric4755.Api", "7/7/1;text/text/1", native);
+
+            var consumer = EmitCSharp(directory, "DirectPrimary4755", """
+                public static class DirectPrimary4755
+                {
+                    public static string Run()
+                    {
+                        var number = new PrimaryGeneric4755.Simple<int>(7);
+                        var text = new PrimaryGeneric4755.Simple<string>("text");
+                        return number.Value + "/" + number.Copy + ";" + text.Value + "/" + text.Copy;
+                    }
+                }
+                """, emitted, native);
+            IlVerifier.Verify(consumer, new[] { emitted, native });
+            Assert.Equal("7/7;text/text", Invoke(EmittedFixture.LoadTogether(native, emitted, consumer).Last(), "DirectPrimary4755"));
+            var box = EmittedFixture.LoadTogether(native, emitted).Last().GetType("PrimaryGeneric4755.Box`1", throwOnError: true);
+            var constructor = Assert.Single(box.GetConstructors());
+            var parameter = Assert.Single(constructor.GetParameters());
+            Assert.Equal("Value", parameter.Name);
+            Assert.Equal(box.GetGenericArguments()[0], parameter.ParameterType);
+            Assert.Equal(box, box.GetField("Copy").DeclaringType);
+        });
+    }
+
+    [Fact]
+    public void PrimaryPrivateFixedArray_AndEnclosingTypesPreserveClosedStorage()
+    {
+        InDirectory(directory =>
+        {
+            var values = typeof(Gsharp.Values.ReadOnlyManagedRef<>).Assembly.Location;
+            var native = EmitCSharp(directory, "NativePrivate4747", """
+                #nullable enable
+                namespace NativePrivate4747;
+                public static class Factory
+                {
+                    public static Gsharp.Values.ReadOnlyManagedRef<int> Make() =>
+                        Gsharp.Values.ReadOnlyManagedRef<int>.FromArray(new[] { 7 }, 0);
+                }
+                public struct Holder<T>(T value)
+                {
+                    private T[] handles = [value];
+                    private readonly T copy = value;
+                    public T Read() => handles[0];
+                    public T ReadCopy() => copy;
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var number = new Holder<int>(7);
+                        var text = new Holder<string>("text");
+                        var location = new Holder<Gsharp.Values.ReadOnlyManagedRef<int>>(Factory.Make());
+                        return number.Read() + "/" + number.ReadCopy() + ";" + text.Read() + "/" + text.ReadCopy() +
+                            ";" + location.Read().Borrow() + "/" + location.ReadCopy().Borrow();
+                    }
+                }
+                """, values);
+            Assert.Equal("7/7;text/text;7/7", Invoke(EmittedFixture.LoadTogether(values, native).Last(), "NativePrivate4747.Oracle"));
+            var emitted = Compile(directory, """
+                package PrimaryPrivate4747
+                import NativePrivate4747
+                struct Holder[T](Value T) {
+                    private var Handles [1]T = [1]T{Value}
+                    private let Copy T = Value
+                    public func Read() T -> Handles[0]
+                    public func ReadCopy() T -> Copy
+                }
+                class Outer[T] {
+                    public struct Inner(Value T) {
+                        public let Copy T = Value
+                    }
+                }
+                struct Plain(Value int32) {
+                    public let Copy int32 = Value
+                }
+                data struct Data[T](Value T) {
+                    public let Copy T = Value
+                }
+                struct Captured[T](Value T) {
+                    public var Reader () -> T = func () T { return Value }
+                }
+                struct Nested[T](Value T) {
+                    private var Storage Holder[T] = Holder[T](Value)
+                    public func Read() T -> Storage.Read()
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let number = Holder[int32]{Value: 7}
+                            let text = Holder[string]("text")
+                            let nested = Outer[string].Inner{Value: "nested"}
+                            let plain = Plain(8)
+                            let data = Data[int32](9)
+                            let captured = Captured[int32](10)
+                            let nestedStorage = Nested[int32](11)
+                            let location = Holder[readonly managed[int32]]{Value: Factory.Make()}
+                            return number.Read().ToString() + "/" + number.ReadCopy().ToString() + ";" +
+                                text.Read() + "/" + text.ReadCopy() + ";" + nested.Copy + ";" +
+                                plain.Copy.ToString() + ";" + data.Copy.ToString() + ";" +
+                                captured.Reader().ToString() + ";" + nestedStorage.Read().ToString() + ";" +
+                                (*location.Read()).ToString() + "/" + (*location.ReadCopy()).ToString()
+                        }
+                    }
+                }
+                """, native, values);
+            IlVerifier.Verify(emitted, new[] { native, values });
+            AssertNativeConsumer(directory, emitted, "PrimaryPrivate4747.Api", "7/7;text/text;nested;8;9;10;11;7/7", native, values);
+            var assembly = EmittedFixture.LoadTogether(values, native, emitted).Last();
+            var holder = assembly.GetType("PrimaryPrivate4747.Holder`1", throwOnError: true);
+            var copy = holder.GetField("Copy", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.True(copy.IsPrivate);
+            Assert.True(copy.IsInitOnly);
+            Assert.Equal(holder, copy.DeclaringType);
+            Assert.Equal(holder.GetGenericArguments()[0], copy.FieldType);
+            Assert.True(holder.GetField("Handles", BindingFlags.Instance | BindingFlags.NonPublic).IsPrivate);
+            Assert.Single(holder.GetConstructors());
+            Assert.Single(assembly.GetType("PrimaryPrivate4747.Data`1", throwOnError: true).GetConstructors());
+        });
+    }
+
+    [Fact]
+    public void PrimaryConstruction_PreservesArgumentAndInitializerOrderAndRawZero()
+    {
+        InDirectory(directory =>
+        {
+            var native = EmitCSharp(directory, "NativeOrder4747", """
+                namespace NativeOrder4747;
+                public static class Effects
+                {
+                    public static string Trace = "";
+                    public static int Mark(string label, int value) { Trace += label; return value; }
+                }
+                public struct Pair<T>(T first, T second)
+                {
+                    public T First = first;
+                    public T Second = second;
+                    public T Copy = Observe(first);
+                    public int Stamp = Effects.Mark("J", 3);
+                    private static T Observe(T value) { Effects.Trace += "I"; return value; }
+                }
+                public struct ZeroInput(int value)
+                {
+                    public int Value = value;
+                    private int seed = Effects.Mark("Z", 5);
+                    public int Read() => seed;
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var named = new Pair<int>(second: Effects.Mark("B", 2), first: Effects.Mark("A", 1));
+                        var supplied = new Pair<int>(Effects.Mark("C", 7), Effects.Mark("D", 8))
+                            { Copy = Effects.Mark("S", 9) };
+                        Pair<int> zero = default;
+                        var array = new Pair<int>[1];
+                        var initialized = new ZeroInput(0);
+                        return named.First + "/" + named.Second + "/" + named.Copy + "/" + supplied.Copy +
+                            "/" + zero.Stamp + "/" + array[0].Stamp + "/" + initialized.Value + "/" + initialized.Read() + "/" + Effects.Trace;
+                    }
+                }
+                """);
+            Assert.Equal("1/2/1/9/0/0/0/5/BAIJCDIJSZ", Invoke(EmittedFixture.Load(native), "NativeOrder4747.Oracle"));
+            var emitted = Compile(directory, """
+                package PrimaryOrder4747
+                class Effects {
+                    shared {
+                        public var Trace string = ""
+                        public func Mark(label string, value int32) int32 {
+                            Trace += label
+                            return value
+                        }
+                    }
+                }
+                struct Pair[T](First T, Second T) {
+                    public var Copy T = Observe(First)
+                    public var Stamp int32 = Effects.Mark("J", 3)
+                    shared {
+                        private func Observe(value T) T {
+                            Effects.Trace += "I"
+                            return value
+                        }
+                    }
+                }
+                struct ZeroInput(Value int32) {
+                    private var Seed int32 = Effects.Mark("Z", 5)
+                    public func Read() int32 -> Seed
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let named = Pair[int32](Second: Effects.Mark("B", 2), First: Effects.Mark("A", 1))
+                            let supplied = Pair[int32]{First: Effects.Mark("C", 7), Second: Effects.Mark("D", 8), Copy: Effects.Mark("S", 9)}
+                            let zero Pair[int32] = default
+                            let array = System.GC.AllocateArray[Pair[int32]](1)
+                            let initialized = ZeroInput{}
+                            return named.First.ToString() + "/" + named.Second.ToString() + "/" + named.Copy.ToString() + "/" +
+                                supplied.Copy.ToString() + "/" + zero.Stamp.ToString() + "/" + array[0].Stamp.ToString() + "/" +
+                                initialized.Value.ToString() + "/" + initialized.Read().ToString() + "/" + Effects.Trace
+                        }
+                    }
+                }
+                """);
+            IlVerifier.Verify(emitted);
+            AssertNativeConsumer(directory, emitted, "PrimaryOrder4747.Api", "1/2/1/9/0/0/0/5/BAIJCDIJSZ");
+        });
+    }
+
     private static object Invoke(Assembly assembly, string typeName) =>
         assembly.GetType(typeName, throwOnError: true).GetMethod("Run").Invoke(null, null);
 

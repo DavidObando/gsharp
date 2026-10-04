@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -132,6 +133,77 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             AssemblyAttributes = program.AssemblyAttributes,
             ModuleAttributes = program.ModuleAttributes,
         };
+    }
+
+    /// <inheritdoc/>
+    protected override BoundExpression RewriteStructLiteralExpression(BoundStructLiteralExpression node)
+    {
+        var type = node.StructType;
+        if (!type.HasPrimaryConstructor || !type.NeedsSynthesizedValueStructDefaultCtor)
+        {
+            return base.RewriteStructLiteralExpression(node);
+        }
+
+        // Primary parameters belong to the owning constructor, not the literal
+        // site. Capture supplied values in lexical order before mapping them to
+        // parameters; constructor-owned declaration expressions run only there.
+        var declared = new HashSet<BoundExpression>(
+            type.Definition.InstanceFieldInitializers.Values,
+            ReferenceEqualityComparer.Instance);
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var supplied = new Dictionary<string, BoundExpression>();
+        var remaining = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        var primaryFields = new HashSet<string>();
+        foreach (var parameter in type.PrimaryConstructorParameters)
+        {
+            primaryFields.Add(parameter.Name);
+        }
+
+        foreach (var initializer in node.Initializers)
+        {
+            if (initializer.Field != null && declared.Contains(initializer.Value))
+            {
+                continue;
+            }
+
+            var value = this.RewriteExpression(initializer.Value);
+            if (primaryFields.Contains(initializer.MemberName))
+            {
+                value = this.MaybeSpill(value, true, "primary", statements);
+                supplied[initializer.MemberName] = value;
+                continue;
+            }
+
+            remaining.Add(initializer.Field != null
+                ? new BoundFieldInitializer(initializer.Field, value, initializer.FieldDeclaringType)
+                : new BoundFieldInitializer(Invariant.Required(initializer.Property, "a literal initializer has a field or property"), value));
+        }
+
+        var arguments = ImmutableArray.CreateBuilder<BoundExpression>(type.PrimaryConstructorParameters.Length);
+        foreach (var parameter in type.PrimaryConstructorParameters)
+        {
+            ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(type, parameter.Name, out var field);
+            var storage = Invariant.Required(field, "primary constructor parameters have corresponding fields");
+
+            // Omitted primary fields retain the composite literal's CLR zero.
+            arguments.Add(supplied.TryGetValue(parameter.Name, out var value)
+                ? value
+                : new BoundDefaultExpression(node.Syntax, storage.Type));
+        }
+
+        var construction = new BoundConstructorCallExpression(node.Syntax, type, arguments.MoveToImmutable());
+        var receiver = (BoundVariableExpression)this.MaybeSpill(construction, true, "constructed", statements);
+        foreach (var initializer in remaining)
+        {
+            BoundExpression assignment = initializer.Field != null
+                ? new BoundFieldAssignmentExpression(
+                    node.Syntax, receiver.Variable, initializer.FieldDeclaringType ?? type, initializer.Field, initializer.Value)
+                : new BoundPropertyAssignmentExpression(
+                    node.Syntax, receiver, type, Invariant.Required(initializer.Property, "a literal initializer has a field or property"), initializer.Value);
+            statements.Add(new BoundExpressionStatement(node.Syntax, assignment));
+        }
+
+        return new BoundBlockExpression(node.Syntax, statements.ToImmutable(), receiver);
     }
 
     /// <inheritdoc/>

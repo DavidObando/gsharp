@@ -26,7 +26,7 @@ internal static class InitializationPlanner
             var fields = type.InstanceFieldInitializers.Values;
             var primary = type.BaseConstructorInitializer?.Arguments ?? ImmutableArray<BoundExpression>.Empty;
             if ((type.ExplicitConstructor == null || type.HasPrimaryConstructor || type.NeedsSynthesizedValueStructDefaultCtor)
-                && HasRequest(fields.Concat(primary)))
+                && (type.NeedsSynthesizedValueStructDefaultCtor || HasRequest(fields.Concat(primary))))
             {
                 var function = OwnerFunction(program, type, type.PrimaryConstructorParameters, isStatic: false);
                 plans[(type, false)] = InstancePlan(type, function, primary, Empty(), primaryStores: true);
@@ -198,7 +198,8 @@ internal static class InitializationPlanner
 
         public override void VisitExpression(BoundExpression? node)
         {
-            Found |= node is BoundManagedReferenceExpression;
+            Found |= node is BoundManagedReferenceExpression
+                || node is BoundStructLiteralExpression { StructType.HasPrimaryConstructor: true, StructType.NeedsSynthesizedValueStructDefaultCtor: true };
             if (node is BoundFunctionLiteralExpression literal)
             {
                 Visit(literal.Body);

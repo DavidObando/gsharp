@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **Ordinary generic struct literals retain declared field initializers** (issue #4755). Default construction now runs definition-bound initializers once in the owning generic type, before explicit literal member writes, instead of silently leaving initialized fields at CLR zero. Constructed value/reference arguments, private and readonly storage keep their owning metadata; array/default zero-initialization is unchanged.
+- **Ordinary generic struct literals retain declared field initializers and primary-parameter scope** (issues #4755 and #4747). Construction runs definition-bound initializers once in their owning type, using the actual primary inputs before later explicit member writes, instead of silently leaving initialized fields at CLR zero or crashing on a primary-parameter reference. Constructed value/reference arguments, private fixed-array and readonly storage retain their owning metadata; authored constructors and raw array/default zero-initialization are unchanged.
 
 - **cs2gs keeps attributes naming a safely lifted source delegate on the original extension owner** (issue #4676). A private nested delegate already maps to a bindable top-level name, so an external-receiver extension no longer unnecessarily splits into an owner helper and a public `<Program>` companion. The shared exposure check still follows the delegate's signature, constraints and containing generic arguments for genuine private types, and does not relax imported delegate accessibility or CLR identity.
 

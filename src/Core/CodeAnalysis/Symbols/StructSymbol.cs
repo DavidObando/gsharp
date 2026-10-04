@@ -703,7 +703,8 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>
     /// Gets a value indicating whether value-struct field initializers require an
-    /// in-type default constructor for accessibility or generic ownership.
+    /// in-type constructor for accessibility, generic ownership, or primary
+    /// parameter scope. A primary type uses its parameterized constructor.
     /// Definition-bound expressions must execute in their owning generic
     /// context, not in a literal site's unrelated VAR/MVAR scope (#4755).
     /// </summary>
@@ -714,6 +715,7 @@ public sealed class StructSymbol : TypeSymbol
         && !InstanceFieldInitializers.IsEmpty
         && (ExplicitConstructors.IsDefaultOrEmpty || !ExplicitConstructors.Any(ctor => ctor.Parameters.Length == 0))
         && (IsGenericDefinition
+            || HasPrimaryConstructor
             || !CollectEnclosingTypeParameters(this).IsDefaultOrEmpty
             || InstanceFieldInitializers.Keys.Any(member => member.Accessibility != Accessibility.Public));
 

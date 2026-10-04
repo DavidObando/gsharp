@@ -1026,8 +1026,10 @@ The semantics match C#:
   `init(...)` constructor, and the synthesized default constructor when no
   constructor is declared. Because the initializer runs before the constructor
   body, it may not reference `this`, another instance member of the same object,
-  or a constructor parameter; doing so reports `GS0377` (assign such fields in an
-  `init(...)` body instead). A `var` field initialized inline may still be
+  or an explicit `init(...)` parameter; doing so reports `GS0377` (assign such fields in an
+  `init(...)` body instead). Primary-constructor parameters are in scope:
+  their corresponding fields are assigned before declaration initializers run.
+  A `var` field initialized inline may still be
   overwritten by a later `init(...)` body.
 * A `let` field initializer counts as a construction-time write, so it composes
   with the `initonly` emission described above (the field remains read-only).
@@ -1039,10 +1041,15 @@ The semantics match C#:
   contexts and from other assemblies. A `const` field with no initializer reports
   `GS0375`; a `const` field whose initializer is not a constant expression reports
   `GS0376`.
-* For **value types** (`struct` / `data struct`), which have no class-style
-  constructor that could run inline initializers, a composite struct literal
-  (`Pt{ ... }`) zero-initializes the storage and then applies each declared field
-  initializer for any field the literal omitted, in declaration order.
+* For **value types** (`struct` / `data struct`), a composite struct literal
+  (`Pt{ ... }`) starts with zero-initialized storage. Generic ownership,
+  primary-parameter scope, or non-public initialized storage requires an
+  owning constructor: primary inputs are evaluated once, then declaration
+  initializers run in declaration order, then explicit non-primary member
+  writes run in literal order. Ordinary omitted primary fields keep the
+  literal's zero value. Other public-only, non-generic literals retain inline
+  initialization for omitted fields. Raw `default(T)` and array element
+  zero-initialization do not invoke these constructors.
 
 ## Expressions
 

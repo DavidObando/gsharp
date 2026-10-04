@@ -101,6 +101,7 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken;
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
     private readonly Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef;
+    private readonly Func<StructSymbol, MethodDefinitionHandle> emitInitializerConstructor;
 
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassEqualsTypedMethods = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
@@ -123,7 +124,8 @@ internal sealed class DataStructSynthesizer
         Func<StructSymbol, EntityHandle> resolveUserTypeToken,
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken,
         Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef,
-        Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef)
+        Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef,
+        Func<StructSymbol, MethodDefinitionHandle> emitInitializerConstructor)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -137,6 +139,7 @@ internal sealed class DataStructSynthesizer
         this.resolveUserFieldToken = resolveUserFieldToken ?? throw new ArgumentNullException(nameof(resolveUserFieldToken));
         this.resolveUserMethodRef = resolveUserMethodRef ?? throw new ArgumentNullException(nameof(resolveUserMethodRef));
         this.resolveImportedMethodRef = resolveImportedMethodRef ?? throw new ArgumentNullException(nameof(resolveImportedMethodRef));
+        this.emitInitializerConstructor = emitInitializerConstructor ?? throw new ArgumentNullException(nameof(emitInitializerConstructor));
     }
 
     /// <summary>
@@ -847,6 +850,11 @@ internal sealed class DataStructSynthesizer
     /// </summary>
     private MethodDefinitionHandle EmitDataStructPrimaryConstructor(StructSymbol structSym)
     {
+        if (structSym.NeedsSynthesizedValueStructDefaultCtor)
+        {
+            return this.emitInitializerConstructor(structSym);
+        }
+
         var parameters = structSym.PrimaryConstructorParameters;
 
         int bodyOffset = -1;

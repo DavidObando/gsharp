@@ -1194,26 +1194,7 @@ internal sealed class ReflectionMetadataEmitter
         // not need a hard back-reference to this emitter.
         this.conversionEmitter = new ConversionEmitter(this.emitCtx, this.cache, this.wellKnown, this.memberRefs.GetElementTypeToken);
 
-        // PR-E-6: DataStructSynthesizer wires up after ConversionEmitter
-        // because it needs `conversionEmitter.EmitBoxIfNeeded` for every
-        // field load. Like ConversionEmitter and SlotPlanner, it consumes
-        // the remaining root-emitter helpers it depends on as delegates so
-        // it does not need a hard back-reference to this emitter.
-        this.dataStructSynth = new DataStructSynthesizer(
-            this.emitCtx,
-            this.cache,
-            this.wellKnown,
-            this.conversionEmitter,
-            this.signatures.EncodeTypeSymbol,
-            this.memberRefs.GetElementTypeToken,
-            this.memberRefs.GetTypeReference,
-            this.customAttrEncoder.NextParameterHandle,
-            this.userTokens.ResolveUserTypeToken,
-            this.userTokens.ResolveFieldToken,
-            this.userTokens.GetUserStructMethodRef,
-            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType));
-
-        // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
+        // PR-E-7: MemberDefEmitter wires up after ConversionEmitter.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
         // trio and threads delegate callbacks for the five root-emitter
         // helpers it uses (EmitFunction, EncodeTypeSymbol, NextParameterHandle,
@@ -1272,6 +1253,23 @@ internal sealed class ReflectionMetadataEmitter
             this.ctorBodies.EmitClassConstructorWithBaseInitializerBodyBytes,
             this.ctorBodies.EmitClassConstructorWithBodyBodyBytes,
             this.ctorBodies.EmitClassDeinitializerBodyBytes);
+
+        // Data structs reuse the owning initializer constructor rather than
+        // emitting a second constructor with the same primary signature.
+        this.dataStructSynth = new DataStructSynthesizer(
+            this.emitCtx,
+            this.cache,
+            this.wellKnown,
+            this.conversionEmitter,
+            this.signatures.EncodeTypeSymbol,
+            this.memberRefs.GetElementTypeToken,
+            this.memberRefs.GetTypeReference,
+            this.customAttrEncoder.NextParameterHandle,
+            this.userTokens.ResolveUserTypeToken,
+            this.userTokens.ResolveFieldToken,
+            this.userTokens.GetUserStructMethodRef,
+            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType),
+            this.typeDefEmitter.EmitValueStructDefaultConstructor);
 
         // PR-E-9: ClosureEmitter wires up after TypeDefEmitter. It depends
         // on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -2476,9 +2474,17 @@ internal sealed class ReflectionMetadataEmitter
             // parameterless .ctor as the struct's last row. ClassCtorHandles
             // doubles as the default-ctor registry ResolveUserCtorTokenForDefault
             // consults for constructed-generic MemberRef parenting.
-            if (needsSynthesizedDefaultCtor)
+            if (needsSynthesizedDefaultCtor && !(s.IsData && s.HasPrimaryConstructor))
             {
-                this.cache.ClassCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                var initializerCtor = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                if (s.HasPrimaryConstructor)
+                {
+                    this.cache.ClassPrimaryCtorHandles[s] = initializerCtor;
+                }
+                else
+                {
+                    this.cache.ClassCtorHandles[s] = initializerCtor;
+                }
             }
         }
 
@@ -2786,7 +2792,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(inlineCtorRow);
             }
-            else if (s.IsData && s.Fields.IsDefaultOrEmpty && s.HasPrimaryConstructor
+            else if (s.IsData && s.HasPrimaryConstructor
                 && classPrimaryCtorRows.TryGetValue(s, out var dataPrimaryCtorRow))
             {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(dataPrimaryCtorRow);
@@ -3957,7 +3963,8 @@ internal sealed class ReflectionMetadataEmitter
             // struct's LAST planned row — emitted at the tail of this method,
             // so the early-out below must not skip a struct whose only row is
             // that ctor.
-            var emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s);
+            var emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s)
+                && !(s.IsData && s.HasPrimaryConstructor);
             if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields) && !s.HasStaticInitializerBlock)
             {
                 if (emitsSynthesizedDefaultCtor)

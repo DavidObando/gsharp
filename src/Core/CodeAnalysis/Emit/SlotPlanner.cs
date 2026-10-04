@@ -327,7 +327,7 @@ internal sealed class SlotPlanner
             }
         }
 
-        return hasPath;
+        return true;
     }
 
     // ─────────────────────────── collectors ───────────────────────────

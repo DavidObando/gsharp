@@ -384,10 +384,16 @@ internal sealed class ConstructorBodyEmitter
         }
 
         var localsSignature = session.BuildLocalsSignature();
-        var emitter = session.CreateEmitter(paramSlots);
+        var emitter = session.CreateEmitter(paramSlots, structThisParameter: classSym.IsClass ? null : thisParam);
 
         var richObject = classSym.Declaration?.IsSynthesizedRichAnonymousObject == true;
-        if (!richObject)
+        if (!classSym.IsClass)
+        {
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Initobj);
+            il.Token(this.outer.userTokens.ResolveUserTypeToken(classSym));
+        }
+        else if (!richObject)
         {
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Call);
@@ -444,18 +450,20 @@ internal sealed class ConstructorBodyEmitter
     /// call-site lowering (initobj + raw <c>stfld</c> per initializer) —
     /// the private-field store executes outside the type and the runtime
     /// rejects it with <see cref="FieldAccessException"/>. Such a struct
-    /// gets a synthesized public parameterless <c>.ctor</c> that runs ALL
+    /// gets a synthesized public <c>.ctor</c> that runs ALL
     /// declared instance field initializers in-type (mirroring the class
     /// default-ctor path), and struct-literal sites construct through it.
     /// Generic structs also require in-type initialization: their definition-bound
     /// expressions cannot execute in the literal site's generic context (#4755).
+    /// Primary structs use their primary signature so declaration initializers
+    /// retain the actual constructor parameter scope (#4747).
     /// Non-generic structs whose initializers are all public keep the historical
     /// inline emission. A user-declared parameterless ctor (which
     /// would collide) and inline structs (fixed synthesized-member layout)
     /// are excluded.
     /// </summary>
     /// <param name="structSym">The struct definition to probe.</param>
-    /// <returns><see langword="true"/> when the synthesized parameterless ctor is required.</returns>
+    /// <returns><see langword="true"/> when an owning initializer ctor is required.</returns>
     internal static bool NeedsSynthesizedValueStructDefaultCtor(StructSymbol structSym)
         => structSym.NeedsSynthesizedValueStructDefaultCtor;
 
