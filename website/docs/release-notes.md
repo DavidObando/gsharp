@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **cs2gs preserves nullable selector results observed by LINQ predicates** (issue #4769). `Any`, `All`, `Where` and `FirstOrDefault` type-pattern and nil tests now receive the original nullable value instead of an inserted `!!` throwing before the predicate runs. This repairs the shared recursive-lift query in the self-migrated translator; fixed non-null delegate contracts retain their checks.
+
 - **cs2gs keeps attributes naming a safely lifted source delegate on the original extension owner** (issue #4676). A private nested delegate already maps to a bindable top-level name, so an external-receiver extension no longer unnecessarily splits into an owner helper and a public `<Program>` companion. The shared exposure check still follows the delegate's signature, constraints and containing generic arguments for genuine private types, and does not relax imported delegate accessibility or CLR identity.
 
 - **An inherited non-virtual property accessor can satisfy a G# interface across assemblies** (issue [#4717](https://github.com/DavidObando/gsharp/issues/4717)). The derived class now emits a private forwarding slot that calls the exact imported accessor selected by binding, including setters, init accessors, indexers and constructed generic bases. Previously the two compilations succeeded but the derived type failed IL verification and runtime loading. Ordinary base accessors stay non-virtual; existing virtual and inherited interface mappings are preserved, and reference assemblies carry the same forwarding-slot metadata.
