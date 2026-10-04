@@ -68,6 +68,49 @@ Useful `migrate` options:
 | `--format` | Run the canonical formatter over emitted G#. This is the default since ADR-0179 phase 7b. |
 | `--no-format` | Keep the printer's own layout instead of the canonical one. Useful for A/B measurement against the formatter; the emitted G# is the same program either way, only its line breaks differ. |
 
+## Replay a translated repository
+
+A repository-layout `migrate --translate-only` run writes a
+`validation-context.json` for each app. Replay its compile, IL-verify and parity
+stages with the **same revision's original C# checkout**, migrated tree and
+original per-test-name oracles:
+
+```sh
+cs2gs validate --corpus original-checkout --migrated downloaded-migrated-tree \
+  --manifests downloaded-runs/migrate-run-id --csharp-test-oracle original-oracles \
+  --app test/Compiler.Tests/Compiler.Tests.csproj
+```
+
+Keep `--exclude` and `--passthrough` consistent with the producing run. Selecting
+an app does not narrow the repository-wide project-reference map.
+
+Manifests retain the producing `sourceRoot` and `sourceProjectPath`, and each
+emitted file's `relativeCsPath`, absolute source provenance and referenced-project
+ownership. Hydration resolves original sources only under the supplied
+`--corpus`, including linked sources and `.resx` inputs; it never substitutes
+generated G# or an unrelated checkout. This preserves the source-declared
+`[Fact]` count used by the existing parity budget, not the larger discovered
+per-name/theory oracle count (issue #4752).
+An explicitly empty or whitespace producing `sourceRoot` is invalid, even when
+no files were emitted. A valid modern project identity can represent no emitted
+or only referenced files; it does not manufacture own-source Facts or verification.
+Source roots and owning project paths are canonicalized consistently, including
+when the checkout is reached through a directory symlink.
+Legacy ownership uses that same canonical project identity for nested project
+directories and their explicit linked compile inputs.
+
+Older manifests without these additive fields use the exact full
+corpus-relative primary C# output mapping to establish one owning producing
+root. Namespace splits are not guessed by filename. Missing sources, conflicting
+roots, incomplete identity metadata and paths escaping either authorized tree
+fail explicitly. An old manifest with no unambiguous owning C# anchor needs a
+new translate pass; replay does not silently accept an empty source count.
+For projects directly at the corpus root, non-referenced primary C# inputs
+can establish that anchor, including SDK-default implicit compile items.
+Referenced-project entries never establish ownership.
+Relocation repairs source evidence, not runtime failures: a restored budget
+alone does not prove the test suite completes.
+
 ## Roslyn analyzer projects
 
 When a project in the migration declares Roslyn analyzers, `cs2gs` switches that project into analyzer translation mode: `Microsoft.CodeAnalysis` usage is rewritten to the [G# analyzer API](./analyzers.md) instead of passing through as an ordinary library reference. The `[DiagnosticAnalyzer]` attribute, base class, analysis contexts, `SyntaxKind` values, and node/symbol members all map to their G# counterparts, and common idioms are rewritten (`GetLocation()` becomes `.Location`, operation actions become bound-node actions, and so on). The project file is retargeted too: the Roslyn compiler packages are dropped in favor of a `GSharp.Core` reference, and consumers' `OutputItemType="Analyzer"` wiring becomes `OutputItemType="GsharpCodeAnalyzer"`.
