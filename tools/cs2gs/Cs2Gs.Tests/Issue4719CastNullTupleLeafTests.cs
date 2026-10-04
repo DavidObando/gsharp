@@ -3011,7 +3011,7 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     [InlineData(true)]
     public void TupleContractRemapping_LocalClosureQueriesStayBounded(bool registerCurrent)
     {
-        const int count = 800;
+        const int count = 1600;
         string implementations = string.Join(Environment.NewLine, Enumerable.Range(0, count).Select(index =>
             $"public sealed class Rows{index} : IRows {{ public (string Value,int Code) Read() => (null,1); }}"));
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
