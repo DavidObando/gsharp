@@ -157,22 +157,66 @@ public sealed class Issue4757RecursiveDelegateDriverTests
         }
         """;
 
+    private const string TupleNative = """
+        using System;
+        using System.Collections.Generic;
+        namespace Tuple4757;
+        public delegate (List<D<T>>, int) D<T>(D<T> other);
+        public static class Owner {
+            public static (List<D<int>>, int) Apply(D<int> callback) => callback(callback);
+        }
+        """;
+
+    private const string TupleSource = """
+        package Tuple4757
+        import System
+        import System.Collections.Generic
+        delegate D[T](other D[T]) (List[D[T]], int32);
+        shared class Owner {
+            func Apply(callback D[int32]) (List[D[int32]], int32) -> callback.Invoke(callback)
+        }
+        """;
+
+    private const string TupleConsumer = """
+        using System;
+        using System.Collections.Generic;
+        using Tuple4757;
+        public static class Consumer {
+            public static string Run() {
+                var calls = 0;
+                D<int> callback = other => { calls++; return (new List<D<int>> { other }, 7); };
+                var result = Owner.Apply(callback);
+                if (calls != 1 || result.Item2 != 7 || result.Item1.Count != 1 ||
+                    !ReferenceEquals(result.Item1[0], callback)) throw new Exception("tuple effect");
+                var invoke = typeof(D<int>).GetMethod("Invoke") ?? throw new Exception("Invoke");
+                if (invoke.ReturnType != typeof(ValueTuple<List<D<int>>, int>) ||
+                    invoke.GetParameters()[0].ParameterType != typeof(D<int>) ||
+                    typeof(D<int>).ContainsGenericParameters) throw new Exception("tuple nominal identity");
+                return "tuple:1;recursive:identity;list:Callback";
+            }
+        }
+        """;
+
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void RealDriver_EmitsNativeCallableRecursiveDelegates(bool growing)
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void RealDriver_EmitsNativeCallableRecursiveDelegates(int shape)
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
-        var native = fixture.CompileCSharp(growing ? GrowingNative : RecursiveNative, "native4757");
-        var emitted = Compile(fixture.Directory, growing ? GrowingSource : RecursiveSource, growing ? "Growing4757" : "Recursive4757");
-        var expected = growing
-            ? "growing:1;closed:int32;private:Box;nested:int32;parameter:2/return:1"
-            : "self:1;mutual:identity;attribute:Callback";
+        var (nativeSource, source, consumerSource, name, expected) = shape switch
+        {
+            0 => (RecursiveNative, RecursiveSource, RecursiveConsumer, "Recursive4757", "self:1;mutual:identity;attribute:Callback"),
+            1 => (GrowingNative, GrowingSource, GrowingConsumer, "Growing4757", "growing:1;closed:int32;private:Box;nested:int32;parameter:2/return:1"),
+            _ => (TupleNative, TupleSource, TupleConsumer, "Tuple4757", "tuple:1;recursive:identity;list:Callback"),
+        };
+        var native = fixture.CompileCSharp(nativeSource, "native4757");
+        var emitted = Compile(fixture.Directory, source, name);
         foreach (var producer in new[] { native, emitted })
         {
             IlVerifier.Verify(producer);
             var consumer = fixture.CompileCSharp(
-                growing ? GrowingConsumer : RecursiveConsumer,
+                consumerSource,
                 Path.GetFileNameWithoutExtension(producer) + "Consumer",
                 producer);
             IlVerifier.Verify(consumer, new[] { producer });

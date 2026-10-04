@@ -162,6 +162,71 @@ public sealed class Issue4757RecursiveDelegateTests
         Assert.Empty(sink);
     }
 
+    [Fact]
+    public void TupleWrappedRecursion_QueriesDoNotForceConstructedSignatureProjection()
+    {
+        var parameter = Tp("T");
+        var definition = ShellWithParameter("TupleRecursive", parameter);
+        var open = Construct(definition, parameter);
+        var list = ImportedTypeSymbol.GetConstructed(
+            typeof(List<object>),
+            typeof(List<>),
+            ImmutableArray.Create<TypeSymbol>(open));
+        definition.SetSignature(
+            Parameters(open),
+            TupleTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(list, TypeSymbol.Int32)));
+        var closed = Construct(definition, TypeSymbol.Int32);
+        Assert.False(TypeSymbol.ContainsTypeParameter(closed));
+        var projected = Assert.IsType<TupleTypeSymbol>(closed.ReturnType);
+        var projectedList = Assert.IsType<ImportedTypeSymbol>(projected.ElementTypes[0]);
+        Assert.Same(closed, Assert.Single(closed.Parameters).Type);
+        Assert.Same(closed, Assert.Single(projectedList.TypeArguments));
+        Assert.False(projectedList.HasTypeParameterArgument);
+        Assert.True(TypeSymbol.RequiresSymbolicProjection(projectedList));
+        Assert.Null(projected.ClrType);
+        var sink = new List<TypeParameterSymbol>();
+        TypeSymbol.CollectReferencedTypeParameters(closed, sink);
+        Assert.Empty(sink);
+        Assert.True(TypeSymbol.ContainsTypeParameter(open));
+        TypeSymbol.CollectReferencedTypeParameters(open, sink);
+        Assert.Equal(new[] { parameter }, sink);
+    }
+
+    [Fact]
+    public void DefinitionSignatures_KeepFormalAndFreeParametersInTheirOwnScopes()
+    {
+        var parameter = Tp("T");
+        var definition = ShellWithParameter("Definition", parameter);
+        definition.SetSignature(Parameters(parameter), TypeSymbol.Void);
+        var actual = Tp("Actual");
+        var function = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(Construct(definition, actual), definition),
+            TypeSymbol.Void);
+        Assert.True(TypeSymbol.AnyTypeParameter(function, candidate => candidate == parameter));
+        Assert.True(TypeSymbol.AnyTypeParameter(function, candidate => candidate == actual));
+        var sink = new List<TypeParameterSymbol>();
+        TypeSymbol.CollectReferencedTypeParameters(function, sink);
+        Assert.Equal(new[] { actual, parameter }, sink);
+
+        var unused = ShellWithParameter("Unused", parameter);
+        Assert.False(TypeSymbol.ContainsTypeParameter(unused));
+        sink.Clear();
+        TypeSymbol.CollectReferencedTypeParameters(unused, sink);
+        Assert.Empty(sink);
+
+        var nestedParameter = Tp("U");
+        var nested = ShellWithParameter("Nested", nestedParameter);
+        nested.SetSignature(Parameters(nestedParameter), parameter);
+        definition.SetSignature(Parameters(Construct(nested, parameter)), TypeSymbol.Void);
+        var closed = Construct(definition, TypeSymbol.Int32);
+        var projectedNested = Assert.IsType<DelegateTypeSymbol>(Assert.Single(closed.Parameters).Type);
+        Assert.Same(TypeSymbol.Int32, Assert.Single(projectedNested.Parameters).Type);
+        Assert.Same(parameter, projectedNested.ReturnType);
+        Assert.True(TypeSymbol.AnyTypeParameter(closed, candidate => candidate == parameter));
+        TypeSymbol.CollectReferencedTypeParameters(closed, sink);
+        Assert.Equal(new[] { parameter }, sink);
+    }
+
     private static TypeParameterSymbol Tp(string name)
         => new(name, 0, TypeParameterConstraint.Any, TypeParameterVariance.None);
 
