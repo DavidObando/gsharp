@@ -67,11 +67,28 @@ class RedirectTests(unittest.TestCase):
         self.assertIn('/out:"/work dir/run/a.dll"', redirected)
 
     def test_bare_log_uses_a_run_local_default_without_changing_other_empty_options(self) -> None:
-        for spelling in ("/log:", '"/log:"', "/LOG:"):
+        for spelling in ("/log:", '"/log:"', "/LOG:", "/log", "/log=", '"/log"', '"/LOG="',
+                         '/log:""', '/log=""', '"/log:"""', '"/log="""', '"/LOG:   "'):
             with self.subTest(spelling=spelling):
                 self.assertEqual(
                     '/log:"/work dir/run/gsharp-compiler-debug.log"\n/out:\n',
                     bench.redirect_outputs(spelling + "\n/out:\n", Path("/work dir/run")))
+
+    def test_switch_values_use_the_first_separator_and_exact_output_names(self) -> None:
+        for option in ("/out:", "/pdb:", "/refout:", "/doc:", "/log:"):
+            for separator in (":", "="):
+                spelling = option[:-1].upper() + separator
+                with self.subTest(option=option, separator=separator):
+                    name = "ref-file=part.log" if option == "/refout:" else "file=part.log"
+                    self.assertEqual(
+                        option + '"/work dir/run/' + name + '"\n',
+                        bench.redirect_outputs(spelling + '"/tree/file=part.log"\n', Path("/work dir/run")))
+        self.assertEqual("/log:/work/run/file:part.log\n",
+                         bench.redirect_outputs("/log=file:part.log\n", Path("/work/run")))
+
+    def test_non_output_switch_names_are_not_rewritten(self) -> None:
+        original = '/logger:\n/logger=\n/logfile\n/log+\n/log-\n"/logger:file"\n/r:/log.dll\n'
+        self.assertEqual(original, bench.redirect_outputs(original, Path("/work/run")))
 
 
 class BuildTaskSpellingTests(unittest.TestCase):

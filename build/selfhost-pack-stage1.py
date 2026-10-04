@@ -154,6 +154,13 @@ def check_no_versioned_toolchain_pins(tree: Path) -> None:
             + "\n  ".join(sorted(offenders)))
 
 
+def block_comment_end(text: str, start: int) -> int:
+    end = text.find("*/", start + 2)
+    if end < 0:
+        raise json.JSONDecodeError("Unterminated block comment", text, start)
+    return end + 2
+
+
 def closes_next(text: str, start: int) -> bool:
     """Whether the next token after `start`, skipping whitespace and comments, closes an object or array."""
     i = start
@@ -164,8 +171,7 @@ def closes_next(text: str, start: int) -> bool:
             end = text.find("\n", i)
             i = len(text) if end < 0 else end + 1
         elif text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            i = len(text) if end < 0 else end + 2
+            i = block_comment_end(text, i)
         else:
             return text[i] in "}]"
     return False
@@ -190,8 +196,7 @@ def strip_json_comments(text: str) -> str:
                 i += 1
             continue
         elif text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            i = len(text) if end < 0 else end + 2
+            i = block_comment_end(text, i)
             continue
         elif c == "," and closes_next(text, i + 1):
             # A trailing comma (outside any string): drop it.

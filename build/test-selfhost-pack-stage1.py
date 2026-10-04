@@ -150,6 +150,27 @@ class GlobalJsonTests(unittest.TestCase):
     def test_comment_markers_inside_strings_are_kept(self) -> None:
         self.assertEqual('{"a": "http://x/*y*/"} ', packer.strip_json_comments('{"a": "http://x/*y*/"} // c'))
 
+    def test_unterminated_block_comments_report_original_source_location(self) -> None:
+        for text in ("/*", "/* unfinished *", " \n /* before JSON\n{}",
+                     '{"sdk": {}} /*', '{"text": "/* in string"} /* after JSON',
+                     '{"array": [1, /* after comma', '{"array": [1, // line\n /* block'):
+            with self.subTest(text=text):
+                with self.assertRaises(json.JSONDecodeError) as raised:
+                    packer.strip_json_comments(text)
+                error = raised.exception
+                start = text.rfind("/*")
+                self.assertEqual("Unterminated block comment", error.msg)
+                self.assertEqual(text, error.doc)
+                self.assertEqual(start, error.pos)
+                self.assertEqual(text.count("\n", 0, start) + 1, error.lineno)
+                self.assertEqual(start - text.rfind("\n", 0, start), error.colno)
+
+    def test_valid_comments_trailing_commas_and_escaped_string_markers_survive(self) -> None:
+        value = 'escaped " quote, backslash \\, // line and /* unterminated in string'
+        text = ('// before\n{"text": ' + json.dumps(value) + ', /* between */\n'
+                '"array": [1, 2, /* closing array */], /* closing object */} // after')
+        self.assertEqual({"text": value, "array": [1, 2]}, json.loads(packer.strip_json_comments(text)))
+
 
 class PrepareTreeTests(unittest.TestCase):
     def test_mid_scan_failure_retains_each_completed_rewrite(self) -> None:
@@ -669,6 +690,49 @@ class GlobalJsonFailureTests(unittest.TestCase):
                                   packer.CORE_PROJECT.as_posix()], failed["rewrittenPins"])
                 self.assertNotIn("globalJsonUpdated", failed)
                 self.assertNotIn("stagedPackages", failed)
+
+    def test_unterminated_comments_after_complete_or_partial_changes_are_repairable(self) -> None:
+        for failing in (None, "src/Compiler/Compiler.gsproj", packer.SDK_PROJECT.as_posix()):
+            for suffix in (b" /*", b"\n/* unfinished block\n still open *"):
+                with self.subTest(failing=failing, suffix=suffix), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    tree = make_tree(root)
+                    valid = (tree / "global.json").read_bytes()
+                    invalid = b"\xef\xbb\xbf" + valid + suffix
+                    (tree / "global.json").write_bytes(invalid)
+                    bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+                    completed = ["src/Compiler/Compiler.gsproj", packer.SDK_PROJECT.as_posix(),
+                                 packer.CORE_PROJECT.as_posix()]
+                    if failing is not None:
+                        write_bytes = Path.write_bytes
+
+                        def fail_write(path, data):
+                            if path == tree / failing:
+                                raise OSError("injected pre-comment project write failure")
+                            return write_bytes(path, data)
+
+                        with mock.patch.object(Path, "write_bytes", fail_write):
+                            code, partial, stderr = self.prepare(tree, bootstrap, root / "partial")
+                        self.assertEqual(1, code)
+                        self.assertIn("injected pre-comment project write failure", partial["error"])
+                        count = completed.index(failing)
+                        self.assertEqual(completed[:count], partial["rewrittenPins"])
+                        self.assertEqual(invalid, (tree / "global.json").read_bytes())
+                        completed = completed[count:]
+                    code, failed, stderr = self.prepare(tree, bootstrap, root / "malformed")
+                    self.assertEqual(1, code)
+                    self.assert_parse_failure(tree, failed, stderr, invalid, completed)
+                    self.assertIn("Unterminated block comment", failed["error"])
+                    (tree / "global.json").write_bytes(valid)
+                    code, repaired, stderr = self.prepare(tree, bootstrap, root / "repaired")
+                    self.assertEqual(0, code, repaired)
+                    self.assertEqual("", stderr)
+                    self.assertEqual([], repaired["rewrittenPins"])
+                    packer.check_no_versioned_toolchain_pins(tree)
+                    code, again, stderr = self.prepare(tree, bootstrap, root / "again")
+                    self.assertEqual(0, code, again)
+                    self.assertEqual([], again["rewrittenPins"])
+                    self.assertFalse(again["globalJsonUpdated"])
 
 
 class VersionTests(unittest.TestCase):

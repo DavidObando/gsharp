@@ -30,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# gsc writes a file for each of these; /log: is the compiler debug log (src/Compiler/Program.cs).
+# gsc accepts ':' or '=' values; /log also accepts an empty value (src/Compiler/Program.cs).
 OUTPUT_OPTIONS = ("/out:", "/pdb:", "/refout:", "/doc:", "/log:")
 METRICS = ("wallSeconds", "cpuSeconds", "maxRssMb")
 # The budget applies to time (wall and CPU) and to peak memory.
@@ -50,13 +50,14 @@ def redirect_outputs(rsp_text: str, directory: Path) -> str:
     lines = []
     for line in rsp_text.splitlines():
         stripped = line.strip()
-        whole_token_quoted = stripped.startswith('"')
-        probe = stripped[1:] if whole_token_quoted else stripped
-        option = next((o for o in OUTPUT_OPTIONS if probe.lower().startswith(o)), None)
-        if option is None:
+        probe = stripped[1:-1] if stripped.startswith('"') and stripped.endswith('"') else stripped
+        switch = re.fullmatch(r"/([^:=]+)(?:[:=](.*))?", probe)
+        option = "/" + switch.group(1).lower() + ":" if switch else None
+        if option not in OUTPUT_OPTIONS:
             lines.append(line)
             continue
-        name = Path(probe[len(option):].strip('"')).name
+        value = (switch.group(2) or "").strip('"')
+        name = Path(value.strip() if option == "/log:" else value).name
         if not name and option == "/log:":
             name = "gsharp-compiler-debug.log"
         if not name:
