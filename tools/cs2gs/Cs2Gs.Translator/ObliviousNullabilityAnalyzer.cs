@@ -1200,12 +1200,15 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         TaintResult result = Cache.GetValue(compilation, Compute);
-        if (IsTupleContractFixedCore(
+        bool hasOtherSiblings = siblingCompilations != null
+            && siblingCompilations.Any(sibling => sibling != null && !ReferenceEquals(sibling, compilation));
+        if (result.FixedTupleContracts.Contains(key)
+            || (hasOtherSiblings && IsTupleContractFixedCore(
                 compilation,
                 symbol,
                 path,
                 siblingCompilations,
-                new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance)))
+                new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance))))
         {
             return false;
         }
@@ -1328,23 +1331,25 @@ internal static class ObliviousNullabilityAnalyzer
     /// table that is the "same" declaration as <paramref name="symbol"/>,
     /// which may have been resolved through an entirely different
     /// <see cref="CSharpCompilation"/>. Matching is by stable metadata
-    /// identity (containing type's fully qualified metadata name plus member
-    /// name/kind/arity), never by <see cref="SymbolEqualityComparer"/> or CLR
-    /// object identity, since those do not hold across independently bound
+    /// identity (assembly, constructed containing type and original member
+    /// signature), never by <see cref="SymbolEqualityComparer"/> or CLR object
+    /// identity, since those do not hold across independently bound
     /// compilations (see the long comment on the calling overload). Returns
     /// <see langword="null"/> when no matching declaration exists in
     /// <paramref name="targetCompilation"/> (e.g. `symbol` is unrelated to it).
     /// </summary>
     private static ISymbol RemapToCompilation(Compilation targetCompilation, ISymbol symbol)
     {
-        if (symbol is INamedTypeSymbol)
+        if (symbol is ITypeSymbol type)
         {
             string reference = DocumentationCommentId.CreateReferenceId(symbol);
-            return reference == null
+            ITypeSymbol remapped = reference == null
                 ? null
                 : DocumentationCommentId.GetSymbolsForReferenceId(reference, targetCompilation)
+                    .OfType<ITypeSymbol>()
                     .FirstOrDefault(candidate =>
                         Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity));
+            return remapped?.WithNullableAnnotation(type.NullableAnnotation);
         }
 
         if (symbol is IParameterSymbol parameter)
@@ -1378,8 +1383,8 @@ internal static class ObliviousNullabilityAnalyzer
     /// Remaps a field/property/method/local-owning member symbol (everything
     /// <see cref="RemapToCompilation"/> handles other than parameters
     /// themselves) into <paramref name="targetCompilation"/>'s own symbol
-    /// table by metadata name. Locals have no stable cross-compilation
-    /// identity (they only ever make sense within the one method body/one
+    /// table by original signature and constructed containing type. Locals have
+    /// no stable cross-compilation identity (they only ever make sense within the one method body/one
     /// compilation that declares them), so they intentionally fall through to
     /// <see langword="null"/> here.
     /// </summary>
@@ -1396,43 +1401,39 @@ internal static class ObliviousNullabilityAnalyzer
             return null;
         }
 
-        INamedTypeSymbol remappedType = targetCompilation.GetTypeByMetadataName(MetadataTypeName(containingType));
-        if (remappedType == null)
+        INamedTypeSymbol remappedType = RemapToCompilation(targetCompilation, containingType) as INamedTypeSymbol;
+        string declarationId = symbol.OriginalDefinition.GetDocumentationCommentId();
+        if (remappedType == null || declarationId == null)
         {
             return null;
         }
 
-        if (symbol is IMethodSymbol method)
+        ISymbol remapped = remappedType.GetMembers(symbol.Name).FirstOrDefault(candidate =>
+            candidate.Kind == symbol.Kind
+            && Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity)
+            && string.Equals(
+                candidate.OriginalDefinition.GetDocumentationCommentId(), declarationId, StringComparison.Ordinal));
+        if (remapped is IMethodSymbol remappedMethod
+            && symbol is IMethodSymbol method
+            && !SymbolEqualityComparer.Default.Equals(method, method.ConstructedFrom))
         {
-            return remappedType.GetMembers(method.Name)
-                .OfType<IMethodSymbol>()
-                .FirstOrDefault(candidate =>
-                    candidate.IsStatic == method.IsStatic &&
-                    candidate.Parameters.Length == method.Parameters.Length &&
-                    candidate.TypeParameters.Length == method.TypeParameters.Length);
+            var arguments = new ITypeSymbol[method.TypeArguments.Length];
+            for (int index = 0; index < arguments.Length; index++)
+            {
+                ITypeSymbol argument = method.TypeArguments[index];
+                ITypeSymbol mappedArgument = RemapToCompilation(targetCompilation, argument) as ITypeSymbol;
+                if (mappedArgument == null)
+                {
+                    return null;
+                }
+
+                arguments[index] = mappedArgument;
+            }
+
+            return remappedMethod.Construct(arguments);
         }
 
-        return remappedType.GetMembers(symbol.Name).FirstOrDefault(candidate => candidate.Kind == symbol.Kind);
-    }
-
-    /// <summary>
-    /// Builds the CLR metadata name (e.g. <c>Outer+Inner`1</c> within its
-    /// namespace) that <see cref="Compilation.GetTypeByMetadataName"/> expects,
-    /// walking outward through nested-type containment so nested types (which
-    /// <c>MetadataName</c> alone does not capture) are found too.
-    /// </summary>
-    private static string MetadataTypeName(INamedTypeSymbol type)
-    {
-        var parts = new List<string>();
-        for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
-        {
-            parts.Insert(0, current.MetadataName);
-        }
-
-        string nested = string.Join("+", parts);
-        return type.ContainingNamespace is { IsGlobalNamespace: false } ns
-            ? ns.ToDisplayString() + "." + nested
-            : nested;
+        return remapped;
     }
 
     // Every member of `compilation` that some source in it directly writes

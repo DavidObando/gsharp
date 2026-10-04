@@ -4246,6 +4246,7 @@ public sealed partial class CSharpToGSharpTranslator
             while (true)
             {
                 if (current.Parent is ParenthesizedExpressionSyntax
+                    or CheckedExpressionSyntax
                     or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
                 {
                     // `!` has no runtime meaning: the arm still flows wherever
@@ -4310,9 +4311,14 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool IsNilArm(ExpressionSyntax arm)
             {
-                while (arm is ParenthesizedExpressionSyntax parenthesized)
+                while (arm is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
                 {
-                    arm = parenthesized.Expression;
+                    arm = arm switch
+                    {
+                        ParenthesizedExpressionSyntax parenthesized => parenthesized.Expression,
+                        CheckedExpressionSyntax checkedExpression => checkedExpression.Expression,
+                        _ => arm,
+                    };
                 }
 
                 // `default(T)` is nil for a reference type or Nullable<T>,

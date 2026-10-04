@@ -17,6 +17,7 @@ using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -2813,6 +2814,289 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                 }
                 """,
         };
+        string[] printedProjects = this.AssertSplitProjectsVerifyAndRun(sources, fixture, reverseOrder);
+        Assert.All(printedProjects, printed =>
+            Assert.Contains(nativeLock ? "Required NullableResultBox," : "Required NullableResultBox?", printed));
+    }
+
+    [Theory]
+    [InlineData("checked", false, false)]
+    [InlineData("checked", true, false)]
+    [InlineData("unchecked", false, false)]
+    [InlineData("unchecked", true, false)]
+    [InlineData("checked", false, true)]
+    [InlineData("checked", true, true)]
+    [InlineData("unchecked", false, true)]
+    [InlineData("unchecked", true, true)]
+    public void TupleContractRemapping_CheckedBranchesPreserveConvertedNil(
+        string wrapper,
+        bool switchArm,
+        bool explicitConversion)
+    {
+        string fixture = this.EmitFixture();
+        string converted = explicitConversion ? "(MaybeBox)Value" : "Value";
+        string branch = switchArm
+            ? $"Choose(choose) switch {{ true => {converted}, false => new MaybeBox() }}"
+            : $"Choose(choose) ? {converted} : new MaybeBox()";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Decisions;
+                public static int Fallbacks;
+                public static string Value { get { Reads++; return "x"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static MaybeBox Fallback() { Fallbacks++; return new MaybeBox(); }
+                public static (MaybeBox Value, int Code) Row(bool choose) =>
+                    ({{wrapper}}({{branch}}) ?? Fallback(), 1);
+                public static bool Check(bool choose) {
+                    Probe.Reset();
+                    Reads = Decisions = Fallbacks = 0;
+                    var row = Row(choose);
+                    return row.Value != null && row.Code == 1 && Decisions == 1
+                        && Reads == (choose ? 1 : 0) && Probe.Calls == (choose ? 1 : 0)
+                        && Fallbacks == (choose ? 1 : 0);
+                }
+                public static void Main() { Console.WriteLine(Check(true) && Check(false) ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value MaybeBox,", printed);
+    }
+
+    [Theory]
+    [InlineData("checked", false)]
+    [InlineData("checked", true)]
+    [InlineData("unchecked", false)]
+    [InlineData("unchecked", true)]
+    public void TupleContractRemapping_CheckedResultsKeepStrictOperatorInputs(string wrapper, bool strictInput)
+    {
+        string fixture = this.EmitFixture();
+        string box = strictInput ? "MaybeStrictInputBox<string>" : "NullAcceptingBox";
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Fallbacks;
+                public static string? Value { get { Reads++; return null; } }
+                public static {{box}} Fallback() { Fallbacks++; return new {{box}}(); }
+                public static ({{box}} Value, int Code) Row(bool choose) =>
+                    ({{wrapper}}(choose ? Value : new {{box}}()) ?? Fallback(), 1);
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Row(true).Value != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(Reads == 1 && {{(strictInput
+                        ? "asserted && Probe.Calls == 0 && Fallbacks == 0"
+                        : "!asserted && present && Probe.Calls == 1 && Fallbacks == 1")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToArray();
+        if (strictInput)
+        {
+            Assert.Contains("parameter 'value'", Assert.Single(sites).Message);
+        }
+        else
+        {
+            Assert.Empty(sites);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void TupleContractRemapping_SiblingOverloadsKeepTheirOwnContract(bool genericOwner, bool reverseOrder)
+    {
+        string fixture = this.EmitFixture();
+        string owner = genericOwner ? "Rows<T>" : "Rows";
+        string constraint = genericOwner ? "where T : class" : string.Empty;
+        string constructed = genericOwner ? "Rows<string>" : "Rows";
+        string[] printed = this.AssertSplitProjectsVerifyAndRun(new[]
+        {
+            $$"""
+                using Issue4719Fixture;
+                public sealed class {{owner}} : IOverloadedRows {{constraint}} {
+                    public (NullableResultBox Required, int Code) Read(int value) =>
+                        (value == 0 ? "miss" : "keep", value);
+                    public (NullableResultBox Required, int Code) Read(string value) => (value, 1);
+                }
+                """,
+            $$"""
+                using System;
+                using Issue4719Fixture;
+                public static class Obj {
+                    public static void Main() {
+                        var rows = new {{constructed}}();
+                        Probe.Reset();
+                        bool valid = rows.Read("keep").Item1 != null && Probe.Calls == 1;
+                        Probe.Reset();
+                        valid = valid && rows.Read("miss").Item1 == null && Probe.Calls == 1;
+                        Probe.Reset();
+                        IOverloadedRows native = rows;
+                        valid = valid && native.Read(1).Required != null && Probe.Calls == 1;
+                        Probe.Reset();
+                        bool asserted = false;
+                        try { native.Read(0); }
+                        catch (NullReferenceException) { asserted = true; }
+                        Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                    }
+                }
+                """,
+        }, fixture, reverseOrder);
+        Assert.Contains("func Read(value int32) (Required NullableResultBox,", printed[0]);
+        Assert.Contains("func Read(value string) (Required NullableResultBox?,", printed[0]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_UnrelatedAssemblyNamesDoNotShareLocks(bool reverseOrder)
+    {
+        string fixture = this.EmitFixture();
+        LoadedCSharpProject unrelated = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", """
+                using Issue4719Fixture;
+                public sealed class Rows : IOverloadedRows {
+                    public (NullableResultBox Required, int Code) Read(int value) => ("keep", value);
+                    public (NullableResultBox Required, int Code) Read(string value) => ("keep", 1);
+                }
+                """) },
+            CSharpProjectLoader.RuntimeReferences().Concat(new[] { MetadataReference.CreateFromFile(fixture) }).ToArray(),
+            "Unrelated" + Guid.NewGuid().ToString("N"));
+        LoadedCSharpProject current = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", """
+                using System;
+                using Issue4719Fixture;
+                public sealed class Rows {
+                    public (NullableResultBox Required, int Code) Read(string value) => (value, 1);
+                }
+                public static class Obj {
+                    public static void Main() {
+                        Probe.Reset();
+                        var row = new Rows().Read("miss");
+                        Console.WriteLine(row.Required == null && row.Code == 1 && Probe.Calls == 1 ? 15 : -1);
+                    }
+                }
+                """) },
+            CSharpProjectLoader.RuntimeReferences().Concat(new[] { MetadataReference.CreateFromFile(fixture) }).ToArray(),
+            "Current" + Guid.NewGuid().ToString("N"));
+        Assert.True(unrelated.BoundWithoutErrors, string.Join(Environment.NewLine, unrelated.ErrorDiagnostics));
+        Assert.True(current.BoundWithoutErrors, string.Join(Environment.NewLine, current.ErrorDiagnostics));
+        var siblings = new[] { current.Compilation, unrelated.Compilation };
+        if (reverseOrder)
+        {
+            Array.Reverse(siblings);
+        }
+
+        LoadedDocument document = Assert.Single(current.Documents);
+        var context = new TranslationContext(current.Compilation, document.SemanticModel, document.FilePath, siblings);
+        string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Required NullableResultBox?", printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_LocalClosureQueriesStayBounded(bool registerCurrent)
+    {
+        const int count = 800;
+        string implementations = string.Join(Environment.NewLine, Enumerable.Range(0, count).Select(index =>
+            $"public sealed class Rows{index} : IRows {{ public (string Value,int Code) Read() => (null,1); }}"));
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", "public interface IRows { (string Value,int Code) Read(); }\n" + implementations) },
+            CSharpProjectLoader.RuntimeReferences(),
+            "Local" + Guid.NewGuid().ToString("N"));
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        Type analyzer = Assert.IsAssignableFrom<Type>(
+            typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer"));
+        var method = analyzer.GetMethod("IsTupleElementTainted", new[]
+        {
+            typeof(CSharpCompilation), typeof(ISymbol), typeof(IReadOnlyList<int>),
+            typeof(IReadOnlyList<CSharpCompilation>),
+        });
+        Assert.NotNull(method);
+        var query = method.CreateDelegate<Func<CSharpCompilation, ISymbol, IReadOnlyList<int>, IReadOnlyList<CSharpCompilation>, bool>>();
+        IReadOnlyList<CSharpCompilation> siblings = registerCurrent ? new[] { project.Compilation } : null;
+        int[] path = { 0 };
+        ISymbol contract = Assert.Single(project.Compilation.GetTypeByMetadataName("IRows").GetMembers("Read"));
+        Assert.True(query(project.Compilation, contract, path, siblings));
+        ISymbol[] symbols = Enumerable.Range(0, count).Select(index =>
+            Assert.Single(project.Compilation.GetTypeByMetadataName("Rows" + index).GetMembers("Read"))).ToArray();
+        var elapsed = Stopwatch.StartNew();
+        foreach (ISymbol symbol in symbols)
+        {
+            Assert.True(query(project.Compilation, symbol, path, siblings));
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(10), $"Cached local queries took {elapsed.Elapsed}.");
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void TupleContractRemapping_ConstructedSignaturesRetainActualArguments(bool genericMethod, bool targetSource)
+    {
+        LoadedCSharpProject source = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", """
+                public sealed class Rows<T> {
+                    public (T Value,int Code) Read(int value) => (default,1);
+                    public (T Value,int Code) Read(string value) => (default,1);
+                    public (U Value,int Code) Read<U>(U value) => (value,1);
+                }
+                """) },
+            CSharpProjectLoader.RuntimeReferences(),
+            "Owner" + Guid.NewGuid().ToString("N"));
+        Assert.True(source.BoundWithoutErrors, string.Join(Environment.NewLine, source.ErrorDiagnostics));
+        Directory.CreateDirectory(this.fixtureDirectory);
+        string assembly = Path.Combine(this.fixtureDirectory, source.Compilation.AssemblyName + ".dll");
+        var emitted = source.Compilation.Emit(assembly);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        LoadedCSharpProject consumer = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Consumer.cs", "public sealed class Consumer { }") },
+            CSharpProjectLoader.RuntimeReferences().Concat(new[] { MetadataReference.CreateFromFile(assembly) }).ToArray(),
+            "Consumer" + Guid.NewGuid().ToString("N"));
+        Assert.True(consumer.BoundWithoutErrors, string.Join(Environment.NewLine, consumer.ErrorDiagnostics));
+        ITypeSymbol text = source.Compilation.GetSpecialType(SpecialType.System_String);
+        INamedTypeSymbol owner = source.Compilation.GetTypeByMetadataName("Rows`1").Construct(text);
+        IMethodSymbol input = owner.GetMembers("Read").OfType<IMethodSymbol>().Single(method =>
+            genericMethod ? method.Arity == 1 : method.Arity == 0 && method.Parameters[0].Type.SpecialType == SpecialType.System_Int32);
+        if (genericMethod)
+        {
+            input = input.Construct(text);
+        }
+
+        Type analyzer = Assert.IsAssignableFrom<Type>(
+            typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer"));
+        var remapper = analyzer.GetMethod(
+            "RemapToCompilation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(remapper);
+        IMethodSymbol output = Assert.IsAssignableFrom<IMethodSymbol>(
+            remapper.Invoke(null, new object[] { targetSource ? source.Compilation : consumer.Compilation, input }));
+        Assert.Equal(source.Compilation.Assembly.Identity, output.ContainingAssembly.Identity);
+        Assert.Equal(SpecialType.System_String, Assert.Single(output.ContainingType.TypeArguments).SpecialType);
+        Assert.Equal(genericMethod ? SpecialType.System_String : SpecialType.System_Int32, output.Parameters[0].Type.SpecialType);
+        Assert.Equal(SpecialType.System_String, Assert.IsAssignableFrom<INamedTypeSymbol>(output.ReturnType).TupleElements[0].Type.SpecialType);
+        if (genericMethod)
+        {
+            Assert.Equal(SpecialType.System_String, Assert.Single(output.TypeArguments).SpecialType);
+        }
+    }
+
+    private string[] AssertSplitProjectsVerifyAndRun(string[] sources, string fixture, bool reverseOrder)
+    {
         Directory.CreateDirectory(Path.Combine(this.fixtureDirectory, "csharp"));
         var projects = new LoadedCSharpProject[sources.Length];
         var sourceReferences = new[] { MetadataReference.CreateFromFile(fixture) }.Cast<MetadataReference>().ToList();
@@ -2873,9 +3157,7 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         Assert.True(
             executed.Output == "15" + Environment.NewLine,
             string.Join(Environment.NewLine, printedProjects) + Environment.NewLine + executed.Output);
-        Assert.NotEmpty(printedProjects);
-        Assert.All(printedProjects, printed =>
-            Assert.Contains(nativeLock ? "Required NullableResultBox," : "Required NullableResultBox?", printed));
+        return printedProjects;
     }
 
     public void Dispose()
@@ -2999,6 +3281,9 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                     }
                     public interface IWholeRows<T> {
                         T Read(string value);
+                    }
+                    public interface IOverloadedRows {
+                        (NullableResultBox Required, int Code) Read(int value);
                     }
                     public abstract class WholeRowsBase<T> {
                         public abstract T Read(string value);
