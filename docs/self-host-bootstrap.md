@@ -23,7 +23,7 @@ python3 build/selfhost-pack-stage1.py \
 
 The script changes the tree in place, idempotently, and records every change in `<work>/stage1-report.json`:
 
-- Completed pin rewrites and feed copies are appended to report-owned lists immediately, so even a later decode/write/copy failure retains earlier mutations. Expected I/O and decoding failures return an error with that partial report, not success.
+- Project/global configuration writes and feed archives publish through one atomic boundary: fully write/close and copy required metadata to an exclusively owned sibling file in the destination directory, then replace the destination and immediately record the committed mutation. Late write/close/metadata failures leave the destination unchanged or absent and remove only that owned sibling. Project bytes retain their BOM/newlines and permissions; changed text gets normal write timestamps. Symlink, hard-linked and non-regular destinations and symlinked publication directories are rejected rather than silently changing linked data. Expected I/O and decoding failures return an error with the exact committed partial report, not success.
 - Core's generated SDK pin is rewritten last, preserving the canonical version while other projects normalize. After repairing a failed project read/write, a second prepare can finish the remaining pins without rollback or guessing a version from other projects.
 - Malformed `global.json`, including unterminated block comments, fails with its path and parse location in the report, retaining completed pin changes and leaving the invalid configuration bytes untouched. Comment markers inside strings, escaped quotes, valid comments and trailing commas remain supported. Repairing that configuration lets a later prepare proceed; unsupported non-object configuration shapes remain errors rather than being replaced.
 - It stages the stage-0 nupkg and each version of `GSharp.CodeAnalysis.Analyzers.Testing` referenced by the tree into `.nugs`. Each required archive must be beside the bootstrap, under its original package ID and version; the verifier version is independent of the SDK version. Without a reference, the bootstrap-version sibling remains optional and its absence is only reported.
@@ -34,7 +34,7 @@ The script changes the tree in place, idempotently, and records every change in 
 
 It restores the projects that the SDK's `Pack*` targets build through nested `<MSBuild>` calls, then runs `dotnet pack` on the SDK project.
 Nerdbank.GitVersioning ignores `-p:PackageVersion` (and outside git it packs as `<major>.<minor>.0-g`), so the script stamps
-the stage-1 version (default `<major.minor.patch>-stage1`) into the nuspec of the package and its `.snupkg` afterwards. That version must differ from the
+the stage-1 version (default `<full bootstrap numeric version>-stage1`, for example `1.2.3.4-stage1`) into the nuspec of the package and its `.snupkg` afterwards. That version must differ from the
 bootstrap version, because NuGet package caches are keyed by id and version.
 
 The package is verified before the script succeeds:

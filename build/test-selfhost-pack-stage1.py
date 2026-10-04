@@ -31,6 +31,11 @@ def write(path: Path, text: str, bom: bool = False) -> None:
     path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8"))
 
 
+def publication_write(path: Path, target: Path) -> bool:
+    return path == target or (path.parent == target.parent
+                              and path.name.startswith(f".{target.name}.publish-"))
+
+
 def make_tree(root: Path, core_sdk: str = GENERATED) -> Path:
     tree = root / "tree"
     write(tree / "src/Core/Core.gsproj", project(core_sdk), bom=True)
@@ -234,7 +239,7 @@ class PrepareTreeTests(unittest.TestCase):
             write_bytes = Path.write_bytes
 
             def fail_core(path, data):
-                if path == tree / packer.CORE_PROJECT:
+                if publication_write(path, tree / packer.CORE_PROJECT):
                     raise OSError("injected Core write failure")
                 return write_bytes(path, data)
 
@@ -527,7 +532,7 @@ class NormalizationRetryTests(unittest.TestCase):
                 write_bytes = Path.write_bytes
 
                 def fail_write(path, data):
-                    if path == failed_path:
+                    if publication_write(path, failed_path):
                         raise OSError("injected normalization write failure")
                     return write_bytes(path, data)
 
@@ -641,7 +646,7 @@ class GlobalJsonFailureTests(unittest.TestCase):
             write_bytes = Path.write_bytes
 
             def fail_sdk(path, data):
-                if path == tree / packer.SDK_PROJECT:
+                if publication_write(path, tree / packer.SDK_PROJECT):
                     raise OSError("injected pre-parse SDK write failure")
                 return write_bytes(path, data)
 
@@ -707,7 +712,7 @@ class GlobalJsonFailureTests(unittest.TestCase):
                         write_bytes = Path.write_bytes
 
                         def fail_write(path, data):
-                            if path == tree / failing:
+                            if publication_write(path, tree / failing):
                                 raise OSError("injected pre-comment project write failure")
                             return write_bytes(path, data)
 
@@ -733,6 +738,308 @@ class GlobalJsonFailureTests(unittest.TestCase):
                     self.assertEqual(0, code, again)
                     self.assertEqual([], again["rewrittenPins"])
                     self.assertFalse(again["globalJsonUpdated"])
+
+
+class AtomicPublicationTests(unittest.TestCase):
+    def prepare(self, tree: Path, bootstrap: Path, out: Path) -> tuple[int, dict]:
+        return NormalizationRetryTests.prepare(self, tree, bootstrap, out)
+
+    def snapshot(self, path: Path):
+        if not path.exists():
+            return None
+        data = path.read_bytes()
+        info = path.stat()
+        return data, info.st_mode, info.st_mtime_ns
+
+    def assert_clean_staging(self, root: Path) -> None:
+        self.assertEqual([], list(root.rglob("*.publish-*")))
+
+    def test_late_truncation_and_partial_text_writes_never_publish_and_retry_really_succeeds(self) -> None:
+        order = ["src/Compiler/Compiler.gsproj", packer.SDK_PROJECT.as_posix(), packer.CORE_PROJECT.as_posix()]
+        for relative in (*order, "global.json"):
+            for kind in ("truncate", "partial"):
+                with self.subTest(relative=relative, kind=kind), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    tree = make_tree(root)
+                    target = tree / relative
+                    target.chmod(0o640)
+                    before = self.snapshot(target)
+                    core = self.snapshot(tree / packer.CORE_PROJECT)
+                    bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b"source"})
+                    source = bootstrap.read_bytes()
+                    write_bytes = Path.write_bytes
+                    observed = []
+
+                    def fail_late(path, data):
+                        if publication_write(path, target):
+                            write_bytes(path, b"" if kind == "truncate" else data[:len(data) // 2])
+                            observed.append(self.snapshot(target))
+                            raise OSError("injected AFTER actual truncation/partial bytes")
+                        return write_bytes(path, data)
+
+                    with mock.patch.object(Path, "write_bytes", fail_late):
+                        code, failed = self.prepare(tree, bootstrap, root / "failed")
+                    self.assertEqual(1, code)
+                    self.assertIn("AFTER actual truncation/partial bytes", failed["error"])
+                    self.assertEqual([before], observed)
+                    self.assertEqual(before, self.snapshot(target))
+                    expected = order if relative == "global.json" else order[:order.index(relative)]
+                    self.assertEqual(expected, failed["rewrittenPins"])
+                    if relative != "global.json":
+                        self.assertEqual(core, self.snapshot(tree / packer.CORE_PROJECT))
+                    self.assertNotIn("globalJsonUpdated", failed)
+                    self.assertNotIn("stagedPackages", failed)
+                    self.assertEqual(source, bootstrap.read_bytes())
+                    self.assert_clean_staging(tree)
+                    code, repaired = self.prepare(tree, bootstrap, root / "repaired")
+                    self.assertEqual(0, code, repaired)
+                    self.assertEqual(order[len(expected):], repaired["rewrittenPins"])
+                    self.assertEqual(0o640, target.stat().st_mode & 0o777)
+                    code, again = self.prepare(tree, bootstrap, root / "again")
+                    self.assertEqual(0, code, again)
+                    self.assertEqual([], again["rewrittenPins"])
+                    self.assertFalse(again["globalJsonUpdated"])
+                    self.assert_clean_staging(tree)
+
+    def test_actual_text_close_failures_do_not_publish(self) -> None:
+        for relative in (packer.CORE_PROJECT.as_posix(), "global.json"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                target = tree / relative
+                before = self.snapshot(target)
+                bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+                original_open = Path.open
+
+                class LateClose:
+                    def __init__(self, stream):
+                        self.stream = stream
+
+                    def __enter__(self):
+                        return self.stream.__enter__()
+
+                    def __exit__(self, *args):
+                        self.stream.__exit__(*args)
+                        raise OSError("injected AFTER actual data write and file close")
+
+                def fail_close(path, mode="r", *args, **kwargs):
+                    stream = original_open(path, mode, *args, **kwargs)
+                    return LateClose(stream) if mode == "wb" and publication_write(path, target) else stream
+
+                with mock.patch.object(Path, "open", fail_close):
+                    code, failed = self.prepare(tree, bootstrap, root / "failed")
+                self.assertEqual(1, code)
+                self.assertIn("AFTER actual data write and file close", failed["error"])
+                self.assertEqual(before, self.snapshot(target))
+                self.assert_clean_staging(tree)
+                code, repaired = self.prepare(tree, bootstrap, root / "repaired")
+                self.assertEqual(0, code, repaired)
+                code, again = self.prepare(tree, bootstrap, root / "again")
+                self.assertEqual(0, code, again)
+                self.assertEqual([], again["rewrittenPins"])
+                self.assertFalse(again["globalJsonUpdated"])
+
+    def test_absent_global_json_and_late_text_metadata_failure_are_not_published(self) -> None:
+        for relative, absent in (("global.json", True), ("global.json", False),
+                                 (packer.CORE_PROJECT.as_posix(), False)):
+            with self.subTest(relative=relative, absent=absent), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                target = tree / relative
+                if absent:
+                    target.unlink()
+                before = self.snapshot(target)
+                bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b""})
+                write_bytes, copystat = Path.write_bytes, packer.shutil.copystat
+
+                def fail_write(path, data):
+                    result = write_bytes(path, data)
+                    if publication_write(path, target):
+                        raise OSError("injected late new-file write")
+                    return result
+
+                def fail_metadata(source, destination, *args, **kwargs):
+                    result = copystat(source, destination, *args, **kwargs)
+                    if source == target:
+                        raise OSError("injected late text metadata copy")
+                    return result
+
+                patch = mock.patch.object(Path, "write_bytes", fail_write) if absent else (
+                    mock.patch.object(packer.shutil, "copystat", fail_metadata))
+                with patch:
+                    code, failed = self.prepare(tree, bootstrap, root / "failed")
+                self.assertEqual(1, code)
+                self.assertIn("injected late", failed["error"])
+                self.assertEqual(before, self.snapshot(target))
+                self.assert_clean_staging(tree)
+                code, repaired = self.prepare(tree, bootstrap, root / "repaired")
+                self.assertEqual(0, code, repaired)
+                code, again = self.prepare(tree, bootstrap, root / "again")
+                self.assertEqual(0, code, again)
+                self.assertEqual([], again["rewrittenPins"])
+                self.assertFalse(again["globalJsonUpdated"])
+
+    def test_archive_content_and_metadata_failures_preserve_existing_and_absent_destinations(self) -> None:
+        for existing in (False, True):
+            for failed_index in (0, 1):
+                for kind in ("content", "metadata"):
+                    with self.subTest(existing=existing, index=failed_index, kind=kind), (
+                        tempfile.TemporaryDirectory()) as temp:
+                        root = Path(temp)
+                        tree = make_tree(root)
+                        sources = [nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b"new sdk"}),
+                                   nupkg(root / "feed/GSharp.CodeAnalysis.Analyzers.Testing.1.0.0.nupkg",
+                                         {"x": b"new verifier"})]
+                        target = tree / ".nugs" / sources[failed_index].name
+                        target.parent.mkdir()
+                        if existing:
+                            nupkg(target, {"old": b"old complete archive"})
+                            target.chmod(0o640)
+                        before = self.snapshot(target)
+                        originals = [p.read_bytes() for p in sources]
+                        copyfile, copystat = packer.shutil.copyfile, packer.shutil.copystat
+                        observed = []
+
+                        def fail_content(source, destination, *args, **kwargs):
+                            if source == sources[failed_index]:
+                                Path(destination).write_bytes(originals[failed_index][:len(originals[failed_index]) // 2])
+                                observed.append(self.snapshot(target))
+                                raise OSError("injected AFTER archive partial content")
+                            return copyfile(source, destination, *args, **kwargs)
+
+                        def fail_metadata(source, destination, *args, **kwargs):
+                            result = copystat(source, destination, *args, **kwargs)
+                            if source == sources[failed_index]:
+                                observed.append(self.snapshot(target))
+                                raise OSError("injected AFTER archive bytes and metadata copy")
+                            return result
+
+                        function, replacement = ("copyfile", fail_content) if kind == "content" else ("copystat", fail_metadata)
+                        with mock.patch.object(packer.shutil, function, replacement):
+                            code, failed = self.prepare(tree, sources[0], root / "failed")
+                        self.assertEqual(1, code)
+                        self.assertIn("injected AFTER archive", failed["error"])
+                        self.assertEqual([before], observed)
+                        self.assertEqual(before, self.snapshot(target))
+                        self.assertEqual([{"package": sources[0].name, "replacedExisting": False}]
+                                         if failed_index else [], failed["stagedPackages"])
+                        self.assertEqual(originals, [p.read_bytes() for p in sources])
+                        self.assert_clean_staging(tree)
+                        code, repaired = self.prepare(tree, sources[0], root / "repaired")
+                        self.assertEqual(0, code, repaired)
+                        self.assertEqual(originals[failed_index], target.read_bytes())
+                        self.assertEqual(existing, repaired["stagedPackages"][failed_index]["replacedExisting"])
+                        code, again = self.prepare(tree, sources[0], root / "again")
+                        self.assertEqual(0, code, again)
+                        self.assertEqual([], again["rewrittenPins"])
+                        self.assertFalse(again["globalJsonUpdated"])
+                        self.assert_clean_staging(tree)
+
+    def test_permissions_bom_newlines_and_linked_destination_rejection(self) -> None:
+        import os
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = make_tree(root)
+            core = tree / packer.CORE_PROJECT
+            data = core.read_bytes().replace(b"\n", b"\r\n")
+            core.write_bytes(data)
+            core.chmod(0o640)
+            packer.normalize_pins(tree)
+            self.assertEqual(data.replace(b"Gsharp.NET.Sdk/0.4.1129", b"Gsharp.NET.Sdk"), core.read_bytes())
+            self.assertEqual(0o640, core.stat().st_mode & 0o777)
+            linked_source = root / "linked-source"
+            linked_source.write_bytes(b"unchanged source")
+            for kind in ("symlink", "hardlink", "directory"):
+                target = root / kind
+                if kind == "symlink":
+                    target.symlink_to(linked_source)
+                elif kind == "hardlink":
+                    os.link(linked_source, target)
+                else:
+                    target.mkdir()
+                with self.subTest(kind=kind), self.assertRaisesRegex(packer.SelfHostError, "single-link regular"):
+                    packer.atomic_publish(target, b"must not appear")
+                self.assertEqual(b"unchanged source", linked_source.read_bytes())
+            real_directory = root / "real-directory"
+            real_directory.mkdir()
+            alias = root / "directory-alias"
+            alias.symlink_to(real_directory, target_is_directory=True)
+            aliased_target = alias / "target"
+            aliased_target.write_bytes(b"unchanged aliased destination")
+            with self.assertRaisesRegex(packer.SelfHostError, "symlinked directory"):
+                packer.atomic_publish(aliased_target, b"must not appear")
+            self.assertEqual(b"unchanged aliased destination", aliased_target.read_bytes())
+            self.assert_clean_staging(root)
+
+    def test_actual_archive_close_failures_preserve_absent_and_existing_targets(self) -> None:
+        import builtins
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tree = make_tree(root)
+                bootstrap = nupkg(root / "feed/Gsharp.NET.Sdk.1.0.0.nupkg", {"x": b"archive bytes"})
+                target = tree / ".nugs" / bootstrap.name
+                target.parent.mkdir()
+                if existing:
+                    nupkg(target, {"old": b"old valid archive"})
+                before = self.snapshot(target)
+                original_open = builtins.open
+
+                class LateClose:
+                    def __init__(self, stream):
+                        self.stream = stream
+
+                    def __enter__(self):
+                        return self.stream.__enter__()
+
+                    def __exit__(self, *args):
+                        self.stream.__exit__(*args)
+                        raise OSError("injected AFTER actual archive file close")
+
+                def fail_close(path, mode="r", *args, **kwargs):
+                    stream = original_open(path, mode, *args, **kwargs)
+                    return LateClose(stream) if mode == "wb" and publication_write(Path(path), target) else stream
+
+                with mock.patch.object(builtins, "open", fail_close):
+                    code, failed = self.prepare(tree, bootstrap, root / "failed")
+                self.assertEqual(1, code)
+                self.assertIn("AFTER actual archive file close", failed["error"])
+                self.assertEqual(before, self.snapshot(target))
+                self.assertEqual([], failed["stagedPackages"])
+                self.assert_clean_staging(tree)
+                code, repaired = self.prepare(tree, bootstrap, root / "repaired")
+                self.assertEqual(0, code, repaired)
+                self.assertEqual(bootstrap.read_bytes(), target.read_bytes())
+                code, again = self.prepare(tree, bootstrap, root / "again")
+                self.assertEqual(0, code, again)
+                self.assertFalse(again["globalJsonUpdated"])
+
+    def test_exclusive_staging_collision_never_removes_an_unowned_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / "target"
+            target.write_bytes(b"original target")
+            foreign = root / ".target.publish-collision"
+            foreign.write_bytes(b"not owned by this invocation")
+            with mock.patch.object(packer.uuid, "uuid4", return_value=mock.Mock(hex="collision")):
+                with self.assertRaises(OSError):
+                    packer.atomic_publish(target, b"must not publish")
+            self.assertEqual(b"original target", target.read_bytes())
+            self.assertEqual(b"not owned by this invocation", foreign.read_bytes())
+
+    def test_symlinked_publication_directory_cannot_mutate_its_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real = root / "real"
+            real.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            target = alias / "target"
+            target.write_bytes(b"unchanged destination")
+            with self.assertRaisesRegex(packer.SelfHostError, "symlinked directory"):
+                packer.atomic_publish(target, b"must not publish")
+            self.assertEqual(b"unchanged destination", target.read_bytes())
+            self.assert_clean_staging(root)
 
 
 class RevisionVersionTests(unittest.TestCase):

@@ -47,8 +47,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -79,6 +81,52 @@ GSHARP_COMPILED = ("tools/compiler/gsc", "tools/compiler/GSharp.Core")
 
 class SelfHostError(Exception):
     """A precondition or verification failure; reported, never swallowed."""
+
+
+def publication_target(path: Path):
+    for directory in path.parents:
+        if stat.S_ISLNK(directory.lstat().st_mode):
+            raise SelfHostError(f"{path}: publication through symlinked directory {directory} is unsupported")
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise SelfHostError(f"{path}: publication requires a single-link regular file")
+    return info
+
+
+def atomic_publish(target: Path, content: bytes | Path) -> None:
+    """Publishes only a complete, closed, metadata-ready sibling file."""
+    original = publication_target(target)
+    temporary = target.with_name(f".{target.name}.publish-{uuid.uuid4().hex}")
+    created = published = False
+    try:
+        try:
+            with temporary.open("xb"):
+                created = True
+            if isinstance(content, Path):
+                shutil.copy2(content, temporary)
+            else:
+                temporary.write_bytes(content)
+                if original is not None:
+                    written = temporary.stat()
+                    shutil.copystat(target, temporary)
+                    # Keep normal write timestamps so incremental builds see changed text.
+                    os.utime(temporary, ns=(written.st_atime_ns, written.st_mtime_ns))
+            if original is not None:
+                staged = temporary.stat()
+                if (staged.st_uid, staged.st_gid) != (original.st_uid, original.st_gid):
+                    os.chown(temporary, original.st_uid, original.st_gid)
+                    os.chmod(temporary, stat.S_IMODE(staged.st_mode))
+            publication_target(target)
+            temporary.replace(target)
+            published = True
+        finally:
+            if created and not published:
+                temporary.unlink(missing_ok=True)
+    except OSError as error:
+        raise OSError(f"{target}: atomic publication failed: {error}") from error
 
 
 def package_version(nupkg: Path, package_id: str = SDK_ID) -> str:
@@ -133,7 +181,7 @@ def normalize_pins(tree: Path, rewritten: list[str] | None = None) -> list[str]:
         if project_sdk(text) != generated:
             continue
         text = PROJECT_SDK_RE.sub(lambda m: m.group(1) + SDK_ID + m.group(3), text, count=1)
-        path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8"))
+        atomic_publish(path, (b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8"))
         rewritten.append(path.relative_to(tree).as_posix())
     return rewritten
 
@@ -228,7 +276,7 @@ def pin_global_json(tree: Path, version: str) -> bool:
     updated = (b"\xef\xbb\xbf" if bom else b"") + (json.dumps(document, indent=2) + "\n").encode("utf-8")
     changed = updated != raw
     if changed:
-        path.write_bytes(updated)
+        atomic_publish(path, updated)
     return changed
 
 
@@ -239,10 +287,10 @@ def stage_feed(tree: Path, nupkgs: list[Path], staged: list[dict] | None = None)
     staged = [] if staged is None else staged
     for nupkg in nupkgs:
         target = feed / nupkg.name
-        replaced = target.exists()
+        replaced = publication_target(target) is not None
         # A bootstrap already in the tree's feed (a natural input) is the target itself.
         if not (replaced and target.samefile(nupkg)):
-            shutil.copy2(nupkg, target)
+            atomic_publish(target, nupkg)
         staged.append({"package": nupkg.name, "replacedExisting": replaced})
     return staged
 
