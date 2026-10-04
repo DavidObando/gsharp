@@ -55,7 +55,7 @@ public sealed class BoundClrConversionCallExpression : BoundExpression
         Function = function;
         FunctionOwnerType = functionOwnerType;
         Type = resultType;
-        IsLifted = ComputeIsLifted();
+        IsLifted = ComputeIsLifted(source.Type, resultType, method, function, functionOwnerType);
         if (IsLifted && resultType is not NullableTypeSymbol)
         {
             // The effective conversion can return nil even when op_Explicit
@@ -84,37 +84,49 @@ public sealed class BoundClrConversionCallExpression : BoundExpression
                 || Conversion.IsReferenceLikeTarget(nullable.UnderlyingType)
             : Conversion.IsReferenceLikeTarget(target);
 
-    private bool ComputeIsLifted()
+    internal static bool CanLiftImplicitlyTo(TypeSymbol target)
+        => CanLiftTo(target)
+            && Conversion.ClassifyNonStructural(NullableTypeSymbol.Get(target), target).IsImplicit;
+
+    internal static bool CanApplyImplicitClrConversion(TypeSymbol source, TypeSymbol target, MethodInfo method)
+        => !ComputeIsLifted(source, target, method, null, null) || CanLiftImplicitlyTo(target);
+
+    private static bool ComputeIsLifted(
+        TypeSymbol sourceType,
+        TypeSymbol conversionType,
+        MethodInfo? method,
+        FunctionSymbol? function,
+        StructSymbol? functionOwnerType)
     {
-        if (Source.Type is not NullableTypeSymbol source
+        if (sourceType is not NullableTypeSymbol source
             || !NullableLifting.IsAnyValueTypeNullable(source)
-            || !CanLiftTo(Type))
+            || !CanLiftTo(conversionType))
         {
             return false;
         }
 
-        var target = Type is NullableTypeSymbol nullable ? nullable.UnderlyingType : Type;
-        if (Function != null)
+        var target = conversionType is NullableTypeSymbol nullable ? nullable.UnderlyingType : conversionType;
+        if (function != null)
         {
-            if (Function.Parameters.Length != 1
-                || Function.Parameters[0].RefKind != RefKind.None
-                || Function.ReturnRefKind != RefKind.None)
+            if (function.Parameters.Length != 1
+                || function.Parameters[0].RefKind != RefKind.None
+                || function.ReturnRefKind != RefKind.None)
             {
                 return false;
             }
 
-            var parameterType = FunctionOwnerType?.SubstituteMemberType(Function.Parameters[0].Type)
-                ?? Function.Parameters[0].Type;
-            var resultType = FunctionOwnerType?.SubstituteMemberType(Function.Type) ?? Function.Type;
+            var parameterType = functionOwnerType?.SubstituteMemberType(function.Parameters[0].Type)
+                ?? function.Parameters[0].Type;
+            var resultType = functionOwnerType?.SubstituteMemberType(function.Type) ?? function.Type;
             return Conversion.ClassifyNonStructural(source.UnderlyingType, parameterType).IsIdentity
                 && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, target);
         }
 
-        var parameters = Method?.GetParameters();
+        var parameters = method?.GetParameters();
         return parameters is { Length: 1 }
             && !parameters[0].ParameterType.IsByRef
-            && Method is { ReturnType.IsByRef: false }
+            && method is { ReturnType.IsByRef: false }
             && ClrTypeUtilities.AreSame(parameters[0].ParameterType, source.UnderlyingType.ClrType)
-            && ClrTypeUtilities.AreSame(Method.ReturnType, target.ClrType);
+            && ClrTypeUtilities.AreSame(method.ReturnType, target.ClrType);
     }
 }

@@ -371,8 +371,9 @@ internal sealed class ConversionClassifier
                 sourceType.ClrType,
                 targetType.ClrType,
                 allowExplicit: false,
-                out _,
-                out _);
+                out var method,
+                out _)
+            && BoundClrConversionCallExpression.CanApplyImplicitClrConversion(sourceType, targetType, method);
     }
 
     /// <summary>
@@ -879,13 +880,15 @@ internal sealed class ConversionClassifier
             // Issue #4350: a conversion between symbolic generics (`Span[T]` ->
             // `ReadOnlySpan[T]`) resolves on the open definition first; the
             // CLR branch below would pick the erased `<object>` operator.
-            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var symbolicConvMethod))
+            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var symbolicConvMethod)
+                && (allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(expression.Type, type, symbolicConvMethod)))
             {
                 return new BoundClrConversionCallExpression(null, expression, symbolicConvMethod, type);
             }
 
             if (expression.Type?.ClrType != null && type?.ClrType != null
-                && ClrOperatorResolution.TryResolveConversion(expression.Type.ClrType, type.ClrType, allowExplicit, out var convMethod, out var isExplicit))
+                && ClrOperatorResolution.TryResolveConversion(expression.Type.ClrType, type.ClrType, allowExplicit, out var convMethod, out var isExplicit)
+                && (allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(expression.Type, type, convMethod)))
             {
                 _ = isExplicit;
                 return new BoundClrConversionCallExpression(null, expression, convMethod, type);
@@ -1025,7 +1028,8 @@ internal sealed class ConversionClassifier
                     allowExplicit);
             }
 
-            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var projectionSymbolicConvMethod))
+            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var projectionSymbolicConvMethod)
+                && (allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(expression.Type, type, projectionSymbolicConvMethod)))
             {
                 return new BoundClrConversionCallExpression(null, expression, projectionSymbolicConvMethod, type);
             }
@@ -1036,7 +1040,8 @@ internal sealed class ConversionClassifier
                     type.ClrType,
                     allowExplicit,
                     out var projectionConvMethod,
-                    out _))
+                    out _)
+                && (allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(expression.Type, type, projectionConvMethod)))
             {
                 return new BoundClrConversionCallExpression(null, expression, projectionConvMethod, type);
             }
@@ -1825,7 +1830,8 @@ internal sealed class ConversionClassifier
         // Issue #4350: resolve symbolic generic pairs before the erased CLR
         // branch can bind the `<object>` operator.
         if (argument.Type != TypeSymbol.Error
-            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var symbolicConvMethod))
+            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var symbolicConvMethod)
+            && BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType, symbolicConvMethod))
         {
             converted = new BoundClrConversionCallExpression(null, argument, symbolicConvMethod, expectedType);
             return true;
@@ -1834,7 +1840,8 @@ internal sealed class ConversionClassifier
         if (argument.Type?.ClrType != null
             && expectedType.ClrType != null
             && argument.Type != TypeSymbol.Error
-            && ClrOperatorResolution.TryResolveConversion(argument.Type.ClrType, expectedType.ClrType, allowExplicit: false, out var convMethod, out _))
+            && ClrOperatorResolution.TryResolveConversion(argument.Type.ClrType, expectedType.ClrType, allowExplicit: false, out var convMethod, out _)
+            && BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType, convMethod))
         {
             converted = new BoundClrConversionCallExpression(null, argument, convMethod, expectedType);
             return true;
@@ -1851,7 +1858,8 @@ internal sealed class ConversionClassifier
         if (argument.Type != null
             && expectedType != null
             && argument.Type != TypeSymbol.Error
-            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var openConvMethod))
+            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var openConvMethod)
+            && BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType, openConvMethod))
         {
             converted = new BoundClrConversionCallExpression(null, argument, openConvMethod, expectedType);
             return true;
@@ -4023,9 +4031,18 @@ internal sealed class ConversionClassifier
     {
         method = null;
         methodOwner = null;
+        if (TryResolveUserDefinedSymbolConversion(source, target, allowExplicit, out var ordinary, out var ordinaryOwner)
+            && Conversion.ClassifyNonStructural(
+                source,
+                ordinaryOwner.SubstituteMemberType(ordinary.Parameters[0].Type)).IsIdentity)
+        {
+            return false;
+        }
+
         var targetUnderlying = target is NullableTypeSymbol nullable ? nullable.UnderlyingType : target;
         return NullableLifting.IsAnyValueTypeNullable(source)
             && BoundClrConversionCallExpression.CanLiftTo(target)
+            && (allowExplicit || BoundClrConversionCallExpression.CanLiftImplicitlyTo(target))
             && !TypeSymbol.IsByRefLike(source)
             && !TypeSymbol.IsByRefLike(target)
             && TryResolveUserDefinedSymbolConversion(

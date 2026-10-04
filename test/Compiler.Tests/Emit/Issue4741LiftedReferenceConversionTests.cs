@@ -75,6 +75,94 @@ public sealed class Issue4741LiftedReferenceConversionTests
     }
 
     [Theory]
+    [InlineData("return", false)]
+    [InlineData("initializer", false)]
+    [InlineData("assignment", false)]
+    [InlineData("argument", false)]
+    [InlineData("tuple", false)]
+    [InlineData("return", true)]
+    [InlineData("initializer", true)]
+    [InlineData("assignment", true)]
+    [InlineData("argument", true)]
+    [InlineData("tuple", true)]
+    public void ContextualImplicitConversion_RejectsNonNullableSinks(string sink, bool sourceOwned)
+    {
+        var token = sourceOwned ? "LocalImplicit" : "ImplicitToken";
+        var gsharpDeclaration = sourceOwned
+            ? "struct LocalImplicit {}\nfunc operator implicit(value LocalImplicit) Box { Probe.Calls += 1\nreturn Box() }"
+            : string.Empty;
+        var csharpDeclaration = sourceOwned
+            ? "public struct LocalImplicit { public static implicit operator Box(LocalImplicit value) { Probe.Calls++; return new Box(); } }"
+            : string.Empty;
+        var bodies = sink switch
+        {
+            "initializer" => ("let result Box = value\nreturn result", "Box result = value; return result;"),
+            "assignment" => ("var result Box = Box()\nresult = value\nreturn result", "Box result = new Box(); result = value; return result;"),
+            "argument" => ("return Accept(value)", "return Accept(value);"),
+            "tuple" => ("let row (Value Box, Code int32) = (value, 7)\nreturn row.Value", "(Box Value, int Code) row = (value, 7); return row.Value;"),
+            "return" => ("return value", "return value;"),
+            _ => throw new ArgumentOutOfRangeException(nameof(sink)),
+        };
+        var name = sink == "return" ? "Raw" : "Convert";
+        var result = sink == "return" ? "Box" : "Box?";
+        RunPair(
+            $$"""
+            {{gsharpDeclaration}}
+            func Accept(value Box) Box? -> value
+            func {{name}}(present bool) {{result}} {
+                let value {{token}}? = Probe.Read[{{token}}](present)
+                {{bodies.Item1}}
+            }
+            {{(sink == "return" ? "func Convert(present bool) Box? -> Raw(present)" : string.Empty)}}
+            """,
+            $$"""
+            {{csharpDeclaration}}
+            static Box? Accept(Box value) => value;
+            static {{result}} {{name}}(bool present) {
+                {{token}}? value = Probe.Read<{{token}}>(present);
+                {{bodies.Item2}}
+            }
+            {{(sink == "return" ? "static Box? Convert(bool present) => Raw(present);" : string.Empty)}}
+            """,
+            expectedDiagnostic: sink == "argument" ? "GS0154" : "GS0155");
+    }
+
+    [Theory]
+    [InlineData("DualBox")]
+    [InlineData("DualBox?")]
+    public void ExactNullableOperandOperator_TakesPrecedenceOverTheLift(string result)
+    {
+        RunPair(
+            $$"""
+            struct DualToken {}
+            class DualBox {
+                shared {
+                    func operator implicit(value DualToken) DualBox {
+                        Probe.Calls += 1
+                        return DualBox()
+                    }
+                    func operator implicit(value DualToken?) DualBox {
+                        Probe.Calls += 1
+                        return DualBox()
+                    }
+                }
+            }
+            func Raw(present bool) {{result}} -> Probe.Read[DualToken](present)
+            func Convert(present bool) DualBox? -> Raw(present)
+            """,
+            $$"""
+            public struct DualToken {}
+            public sealed class DualBox {
+                public static implicit operator DualBox(DualToken value) { Probe.Calls++; return new DualBox(); }
+                public static implicit operator DualBox(DualToken? value) { Probe.Calls++; return new DualBox(); }
+            }
+            static {{result}} Raw(bool present) => Probe.Read<DualToken>(present);
+            static DualBox? Convert(bool present) => Raw(present);
+            """,
+            expectedOutput: "110,110,18,10,11,10");
+    }
+
+    [Theory]
     [InlineData("explicit", "Box(value)")]
     [InlineData("implicit", "value")]
     public void SourceConversion_LiftsOnlyTheNonNullableValueOperand(string kind, string cast)
@@ -197,7 +285,11 @@ public sealed class Issue4741LiftedReferenceConversionTests
         }
     }
 
-    private static void RunPair(string gsharpConversion, string csharpConversion)
+    private static void RunPair(
+        string gsharpConversion,
+        string csharpConversion,
+        string expectedOutput = "101,110,18,10,11,10",
+        string expectedDiagnostic = null)
     {
         var directory = Path.Combine(AppContext.BaseDirectory, "issue4741-fixtures", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -277,7 +369,7 @@ public sealed class Issue4741LiftedReferenceConversionTests
             var oracle = EmittedFixture.Load(fixturePath).GetType("Fixture4741.Oracle", throwOnError: true)
                 ?? throw new InvalidOperationException("Roslyn oracle type missing.");
             var expected = oracle.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)?.Invoke(null, null);
-            Assert.Equal("101,110,18,10,11,10", expected);
+            Assert.Equal(expectedOutput, expected);
 
             var source = $$"""
                 package Test4741
@@ -325,6 +417,13 @@ public sealed class Issue4741LiftedReferenceConversionTests
             var assemblyPath = Path.Combine(directory, "App.dll");
             File.WriteAllText(sourcePath, source);
             var compilation = CompileGSharp(sourcePath, assemblyPath, fixturePath);
+            if (expectedDiagnostic != null)
+            {
+                Assert.NotEqual(0, compilation.Exit);
+                Assert.True(compilation.Diagnostics.Contains(expectedDiagnostic, StringComparison.Ordinal), compilation.Diagnostics);
+                return;
+            }
+
             Assert.True(compilation.Exit == 0, compilation.Diagnostics);
             var assembly = EmittedFixture.Load(assemblyPath);
             var program = assembly.GetTypes().Single(type => type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static) != null);
