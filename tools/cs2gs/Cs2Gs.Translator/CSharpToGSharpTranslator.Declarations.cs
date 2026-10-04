@@ -511,7 +511,8 @@ public sealed partial class CSharpToGSharpTranslator
                 .OfType<PropertyDeclarationSyntax>()
                 .Any(syntax => IsGetOnlyAutoProperty(syntax)
                     && (property.IsStatic || property.IsVirtual || property.IsOverride
-                        || (property.ContainingType?.IsRecord == true && syntax.Initializer != null)));
+                        || (property.ContainingType?.IsRecord == true && syntax.Initializer != null)
+                        || IsExplicitPositionalAutoProperty(syntax, property)));
         }
 
         // Issue #2382: whether `localFunction` — declared among the top-level
@@ -1454,7 +1455,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // an explicit parameter-copy constructor. This keeps value
                 // equality / `with` support instead of downgrading to a plain
                 // class/struct (which a `with` expression then cannot target).
-                if (hasAutoPropData && !hasExplicitInstanceCtor && record.ParameterList == null)
+                if (hasAutoPropData && !hasExplicitInstanceCtor && GetPrimaryConstructorParameterList(symbol) == null)
                 {
                     autoPropertyLift = this.AnalyzeAutoPropertyLift(record, symbol, kind.Value);
                 }
@@ -1553,10 +1554,6 @@ public sealed partial class CSharpToGSharpTranslator
                 : this.MapPrimaryConstructor(node);
             var primaryCtorParamNames = new HashSet<string>(
                 primaryCtor?.Select(p => p.Name) ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
-            var primaryCtorSemanticParamNames = new HashSet<string>(
-                node.ParameterList?.Parameters.Select(parameter => parameter.Identifier.ValueText)
-                    ?? Enumerable.Empty<string>(),
-                StringComparer.Ordinal);
 
             // Issue #4350 (review): allocate every lowered get-only
             // auto-property's backing field NOW, with the primary-constructor
@@ -1638,8 +1635,7 @@ public sealed partial class CSharpToGSharpTranslator
                     propertyCtorInits,
                     primaryCtorParamNames,
                     callSiteLoweredStructConstructors,
-                    ownedExtensionTarget,
-                    primaryCtorSemanticParamNames))
+                    ownedExtensionTarget))
                 {
                     // Issue #3469: the member's leading comments ride on the
                     // FIRST G# member it translates to, wherever that member

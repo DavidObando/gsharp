@@ -700,6 +700,126 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void OrdinaryGenericScalar_RetainsActualConstructedInitializer(bool nested, bool handle)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var type = handle ? "readonly managed[int32]" : "int32";
+        var construction = """
+            var value = 7
+            Provider[TYPE].Value = VALUE
+            var item CONTAINER[TYPE]
+            """.Replace("TYPE", type, StringComparison.Ordinal)
+                .Replace("VALUE", handle ? "readonly managed(value)" : "value", StringComparison.Ordinal)
+                .Replace("CONTAINER", nested ? "Outer" : "Holder", StringComparison.Ordinal);
+        var dll = fixture.Compile(
+            OrdinaryGenericScalarSource(construction, " = Provider[T].Next()", type, handle),
+            "OrdinaryGenericScalar", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n1\n0\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData(false, "")]
+    [InlineData(true, "")]
+    [InlineData(false, " = default(T)")]
+    [InlineData(true, " = default(T)")]
+    public void OrdinaryGenericScalar_RejectsAbsentOrDefaultConstructedInitializer(bool nested, string initializer)
+    {
+        var declaration = nested ? "var item Outer[readonly managed[int32]]" : "var item Holder[readonly managed[int32]]";
+        Reject(OrdinaryGenericScalarSource(declaration, initializer, "readonly managed[int32]", true), declaration);
+    }
+
+    private static string OrdinaryGenericScalarSource(string construction, string initializer, string type, bool handle)
+        => """
+            package OrdinaryGenericScalar
+            import System
+            class Provider[T] {
+                shared {
+                    public var Value T
+                    public var Calls int32
+                    public func Next() T {
+                        Calls += 1
+                        return Value
+                    }
+                }
+            }
+            struct Holder[T] {
+                private var Saved TINITIALIZER
+                private var Items []int32
+                public func Read() T -> Saved
+                public func Length() int32 -> Items.Length
+            }
+            struct Outer[T] {
+                private var Nested Holder[T]
+                private var Items []int32
+                public func Read() T -> Nested.Read()
+                public func Length() int32 -> Nested.Length()
+            }
+            func Main() {
+                CONSTRUCTION
+                Console.WriteLine(DEREFERENCEitem.Read())
+                Console.WriteLine(Provider[TYPE].Calls)
+                Console.WriteLine(item.Length())
+            }
+            """.Replace("INITIALIZER", initializer, StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal)
+                .Replace("DEREFERENCE", handle ? "*" : "", StringComparison.Ordinal)
+                .Replace("TYPE", type, StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OrdinaryZeroConstructor_DoesNotCreditUnwrittenRequiredProperty(bool nested)
+    {
+        var declaration = nested ? "var item Outer" : "var item Holder";
+        Reject(OrdinaryUnwrittenPropertySource(declaration), declaration);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OrdinaryRequiredProperty_ExplicitInTypeInitializationRemainsValid(bool nested)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var construction = nested ? "let item = Outer{Nested: Holder.Create(7)}" : "let item = Holder.Create(7)";
+        var source = OrdinaryUnwrittenPropertySource(construction)
+            .Replace("public var Nested Holder", "public var Nested Holder = Holder.Create(7)", StringComparison.Ordinal);
+        var dll = fixture.Compile(source, "OrdinaryRequiredProperty", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n0\n", fixture.Run(dll));
+    }
+
+    private static string OrdinaryUnwrittenPropertySource(string construction)
+        => """
+            package OrdinaryRequiredProperty
+            import System
+            struct Holder {
+                private prop Handle readonly managed[int32] { get; init; }
+                private var Items []int32
+                public func Read() int32 -> *Handle
+                public func Length() int32 -> Items.Length
+                shared {
+                    public func Create(value int32) Holder -> Holder{Handle: readonly managed(value)}
+                }
+            }
+            struct Outer {
+                public var Nested Holder
+                private var Items []int32
+                public func Read() int32 -> Nested.Read()
+                public func Length() int32 -> Nested.Length()
+            }
+            func Main() {
+                CONSTRUCTION
+                Console.WriteLine(item.Read())
+                Console.WriteLine(item.Length())
+            }
+            """.Replace("CONSTRUCTION", construction, StringComparison.Ordinal);
+
+    [Theory]
     [InlineData(1, false)]
     [InlineData(1, true)]
     [InlineData(2, false)]

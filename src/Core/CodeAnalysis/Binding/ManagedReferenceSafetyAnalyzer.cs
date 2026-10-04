@@ -436,7 +436,9 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 .OfType<FieldSymbol>().ToHashSet();
             foreach (var storage in InstanceStorageTypes(type))
             {
-                if (supplied.Contains(storage.Key))
+                var writtenField = type.GetDefinitionField(storage.Key);
+                var declaredField = writtenField ?? storage.Key;
+                if (supplied.Contains(declaredField))
                 {
                     continue;
                 }
@@ -450,20 +452,19 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                     continue;
                 }
 
-                var declaredField = type.GetDefinitionField(storage.Key) ?? storage.Key;
-                var hasDeclaredInitializer = validatedInitializers && type.Definition.InstanceFieldInitializers.ContainsKey(declaredField);
-                if (hasDeclaredInitializer
-                    && type.Definition.InstanceFieldInitializers[declaredField] is BoundStructLiteralExpression { IsZeroInitialization: true }
-                    && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, storage.Value) is { } constructedInitializer)
+                var hasDeclaredInitializer = validatedInitializers && writtenField != null
+                    && type.Definition.InstanceFieldInitializers.ContainsKey(writtenField);
+                if (hasDeclaredInitializer)
                 {
-                    this.VisitExpression(constructedInitializer);
+                    this.VisitConstructedInitializer(type, zeroValue, type.Definition.InstanceFieldInitializers[declaredField]);
+                    continue;
                 }
 
                 if (this.RequiredHandle(storage.Value) != null)
                 {
-                    // A validated ordinary constructor proves the definition's
-                    // required slots, not additional obligations introduced by T.
-                    if (declaredStorage != null && declaredStorage.TryGetValue(declaredField, out var declaredType)
+                    // A validated ordinary constructor proves its definition's
+                    // written fields, not unwritten properties or new T slots.
+                    if (writtenField != null && declaredStorage != null && declaredStorage.TryGetValue(declaredField, out var declaredType)
                         && this.RequiredHandle(declaredType) != null)
                     {
                         continue;
@@ -471,7 +472,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
                     this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{storage.Key.Name}'; explicitly construct the aggregate");
                 }
-                else if (!hasDeclaredInitializer && storage.Key.Accessibility != Accessibility.Public
+                else if (storage.Key.Accessibility != Accessibility.Public
                     && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, storage.Value) != null
                     && zeroValue.Syntax is { } syntax)
                 {

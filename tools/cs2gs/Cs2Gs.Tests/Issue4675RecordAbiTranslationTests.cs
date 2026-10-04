@@ -82,8 +82,55 @@ public sealed class Issue4675RecordAbiTranslationTests
     }
 
     private static void VerifyExplicitPositionalProperty(string source, string name, int expected)
+        => VerifyExplicitPositionalProperty(new[] { ("Item.cs", source) }, name, expected);
+
+    [Theory]
+    [InlineData("record", "Value", "", false, false, false, 0)]
+    [InlineData("record struct", "Value", "", false, false, false, 0)]
+    [InlineData("record", "package", "", false, false, false, 0)]
+    [InlineData("record struct", "package", "", false, false, false, 0)]
+    [InlineData("record", "Value", " = Value", false, false, false, 7)]
+    [InlineData("record struct", "Value", " = Value", false, false, false, 7)]
+    [InlineData("record", "Value", "", false, true, true, 0)]
+    [InlineData("record struct", "Value", "", false, true, true, 0)]
+    [InlineData("record", "package", "", false, true, true, 0)]
+    [InlineData("record struct", "package", "", false, true, true, 0)]
+    [InlineData("record", "Value", "", false, true, false, 0)]
+    [InlineData("record struct", "Value", "", false, true, false, 0)]
+    [InlineData("record", "Value", " = null", true, true, true, 0)]
+    [InlineData("record struct", "Value", " = null", true, true, true, 0)]
+    [InlineData("record", "Value", " = Value", false, true, true, 7)]
+    [InlineData("record struct", "Value", " = Value", false, true, true, 7)]
+    public void ExplicitPositionalProperty_PartialAndGetOnlyStorage_PreservesBaseline(
+        string kind, string name, string initializer, bool nullable, bool split, bool hasSetter, int expected)
     {
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Item.cs", source) });
+        var source = $$"""
+            #nullable enable
+            namespace PositionalProperty {
+                public {{(split ? "partial " : "")}}{{kind}} Item{{(split ? "" : "(" + (nullable ? "string?" : "int") + " " + name + ")")}} {
+                    public {{(nullable ? "string?" : "int")}} {{name}} { get; {{(hasSetter ? "init;" : "")}} }{{initializer}}{{(initializer.Length == 0 ? "" : ";")}}
+                    public static int Run() => {{(nullable ? "new Item(\"input\")." + name + " is null ? 0 : 1" : "new Item(7)." + name)}};
+                }
+            }
+            """;
+        var sources = split
+            ? new[]
+            {
+                ("Header.cs", $$"""
+                    #nullable enable
+                    namespace PositionalProperty {
+                        public partial {{kind}} Item({{(nullable ? "string?" : "int")}} {{name}});
+                    }
+                    """),
+                ("Item.cs", source),
+            }
+            : new[] { ("Item.cs", source) };
+        VerifyExplicitPositionalProperty(sources, name, expected);
+    }
+
+    private static void VerifyExplicitPositionalProperty((string Name, string Source)[] sources, string name, int expected)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(sources);
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
         string root = Path.Combine(AppContext.BaseDirectory, "record-property-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -98,19 +145,23 @@ public sealed class Issue4675RecordAbiTranslationTests
             Assembly baseline = Assembly.LoadFile(baselinePath);
             Type original = baseline.GetType("PositionalProperty.Item", throwOnError: true);
             Assert.Equal(expected, original.GetMethod("Run").Invoke(null, null));
-            LoadedDocument document = Assert.Single(project.Documents);
-            var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-            string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
-            string sourcePath = Path.Combine(root, "Translated.gs");
+            Assert.Equal(sources.Length, project.Documents.Count);
+            var sourcePaths = project.Documents.Select((document, index) =>
+            {
+                var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+                string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+                string sourcePath = Path.Combine(root, "Translated" + index + ".gs");
+                File.WriteAllText(sourcePath, translated + (index == 0 ? "\nfunc Main() { System.Console.WriteLine(Item.Run()) }\n" : ""));
+                return sourcePath;
+            }).ToArray();
             string dll = Path.Combine(root, "Translated.dll");
-            File.WriteAllText(sourcePath, translated + "\nfunc Main() { System.Console.WriteLine(Item.Run()) }\n");
             string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
             Assert.True(File.Exists(compiler), compiler);
             var compile = ProcessRunner.Run("dotnet", new[]
             {
                 compiler, "/target:exe", "/targetframework:net10.0",
-                "/reference:" + baselinePath, "/out:" + dll, sourcePath,
-            });
+                "/reference:" + baselinePath, "/out:" + dll,
+            }.Concat(sourcePaths).ToArray());
             Assert.True(compile.ExitCode == 0, compile.Output);
             Assert.True(File.Exists(dll), compile.Output);
             string repo = GsharpTestProjectRunner.FindRepoRoot();
@@ -134,11 +185,19 @@ public sealed class Issue4675RecordAbiTranslationTests
             Type migrated = Assembly.LoadFile(dll).GetType("PositionalProperty.Item", throwOnError: true);
             MethodInfo originalSetter = original.GetProperty(name).SetMethod;
             MethodInfo migratedSetter = migrated.GetProperty(name).SetMethod;
-            Assert.Equal(originalSetter.IsPrivate, migratedSetter.IsPrivate);
-            Assert.Equal(originalSetter.IsPublic, migratedSetter.IsPublic);
-            Assert.Equal(
-                originalSetter.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName),
-                migratedSetter.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName));
+            if (originalSetter == null)
+            {
+                Assert.Null(migratedSetter);
+            }
+            else
+            {
+                Assert.NotNull(migratedSetter);
+                Assert.Equal(originalSetter.IsPrivate, migratedSetter.IsPrivate);
+                Assert.Equal(originalSetter.IsPublic, migratedSetter.IsPublic);
+                Assert.Equal(
+                    originalSetter.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName),
+                    migratedSetter.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName));
+            }
         }
         finally
         {

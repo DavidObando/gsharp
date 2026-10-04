@@ -132,9 +132,14 @@ public accessors and metadata match the synthesized property. Other initializer
 expressions, restricted accessor visibility, and attributes stay on the ordinary
 property/backing-field translation path. With no initializer, that explicit
 storage retains C#'s default value rather than acquiring a positional store.
+Accessor accessibility uses explicit Roslyn enum equality so this decision
+also survives the translator's own-source migration.
 An explicit null initializer likewise retains independent storage. Positional
 identity uses semantic parameter names separately from emitted-name allocator
-reservations, so escaped names do not change this decision. An explicitly
+reservations, so escaped names do not change this decision. Its primary
+constructor ownership is resolved across the type's declarations, including
+preserved partial parts. Get-only accessor and constructor lowering use the
+same independent backing storage even without an initializer. An explicitly
 redeclared native auto-property keeps its own backing-field visibility and
 readonly flags; primary-constructor storage resolves that final property rather
 than replacing its field with the synthesized positional field.
