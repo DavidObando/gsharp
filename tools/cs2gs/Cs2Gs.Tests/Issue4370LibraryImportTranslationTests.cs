@@ -66,10 +66,11 @@ public static partial class Native
         Assert.DoesNotContain("partial func", printed, StringComparison.Ordinal);
         Assert.Contains("func Call() int32 -> GetPid()", printed, StringComparison.Ordinal);
 
-        // The import is a static member of the type (inside `shared`), not a
-        // top-level function: C# callers reach it as Native.GetPid.
-        int shared = printed.IndexOf("shared {", StringComparison.Ordinal);
-        Assert.True(shared >= 0 && shared < printed.IndexOf("func GetPid", StringComparison.Ordinal), printed);
+        // The import is a static member of the type (a member of its `shared class`
+        // body, ADR-0195), not a top-level function: C# callers reach it as
+        // Native.GetPid.
+        Assert.Contains("shared partial class Native", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("shared {", printed, StringComparison.Ordinal);
 
         TranslationTestValidation.AssertBinds(printed);
         Assembly assembly = CompileInProcess(printed);

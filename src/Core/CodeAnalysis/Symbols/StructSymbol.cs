@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -329,12 +330,13 @@ public sealed class StructSymbol : TypeSymbol
     public bool IsOpen { get; }
 
     /// <summary>
-    /// Gets a value indicating whether this class is abstract — issue #987. A
-    /// class is abstract when its effective member set (own + inherited, after
-    /// override resolution) contains at least one abstract method (a no-body
-    /// <c>open func</c>), or when a non-data class inherits an abstract
-    /// synthesized record clone. Such a type cannot be instantiated and is
-    /// emitted with <c>TypeAttributes.Abstract</c>. Always <c>false</c> for
+    /// Gets a value indicating whether this class is abstract: an explicit <c>abstract</c> or
+    /// <c>shared</c> modifier (ADR-0195), an unimplemented abstract member in
+    /// its effective own/inherited member set after override resolution
+    /// (including imported CLR contracts), or a non-data descendant of an
+    /// abstract synthesized record-clone ancestor. Such a type cannot be
+    /// instantiated and is emitted with <c>TypeAttributes.Abstract</c>;
+    /// a <c>shared</c> class is also sealed. Always <c>false</c> for
     /// value-type structs.
     /// </summary>
     public bool IsAbstract
@@ -367,7 +369,11 @@ public sealed class StructSymbol : TypeSymbol
                 return effectiveProperties.Values.Any(property => property.IsAbstract);
             }
 
-            return (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
+            // ADR-0195 / issue #4674: an explicitly `abstract` or `shared` class is
+            // abstract whatever its members are.
+            return IsDeclaredAbstract
+                || IsSharedClass
+                || (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
                 || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
                 || HasUnimplementedAbstractProperties()
                 || ExternalClrOverrideResolver.HasUnimplementedAbstractMembers(this);
@@ -672,6 +678,28 @@ public sealed class StructSymbol : TypeSymbol
     /// CLR <c>Finalize</c> override.
     /// </summary>
     public DeinitSymbol? Deinitializer { get; private set; }
+
+    /// <summary>Gets imported accessors selected by interface conformance binding.</summary>
+    internal List<(InterfaceSymbol Interface, PropertySymbol Property, MethodInfo Accessor, TypeSymbol ContainingType, bool IsSetter)> ImportedInterfaceAccessors { get; } = new();
+
+    /// <summary>
+    /// Gets a value indicating whether the class was declared with the
+    /// <c>abstract</c> modifier (ADR-0195 / issue #4674). Unlike the
+    /// member-derived <see cref="IsAbstract"/>, this is the author's explicit
+    /// statement, so a class with no abstract member can still be
+    /// uninstantiable (a migrated C# <c>abstract class</c> with only concrete
+    /// members). Such a class is inheritable: the binder gives it
+    /// <see cref="IsOpen"/>.
+    /// </summary>
+    internal bool IsDeclaredAbstract => IsClass && (Declaration?.IsAbstract ?? false);
+
+    /// <summary>
+    /// Gets a value indicating whether the class was declared with the
+    /// <c>shared</c> modifier (ADR-0195 / issue #4674): emitted CLR
+    /// <c>abstract sealed</c> with no instance constructor, every member shared,
+    /// the shape of a C# <c>static class</c>.
+    /// </summary>
+    internal bool IsSharedClass => IsClass && (Declaration?.IsShared ?? false);
 
     /// <summary>
     /// Gets a value indicating whether non-public value-struct field initializers require an

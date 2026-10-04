@@ -179,7 +179,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal(Visibility.Private, entryHelper.Visibility);
         Assert.Single(entryHelper.TypeParameters);
         Assert.Contains(
-            Assert.Single(program.Members.OfType<SharedBlock>()).Members.OfType<MethodDeclaration>(),
+            SharedMembers(program).OfType<MethodDeclaration>(),
             method => method.Name == "Main");
 
         TypeDeclaration genericOwner = unit.Members
@@ -202,10 +202,10 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal("Cache", cache.Name);
         Assert.Equal(Visibility.Private, cache.Visibility);
         Assert.Single(cache.TypeParameters);
-        SharedBlock extensionShared = Assert.Single(extensionOwner.Members.OfType<SharedBlock>());
+        IReadOnlyList<GMember> extensionShared = SharedMembers(extensionOwner);
         Assert.Equal(
             Visibility.Private,
-            extensionShared.Members.OfType<FieldDeclaration>().Single(field => field.Name == "cache").Visibility);
+            extensionShared.OfType<FieldDeclaration>().Single(field => field.Name == "cache").Visibility);
 
         // Issue #4676: an extension on an EXTERNAL receiver (`this T`, `int`, `string`)
         // is lifted with its real body and hosted on the owner through
@@ -226,7 +226,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             Assert.Contains(lifted.Attributes, attribute => attribute.Name == "ExtensionOwner");
             Assert.True(lifted.Body != null || lifted.ExpressionBody != null, name);
             Assert.DoesNotContain(
-                extensionShared.Members.OfType<MethodDeclaration>(),
+                extensionShared.OfType<MethodDeclaration>(),
                 method => method.Name == name);
         }
 
@@ -286,12 +286,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
 
         // Issue #4676: the real body is lifted and hosted on the owner; the owner keeps
         // no `Identity` helper and the package gets no forwarding companion.
-        Assert.Empty(owner.Members.OfType<SharedBlock>());
+        Assert.Empty(SharedMembers(owner).OfType<MethodDeclaration>());
         MethodDeclaration identity = Assert.Single(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Identity");
         Assert.Contains(identity.Attributes, attribute => attribute.Name == "ExtensionOwner");
-        Assert.Contains("private class Cache[T]", rendered, StringComparison.Ordinal);
+        Assert.Contains("private shared class Cache[T]", rendered, StringComparison.Ordinal);
         Assert.Contains("@ExtensionOwner(typeof(ExtensionOwner))", rendered, StringComparison.Ordinal);
         Assert.Contains("func (value T) Identity[T]() T -> Cache[T].Echo(value)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
@@ -407,7 +407,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         TypeDeclaration owner = unit.Members
             .OfType<TypeDeclaration>()
             .Single(type => type.Name == "Owner");
-        IReadOnlyList<GMember> shared = Assert.Single(owner.Members.OfType<SharedBlock>()).Members;
+        IReadOnlyList<GMember> shared = SharedMembers(owner);
 
         foreach (string name in new[] { "Make", "Count", "Sum", "Deep", "Tagged", "Moded", "Nested" })
         {
@@ -504,7 +504,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal(Visibility.Private, secret.Visibility);
         Assert.Contains(secret.Attributes, attribute => attribute.Name == "ExtensionOwner");
         Assert.DoesNotContain(
-            Assert.Single(owner.Members.OfType<SharedBlock>()).Members.OfType<MethodDeclaration>(),
+            SharedMembers(owner).OfType<MethodDeclaration>(),
             method => method.Name == "Secret");
         Assert.Contains("func Run(value string) string -> value.Secret()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
@@ -559,20 +559,20 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         TypeDeclaration owner = unit.Members
             .OfType<TypeDeclaration>()
             .Single(type => type.Name == "OwnerScoped");
-        SharedBlock shared = Assert.Single(owner.Members.OfType<SharedBlock>());
+        IReadOnlyList<GMember> shared = SharedMembers(owner);
 
         // The receiver `Host` is OWNED by the project, so an extension on it is moved
         // into `Host` and could not reach the owner's private nested type: that case
         // keeps the owner-scoped scheme. `Describe` collides with `Host`'s own
         // instance method, so it stays an in-owner static helper.
-        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Describe");
+        Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == "Describe");
         Assert.DoesNotContain(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Describe");
 
         // Issue #4676: an extension on an EXTERNAL receiver is lifted and hosted on its
         // owner; the owner keeps no helper copy.
-        Assert.DoesNotContain(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Format");
+        Assert.DoesNotContain(shared.OfType<MethodDeclaration>(), method => method.Name == "Format");
         MethodDeclaration format = Assert.Single(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Format");
@@ -587,14 +587,13 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.DoesNotContain(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "func__");
-
         // ADR-0170: the metadata-visible `@func` extension keeps its CLR name via the
         // escape; the legal func_ members keep their own names.
         MethodDeclaration externalEscaped = Assert.Single(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "$func" && method.Attributes.Any(attribute => attribute.Name == "ExtensionOwner"));
         Assert.Equal("string", GSharpPrinter.RenderTypeReference(externalEscaped.Receiver.Type));
-        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "$func");
+        Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == "$func");
         Assert.Contains("OwnerScoped.$func(host)", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
@@ -989,6 +988,13 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains("value.Echo()", printedConsumer, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printedProducer, printedConsumer);
     }
+
+    // ADR-0195 / issue #4674: the shared members of a type are the body of a `shared class`
+    // (a C# static class), and the `shared { }` block of any other class.
+    private static IReadOnlyList<GMember> SharedMembers(TypeDeclaration type) =>
+        type.IsShared
+            ? type.Members
+            : Assert.Single(type.Members.OfType<SharedBlock>()).Members;
 
     private static (CompilationUnit Unit, TranslationContext Context) Translate(string source)
     {

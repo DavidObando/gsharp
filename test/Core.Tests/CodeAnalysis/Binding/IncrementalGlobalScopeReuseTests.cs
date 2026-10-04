@@ -63,6 +63,45 @@ public class IncrementalGlobalScopeReuseTests
     }
 
     /// <summary>
+    /// ADR-0195 / issue #4674: a <c>shared class</c> is bound from a normalized copy of its
+    /// parsed declaration, so a body-only edit in a file that holds one must still be
+    /// repointed (not fall back to a full bind), including for a shared class nested in an
+    /// ordinary one, and the repointed symbols must see the edited tree.
+    /// </summary>
+    [Fact]
+    public void BodyOnlyEdit_InFileWithSharedClass_IsRepointed()
+    {
+        const string template = """
+            package P
+            shared class Util {
+                var entries int32
+                func Twice(x int32) int32 {
+                    return x * %N%
+                }
+            }
+            class Outer {
+                var count int32
+                shared class Inner {
+                    func Make() int32 {
+                        return %N%
+                    }
+                }
+            }
+            """;
+        var original = Parse("A.gs", template.Replace("%N%", "2"));
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(original));
+        var util = scope.Structs.Single(s => s.Name == "Util");
+        var entries = util.StaticFields.Single();
+        var edited = Parse("A.gs", template.Replace("%N%", "3000"));
+
+        Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, original, edited));
+        Assert.Same(edited.Text, entries.Location.Text);
+        Assert.Equal("entries", entries.Location.Text!.ToString(entries.Location.Span));
+        Assert.Same(edited, util.Declaration!.SyntaxTree);
+        Assert.NotEmpty(util.Declaration!.SharedBlock!.Methods);
+    }
+
+    /// <summary>
     /// A body-only edit to one file in a multi-file project reuses the cached
     /// bodies of every unchanged file (cache hits, same symbol identity) and
     /// re-binds only the edited file's body.

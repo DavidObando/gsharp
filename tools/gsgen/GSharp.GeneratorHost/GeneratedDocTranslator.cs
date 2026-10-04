@@ -190,6 +190,7 @@ public static class GeneratedDocTranslator
     /// which contradicts a user part that says <c>sealed</c> (GS0478).
     /// Openness and sealedness are the user's to state (gsc unions them across
     /// parts, ADR-0144 §C), so a generated part states neither.
+    /// An explicitly generator-authored abstract modifier is preserved.
     /// <para>
     /// A positional parameter list a generator supplies is kept when no user
     /// part states one. Only one part may (GS0482), so when both do, the
@@ -244,7 +245,7 @@ public static class GeneratedDocTranslator
                 part.Visibility,
                 isOpen: false,
                 isSealed: false,
-                isAbstract: false,
+                isAbstract: part.IsAbstract,
                 isPartial: true,
                 part.HasBody,
                 part.Attributes,

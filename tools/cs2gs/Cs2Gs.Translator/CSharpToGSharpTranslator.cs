@@ -1079,7 +1079,7 @@ public sealed partial class CSharpToGSharpTranslator
         AttributeApplicationsNamingPrivateNestedType(method).Count > 0;
 
     /// <summary>
-    /// The syntax of every attribute on <paramref name="method"/>, its return value, a parameter
+    /// The syntax of every attribute on <paramref name="method"/>, its return value
     /// or a parameter that names one of its owner's private nested types.
     /// </summary>
     /// <param name="method">The extension method.</param>
