@@ -373,6 +373,15 @@ Selecting an in-type helper removes only literal values whose actual storage
 that constructor writes. Closed-generic public field values remain bound and
 planned when the definition has no store, even with a private collection sibling;
 emission and safety consume those retained children normally.
+Every actual in-type zero-helper value is visited before filtering storage for
+required handles. Fixed-array element obligations therefore remain checked when
+the literal omits a private array; an ordinary primary initializer cannot prove
+that the zero-only helper supplies its elements.
+If a closed generic private field needs a collection zero but neither a retained
+value nor an actual in-type assignment exists, bare construction fails with the
+existing inaccessible-member diagnostic (GS0472), rather than silently leaving
+null storage or generating an illegal external private-field store. A concrete
+definition-owned field with a real helper assignment remains supported.
 
 Handle assignment copies the handle value; it does not copy the referent.
 `var copy = *p` copies `T` normally. Promoting `copy` later identifies that

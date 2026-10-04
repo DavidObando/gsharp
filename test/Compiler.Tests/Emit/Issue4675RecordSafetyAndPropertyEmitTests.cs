@@ -631,7 +631,254 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
         Assert.Equal("7\n0\n", fixture.Run(dll));
     }
 
-    private static void Reject(string source, string anchor)
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void PrivateClosedGenericZero_RejectsAChildWithoutAnInTypeStore(bool privateCollection, bool nested)
+    {
+        var declaration = nested ? "var outer Envelope" : "var outer Outer[Inner]";
+        Reject(
+            PrivateClosedZeroSource(privateCollection, "T", declaration)
+                .Replace("outer.Read().Items.Length", nested ? "outer.Read().Read().Items.Length" : "outer.Read().Items.Length", StringComparison.Ordinal),
+            declaration,
+            "GS0472");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void PrivateClosedGenericZero_RetainsActualDefinitionStores(bool privateCollection, bool explicitConstruction)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            PrivateClosedZeroSource(privateCollection, "Inner", explicitConstruction
+                ? "let outer = Outer[Inner]{Value: 7}"
+                : "var outer Outer[Inner]"),
+            "PrivateClosedZero", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal(explicitConstruction ? "0\n7\n1\n1\n" : "0\n0\n0\n0\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public void PrivateFixedHandleArrayZero_RejectsUnsuppliedElements(int length, bool nested)
+    {
+        const string declaration = "var box Box";
+        Reject(PrivateFixedHandleArraySource(length, declaration, nested), declaration);
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public void PrivateFixedHandleArrayZero_ExplicitPrimaryInitializationRemainsValid(int length, bool nested)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        const string construction = "let box = Box{Value: 7}";
+        var dll = fixture.Compile(
+            PrivateFixedHandleArraySource(length, construction, nested),
+            "PrivateFixedHandleArray", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal($"7\n{length}\n1\n1\n", fixture.Run(dll));
+    }
+
+    private static string PrivateClosedZeroSource(bool privateCollection, string fieldType, string construction)
+        => """
+            package PrivateClosedZero
+            import System
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            struct Inner { public var Items []int32 }
+            data struct Outer[T](Value int32) {
+                private var Nested FIELD_TYPE
+                private var Marker int32 = Counter.Next()
+                COLLECTION
+                public func Read() FIELD_TYPE -> Nested
+                public func Mark() int32 -> Marker
+            }
+            ENVELOPE
+            func Main() {
+                CONSTRUCTION
+                Console.WriteLine(outer.Read().Items.Length)
+                Console.WriteLine(outer.Value)
+                Console.WriteLine(outer.Mark())
+                Console.WriteLine(Counter.Count)
+            }
+            """.Replace("FIELD_TYPE", fieldType, StringComparison.Ordinal)
+                .Replace("COLLECTION", privateCollection ? "private var Items []int32" : string.Empty, StringComparison.Ordinal)
+                .Replace("ENVELOPE", construction == "var outer Envelope" ? """
+                    struct Envelope {
+                        public var Nested Outer[Inner]
+                        public func Read() Outer[Inner] -> Nested
+                    }
+                    """ : string.Empty, StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal)
+                .Replace("Console.WriteLine(outer.Value)", construction == "var outer Envelope" ? string.Empty : "Console.WriteLine(outer.Value)", StringComparison.Ordinal)
+                .Replace("Console.WriteLine(outer.Mark())", construction == "var outer Envelope" ? string.Empty : "Console.WriteLine(outer.Mark())", StringComparison.Ordinal);
+
+    private static string PrivateFixedHandleArraySource(int length, string construction, bool nested)
+        => """
+            package PrivateFixedHandleArray
+            import System
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            ELEMENT_DECLARATION
+            data struct Box(Value int32) {
+                private var Handles [LENGTH]ELEMENT_TYPE = [LENGTH]ELEMENT_TYPE{ELEMENTS}
+                private var Marker int32 = Counter.Next()
+                private var Items []int32
+                public func Read() int32 -> READ
+                public func Length() int32 -> Handles.Length
+                public func Mark() int32 -> Marker
+            }
+            func Main() {
+                CONSTRUCTION
+                Console.WriteLine(box.Read())
+                Console.WriteLine(box.Length())
+                Console.WriteLine(box.Mark())
+                Console.WriteLine(Counter.Count)
+            }
+            """.Replace("LENGTH", length.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
+                .Replace("ELEMENT_DECLARATION", nested ? "data struct Element(Handle readonly managed[int32]) { public func Read() int32 -> *Handle }" : string.Empty, StringComparison.Ordinal)
+                .Replace("ELEMENT_TYPE", nested ? "Element" : "readonly managed[int32]", StringComparison.Ordinal)
+                .Replace("ELEMENTS", string.Join(", ", Enumerable.Repeat(nested ? "Element{Handle: readonly managed(Value)}" : "readonly managed(Value)", length)), StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal)
+                .Replace("READ", nested ? "Handles[0].Read()" : "*Handles[0]", StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("struct", "public var Extra T", false)]
+    [InlineData("struct", "public var Extra T", true)]
+    [InlineData("struct", "public prop Extra T { get; init; }", false)]
+    [InlineData("struct", "public prop Extra T { get; init; }", true)]
+    [InlineData("data struct", "public var Extra T", false)]
+    [InlineData("data struct", "public var Extra T", true)]
+    [InlineData("data struct", "public prop Extra T { get; init; }", false)]
+    [InlineData("data struct", "public prop Extra T { get; init; }", true)]
+    public void NestedConstructedInitializer_DoesNotCreditANewlyRequiredChildSlot(string kind, string storage, bool publicNested)
+    {
+        Reject(
+            NestedConstructorSource(kind, storage, publicNested, "var outer Outer[readonly managed[int32]]", "*"),
+            "var outer Outer[readonly managed[int32]]");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NestedConstructedInitializer_RecursesThroughMultipleConstructorValues(bool publicNested)
+    {
+        var source = NestedConstructorSource("struct", "public var Extra T", publicNested, "var outer Envelope[readonly managed[int32]]", "*")
+            .Replace("func Main()", """
+                struct Envelope[T] {
+                    private var Nested Outer[T]
+                    public func Read() int32 -> Nested.Read()
+                    public func Extra() T -> Nested.Extra()
+                    public func Length() int32 -> Nested.Length()
+                }
+                func Main()
+                """, StringComparison.Ordinal);
+        Reject(source, "var outer Envelope[readonly managed[int32]]");
+    }
+
+    [Theory]
+    [InlineData("public var Extra T", false)]
+    [InlineData("public var Extra T", true)]
+    [InlineData("public prop Extra T { get; init; }", false)]
+    [InlineData("public prop Extra T { get; init; }", true)]
+    public void NestedConstructedInitializer_RetainsItsValidatedHandleAndValueZero(string storage, bool publicNested)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            NestedConstructorSource("struct", storage, publicNested, "var outer Outer[int32]", string.Empty),
+            "NestedConstructorCredit", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n0\n0\n1\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData("public var Extra T")]
+    [InlineData("public prop Extra T { get; init; }")]
+    public void NestedConstructedInitializer_ExplicitSuppliedHandleRemainsValid(string storage)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            NestedConstructorSource("struct", storage, true, """
+                var value = 11
+                let supplied = Inner[readonly managed[int32]]{Extra: readonly managed(value)}
+                let outer = Outer[readonly managed[int32]]{Nested: supplied}
+                """, "*"),
+            "NestedConstructorCredit", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n11\n0\n2\n", fixture.Run(dll));
+    }
+
+    private static string NestedConstructorSource(string kind, string storage, bool publicNested, string construction, string dereference)
+        => """
+            package NestedConstructorCredit
+            import System
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return 7
+                    }
+                }
+            }
+            struct Inner[T] {
+                private let Reference readonly managed[int32] = {
+                    var value = Counter.Next()
+                    readonly managed(value)
+                }
+                STORAGE
+                private var Items []int32
+                public func Read() int32 -> *Reference
+                public func Length() int32 -> Items.Length
+            }
+            KIND Outer[T]PRIMARY {
+                VISIBILITY var Nested Inner[T]
+                SIBLING
+                public func Read() int32 -> Nested.Read()
+                public func Extra() T -> Nested.Extra
+                public func Length() int32 -> Nested.Length()
+            }
+            func Main() {
+                CONSTRUCTION
+                Console.WriteLine(outer.Read())
+                Console.WriteLine(DEREFERENCEouter.Extra())
+                Console.WriteLine(outer.Length())
+                Console.WriteLine(Counter.Count)
+            }
+            """.Replace("KIND", kind, StringComparison.Ordinal)
+                .Replace("PRIMARY", kind == "data struct" ? "(Value int32)" : string.Empty, StringComparison.Ordinal)
+                .Replace("STORAGE", storage, StringComparison.Ordinal)
+                .Replace("VISIBILITY", publicNested ? "public" : "private", StringComparison.Ordinal)
+                .Replace("SIBLING", publicNested ? "private var Items []int32" : string.Empty, StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal)
+                .Replace("DEREFERENCE", dereference, StringComparison.Ordinal);
+
+    private static void Reject(string source, string anchor, string diagnostic = "GS0604")
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
         var (code, output) = fixture.TryCompile(source, "RejectedRecord", true);
@@ -641,9 +888,9 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
         Assert.True(offset >= 0);
         var line = 1 + source[..offset].Count(c => c == '\n');
         var column = offset - source.LastIndexOf('\n', offset);
-        Assert.Contains($"({line},{column},{line},{column + anchor.Length}): error GS0604:", output, StringComparison.Ordinal);
+        Assert.Contains($"({line},{column},{line},{column + anchor.Length}): error {diagnostic}:", output, StringComparison.Ordinal);
         var diagnostics = output.Split('\n').Where(line => line.Contains(": error ", StringComparison.Ordinal)).ToArray();
         Assert.NotEmpty(diagnostics);
-        Assert.All(diagnostics, line => Assert.Contains(": error GS0604:", line, StringComparison.Ordinal));
+        Assert.All(diagnostics, line => Assert.Contains($": error {diagnostic}:", line, StringComparison.Ordinal));
     }
 }

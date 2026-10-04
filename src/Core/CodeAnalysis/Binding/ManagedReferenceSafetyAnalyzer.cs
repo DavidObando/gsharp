@@ -436,26 +436,48 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 .OfType<FieldSymbol>().ToHashSet();
             foreach (var storage in InstanceStorageTypes(type))
             {
-                if (!supplied.Contains(storage.Key) && this.RequiredHandle(storage.Value) != null)
+                if (supplied.Contains(storage.Key))
+                {
+                    continue;
+                }
+
+                // Arrays have element obligations even when their storage itself
+                // is not a required handle. Check every actual helper value.
+                if (type.ValueStructDefaultCtorIsZeroInitialization
+                    && MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(zeroValue.Syntax, type, storage.Key) is { } helperValue)
+                {
+                    this.VisitExpression(helperValue);
+                    continue;
+                }
+
+                var declaredField = type.GetDefinitionField(storage.Key) ?? storage.Key;
+                var hasDeclaredInitializer = validatedInitializers && type.Definition.InstanceFieldInitializers.ContainsKey(declaredField);
+                if (hasDeclaredInitializer
+                    && type.Definition.InstanceFieldInitializers[declaredField] is BoundStructLiteralExpression { IsZeroInitialization: true }
+                    && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, storage.Value) is { } constructedInitializer)
+                {
+                    this.VisitExpression(constructedInitializer);
+                }
+
+                if (this.RequiredHandle(storage.Value) != null)
                 {
                     // A validated ordinary constructor proves the definition's
                     // required slots, not additional obligations introduced by T.
-                    var declaredField = type.GetDefinitionField(storage.Key) ?? storage.Key;
                     if (declaredStorage != null && declaredStorage.TryGetValue(declaredField, out var declaredType)
                         && this.RequiredHandle(declaredType) != null)
                     {
                         continue;
                     }
 
-                    if (type.ValueStructDefaultCtorIsZeroInitialization
-                        && MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(zeroValue.Syntax, type, storage.Key) is { } helperValue)
-                    {
-                        this.VisitExpression(helperValue);
-                    }
-                    else
-                    {
-                        this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{storage.Key.Name}'; explicitly construct the aggregate");
-                    }
+                    this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{storage.Key.Name}'; explicitly construct the aggregate");
+                }
+                else if (!hasDeclaredInitializer && storage.Key.Accessibility != Accessibility.Public
+                    && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, storage.Value) != null
+                    && zeroValue.Syntax is { } syntax)
+                {
+                    // No in-type store exists, and an external private-field
+                    // store is not a legal substitute for the missing zero path.
+                    this.diagnostics.ReportMemberInaccessible(syntax.Location, storage.Key.Name, type.Name, storage.Key.Accessibility);
                 }
             }
 
