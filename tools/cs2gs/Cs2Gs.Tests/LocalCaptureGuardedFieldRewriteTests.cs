@@ -134,6 +134,73 @@ namespace Demo
     }
 
     [Fact]
+    public void GuardCapture_LiftedHelperNameCollision_FallsBackToFieldRead()
+    {
+        string printed = TranslateOblivious(@"
+using System;
+
+public class C
+{
+    private readonly Func<int, int> Callback_2;
+    private static int callback(int value) => 100 + value;
+
+    public C()
+    {
+        Callback_2 = value => value + 1;
+    }
+
+    public int Run(int value)
+    {
+        if (Callback_2 == null)
+        {
+            return -1;
+        }
+
+        int first = Callback_2(1);
+        return first + callback(value);
+        static int callback(int n) => n == 0 ? 7 : Other<int>(n - 1);
+        static int Other<T>(int n) => callback(n);
+    }
+}");
+
+        Assert.DoesNotContain("let callback_2 =", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(0))",
+            "9");
+    }
+
+    [Fact]
+    public void StructConstructor_ThisQualifiedReadonlyFieldWrite_InvalidatesGuardCapture()
+    {
+        string printed = TranslateOblivious(@"
+using System;
+
+public struct Holder
+{
+    private readonly string F;
+
+    public Holder()
+    {
+        F = ""before"";
+        if (F == null)
+        {
+            return;
+        }
+
+        Console.WriteLine(F);
+        this.F = ""after"";
+        Console.WriteLine(F);
+    }
+}");
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Holder()",
+            "before" + Environment.NewLine + "after");
+    }
+
+    [Fact]
     public void AlreadyLowercaseFieldName_CapturesToSameSpelling()
     {
         // The repo owner's own example: a field ALREADY spelled lowercase

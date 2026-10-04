@@ -697,7 +697,17 @@ public sealed partial class CSharpToGSharpTranslator
             Visibility visibility = MapVisibility(symbol, this.context, node);
             if (isNested)
             {
-                if (visibility == Visibility.Private)
+                // Issue #4676: a nested delegate's reach is bounded by every type that
+                // encloses it. A `public` delegate inside an `internal` class
+                // (GSharp.Core's `OverloadResolver.TryBindClrConstructorCallDelegate`)
+                // was lifted to a top-level `public` delegate, publishing a type the
+                // C# assembly never exported.
+                //
+                // Only a delegate that is public (the default) AND has exclusively public
+                // containers stays public. Anything else becomes `internal`: a lifted
+                // delegate has no container left to be `protected` or `private` in, and a
+                // top-level `protected` declaration is GS0380.
+                if (visibility is not (Visibility.Default or Visibility.Public) || !IsEffectivelyPublic(symbol))
                 {
                     visibility = Visibility.Internal;
                 }
@@ -3086,12 +3096,16 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             taken.UnionWith(this.state.SynthesizedPropertyBackingFieldNames.Values);
+            taken.UnionWith(this.state.LiftedStaticLocalFunctions.Values);
+            taken.UnionWith(this.state.LiftedRecursiveLocalFunctions.Values.Select(lift => lift.Name));
+            taken.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
+                ?? Enumerable.Empty<string>());
+            taken.UnionWith(this.state.PendingInstanceSynthHelpers?.Select(helper => helper.Name)
+                ?? Enumerable.Empty<string>());
 
-            string candidate = baseName;
-            for (int suffix = 2; taken.Contains(candidate); suffix++)
-            {
-                candidate = baseName + suffix;
-            }
+            string candidate = LiftedLocalFunctionNameAllocator
+                .For(this.context.Compilation)
+                .AllocateBackingField(symbol, taken, baseName);
 
             this.state.SynthesizedPropertyBackingFieldNames[symbol] = candidate;
             return candidate;

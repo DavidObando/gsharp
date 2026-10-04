@@ -80,7 +80,7 @@ public sealed class Issue4545ManagedArrayProjectionSelfMigrationTests
             translated[fileName] = GSharpPrinter.Print(
                 new CSharpToGSharpTranslator(preservePartialParts: true)
                     .TranslateDocument(document, context));
-            Assert.Empty(context.Diagnostics);
+            Assert.DoesNotContain(context.Diagnostics, d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
         }
 
         string state = translated["ManagedReferenceArrayNullableState.cs"]

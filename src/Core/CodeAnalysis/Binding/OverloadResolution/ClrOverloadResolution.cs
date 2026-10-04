@@ -4429,13 +4429,10 @@ internal static class ClrOverloadResolution
         string argumentName,
         ParameterInfo[] parameters) =>
         parameterName is not null
-        && string.Equals(
-            SyntaxFacts.GetEmittedIdentifier(
-                parameterName,
-                IdentifierNameContext.Parameter,
-                parameters.Select(parameter => parameter.Name ?? string.Empty)),
+        && OverloadResolver.ClrParameterNameMatches(
+            parameterName,
             argumentName,
-            StringComparison.Ordinal);
+            parameters.Select(parameter => parameter.Name ?? string.Empty));
 
     /// <summary>
     /// Issue #343: returns the index of the parameter whose name matches
