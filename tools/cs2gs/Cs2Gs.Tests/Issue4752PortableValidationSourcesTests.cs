@@ -87,6 +87,8 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
     [InlineData("absolute")]
     [InlineData("incomplete")]
     [InlineData("producing-escape")]
+    [InlineData("empty-source")]
+    [InlineData("empty-identity")]
     public async Task Validate_InvalidManifestIdentityFailsBeforeStages(string invalid)
     {
         Fixture fixture = this.CreateFixture(legacy: false);
@@ -122,6 +124,13 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
                 {
                     file.CsFilePath = manifest.SourceRoot + "/" + file.RelativeCsPath;
                 }
+                break;
+            case "empty-source":
+                manifest.EmittedFiles[0].CsFilePath = null;
+                break;
+            case "empty-identity":
+                manifest.EmittedFiles[0].CsFilePath = null;
+                manifest.EmittedFiles[0].RelativeCsPath = null;
                 break;
         }
 

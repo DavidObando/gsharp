@@ -163,14 +163,13 @@ public sealed class ValidationManifest
         foreach (EmittedGsFile file in context.EmittedFiles)
         {
             string csFilePath = CanonicalRootPath.Resolve(file.CsFilePath);
-            string relativeCsPath = string.IsNullOrEmpty(csFilePath)
-                ? null
-                : Relativize(sourceRoot, csFilePath);
-            if (relativeCsPath is not null)
+            if (string.IsNullOrEmpty(csFilePath))
             {
-                ResolveWithinRoot(sourceRoot, relativeCsPath);
+                throw new InvalidOperationException($"Validation file '{file.GsPath}' has no original source identity.");
             }
 
+            string relativeCsPath = Relativize(sourceRoot, csFilePath);
+            ResolveWithinRoot(sourceRoot, relativeCsPath);
             manifest.EmittedFiles.Add(new ValidationManifestFile
             {
                 Path = Relativize(root, file.GsPath),
@@ -309,27 +308,29 @@ public sealed class ValidationManifest
         {
             string gsPath = ResolveWithinRoot(root, file.Path);
             string csPath = file.CsFilePath;
-            if (!string.IsNullOrEmpty(csPath))
+            if (string.IsNullOrEmpty(csPath))
             {
-                string relativeCsPath = SourceRelativePath(producingRoot, csPath);
-                if (this.SourceRoot is not null &&
-                    !string.Equals(relativeCsPath, Normalize(file.RelativeCsPath), StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"Validation manifest source identity disagrees for '{csPath}'.");
-                }
-
-                csPath = ResolveWithinRoot(sourceRoot, relativeCsPath);
-                if (!File.Exists(csPath))
-                {
-                    throw new InvalidOperationException(
-                        $"Validation source '{relativeCsPath}' is missing from authoritative corpus '{sourceRoot}'.");
-                }
-
-                // Unlike the best-effort Fact reader, replay must not silently
-                // lose authoritative source evidence to a stale/unreadable path.
-                using FileStream source = File.OpenRead(csPath);
+                throw new InvalidOperationException($"Validation file '{file.Path}' has no original source identity.");
             }
+
+            string relativeCsPath = SourceRelativePath(producingRoot, csPath);
+            if (this.SourceRoot is not null &&
+                !string.Equals(relativeCsPath, Normalize(file.RelativeCsPath), StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Validation manifest source identity disagrees for '{csPath}'.");
+            }
+
+            csPath = ResolveWithinRoot(sourceRoot, relativeCsPath);
+            if (!File.Exists(csPath))
+            {
+                throw new InvalidOperationException(
+                    $"Validation source '{relativeCsPath}' is missing from authoritative corpus '{sourceRoot}'.");
+            }
+
+            // Unlike the best-effort Fact reader, replay must not silently
+            // lose authoritative source evidence to a stale/unreadable path.
+            using FileStream source = File.OpenRead(csPath);
 
             if (!File.Exists(gsPath))
             {
