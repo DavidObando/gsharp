@@ -55,8 +55,11 @@ public class Issue3668ShardedValidationTests
         string reference = Path.Combine(temp.Path, "Some.Package.dll");
         File.WriteAllText(reference, string.Empty);
 
-        var app = new CorpusApp("src/Lib/Lib.csproj", Path.Combine(temp.Path, "Lib.csproj"), TargetKind.Library);
-        var options = new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository };
+        string sourceDirectory = Path.Combine(temp.Path, "src", "Lib");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "Widget.cs"), "namespace Lib {}");
+        var app = new CorpusApp("src/Lib/Lib.csproj", Path.Combine(sourceDirectory, "Lib.csproj"), TargetKind.Library);
+        var options = new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository, SourceRoot = temp.Path };
         var context = new StageExecutionContext(
             app,
             options,
@@ -72,7 +75,8 @@ public class Issue3668ShardedValidationTests
         context.GeneratedFriendAssemblies.Add("Lib.Tests");
         context.ExternalReferencePaths.Add(reference);
         context.ExternalReferencePaths.Add(Path.Combine(temp.Path, "Absent.dll"));
-        context.EmittedFiles.Add(new EmittedGsFile(gsPath, "src_Lib/Widget.gs", "Widget.cs", "package Lib\n"));
+        context.EmittedFiles.Add(new EmittedGsFile(
+            gsPath, "src_Lib/Widget.gs", Path.Combine(sourceDirectory, "Widget.cs"), "package Lib\n"));
 
         string artifactDir = Path.Combine(temp.Path, "artifacts");
         ValidationManifest.Write(ValidationManifest.Capture(context, translated: true, migrated), artifactDir);
@@ -85,10 +89,13 @@ public class Issue3668ShardedValidationTests
         // Emitted paths are stored relative to the migrated tree so the tree
         // can be re-rooted onto a shard runner.
         Assert.Equal("src/Lib/Widget.gs", Assert.Single(read.EmittedFiles).Path);
+        Assert.Equal("src/Lib/Widget.cs", Assert.Single(read.EmittedFiles).RelativeCsPath);
+        Assert.Equal("src/Lib/Lib.csproj", read.SourceProjectPath);
+        Assert.Equal(CanonicalRootPath.Resolve(temp.Path), read.SourceRoot);
 
         var rehydrated = new StageExecutionContext(
             app,
-            new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository },
+            new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository, SourceRoot = temp.Path },
             NullGsc(),
             projectDir,
             artifactDir,
