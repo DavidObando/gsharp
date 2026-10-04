@@ -2,8 +2,8 @@
 // element and a plain local: 'ref int r = ref xs[1]', 'ref int alias = ref v'.
 // Maps to G#'s native ref-aliasing local (`let/var ref name T = lvalue`,
 // issue #491/ADR-0060) so writes through the alias observably hit the
-// original storage. See Quarantined/RefExpressionLocalFunction.cs.txt for the
-// ref-returning-local-function/re-alias shapes that have no native G# form.
+// original storage. RefExpressionLocalFunction.cs covers the supported static
+// ref-returning-local-function/re-alias shape.
 using System;
 
 namespace Corpus.Grid09

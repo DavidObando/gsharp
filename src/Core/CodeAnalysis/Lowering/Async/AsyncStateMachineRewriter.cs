@@ -44,7 +44,11 @@ public static class AsyncStateMachineRewriter
         var plans = ImmutableArray.CreateBuilder<AsyncStateMachinePlan>();
         var ordinalsByScopeAndName = new Dictionary<string, int>();
 
-        foreach (var pair in program.Functions.OrderBy(pair => GetFunctionSortKey(program, pair.Key), StringComparer.Ordinal))
+        // Issue #4663: the key ties for same-named, same-signature methods on
+        // different types; break ties in source order, never hash order.
+        foreach (var pair in program.Functions
+            .OrderBy(pair => GetFunctionSortKey(program, pair.Key), StringComparer.Ordinal)
+            .ThenBy(pair => pair.Key, SymbolSourceOrderComparer.Instance))
         {
             var function = pair.Key;
             if (!function.IsAsyncOrSuspending)

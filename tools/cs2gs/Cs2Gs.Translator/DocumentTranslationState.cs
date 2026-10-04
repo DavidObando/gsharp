@@ -224,8 +224,8 @@ internal sealed class DocumentTranslationState
         new Dictionary<SyntaxNode, HashSet<string>>();
 
     // Emitted spellings occupied by source identifiers in each body. Building
-    // this once avoids rescanning every token for every structural carrier.
-    public Dictionary<SyntaxNode, HashSet<string>> DeconstructionOccupiedNamesByBody { get; } =
+    // this once avoids rescanning every token for every synthesized local.
+    public Dictionary<SyntaxNode, HashSet<string>> SynthesizedLocalOccupiedNamesByBody { get; } =
         new Dictionary<SyntaxNode, HashSet<string>>();
 
     // Monotonic counter for synthesizing the hoist local when a loop condition
@@ -275,6 +275,12 @@ internal sealed class DocumentTranslationState
     // same GExpression instance down to the nested test it builds.
     public HashSet<Cs2Gs.CodeModel.Ast.GExpression> GSharpNullablePatternReceivers { get; } =
         new HashSet<Cs2Gs.CodeModel.Ast.GExpression>(ReferenceEqualityComparer.Instance);
+
+    // Issue #4612: for each collection-expression element, the element (or
+    // Add) type CoerceCollectionElement bound it to, so a bridge nested inside
+    // the element (a forgiven `x!`) reports the slot the store really uses.
+    public Dictionary<SyntaxNode, ITypeSymbol> CollectionElementSlots { get; } =
+        new Dictionary<SyntaxNode, ITypeSymbol>();
 
     // Issue #4356: `var` locals a nested nullable pattern member is STORED in
     // (so a designation's binding can read it after the test). A binding is
@@ -354,8 +360,13 @@ internal sealed class DocumentTranslationState
     // Shared helpers synthesized from capture-free static local functions.
     public List<MethodDeclaration> PendingStaticSynthHelpers { get; set; }
 
+    public INamedTypeSymbol CurrentEmittedAggregate { get; set; }
+
     public Dictionary<IMethodSymbol, string> LiftedStaticLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> EmittedLiftedStaticLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
 
     // Issue #3467: synthesized control-flow label names, allocated per
     // enclosing function body in first-use order instead of embedding the
@@ -368,15 +379,20 @@ internal sealed class DocumentTranslationState
     public Dictionary<(SyntaxNode Scope, string Prefix), int> SyntheticLabelCounters { get; } =
         new Dictionary<(SyntaxNode Scope, string Prefix), int>();
 
-    // Issue #3467: lifted local-function helper names already allocated in
-    // this document, so a name collision (same enclosing member name + same
-    // local-function name) takes an ordinal suffix instead of embedding
-    // SpanStart.
-    public HashSet<string> UsedLiftedLocalFunctionNames { get; } =
-        new HashSet<string>(StringComparer.Ordinal);
-
     public Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction> LiftedRecursiveLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> EmittedLiftedRecursiveLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> UnsupportedTopLevelRecursiveLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> UnsupportedRecursiveEnclosingTypeParameterLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
+    public HashSet<IMethodSymbol> UnsupportedSuspendingRefCaptureLocalFunctions { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
 
     // Issue #3399: local functions participating (directly or transitively) in
     // recursion/mutual recursion that cannot be lifted as static helpers

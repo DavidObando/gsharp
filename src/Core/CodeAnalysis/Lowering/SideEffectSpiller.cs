@@ -88,7 +88,9 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         var changed = false;
 
         var functions = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
-        foreach (var pair in program.Functions)
+
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var pair in BoundProgramOrder.Functions(program))
         {
             var newBody = (BoundBlockStatement)spiller.RewriteStatement(pair.Value);
             functions[pair.Key] = newBody;
@@ -98,7 +100,9 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         var statement = (BoundBlockStatement)spiller.RewriteStatement(program.Statement);
         changed |= statement != program.Statement;
         var initializers = program.Initializers.ToBuilder();
-        foreach (var pair in program.Initializers)
+
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var pair in BoundProgramOrder.Initializers(program))
         {
             initializers[pair.Key] = pair.Value.Rewrite(spiller.RewriteExpression, spiller.RewriteStatement);
             changed |= initializers[pair.Key] != pair.Value;
