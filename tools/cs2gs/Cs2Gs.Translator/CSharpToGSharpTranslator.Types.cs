@@ -839,16 +839,23 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol conversionOperator = this.GetUserDefinedConversionInputOperator(
                 expression, targetType, out bool convertsValue);
             if (conversionOperator != null
-                && convertsValue
-                && this.BranchResultAcceptsNil(expression, out _))
+                && convertsValue)
             {
                 GTypeReference convertedType = this.MapDelegateLikeReturnType(
                     conversionOperator, isAsync: false, location);
-                GExpression converted = new ConversionExpression(convertedType, translated);
+
+                // Forgiveness may already have asserted the converted result.
+                bool convertedResultIsAsserted =
+                    this.state.MaterializedConversionResults.TryGetValue(
+                        UnwrapTranslatedValue(translated), out IMethodSymbol materializedOperator)
+                    && SymbolEqualityComparer.Default.Equals(materializedOperator, conversionOperator);
+                GExpression converted = convertedResultIsAsserted
+                    ? translated
+                    : new ConversionExpression(convertedType, translated);
                 return SymbolEqualityComparer.Default.Equals(conversionOperator.ReturnType, targetType)
                     ? converted
                     : new ConversionExpression(
-                        convertedType.IsNullable ? MakeNullable(target) : target,
+                        convertedType.IsNullable && !convertedResultIsAsserted ? MakeNullable(target) : target,
                         converted,
                         isCheckedReferenceCast: true);
             }

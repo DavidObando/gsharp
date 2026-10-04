@@ -4028,16 +4028,19 @@ internal static class ObliviousNullabilityAnalyzer
     {
         if (symbol is IParameterSymbol parameter)
         {
-            if (parameter.ContainingSymbol is IMethodSymbol owner)
+            foreach (ISymbol contract in TupleContractDeclarations(compilation, OwningMember(parameter.ContainingSymbol)))
             {
-                foreach (ISymbol contract in TupleContractDeclarations(compilation, owner))
+                IParameterSymbol inheritedParameter = contract switch
                 {
-                    if (contract is IMethodSymbol method
-                        && parameter.Ordinal >= 0
-                        && parameter.Ordinal < method.Parameters.Length)
-                    {
-                        yield return method.Parameters[parameter.Ordinal];
-                    }
+                    IMethodSymbol method when parameter.Ordinal >= 0 && parameter.Ordinal < method.Parameters.Length =>
+                        method.Parameters[parameter.Ordinal],
+                    IPropertySymbol property when parameter.Ordinal >= 0 && parameter.Ordinal < property.Parameters.Length =>
+                        property.Parameters[parameter.Ordinal],
+                    _ => null,
+                };
+                if (inheritedParameter != null)
+                {
+                    yield return inheritedParameter;
                 }
             }
 

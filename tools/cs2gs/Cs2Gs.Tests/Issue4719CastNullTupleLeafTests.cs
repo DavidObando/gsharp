@@ -2169,6 +2169,47 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractConversion_AssertedOperatorInputDoesNotSkipOuterOperator(bool switchArm)
+    {
+        string fixture = this.EmitFixture();
+        string branch = switchArm
+            ? "choose switch { true => (CastInputBox?)Text, false => new CastOutputBox() }"
+            : "choose ? (CastInputBox?)Text : new CastOutputBox()";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                #nullable enable
+                public static string? Text { get { Reads++; return Missing ? null : "keep"; } }
+                #nullable disable
+                public static (CastOutputBox Value, int Code) Row(bool choose) => ({{branch}}, 1);
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = 0;
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Row(choose).Value != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    return asserted == (choose && missing) && (asserted || present)
+                        && Reads == (choose ? 1 : 0)
+                        && Probe.Calls == (choose ? (missing ? 1 : 2) : 0);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value CastOutputBox?", printed);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -2820,6 +2861,133 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractConversion_NullableDestinationPreservesImplicitOperator(bool switchArm)
+    {
+        string fixture = this.EmitFixture();
+        string branch = switchArm
+            ? "Choose(choose) switch { true => Text, false => new NullAcceptingBox() }"
+            : "Choose(choose) ? Text : new NullAcceptingBox()";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                public static int Decisions;
+                #nullable enable
+                public static string? Text { get { Reads++; return Missing ? null : "keep"; } }
+                #nullable disable
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static (NullAcceptingBox Value, int Code) Row(bool choose) => ({{branch}}, 1);
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = Decisions = 0;
+                    Probe.Reset();
+                    var row = Row(choose);
+                    return (row.Value == null) == (choose && missing) && row.Code == 1
+                        && Reads == (choose ? 1 : 0) && Decisions == 1
+                        && Probe.Calls == (choose ? 1 : 0);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value NullAcceptingBox?", printed);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void TupleContractConversion_IndexerParametersPreserveInheritedContracts(bool baseClass, bool enabledCompilation)
+    {
+        string fixture = this.EmitFixture();
+        string inherited = baseClass ? "TupleIndexerBase" : "ITupleIndexer";
+        string modifier = baseClass ? "override " : string.Empty;
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            {{(enabledCompilation ? "#nullable enable\npublic sealed class AnnotationAnchor { public string Value = \"keep\"; }\n#nullable disable" : string.Empty)}}
+            public sealed class Rows : {{inherited}} {
+                public {{modifier}}int this[(string Required, int Code) row] => row.Code;
+            }
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                #nullable enable
+                public static string? Text { get { Reads++; return Missing ? null : "keep"; } }
+                #nullable disable
+                public static bool Check(bool missing, bool dispatch) {
+                    Missing = missing;
+                    Reads = 0;
+                    bool asserted = false;
+                    int code = 0;
+                    var rows = new Rows();
+                    try {
+                        code = dispatch ? (({{inherited}})rows)[(Text, 1)]
+                            : rows[(Text, 1)];
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    return Reads == 1 && asserted == missing && (missing || code == 1);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(false, false) && Check(true, false)
+                        && Check(false, true) && Check(true, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("row (Required string, Code int32)", printed);
+        Assert.DoesNotContain("row (Required string?", printed);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void TupleContractConversion_PartialIndexerParametersPreserveBothDeclarations(bool strictDefinition, bool strictImplementation)
+    {
+        bool strict = strictDefinition || strictImplementation;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Rows.cs", $$"""
+            public sealed partial class Rows {
+                #nullable {{(strictDefinition ? "enable" : "disable")}}
+                public partial int this[(string Required, string? Optional, int Code) row] { get; }
+                #nullable {{(strictImplementation ? "enable" : "disable")}}
+                public partial int this[(string Required, string? Optional, int Code) row] {
+                    get { return row.Code; }
+                }
+            }
+            """) }, CSharpProjectLoader.RuntimeReferences());
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        Type analyzer = Assert.IsAssignableFrom<Type>(
+            typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer"));
+        MethodInfo method = analyzer.GetMethod(
+            "CanPromoteTuplePosition",
+            BindingFlags.NonPublic | BindingFlags.Static,
+            null,
+            new[] { typeof(Compilation), typeof(ISymbol), typeof(string) },
+            null);
+        Assert.NotNull(method);
+        var eligible = method.CreateDelegate<Func<Compilation, ISymbol, string, bool>>();
+        LoadedDocument document = Assert.Single(project.Documents);
+        IPropertySymbol[] indexers = document.SyntaxTree.GetRoot().DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IndexerDeclarationSyntax>()
+            .Select(node => Assert.IsAssignableFrom<IPropertySymbol>(document.SemanticModel.GetDeclaredSymbol(node)))
+            .ToArray();
+        Assert.Equal(2, indexers.Length);
+        Assert.NotNull(indexers[0].PartialImplementationPart);
+        Assert.NotNull(indexers[1].PartialDefinitionPart);
+        Assert.All(indexers, indexer => Assert.Equal(!strict, eligible(project.Compilation, Assert.Single(indexer.Parameters), "0")));
+    }
+
+    [Theory]
     [InlineData("checked", false, false)]
     [InlineData("checked", true, false)]
     [InlineData("unchecked", false, false)]
@@ -3243,6 +3411,18 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                             return value == null ? null : new NullAcceptingBox();
                         }
                     }
+                    public sealed class CastInputBox {
+                        public static explicit operator CastInputBox?(string? value) {
+                            Probe.Calls++;
+                            return value == null ? null : new CastInputBox();
+                        }
+                    }
+                    public sealed class CastOutputBox {
+                        public static implicit operator CastOutputBox?(CastInputBox value) {
+                            Probe.Calls++;
+                            return new CastOutputBox();
+                        }
+                    }
                     public sealed class StrictInputBox<T> where T : class {
                         public static implicit operator StrictInputBox<T>(T value) {
                             Probe.Calls++;
@@ -3287,6 +3467,12 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                     }
                     public interface IStringRows {
                         (NullableResultBox Required, int Code) Read(string value);
+                    }
+                    public interface ITupleIndexer {
+                        int this[(string Required, int Code) row] { get; }
+                    }
+                    public abstract class TupleIndexerBase {
+                        public abstract int this[(string Required, int Code) row] { get; }
                     }
                     public abstract class WholeRowsBase<T> {
                         public abstract T Read(string value);

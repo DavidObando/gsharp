@@ -2821,7 +2821,9 @@ public sealed partial class CSharpToGSharpTranslator
                     if (resultType.IsNullable)
                     {
                         // Assert the converted result, never its null-accepting input.
-                        return EnsureNonNullAssertion(new ConversionExpression(resultType, operatorOperand));
+                        GExpression converted = EnsureNonNullAssertion(new ConversionExpression(resultType, operatorOperand));
+                        this.state.MaterializedConversionResults[converted] = conversionOperator;
+                        return converted;
                     }
                 }
 
@@ -4098,7 +4100,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             return nullableByShape
                 || type.NullableAnnotation == NullableAnnotation.Annotated
-                || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated;
+                || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated
+                || this.GetDeclaredValueType(value)?.NullableAnnotation == NullableAnnotation.Annotated;
         }
 
         private bool IsImportedObliviousCollectionElement(
