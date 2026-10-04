@@ -528,7 +528,9 @@ internal sealed class TypeDefEmitter
             // Issue #987: a class with an abstract method (own or inherited and
             // not overridden) is itself abstract — emit TypeAttributes.Abstract
             // so the runtime forbids `newobj` on it. Such a class is always
-            // `open`, so it is never also Sealed.
+            // `open`, so it is never also Sealed. The one exception is ADR-0195's
+            // `shared` class (IsAbstract, not open): CLR `abstract sealed`, which
+            // is how a static class is spelled in metadata.
             if (structSym.IsAbstract)
             {
                 classAttrs |= TypeAttributes.Abstract;
@@ -1473,6 +1475,16 @@ internal sealed class TypeDefEmitter
     // Constructor emission
 
     /// <summary>
+    /// Whether the class head declares an EMPTY primary constructor (<c>class C()</c>).
+    /// <see cref="StructSymbol.HasPrimaryConstructor"/> follows the parameter array, so it
+    /// is false for <c>()</c>, and the parameterless constructor gsc emits for such a
+    /// class IS the declared primary constructor, which stays public. ADR-0195's family
+    /// constructor is for the implicit one.
+    /// </summary>
+    private static bool HasEmptyPrimaryConstructor(StructSymbol classSym) =>
+        !classSym.HasPrimaryConstructor && (classSym.Declaration?.HasPrimaryConstructor ?? false);
+
+    /// <summary>
     /// Emits a parameter-less <c>.ctor</c> for a user-defined <c>class</c>
     /// (Phase 3.B.3). The body chains to the base class's <c>.ctor()</c>
     /// (either an inherited user class or <c>System.Object</c>) and returns.
@@ -1507,9 +1519,17 @@ internal sealed class TypeDefEmitter
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        var visibility = classSym.HasPrimaryConstructor && !classSym.IsData
-            ? MethodAttributes.Assembly
-            : MethodAttributes.Public;
+        // ADR-0195 / issue #4674: a `shared` class is not constructible, so its
+        // placeholder `.ctor` is private (C# emits none; a private member is not
+        // part of the API); an explicitly `abstract` class's implicit `.ctor` is
+        // `family`, as in C#, since only derived classes may chain to it.
+        var visibility = classSym.IsSharedClass
+            ? MethodAttributes.Private
+            : classSym.IsDeclaredAbstract && !HasEmptyPrimaryConstructor(classSym)
+                ? MethodAttributes.Family
+                : classSym.HasPrimaryConstructor && !classSym.IsData
+                    ? MethodAttributes.Assembly
+                    : MethodAttributes.Public;
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: visibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
@@ -1727,8 +1747,17 @@ internal sealed class TypeDefEmitter
         // (parallel to the explicit `init(...)` emit path).
         var firstParamHandle = this.AddPrimaryCtorParameterRows(parameters, out var paramHandles);
 
+        // ADR-0195 / issue #4674: the implicit parameterless constructor that chains to an
+        // explicit base initializer (`abstract class D : Base(1) { }`) is `family`, like
+        // the plain implicit constructor of a declared-abstract class (see
+        // EmitClassDefaultConstructor); a primary constructor stays public.
+        var forwardingVisibility = classSym.IsDeclaredAbstract
+            && !classSym.HasPrimaryConstructor
+            && !HasEmptyPrimaryConstructor(classSym)
+            ? MethodAttributes.Family
+            : MethodAttributes.Public;
         var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+            attributes: forwardingVisibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),

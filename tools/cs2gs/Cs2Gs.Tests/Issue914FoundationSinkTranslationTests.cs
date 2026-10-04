@@ -57,7 +57,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("open class ProgressBase[T] {", printed);
+        Assert.Contains("abstract class ProgressBase[T] {", printed);
         Assert.Contains("init(report ((T) -> void)?)", printed);
     }
 
@@ -84,7 +84,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("open class ProgressBase[T] {", printed);
+        Assert.Contains("abstract class ProgressBase[T] {", printed);
         Assert.Contains("init(report (T) -> void)", printed);
         Assert.DoesNotContain("init(report ((T) -> void)?)", printed);
     }

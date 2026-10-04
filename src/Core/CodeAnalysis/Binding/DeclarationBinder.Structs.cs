@@ -135,7 +135,7 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     private void ValidateProtectedMemberPlacement(StructDeclarationSyntax syntax)
     {
-        if (syntax.IsClass && syntax.IsOpen)
+        if (syntax.IsClass && (syntax.IsOpen || syntax.IsAbstract))
         {
             return;
         }
@@ -4108,7 +4108,7 @@ internal sealed partial class DeclarationBinder
             // Issue #950: a `protected` nested type is only meaningful when the
             // container is an inheritable `open class`. Otherwise nothing can
             // derive from the container to reach the nested type.
-            if (!(containerSyntax.IsClass && containerSyntax.IsOpen))
+            if (!(containerSyntax.IsClass && (containerSyntax.IsOpen || containerSyntax.IsAbstract)))
             {
                 ReportProtectedToken(GetMemberAccessibilityModifier(nested));
             }

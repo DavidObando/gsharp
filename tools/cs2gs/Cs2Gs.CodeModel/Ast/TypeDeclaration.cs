@@ -37,6 +37,7 @@ public sealed class TypeDeclaration : GMember
     /// <param name="attributes">The type attributes.</param>
     /// <param name="isUnsafe">Whether the type is <c>unsafe</c> (its body is an unsafe context).</param>
     /// <param name="isRefLike">Whether the type is a by-ref-like <c>ref struct</c> (ADR-0058 / issue #367).</param>
+    /// <param name="isShared">Whether the type is a <c>shared class</c> (ADR-0195 / issue #4674): a C# static class.</param>
     public TypeDeclaration(
         TypeDeclarationKind kind,
         string name,
@@ -54,7 +55,8 @@ public sealed class TypeDeclaration : GMember
         bool hasBody = true,
         IReadOnlyList<AttributeUse> attributes = null,
         bool isUnsafe = false,
-        bool isRefLike = false)
+        bool isRefLike = false,
+        bool isShared = false)
     {
         Kind = kind;
         Name = name;
@@ -73,6 +75,7 @@ public sealed class TypeDeclaration : GMember
         Attributes = attributes ?? new List<AttributeUse>();
         IsUnsafe = isUnsafe;
         IsRefLike = isRefLike;
+        IsShared = isShared;
     }
 
     /// <summary>Gets the aggregate kind.</summary>
@@ -112,8 +115,11 @@ public sealed class TypeDeclaration : GMember
     /// <summary>Gets a value indicating whether the type is <c>sealed</c>.</summary>
     public bool IsSealed { get; }
 
-    /// <summary>Gets a value indicating whether the type is <c>abstract</c>.</summary>
+    /// <summary>Gets a value indicating whether the type is <c>abstract</c> (ADR-0195 / issue #4674: it implies <c>open</c> and cannot be instantiated).</summary>
     public bool IsAbstract { get; }
+
+    /// <summary>Gets a value indicating whether the type is a <c>shared class</c> (ADR-0195 / issue #4674: CLR <c>abstract sealed</c>; every member declared directly in the body is shared, with no <c>shared { }</c> block).</summary>
+    public bool IsShared { get; }
 
     /// <summary>Gets a value indicating whether the type is <c>partial</c> (ADR-0144 §G).</summary>
     public bool IsPartial { get; }

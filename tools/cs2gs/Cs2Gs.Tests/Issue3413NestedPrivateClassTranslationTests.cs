@@ -183,7 +183,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal(Visibility.Private, entryHelper.Visibility);
         Assert.Single(entryHelper.TypeParameters);
         Assert.Contains(
-            Assert.Single(program.Members.OfType<SharedBlock>()).Members.OfType<MethodDeclaration>(),
+            SharedMembers(program).OfType<MethodDeclaration>(),
             method => method.Name == "Main");
 
         TypeDeclaration genericOwner = unit.Members
@@ -206,20 +206,20 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal("Cache", cache.Name);
         Assert.Equal(Visibility.Private, cache.Visibility);
         Assert.Single(cache.TypeParameters);
-        SharedBlock extensionShared = Assert.Single(extensionOwner.Members.OfType<SharedBlock>());
+        IReadOnlyList<GMember> extensionShared = SharedMembers(extensionOwner);
         Assert.Equal(
             Visibility.Private,
-            extensionShared.Members.OfType<FieldDeclaration>().Single(field => field.Name == "cache").Visibility);
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "AddCached");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayIdentityAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "LengthAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayTextAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueNoteAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueLengthAsync");
-        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueDelayAsync");
+            extensionShared.OfType<FieldDeclaration>().Single(field => field.Name == "cache").Visibility);
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "Identity");
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "AddCached");
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "DelayIdentityAsync");
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "DelayAsync");
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "LengthAsync");
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "DelayTextAsync");
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "ValueAsync");
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "ValueNoteAsync");
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "ValueLengthAsync");
+        Assert.Contains(extensionShared.OfType<MethodDeclaration>(), method => method.Name == "ValueDelayAsync");
         Assert.Contains(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Identity");
@@ -303,12 +303,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         TypeDeclaration cache = Assert.Single(owner.Members.OfType<TypeDeclaration>());
         string rendered = GSharpPrinter.Print(unit);
         TranslationTestValidation.AssertBinds(rendered);
-        SharedBlock shared = Assert.Single(owner.Members.OfType<SharedBlock>());
+        IReadOnlyList<GMember> shared = SharedMembers(owner);
 
         Assert.Equal(Visibility.Private, cache.Visibility);
-        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
+        Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == "Identity");
         Assert.Contains(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
-        Assert.Contains("private class Cache[T]", rendered, StringComparison.Ordinal);
+        Assert.Contains("private shared class Cache[T]", rendered, StringComparison.Ordinal);
         Assert.Contains("Cache[T].Echo(value)", rendered, StringComparison.Ordinal);
         Assert.Contains("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
         Assert.Contains(
@@ -350,7 +350,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             .Single(type => type.Name == "Owner");
 
         Assert.Contains(
-            Assert.Single(owner.Members.OfType<SharedBlock>()).Members.OfType<MethodDeclaration>(),
+            SharedMembers(owner).OfType<MethodDeclaration>(),
             method => method.Name == "Secret" && method.Visibility == Visibility.Private);
         Assert.DoesNotContain(
             unit.Members.OfType<MethodDeclaration>(),
@@ -408,10 +408,10 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         TypeDeclaration owner = unit.Members
             .OfType<TypeDeclaration>()
             .Single(type => type.Name == "OwnerScoped");
-        SharedBlock shared = Assert.Single(owner.Members.OfType<SharedBlock>());
+        IReadOnlyList<GMember> shared = SharedMembers(owner);
 
-        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Describe");
-        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Format");
+        Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == "Describe");
+        Assert.Contains(shared.OfType<MethodDeclaration>(), method => method.Name == "Format");
         Assert.DoesNotContain(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Describe");
@@ -428,9 +428,9 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         // name via the escape; the legal func_ members keep their own names.
         Assert.Equal(
             2,
-            shared.Members.OfType<MethodDeclaration>().Count(method => method.Name == "$func"));
+            shared.OfType<MethodDeclaration>().Count(method => method.Name == "$func"));
         Assert.DoesNotContain(
-            shared.Members.OfType<MethodDeclaration>(),
+            shared.OfType<MethodDeclaration>(),
             method => method.Name == "func__");
         TranslationTestValidation.AssertBinds(rendered);
     }
@@ -830,6 +830,13 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains("value.Echo()", printedConsumer, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printedProducer, printedConsumer);
     }
+
+    // ADR-0195 / issue #4674: the shared members of a type are the body of a `shared class`
+    // (a C# static class), and the `shared { }` block of any other class.
+    private static IReadOnlyList<GMember> SharedMembers(TypeDeclaration type) =>
+        type.IsShared
+            ? type.Members
+            : Assert.Single(type.Members.OfType<SharedBlock>()).Members;
 
     private static (CompilationUnit Unit, TranslationContext Context) Translate(string source)
     {

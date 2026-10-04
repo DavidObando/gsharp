@@ -697,7 +697,17 @@ public sealed partial class CSharpToGSharpTranslator
             Visibility visibility = MapVisibility(symbol, this.context, node);
             if (isNested)
             {
-                if (visibility == Visibility.Private)
+                // Issue #4676: a nested delegate's reach is bounded by every type that
+                // encloses it. A `public` delegate inside an `internal` class
+                // (GSharp.Core's `OverloadResolver.TryBindClrConstructorCallDelegate`)
+                // was lifted to a top-level `public` delegate, publishing a type the
+                // C# assembly never exported.
+                //
+                // Only a delegate that is public (the default) AND has exclusively public
+                // containers stays public. Anything else becomes `internal`: a lifted
+                // delegate has no container left to be `protected` or `private` in, and a
+                // top-level `protected` declaration is GS0380.
+                if (visibility is not (Visibility.Default or Visibility.Public) || !IsEffectivelyPublic(symbol))
                 {
                     visibility = Visibility.Internal;
                 }
@@ -888,6 +898,26 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         type = this.PromoteIfInitializerNullable(type, symbol, declarator.Initializer.Value);
                     }
+                }
+
+                // Issue #4684: gsc gives a bare, non-nullable `[]T` instance field of a
+                // class a synthesized zero value (ADR-0159): a fresh zero-length array
+                // allocated in every constructor prologue, BEFORE the constructor body
+                // assigns the real value. C# leaves such a field null, so the migrated
+                // type allocated 24 extra bytes per instance (the redundant array made
+                // `ManagedLocationKey` 64 bytes instead of 40, tripping the array-location
+                // allocation bound under self-host stage 2). Cache the empty value
+                // only when every constructor overwrites it
+                // before observation; otherwise its fresh identity must be retained.
+                if (initializer == null
+                    && binding != BindingKind.Const
+                    && symbol is { IsStatic: false }
+                    && symbol.ContainingType?.TypeKind == TypeKind.Class
+                    && type is ArrayTypeReference { Rank: 1, IsNullable: false } emptyArrayType
+                    && CanUseCachedEmptyArray(emptyArrayType.ElementType)
+                    && this.IsArrayFieldOverwrittenBeforeObservation(symbol))
+                {
+                    initializer = MakeArrayEmptyInvocation(emptyArrayType.ElementType);
                 }
 
                 var declaration = new FieldDeclaration(

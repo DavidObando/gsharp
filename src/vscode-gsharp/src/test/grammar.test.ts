@@ -82,6 +82,8 @@ describe('gsharp.tmLanguage.json', () => {
       'scoped',
       'ref',
       'partial',
+      'abstract',
+      'shared',
       'sizeof',
     ];
     const missing = required.filter(

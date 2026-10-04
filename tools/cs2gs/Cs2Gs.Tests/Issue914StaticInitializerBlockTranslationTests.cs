@@ -55,7 +55,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("shared {", printed);
+        // ADR-0195: a C# static class is a `shared class`, whose body is the shared member
+        // list, so the static initializer is a flat `init { }` (no `shared { }` block).
+        Assert.Contains("shared class ", printed);
+        Assert.DoesNotContain("shared {", printed);
         Assert.Contains("init {", printed);
         Assert.Contains("Table[i]", printed);
         // The field initializer stays on the field declaration; it is not
@@ -96,7 +99,10 @@ namespace Demo
 }",
             "G# currently rejects assignments to let fields inside their static initializer block.");
 
-        Assert.Contains("shared {", printed);
+        // ADR-0195: a C# static class is a `shared class`, whose body is the shared member
+        // list, so the static initializer is a flat `init { }` (no `shared { }` block).
+        Assert.Contains("shared class ", printed);
+        Assert.DoesNotContain("shared {", printed);
         Assert.Contains("init {", printed);
         Assert.Contains("Total", printed);
         Assert.Contains("Scaled", printed);

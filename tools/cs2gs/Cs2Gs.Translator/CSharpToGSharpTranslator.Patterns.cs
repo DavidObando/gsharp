@@ -3951,6 +3951,17 @@ public sealed partial class CSharpToGSharpTranslator
             return new NamedTypeReference("object");
         }
 
+        private static bool CanUseCachedEmptyArray(GTypeReference elementType)
+            => elementType is not (PointerTypeReference or FunctionPointerTypeReference);
+
+        private static InvocationExpression MakeArrayEmptyInvocation(GTypeReference elementType)
+            => new InvocationExpression(
+                new MemberAccessExpression(
+                    new MemberAccessExpression(new IdentifierExpression("System"), "Array"),
+                    "Empty"),
+                new List<GExpression>(),
+                new List<GTypeReference> { elementType });
+
         private GExpression TranslateCollectionExpression(CollectionExpressionSyntax collection)
         {
             // An empty collection expression (`[]`) targeting a concrete
@@ -4098,6 +4109,22 @@ public sealed partial class CSharpToGSharpTranslator
                             elementType,
                             elementTypeSymbol));
                 }
+            }
+
+            // An empty collection expression targeting a one-dimensional array
+            // (`T[] a = []`) is lowered by csc to the cached `Array.Empty<T>()`
+            // singleton, never a fresh zero-length array. A `[]T{}` literal would
+            // allocate on every evaluation (24 bytes for a struct element), so a
+            // migrated hot path such as `Gsharp.Runtime.Values`'
+            // `ManagedLocationKey.Element` would allocate more than its C# source
+            // (issue #4684). Mirror the C# lowering; an explicit `new T[0]` is a
+            // distinct expression that keeps its literal.
+            if (collection.Elements.Count == 0
+                && target is IArrayTypeSymbol { Rank: 1 }
+                && CanUseCachedEmptyArray(sliceElementType)
+                && !TryGetCollectionBuilder(target, out _, out _))
+            {
+                return MakeArrayEmptyInvocation(sliceElementType);
             }
 
             var slice = new ArrayLiteralExpression(sliceElementType, elements);

@@ -56,7 +56,7 @@ public class UserStructMethodEmitTests
     }
 
     [Fact]
-    public void Class_Method_Still_Emits_Virtual_NewSlot_Final()
+    public void Class_Method_Emits_Without_Virtual()
     {
         var source = """
             package P
@@ -73,9 +73,9 @@ public class UserStructMethodEmitTests
         var greet = greeter.GetMethod("Greet", BindingFlags.Public | BindingFlags.Instance);
 
         Assert.NotNull(greet);
-        Assert.True(greet!.IsVirtual);
-        Assert.True(greet.IsFinal);
-        Assert.True((greet.Attributes & MethodAttributes.NewSlot) != 0);
+        Assert.False(greet!.IsVirtual);
+        Assert.False(greet.IsFinal);
+        Assert.False((greet.Attributes & MethodAttributes.NewSlot) != 0);
     }
 
     [Fact]

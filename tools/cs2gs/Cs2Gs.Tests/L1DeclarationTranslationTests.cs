@@ -217,11 +217,11 @@ namespace Corpus.L1
         Assert.NotNull(subtotal.Body);
     }
 
-    /// <summary>B.11: a C# <c>static class</c> maps to a class whose members are
-    /// all in a <c>shared { }</c> block, recorded as an Info decision; the static
+    /// <summary>B.11 / ADR-0195: a C# <c>static class</c> maps to a <c>shared class</c>
+    /// whose members sit directly in its body, recorded as an Info decision; the static
     /// <c>void Main</c> becomes an in-body <c>func</c> (void → no return type).</summary>
     [Fact]
-    public void L1Document_MapsStaticClassToSharedBlock()
+    public void L1Document_MapsStaticClassToSharedClass()
     {
         (CompilationUnit unit, TranslationContext context) = TranslateL1();
 
@@ -232,10 +232,13 @@ namespace Corpus.L1
                 d.Message.Contains("shared"));
 
         TypeDeclaration program = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Program");
-        SharedBlock shared = Assert.Single(program.Members.OfType<SharedBlock>());
-        Assert.Empty(program.Members.OfType<MethodDeclaration>());
 
-        MethodDeclaration main = shared.Members
+        // ADR-0195: the class is a `shared class`, so its static `Main` is a direct member
+        // of the body (no `shared { }` block).
+        Assert.True(program.IsShared);
+        Assert.DoesNotContain(program.Members, member => member is SharedBlock);
+
+        MethodDeclaration main = program.Members
             .OfType<MethodDeclaration>()
             .Single(m => m.Name == "Main");
         Assert.Null(main.ReturnType);
