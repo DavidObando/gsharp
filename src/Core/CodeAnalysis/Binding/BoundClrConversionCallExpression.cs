@@ -54,7 +54,8 @@ public sealed class BoundClrConversionCallExpression : BoundExpression
         Method = method;
         Function = function;
         FunctionOwnerType = functionOwnerType;
-        Type = resultType;
+        IsLifted = ComputeIsLifted(source.Type, resultType, method, function, functionOwnerType);
+        Type = GetEffectiveResultType(source.Type, resultType, method, IsLifted);
     }
 
     public BoundExpression Source { get; }
@@ -68,4 +69,83 @@ public sealed class BoundClrConversionCallExpression : BoundExpression
     public override TypeSymbol Type { get; }
 
     public override BoundNodeKind Kind => BoundNodeKind.ClrConversionCallExpression;
+
+    internal bool IsLifted { get; }
+
+    internal static bool CanLiftTo(TypeSymbol target)
+        => target is NullableTypeSymbol nullable
+            ? NullableLifting.IsAnyValueTypeNullable(nullable)
+                || Conversion.IsReferenceLikeTarget(nullable.UnderlyingType)
+            : Conversion.IsReferenceLikeTarget(target);
+
+    internal static bool CanLiftImplicitlyTo(TypeSymbol target)
+        => CanLiftTo(target)
+            && Conversion.ClassifyNonStructural(NullableTypeSymbol.Get(target), target).IsImplicit;
+
+    internal static bool CanApplyImplicitClrConversion(TypeSymbol source, TypeSymbol target, MethodInfo method)
+        => Conversion.ClassifyNonStructural(
+            GetEffectiveResultType(source, target, method, ComputeIsLifted(source, target, method, null, null)),
+            target).IsImplicit;
+
+    private static TypeSymbol GetEffectiveResultType(TypeSymbol source, TypeSymbol target, MethodInfo? method, bool isLifted)
+    {
+        if (isLifted)
+        {
+            return NullableTypeSymbol.Get(target);
+        }
+
+        if (source is NullableTypeSymbol nullable
+            && NullableLifting.IsAnyValueTypeNullable(nullable)
+            && method?.GetParameters() is { Length: 1 } parameters
+            && ClrTypeUtilities.AreSame(parameters[0].ParameterType, NullableLifting.GetEffectiveClrType(source)))
+        {
+            var declaredResult = ClrNullability.GetReturnTypeSymbol(method);
+            if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(declaredResult, target)
+                && !Conversion.ClassifyNonStructural(declaredResult, target).IsImplicit)
+            {
+                return declaredResult;
+            }
+        }
+
+        return target;
+    }
+
+    private static bool ComputeIsLifted(
+        TypeSymbol sourceType,
+        TypeSymbol conversionType,
+        MethodInfo? method,
+        FunctionSymbol? function,
+        StructSymbol? functionOwnerType)
+    {
+        if (sourceType is not NullableTypeSymbol source
+            || !NullableLifting.IsAnyValueTypeNullable(source)
+            || !CanLiftTo(conversionType))
+        {
+            return false;
+        }
+
+        var target = conversionType is NullableTypeSymbol nullable ? nullable.UnderlyingType : conversionType;
+        if (function != null)
+        {
+            if (function.Parameters.Length != 1
+                || function.Parameters[0].RefKind != RefKind.None
+                || function.ReturnRefKind != RefKind.None)
+            {
+                return false;
+            }
+
+            var parameterType = functionOwnerType?.SubstituteMemberType(function.Parameters[0].Type)
+                ?? function.Parameters[0].Type;
+            var resultType = functionOwnerType?.SubstituteMemberType(function.Type) ?? function.Type;
+            return Conversion.ClassifyNonStructural(source.UnderlyingType, parameterType).IsIdentity
+                && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, target);
+        }
+
+        var parameters = method?.GetParameters();
+        return parameters is { Length: 1 }
+            && !parameters[0].ParameterType.IsByRef
+            && method is { ReturnType.IsByRef: false }
+            && ClrTypeUtilities.AreSame(parameters[0].ParameterType, source.UnderlyingType.ClrType)
+            && ClrTypeUtilities.AreSame(method.ReturnType, target.ClrType);
+    }
 }
