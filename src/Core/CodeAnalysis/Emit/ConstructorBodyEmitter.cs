@@ -458,9 +458,9 @@ internal sealed class ConstructorBodyEmitter
     /// Primary structs use their primary signature so declaration initializers
     /// retain the actual constructor parameter scope (#4747).
     /// Non-generic structs whose initializers are all public keep the historical
-    /// inline emission. A user-declared parameterless ctor (which
-    /// would collide) and inline structs (fixed synthesized-member layout)
-    /// are excluded.
+    /// inline emission. Authored parameterless constructors remain separate
+    /// through a hidden literal initializer signature. Imported CLR types
+    /// and inline structs (fixed synthesized-member layout) are excluded.
     /// </summary>
     /// <param name="structSym">The struct definition to probe.</param>
     /// <returns><see langword="true"/> when an owning initializer ctor is required.</returns>

@@ -16,6 +16,57 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue4755GenericStructInitializerEmitTests
 {
     [Fact]
+    public void ImportedPrimaryMagicCollections_RetainClrLiteralInitialization()
+    {
+        InDirectory(directory =>
+        {
+            var native = EmitCSharp(directory, "NativeImportedMagic4755", """
+                using System.Reflection;
+                [assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|struct|1|Value")]
+                [assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554434|Items:slice,Buffer:arr2")]
+                namespace NativeImportedMagic4755;
+                public struct Scalar
+                {
+                    public int Value;
+                    public int[] Items = System.Array.Empty<int>();
+                    public int[] Buffer = new int[2];
+                    public Scalar(int Value) { this.Value = Value; }
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var number = new Scalar(7);
+                        var supplied = new Scalar(9) { Items = new[] { 5 } };
+                        return number.Value + "/" + number.Items.Length + "/" + number.Buffer.Length + ";" +
+                            supplied.Value + "/" + supplied.Items.Length + "/" + supplied.Buffer.Length;
+                    }
+                }
+                """);
+            var assembly = EmittedFixture.Load(native);
+            Assert.Equal(33554434, assembly.GetType("NativeImportedMagic4755.Scalar", throwOnError: true).MetadataToken);
+            Assert.Equal("7/0/2;9/1/2", Invoke(assembly, "NativeImportedMagic4755.Oracle"));
+            IlVerifier.Verify(native);
+            var emitted = Compile(directory, """
+                package ImportedMagic4755
+                import NativeImportedMagic4755
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let number = Scalar{Value: 7}
+                            let supplied = Scalar{Value: 9, Items: []int32{5}}
+                            return number.Value.ToString() + "/" + number.Items.Length.ToString() + "/" + number.Buffer.Length.ToString() + ";" +
+                                supplied.Value.ToString() + "/" + supplied.Items.Length.ToString() + "/" + supplied.Buffer.Length.ToString()
+                        }
+                    }
+                }
+                """, native);
+            IlVerifier.Verify(emitted, new[] { native });
+            AssertNativeConsumer(directory, emitted, "ImportedMagic4755.Api", "7/0/2;9/1/2", native);
+        });
+    }
+
+    [Fact]
     public void DataPrimaryConstructor_IsRegisteredBeforeInterfaceAndClassCallers()
     {
         InDirectory(directory =>

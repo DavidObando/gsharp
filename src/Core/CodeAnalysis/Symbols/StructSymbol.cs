@@ -707,10 +707,13 @@ public sealed class StructSymbol : TypeSymbol
     /// parameter scope. A primary type uses its parameterized constructor.
     /// Definition-bound expressions must execute in their owning generic
     /// context, not in a literal site's unrelated VAR/MVAR scope (#4755).
+    /// Imported collection defaults retain their existing CLR literal path;
+    /// their owning constructor cannot be synthesized in this compilation.
     /// </summary>
     internal bool NeedsSynthesizedValueStructDefaultCtor => Definition != null && !ReferenceEquals(Definition, this)
         ? Definition.NeedsSynthesizedValueStructDefaultCtor
-        : !IsClass
+        : ClrType == null
+        && !IsClass
         && !IsInline
         && !InstanceFieldInitializers.IsEmpty
         && (IsGenericDefinition
