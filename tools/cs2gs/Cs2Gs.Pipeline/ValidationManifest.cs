@@ -380,11 +380,6 @@ public sealed class ValidationManifest
             hasOwnedAnchor |= !file.FromReferencedProject && owners.IsExcluded(relative);
         }
 
-        if (roots.Count == 0 && this.EmittedFiles.All(file => string.IsNullOrEmpty(file.CsFilePath)))
-        {
-            return null;
-        }
-
         if (roots.Count != 1 || !hasOwnedAnchor)
         {
             throw new InvalidOperationException(

@@ -158,6 +158,26 @@ public sealed class Issue4752PortableValidationSourcesTests : IDisposable
     }
 
     [Fact]
+    public async Task Validate_LegacyEmptyManifestFailsBeforeStages()
+    {
+        Fixture fixture = this.CreateFixture(legacy: true);
+        ValidationManifest manifest = ValidationManifest.Read(Path.GetDirectoryName(fixture.ManifestPath));
+        Assert.NotNull(manifest);
+        manifest.EmittedFiles.Clear();
+        ValidationManifest.Write(manifest, Path.GetDirectoryName(fixture.ManifestPath));
+        var probe = new SourceEvidenceStage();
+
+        Exception error = await Record.ExceptionAsync(() => this.Validate(fixture, fixture.Source, probe));
+
+        Assert.True(
+            error is InvalidOperationException,
+            $"Legacy replay reached validation with {probe.Observation?.Files.Count} files, " +
+            $"{probe.Observation?.Facts} Facts and {probe.Observation?.Budget} budget.");
+        Assert.Contains("unambiguous owning corpus source root", error.Message, StringComparison.Ordinal);
+        Assert.Null(probe.Observation);
+    }
+
+    [Fact]
     public async Task Validate_LegacyReferencedSourcesCannotEstablishAppOwnership()
     {
         Fixture fixture = this.CreateFixture(legacy: true);
