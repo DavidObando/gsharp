@@ -58,7 +58,7 @@ public partial class Parser
             // ADR-0122 / issue #1202: `unsafe` composes with the other class
             // modifiers (in any order), establishing an unsafe context for the
             // whole aggregate. Treat it like the other contextual modifiers.
-            if (k.Kind == SyntaxKind.IdentifierToken && (k.Text == "data" || k.Text == "inline" || k.Text == "ref" || k.Text == "unsafe" || k.Text == "partial"))
+            if (k.Kind == SyntaxKind.IdentifierToken && (k.Text == "data" || k.Text == "inline" || k.Text == "ref" || k.Text == "unsafe" || k.Text == "partial" || k.Text == "abstract" || k.Text == "shared"))
             {
                 // Bail out if the same contextual modifier appears twice — we are
                 // not in a declaration head; let the legacy / statement parser
@@ -106,6 +106,8 @@ public partial class Parser
         SyntaxToken? refModifier = null;
         SyntaxToken? unsafeModifier = null;
         SyntaxToken? partialModifier = null;
+        SyntaxToken? abstractModifier = null;
+        SyntaxToken? sharedModifier = null;
 
         // Collect modifiers in any order. Re-issuing of a modifier is reported
         // as an unexpected token but parsing continues for recovery.
@@ -180,6 +182,33 @@ public partial class Parser
                 continue;
             }
 
+            // ADR-0195 / issue #4674: `abstract` and `shared` are contextual
+            // class modifiers. The head lookahead (TryDetectAggregateDeclarationHead)
+            // only reaches this loop when a class/struct/enum/interface keyword
+            // follows the run, so an identifier named `abstract` or `shared`
+            // elsewhere is unaffected.
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "abstract")
+            {
+                if (abstractModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+                }
+
+                abstractModifier = NextToken();
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared")
+            {
+                if (sharedModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+                }
+
+                sharedModifier = NextToken();
+                continue;
+            }
+
             // ADR-0144 / issue #2201: `partial` is a contextual modifier that
             // composes with the other aggregate modifiers in any order. It is
             // valid on class/struct/interface (rejected on enum below).
@@ -232,6 +261,22 @@ public partial class Parser
         switch (aggregateKind)
         {
             case SyntaxKind.ClassKeyword:
+                // ADR-0195 / issue #4674: a `shared` class is emitted CLR `abstract sealed`
+                // and holds only `shared` members, so it cannot also be inheritable
+                // (`open`, `abstract`), a closed hierarchy (`sealed`) or a record
+                // (`data`). Checked only for a `class` head: on `struct`, `enum` and
+                // `interface` the modifier itself is the unexpected token.
+                if (sharedModifier != null)
+                {
+                    foreach (var conflicting in new[] { openModifier, sealedModifier, abstractModifier, dataKeyword })
+                    {
+                        if (conflicting != null)
+                        {
+                            Diagnostics.ReportSharedClassModifierConflict(conflicting.Location, conflicting.Text);
+                        }
+                    }
+                }
+
                 if (inlineKeyword != null)
                 {
                     Diagnostics.ReportInlineOnlyValidOnStruct(inlineKeyword.Location);
@@ -245,6 +290,7 @@ public partial class Parser
                 break;
 
             case SyntaxKind.StructKeyword:
+                ReportAbstractAndSharedOnlyValidOnClass(abstractModifier, sharedModifier, SyntaxKind.StructKeyword);
                 if (openModifier != null)
                 {
                     Diagnostics.ReportOpenOnlyValidOnClass(openModifier.Location, aggregateText);
@@ -258,6 +304,7 @@ public partial class Parser
                 break;
 
             case SyntaxKind.EnumKeyword:
+                ReportAbstractAndSharedOnlyValidOnClass(abstractModifier, sharedModifier, SyntaxKind.EnumKeyword);
                 if (openModifier != null)
                 {
                     Diagnostics.ReportOpenOnlyValidOnClass(openModifier.Location, aggregateText);
@@ -296,6 +343,7 @@ public partial class Parser
                 break;
 
             case SyntaxKind.InterfaceKeyword:
+                ReportAbstractAndSharedOnlyValidOnClass(abstractModifier, sharedModifier, SyntaxKind.InterfaceKeyword);
                 if (openModifier != null)
                 {
                     Diagnostics.ReportOpenOnlyValidOnClass(openModifier.Location, aggregateText);
@@ -356,21 +404,48 @@ public partial class Parser
             this.unsafeDepth++;
         }
 
+        var enclosingSharedClassBody = sharedClassBody;
+        sharedClassBody = sharedModifier != null && aggregateKind == SyntaxKind.ClassKeyword;
         try
         {
             var structDecl = ParseStructDeclarationNew(accessibilityModifier, dataKeyword, inlineKeyword, openModifier, sealedModifier, refModifier, aggregateKeyword, identifier);
             structDecl.TypeParameterList = typeParameterList;
             structDecl.RefModifier = refModifier;
+            structDecl.AbstractModifier = abstractModifier;
+            structDecl.SharedModifier = sharedModifier;
             structDecl.UnsafeModifier = unsafeModifier;
             structDecl.PartialModifier = partialModifier;
             return structDecl;
         }
         finally
         {
+            sharedClassBody = enclosingSharedClassBody;
             if (unsafeModifier != null)
             {
                 this.unsafeDepth--;
             }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0195 / issue #4674: <c>abstract</c> and <c>shared</c> describe a class
+    /// (an uninstantiable or all-shared reference type), so a
+    /// <c>struct</c>, <c>enum</c> or <c>interface</c> head that carries either is
+    /// an unexpected token, recovered like the other misplaced modifiers.
+    /// </summary>
+    private void ReportAbstractAndSharedOnlyValidOnClass(
+        SyntaxToken? abstractModifier,
+        SyntaxToken? sharedModifier,
+        SyntaxKind aggregateKind)
+    {
+        if (abstractModifier != null)
+        {
+            Diagnostics.ReportUnexpectedToken(abstractModifier.Location, SyntaxKind.IdentifierToken, aggregateKind);
+        }
+
+        if (sharedModifier != null)
+        {
+            Diagnostics.ReportUnexpectedToken(sharedModifier.Location, SyntaxKind.IdentifierToken, aggregateKind);
         }
     }
 
@@ -1159,6 +1234,8 @@ public partial class Parser
         SyntaxToken? openModifier,
         SyntaxToken? preconsumedStructOrClassKeyword = null)
     {
+        var isSharedClassBody = sharedClassBody;
+        sharedClassBody = false;
         var structOrClassKeyword = preconsumedStructOrClassKeyword ?? (Current.Kind == SyntaxKind.ClassKeyword
             ? MatchToken(SyntaxKind.ClassKeyword)
             : MatchToken(SyntaxKind.StructKeyword));
@@ -1248,6 +1325,7 @@ public partial class Parser
         var constructors = ImmutableArray.CreateBuilder<ConstructorDeclarationSyntax>();
         DeinitDeclarationSyntax? structDecl_deinit = null;
         SharedBlockSyntax? structDecl_sharedBlock = null;
+        var sharedInitializers = ImmutableArray.CreateBuilder<StaticInitializerBlockSyntax>();
         var nestedTypes = ImmutableArray.CreateBuilder<MemberSyntax>();
 
         // ADR-0078 / issue #718: the body block `{ ... }` is optional for any
@@ -1478,7 +1556,38 @@ public partial class Parser
                 memberConvenienceModifier = NextToken();
             }
 
-            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init" && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+            if (isSharedClassBody
+                && Current.Kind == SyntaxKind.IdentifierToken
+                && Current.Text == "init"
+                && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+            {
+                // ADR-0195 / ADR-0140: in a `shared class` the body IS the shared
+                // member list, so `init { … }` is the static initializer that a
+                // shared block would hold (a C# static constructor), not a
+                // constructor (`init(…)`), which a shared class cannot declare.
+                if (memberAccessibility != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberAccessibility.Location, memberAccessibility.Kind, SyntaxKind.IdentifierToken);
+                }
+
+                // `open init { }` / `override init { }`: the modifiers were consumed with the
+                // member's other modifiers and would otherwise be dropped without a word.
+                var virtualModifier = memberOpenModifier ?? memberOverrideModifier;
+                if (virtualModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(virtualModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.OpenBraceToken);
+                }
+
+                if (memberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+                }
+
+                var initKeyword = NextToken();
+                var initBody = ParseBlockStatement();
+                sharedInitializers.Add(new StaticInitializerBlockSyntax(syntaxTree, initKeyword, initBody));
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init" && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
             {
                 // Issue #306 / #2766: standalone user-defined constructor
                 // `init(params) [: base(args)] { body }`. Plain structs admit
@@ -1754,6 +1863,7 @@ public partial class Parser
         structDecl.BaseConstructorCloseParenthesisToken = baseCtorCloseParen;
         structDecl.Constructors = constructors.ToImmutable();
         structDecl.Deinitializer = structDecl_deinit;
+        structDecl.SharedInitializers = sharedInitializers.ToImmutable();
         structDecl.NestedTypes = nestedTypes.ToImmutable();
         return structDecl;
     }

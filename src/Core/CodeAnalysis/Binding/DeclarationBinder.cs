@@ -833,7 +833,7 @@ internal sealed partial class DeclarationBinder
             syntax.IsInline,
             syntax.IsClass,
             ImmutableArray<ParameterSymbol>.Empty,
-            isOpen: syntax.IsOpen && syntax.IsClass,
+            isOpen: (syntax.IsOpen || syntax.IsAbstract) && syntax.IsClass,
             baseClass: null);
         Binder.AttachDocumentation(structSymbol, syntax);
 

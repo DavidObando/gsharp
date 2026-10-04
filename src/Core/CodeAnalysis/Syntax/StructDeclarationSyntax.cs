@@ -19,6 +19,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     private SyntaxToken? partialModifier;
     private TypeParameterListSyntax? typeParameterList;
     private SyntaxToken? refModifier;
+    private SyntaxToken? abstractModifier;
+    private SyntaxToken? sharedModifier;
+    private ImmutableArray<StaticInitializerBlockSyntax> sharedInitializers = ImmutableArray<StaticInitializerBlockSyntax>.Empty;
     private SharedBlockSyntax? sharedBlock;
     private SyntaxToken? baseConstructorOpenParenthesisToken;
     private SeparatedSyntaxList<ExpressionSyntax>? baseConstructorArguments;
@@ -439,6 +442,12 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets a value indicating whether this struct was declared with the <c>ref</c> contextual keyword (issue #367 — a by-ref-like / <c>ref struct</c> type emitted with <c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c>). Always false for <c>class</c>.</summary>
     public bool IsRef => RefModifier != null;
 
+    /// <summary>Gets a value indicating whether this class was declared with the <c>abstract</c> contextual keyword (ADR-0195 / issue #4674 — a class that cannot be instantiated even when it declares no abstract member).</summary>
+    public bool IsAbstract => AbstractModifier != null;
+
+    /// <summary>Gets a value indicating whether this class was declared with the <c>shared</c> contextual modifier (ADR-0195 / issue #4674 — a class emitted <c>abstract sealed</c> whose members are all shared and sit directly in its body).</summary>
+    public bool IsShared => SharedModifier != null;
+
     /// <summary>
     /// Gets or sets the optional <c>unsafe</c> contextual modifier (ADR-0122 / issue #1014)
     /// contextual modifier on the aggregate declaration (<c>unsafe class</c> /
@@ -531,6 +540,39 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         set
         {
             refModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets or sets the optional <c>abstract</c> contextual keyword (ADR-0195 / issue #4674). Non-null marks this <c>class</c> abstract: it is inheritable like an <c>open class</c> and cannot be instantiated. Assigned by the parser; <c>null</c> otherwise.</summary>
+    public SyntaxToken? AbstractModifier
+    {
+        get => abstractModifier;
+        set
+        {
+            abstractModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets or sets the optional <c>shared</c> contextual modifier on a class head (ADR-0195 / issue #4674). Non-null marks this <c>class</c> shared: emitted <c>abstract sealed</c> with no instance constructor, every member declared directly in the body is a shared (static) member, and a <c>shared { }</c> block inside it is rejected. Assigned by the parser; <c>null</c> otherwise.</summary>
+    public SyntaxToken? SharedModifier
+    {
+        get => sharedModifier;
+        set
+        {
+            sharedModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets or sets the static-initializer blocks (<c>init { … }</c>, ADR-0140) declared directly in the body of a <c>shared</c> class. Empty for any other aggregate (there they sit in the <c>shared { }</c> block). Assigned by the parser.</summary>
+    public ImmutableArray<StaticInitializerBlockSyntax> SharedInitializers
+    {
+        get => sharedInitializers;
+        set
+        {
+            sharedInitializers = value;
             InvalidateCachedSpan();
         }
     }
@@ -670,6 +712,40 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         ImmutableArray<FunctionDeclarationSyntax> methods,
         SharedBlockSyntax? sharedBlock,
         ImmutableArray<MemberSyntax> nestedTypes)
+        => CopyWith(Fields, Properties, Events, methods, sharedBlock, nestedTypes, SharedInitializers);
+
+    /// <summary>
+    /// ADR-0195 / issue #4674: returns the form of a <c>shared</c> class the binder
+    /// consumes. The parsed tree keeps the members the author wrote directly in
+    /// the body (so the language server, formatter and analyzers see the source
+    /// as written); the binder, which has one path for a type's shared members,
+    /// gets a copy whose body fields, properties, events, methods and
+    /// static initializers sit in <paramref name="sharedBlock"/> and whose
+    /// instance member lists are empty. Never mutates this node.
+    /// </summary>
+    /// <param name="sharedBlock">The block holding the class's members.</param>
+    /// <param name="nestedTypes">The nested types for the copy.</param>
+    /// <returns>The copy.</returns>
+    internal StructDeclarationSyntax WithMembersInSharedBlock(
+        SharedBlockSyntax sharedBlock,
+        ImmutableArray<MemberSyntax> nestedTypes)
+        => CopyWith(
+            ImmutableArray<FieldDeclarationSyntax>.Empty,
+            ImmutableArray<PropertyDeclarationSyntax>.Empty,
+            ImmutableArray<EventDeclarationSyntax>.Empty,
+            ImmutableArray<FunctionDeclarationSyntax>.Empty,
+            sharedBlock,
+            nestedTypes,
+            ImmutableArray<StaticInitializerBlockSyntax>.Empty);
+
+    private StructDeclarationSyntax CopyWith(
+        ImmutableArray<FieldDeclarationSyntax> fields,
+        ImmutableArray<PropertyDeclarationSyntax> properties,
+        ImmutableArray<EventDeclarationSyntax> events,
+        ImmutableArray<FunctionDeclarationSyntax> methods,
+        SharedBlockSyntax? sharedBlock,
+        ImmutableArray<MemberSyntax> nestedTypes,
+        ImmutableArray<StaticInitializerBlockSyntax> sharedInitializers)
     {
         var copy = new StructDeclarationSyntax(
             SyntaxTree,
@@ -687,9 +763,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
             BaseTypeIdentifier,
             AdditionalBaseTypeIdentifiers,
             OpenBraceToken,
-            Fields,
-            Properties,
-            Events,
+            fields,
+            properties,
+            events,
             methods,
             CloseBraceToken)
         {
@@ -699,6 +775,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
             PartialPartLocations = PartialPartLocations,
             TypeParameterList = TypeParameterList,
             RefModifier = RefModifier,
+            AbstractModifier = AbstractModifier,
+            SharedModifier = SharedModifier,
+            SharedInitializers = sharedInitializers,
             SharedBlock = sharedBlock,
             BaseConstructorOpenParenthesisToken = BaseConstructorOpenParenthesisToken,
             BaseConstructorArguments = BaseConstructorArguments,
