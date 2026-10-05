@@ -520,14 +520,17 @@ empirically before adoption.
   `ThisConstructorInitializer` maps to the G# `this`-chained initializer, mirroring
   the `: base(args)` mapping of §B.28.
 - **Local functions retain their declaring activation** (issue #4802). Ordinary
-  local functions use `let Name = func …`; mutual recursion uses the existing
-  nullable callable forward declarations and assignments in the declaring
-  block. Registration inventories only that block's immediate local-function
+  local functions with nullable-callable-compatible signatures use
+  `let Name = func …`; mutual recursion among those signatures uses the existing
+  nullable callable forward declarations and assignments in the declaring block.
+  Registration inventories only that block's immediate local-function
   statements. Dependency scans still descend into nested bodies to find
   references to those siblings, but do not merge descendant helpers into the
   siblings' storage group. Each recursive invocation therefore creates its own
   nested helper bindings, including escaped closures, rather than overwriting a
-  caller's bindings. Signature-specific member lifting remains unchanged.
+  caller's bindings. Generic, ref-returning, variadic and ref-kind groups remain
+  on the existing native direct-local-function or source-named member-lifting
+  fallback paths; this storage strategy does not broaden signature support.
 - **`break` / `continue` → `break` / `continue`.** Both map to their identical G#
   loop-control keywords (these had no prior translator case).
 - **`do … while (c)` → G# do-while.** A `DoStatement` maps to the canonical G#

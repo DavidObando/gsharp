@@ -100,15 +100,123 @@ public sealed class Issue4802RecursiveHelperActivationTests
         }
         finally
         {
-            string evidence = Environment.GetEnvironmentVariable("GSHARP_ISSUE4802_EVIDENCE");
-            if (!string.IsNullOrEmpty(evidence))
+            CaptureEvidenceAndCleanup(directory, Environment.GetEnvironmentVariable("GSHARP_ISSUE4802_EVIDENCE"));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EvidenceCapture_UsesSuppliedRootPreservesArtifactsAndCleansWorkspace(bool fixtureFails)
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "issue4802-evidence", Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(root, "workspace");
+        string evidence = Path.Combine(root, "supplied evidence");
+        string destination = Path.Combine(evidence, "workspace");
+        Directory.CreateDirectory(Path.Combine(directory, "native"));
+        Directory.CreateDirectory(destination);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "command.log"), "fixture evidence");
+            byte[] product = { 0, 1, 255, 42 };
+            File.WriteAllBytes(Path.Combine(directory, "native", "Native.pdb"), product);
+            File.WriteAllText(Path.Combine(evidence, "existing.marker"), "root artifact");
+            File.WriteAllText(Path.Combine(destination, "existing.log"), "previous artifact");
+            Exception failure = Record.Exception(() =>
             {
-                this.output.WriteLine("Retained exact source/products/commands: " + directory);
+                try
+                {
+                    if (fixtureFails)
+                    {
+                        throw new InvalidOperationException("original fixture failure");
+                    }
+                }
+                finally
+                {
+                    CaptureEvidenceAndCleanup(directory, evidence);
+                }
+            });
+            if (fixtureFails)
+            {
+                Assert.Equal("original fixture failure", Assert.IsType<InvalidOperationException>(failure).Message);
             }
             else
             {
-                Directory.Delete(directory, recursive: true);
+                Assert.Null(failure);
             }
+
+            Assert.False(Directory.Exists(directory));
+            Assert.Equal("fixture evidence", File.ReadAllText(Path.Combine(destination, "command.log")));
+            Assert.Equal(product, File.ReadAllBytes(Path.Combine(destination, "native", "Native.pdb")));
+            Assert.Equal("root artifact", File.ReadAllText(Path.Combine(evidence, "existing.marker")));
+            Assert.Equal("previous artifact", File.ReadAllText(Path.Combine(destination, "existing.log")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void EvidenceCapture_CleansWorkspaceAndReportsCopyFailure()
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "issue4802-evidence", Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(root, "workspace");
+        string evidence = Path.Combine(root, "blocked evidence");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "command.log"), "fixture evidence");
+            File.WriteAllText(evidence, "existing artifact");
+            Assert.ThrowsAny<IOException>(() => CaptureEvidenceAndCleanup(directory, evidence));
+            Assert.False(Directory.Exists(directory));
+            Assert.Equal("existing artifact", File.ReadAllText(evidence));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void EvidenceCapture_WithoutDestinationStillCleansWorkspace(string evidence)
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "issue4802-evidence", Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(root, "workspace");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "command.log"), "fixture evidence");
+            CaptureEvidenceAndCleanup(directory, evidence);
+            Assert.False(Directory.Exists(directory));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void CaptureEvidenceAndCleanup(string directory, string evidence)
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(evidence))
+            {
+                string destination = Path.Combine(evidence, Path.GetFileName(directory));
+                Directory.CreateDirectory(destination);
+                foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+                {
+                    string target = Path.Combine(destination, Path.GetRelativePath(directory, file));
+                    Directory.CreateDirectory(Path.GetDirectoryName(target));
+                    File.Copy(file, target, overwrite: true);
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 
