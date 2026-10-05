@@ -2542,18 +2542,24 @@ internal sealed class UserTokenResolver
         }
 
         var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob)
-            .MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                ctor.Parameters.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var p in ctor.Parameters)
+        // Match the constructor's MethodDef slots, not the caller's generic
+        // context, just as the primary-constructor token path does (#4803).
+        using (this.remaps.PushSmRemap(structType.Definition ?? structType))
+        {
+            new BlobEncoder(sigBlob)
+                .MethodSignature(isInstanceMethod: true)
+                .Parameters(
+                    ctor.Parameters.Length,
+                    r => r.Void(),
+                    ps =>
                     {
-                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
-                    }
-                });
+                        foreach (var p in ctor.Parameters)
+                        {
+                            this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        }
+                    });
+        }
+
         return this.GetUserStructMethodRef(structType, explicitDef, ".ctor", sigBlob);
     }
 
