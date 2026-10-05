@@ -2348,6 +2348,28 @@ internal sealed class UserTokenResolver
         return memberRef;
     }
 
+    /// <summary>Resolves the planned data-class clone on its effective generic owner.</summary>
+    /// <param name="structType">The receiver's constructed or self type.</param>
+    /// <returns>The existing clone MethodDef or TypeSpec-parented MemberRef.</returns>
+    internal EntityHandle ResolveDataClassCloneToken(StructSymbol structType)
+    {
+        var definition = structType.Definition ?? structType;
+        if (!this.cache.DataClassCloneHandles.TryGetValue(definition, out var clone))
+        {
+            throw new InvalidOperationException($"Data class '{structType.Name}' has no planned clone contract.");
+        }
+
+        if (!ReflectionMetadataEmitter.IsUserGenericTypeReference(structType))
+        {
+            return clone;
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => this.signatures.EncodeTypeSymbol(r.Type(), definition), _ => { });
+        return this.GetUserStructMethodRef(structType, clone, "<Clone>$", signature);
+    }
+
     /// <summary>
     /// ADR-0087 §3 R3: resolves the right token for a <c>newobj</c>
     /// against a user-declared primary ctor. Returns the bare
@@ -2542,18 +2564,24 @@ internal sealed class UserTokenResolver
         }
 
         var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob)
-            .MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                ctor.Parameters.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var p in ctor.Parameters)
+        // Match the constructor's MethodDef slots, not the caller's generic
+        // context, just as the primary-constructor token path does (#4803).
+        using (this.remaps.PushSmRemap(structType.Definition ?? structType))
+        {
+            new BlobEncoder(sigBlob)
+                .MethodSignature(isInstanceMethod: true)
+                .Parameters(
+                    ctor.Parameters.Length,
+                    r => r.Void(),
+                    ps =>
                     {
-                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
-                    }
-                });
+                        foreach (var p in ctor.Parameters)
+                        {
+                            this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        }
+                    });
+        }
+
         return this.GetUserStructMethodRef(structType, explicitDef, ".ctor", sigBlob);
     }
 

@@ -1180,6 +1180,14 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitStructLiteral(BoundStructLiteralExpression literal)
     {
+        if (literal.CopySource != null)
+        {
+            this.EmitExpression(literal.CopySource);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.userTokens.ResolveDataClassCloneToken(literal.StructType));
+            return;
+        }
+
         // ADR-0087 §3 R3+R4: when the literal target is a user-defined
         // generic type, every body reference (initobj/newobj/stfld) must
         // be routed through a TypeSpec-parented MemberRef. The box bridge

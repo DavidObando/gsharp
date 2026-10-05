@@ -2671,6 +2671,14 @@ public static class SpillSequenceSpiller
 
         private BoundSpillSequenceExpression SpillStructLiteral(BoundStructLiteralExpression structLiteral)
         {
+            if (structLiteral.CopySource != null)
+            {
+                return SpillOneOperand(
+                    structLiteral,
+                    structLiteral.CopySource,
+                    source => new BoundStructLiteralExpression(null, structLiteral.StructType, structLiteral.Initializers, source));
+            }
+
             var values = ImmutableArray.CreateBuilder<BoundExpression>(structLiteral.Initializers.Length);
             foreach (var init in structLiteral.Initializers)
             {
