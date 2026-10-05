@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **cs2gs transports retained build-generated compilation inputs across validation roots and configurations** (issue #4801, ADR-0196). Validation manifests carry the actual producing source text, hash and project ownership for non-inventoried build inputs, including net10 and netstandard2.0 SDK declarations. Authored sources still require the clean authoritative corpus, and source-declared test counts and budgets are unchanged. Old manifests lacking generated evidence fail closed rather than inventing historical contents.
+
 - **Inherited generic CLR method returns preserve source owner arguments** (issue #4785). Generic calls through a source-derived receiver now project the return from the actual declaring owner's symbolic arguments, including multilevel, reordered and nested bases, while keeping the method's own argument order and physical tuple types.
 
 - **Cross-assembly language-server navigation tests retain native C# provenance** (issue #4666). Both portable-PDB and G# Go-to-Definition tests now import a dedicated Roslyn-emitted assembly, require its portable sidecar PDB, and assert the exact `.cs` source path and span. Missing-PDB and same-named `.gs` fixtures must fail those same navigation oracles; migrated Core is no longer used as an assumed C# sibling.
