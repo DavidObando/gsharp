@@ -50,6 +50,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\..\test\Shared\EmittedFixture.cs" Link="EmittedFixture.cs" />
+    <Compile Include="..\..\..\test\Core.Tests\CSharpFixture.cs" Link="CSharpFixture.cs" />
     <!-- ADR-0156 Phase 3c (#3176): the shared emitted oracle replaces the
          retired Compilation.Evaluate for semantic round-trip checks. -->
     <Compile Include="..\..\..\test\Shared\EmittedOracle.cs" Link="EmittedOracle.cs" />

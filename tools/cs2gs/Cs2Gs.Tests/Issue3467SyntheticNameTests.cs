@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -332,11 +333,10 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
-        public void ReadableLiftFallback_OwnedExtensionAllocatesAgainstReceiverAggregate()
+        public void ReadableLiftFallback_OwnedExtensionAllocatesAgainstNativeHolder()
         {
-            // Issue #4302: an owned extension's local functions belong to the
-            // extension container in Roslyn, but the lifted helper is emitted
-            // into the receiver type, so the name must avoid C.Helper.
+            // Issue #4790: the real body and its lifted helpers stay on the
+            // native holder; C's canonical member only forwards to that body.
             string printed = Translate("""
                 public class C
                 {
@@ -354,11 +354,31 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("func Helper_2(", printed, StringComparison.Ordinal);
-            LocalFunctionHoistTranslationTests.CompileAndRun(
-                printed,
-                "Console.WriteLine(C().Extra(2) + C().Helper(1))",
-                "108");
+            Assert.Contains("CExtensions.Extra(c, n)", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "C().Extra(2) + C().Helper(1)");
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal(108, result.Value);
+            Type receiver = Assert.Single(result.Assembly.GetTypes(), type => type.Name == "C");
+            MethodInfo receiverHelper = Assert.Single(receiver.GetMethods(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    | BindingFlags.Static | BindingFlags.DeclaredOnly), method => method.Name == "Helper");
+            Assert.False(receiverHelper.IsStatic);
+            Assert.DoesNotContain(receiver.GetMethods(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    | BindingFlags.Static | BindingFlags.DeclaredOnly), method => method.Name.StartsWith("Helper_", StringComparison.Ordinal));
+            Type holder = Assert.Single(result.Assembly.GetTypes(), type => type.Name == "CExtensions");
+            Assert.Equal(receiver.Namespace, holder.Namespace);
+            Assert.True(holder.IsAbstract && holder.IsSealed);
+            MethodInfo holderHelper = Assert.Single(holder.GetMethods(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly),
+                method => method.Name == "Helper");
+            Assert.True(holderHelper.IsPrivate);
+            MethodInfo original = holder.GetMethod("Extra", BindingFlags.Public | BindingFlags.Static);
+            Assert.NotNull(original);
+            Assert.Equal(receiver, original.GetParameters()[0].ParameterType);
         }
 
         [Fact]
