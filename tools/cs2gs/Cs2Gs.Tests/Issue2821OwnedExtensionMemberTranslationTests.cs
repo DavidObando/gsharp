@@ -82,18 +82,20 @@ public static class MeterExtensions
             printed.Values,
             text => text.Contains("func Adjust(", StringComparison.Ordinal));
 
-        Assert.Equal(2, CountOccurrences(combined, "class Meter"));
+        Assert.Equal(2, CountOccurrences(combined, "partial class Meter {"));
         Assert.Equal(1, CountOccurrences(combined, "func Adjust("));
         Assert.Contains("import System", target);
         Assert.Contains("    func Adjust()", target);
         Assert.Contains("var meter = this", target);
         Assert.DoesNotContain("func Double(", target);
-        Assert.DoesNotContain("func (meter Meter) Adjust", combined);
-        Assert.DoesNotContain("class MeterExtensions", combined);
+        Assert.Contains("MeterExtensions.Adjust(meter)", target);
+        Assert.Contains("func (meter Meter) Adjust", combined);
+        Assert.Contains("@ExtensionOwner(typeof(MeterExtensions))", combined);
+        Assert.Contains("class MeterExtensions", combined);
     }
 
     [Fact]
-    public void OwnedExtensionLiftedHelpers_UseReceiverAggregateNameRegistry()
+    public void OwnedExtensionLiftedHelpers_UseOriginalHolderNameRegistry()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(
             ("Target.cs", """
@@ -130,10 +132,10 @@ public static class MeterExtensions
 
         string combined = string.Join(Environment.NewLine, printed.Values);
         Assert.Contains("func Helper(value int32)", combined, StringComparison.Ordinal);
-        Assert.Contains("func Helper_2(", combined, StringComparison.Ordinal);
+        Assert.Contains("func Helper(", combined, StringComparison.Ordinal);
         Assert.Contains("func Other_2[", combined, StringComparison.Ordinal);
-        Assert.DoesNotContain("Extensions.", combined, StringComparison.Ordinal);
-        Assert.DoesNotContain("class Extensions", combined, StringComparison.Ordinal);
+        Assert.Contains("Extensions.Extra(", combined, StringComparison.Ordinal);
+        Assert.Contains("class Extensions", combined, StringComparison.Ordinal);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
@@ -164,8 +166,9 @@ public static class HostExtensions
 
         Assert.Contains("func M()", host);
         Assert.Contains("func M(value int32)", host);
-        Assert.DoesNotContain("func (host Host) M", combined);
-        Assert.DoesNotContain("class HostExtensions", combined);
+        Assert.Contains("func (host Host) M", combined);
+        Assert.Contains("@ExtensionOwner(typeof(HostExtensions))", combined);
+        Assert.Contains("class HostExtensions", combined);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);

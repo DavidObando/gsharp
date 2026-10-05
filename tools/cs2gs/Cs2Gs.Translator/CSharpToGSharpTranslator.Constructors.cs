@@ -449,7 +449,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 var accessorSymbol = this.context.GetDeclaredSymbol(accessor) as IMethodSymbol;
                 Visibility visibility = accessor.Modifiers.Count > 0
-                    ? MapVisibility(accessorSymbol, this.context, accessor, preserveStaticClassPrivate: true)
+                    ? MapVisibility(accessorSymbol, this.context, accessor)
                     : Visibility.Default;
 
                 bool bodied = accessor.Body != null || accessor.ExpressionBody != null;

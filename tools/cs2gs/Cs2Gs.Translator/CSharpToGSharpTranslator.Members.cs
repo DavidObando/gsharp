@@ -43,10 +43,9 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
 
                 case MethodDeclarationSyntax method:
-                    if (ownedExtensionTarget is null && this.CanLowerOwnedExtension(method))
-                    {
-                        break;
-                    }
+                    bool preservedOwnedExtension = ownedExtensionTarget is null
+                        && this.context.GetDeclaredSymbol(method) is IMethodSymbol ownedMethod
+                        && this.IsPreservedOwnedExtension(ownedMethod);
 
                     // ADR-0169 M5 / issue #3686: private plumbing of a Roslyn
                     // analyzer test harness whose body is being replaced by a
@@ -61,13 +60,15 @@ public sealed partial class CSharpToGSharpTranslator
                     (GMember methodMember, bool methodIsStatic) = this.TranslateMethod(
                         method,
                         ownerKind,
-                        ownedExtensionTarget: ownedExtensionTarget);
+                        ownedExtensionTarget: ownedExtensionTarget,
+                        forceExtensionReceiver: preservedOwnedExtension);
                     if (methodMember != null)
                     {
                         yield return (methodMember, methodIsStatic);
                     }
 
                     if (ownedExtensionTarget is null
+                        && !preservedOwnedExtension
                         && this.context.GetDeclaredSymbol(method) is IMethodSymbol companionSymbol
                         && this.HasReceiverCompanion(companionSymbol))
                     {
@@ -301,6 +302,8 @@ public sealed partial class CSharpToGSharpTranslator
             using IDisposable modelScope = this.context.UseSemanticModelFor(method.SyntaxTree);
             if (this.context.GetDeclaredSymbol(method) is not IMethodSymbol symbol ||
                 !symbol.IsExtensionMethod ||
+                symbol.DeclaredAccessibility == Accessibility.Private ||
+                symbol.IsExtern ||
                 symbol.Parameters.Length == 0)
             {
                 return false;
@@ -1219,8 +1222,8 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     // Issue #2821: a same-package source receiver is owned by
                     // this output package. Emit the extension as an in-body
-                    // member and preserve its former `this` parameter as a local
-                    // copy of the real instance for the translated body.
+                    // member forwarding to the original static holder. Its body
+                    // and private helpers retain their native declaring owner.
                     ownedExtensionSelf = self;
                     skipFirstParameter = true;
                     isStatic = false;
@@ -1316,6 +1319,16 @@ public sealed partial class CSharpToGSharpTranslator
                 body = this.BuildOwnerScopedExtensionCompanionBody(
                     symbol,
                     receiver,
+                    parameters,
+                    returnType);
+            }
+            else if (hasBody && ownedExtensionSelf != null)
+            {
+                body = this.BuildOwnerScopedExtensionCompanionBody(
+                    symbol,
+                    new Receiver(
+                        this.EmittedName(ownedExtensionSelf, ownedExtensionSelf.Name),
+                        this.typeMapper.Map(ownedExtensionSelf.Type, this.context, node.GetLocation())),
                     parameters,
                     returnType);
             }
@@ -1848,6 +1861,12 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool HasReceiverCompanion(IMethodSymbol method)
         {
+            if (this.IsPreservedOwnedExtension(method)
+                && (method?.ReducedFrom ?? method).DeclaredAccessibility != Accessibility.Private)
+            {
+                return true;
+            }
+
             if (!this.ownedExtensions.HasReceiverCompanion(method))
             {
                 return false;
@@ -2129,9 +2148,21 @@ public sealed partial class CSharpToGSharpTranslator
                 + declarationId;
         }
 
+        private bool IsPreservedOwnedExtension(IMethodSymbol method)
+        {
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            return original != null
+                && original.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax() is MethodDeclarationSyntax declaration
+                    && this.ownedExtensions.Contains(declaration)
+                    && (original.DeclaredAccessibility == Accessibility.Private
+                        || this.CanLowerOwnedExtension(declaration)));
+        }
+
         private bool IsStaticExtensionHelper(IMethodSymbol method)
         {
-            if (this.ownedExtensions.IsStaticHelper(method))
+            if (this.IsPreservedOwnedExtension(method)
+                || this.ownedExtensions.IsStaticHelper(method))
             {
                 return true;
             }
@@ -2800,8 +2831,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return MapVisibility(
                     this.context.GetDeclaredSymbol(accessor),
                     this.context,
-                    accessor,
-                    preserveStaticClassPrivate: true);
+                    accessor);
             }
         }
 
