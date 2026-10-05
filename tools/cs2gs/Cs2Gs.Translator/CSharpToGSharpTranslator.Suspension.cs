@@ -90,6 +90,15 @@ public sealed partial class CSharpToGSharpTranslator
             => type is INamedTypeSymbol { Name: "ValueTask" } named
                 && named.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
 
+        // FunctionSymbol.AddHiddenContextParameter adopts a declared Context
+        // and leaves variadic signatures unchanged (ADR-0174 D7).
+        private bool CanPreserveSuspendingExtensionSignature(IMethodSymbol symbol, MethodDeclarationSyntax node)
+            => !this.IsSuspendingCandidate(symbol, node)
+                || symbol.Parameters.Any(parameter =>
+                    parameter.IsParams
+                    || (parameter.Type is INamedTypeSymbol { Name: "Context" } contextType
+                        && IsConcurrencyRuntimeNamespace(contextType.ContainingNamespace)));
+
         private static bool IsConcurrencyRuntimeNamespace(INamespaceSymbol ns)
             => ns != null && !ns.IsGlobalNamespace && ns.ToDisplayString() == ConcurrencyRuntimeNamespace;
 
