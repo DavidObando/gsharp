@@ -88,6 +88,20 @@ negative diagnostic; a missing base type must not masquerade as rejection of
 an out-of-range constructor argument. This preserves the fixture, not an
 exclusion of production source or a relaxation of the parity oracle.
 
+`NativeMetadataContracts.cs.txt` similarly holds the CLR nullability,
+overload-resolution, access-path, documentation-ID and UnscopedRef contracts
+from #4664. It is embedded as source data, never compiled as part of the
+test harness or translated to G#. `NativeMetadataFixtures` delegates to the
+existing Roslyn `CSharpFixture` compiler: reflection-only consumers load its
+bytes through `EmittedFixture`; importer/binder consumers pass its physical
+`AssemblyPath` explicitly and dispose the workspace after their assertions.
+The provenance tests resolve every extracted type from that physical
+assembly and pin native nullable-context/byte-array, optional, params and
+generic-constraint metadata. The property-test candidate set remains intact.
+The nullability contract's enclosing reference-typed signature preserves
+Roslyn's original inherited `NullableContext(1)` placement, including the
+nested value container's `NullableContext(0)` override.
+
 Source-inspection guards have the same provenance requirement. A guard that
 parses C# or inventories literal C# signatures must use the original tree
 selected by `CS2GS_TEST_SOURCE_ROOT` (`Core.Tests.TestSource` or the corresponding
