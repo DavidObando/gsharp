@@ -31,6 +31,15 @@ public sealed class Issue4738InheritedTupleArgumentEmitTests
             public (B, int) Keep((B, int) value) => value;
             public object Mix<U>((B, U) value) => value;
         }
+        public class ReturnOwner<A, B>
+        {
+            public (B, U) Mix<U>((B, U) value) => value;
+            public (B, V, U, A) Vector<U, V>((B, V, U, A) value) => value;
+            public (B, U) Reference<U>((B, U) value) where U : class => value;
+            public (B, U) Value<U>((B, U) value) where U : struct => value;
+        }
+        public class ReorderedReturnOwner<A, B> : ReturnOwner<B, A> { }
+        public class NestedReturnOwner<A, B> : ReturnOwner<A, System.Collections.Generic.List<B>> { }
         public static class Native
         {
             public static T Identity<T>(T value) => value;
@@ -276,7 +285,7 @@ public sealed class Issue4738InheritedTupleArgumentEmitTests
         }
     }
 
-    private static string CompileContract(string directory)
+    internal static string CompileContract(string directory)
     {
         var contractPath = Path.Combine(directory, "Issue4738.Contracts.dll");
         var compilation = CSharpCompilation.Create(
@@ -289,10 +298,10 @@ public sealed class Issue4738InheritedTupleArgumentEmitTests
         return contractPath;
     }
 
-    private static MethodInfo FindMethod(Assembly assembly, string name) =>
+    internal static MethodInfo FindMethod(Assembly assembly, string name) =>
         Assert.Single(assembly.GetTypes().SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static)), method => method.Name == name);
 
-    private static string Compile(string directory, string source, string contractPath)
+    internal static string Compile(string directory, string source, string contractPath)
     {
         var sourcePath = Path.Combine(directory, "Consumer.gs");
         var outputPath = Path.Combine(directory, "Consumer.dll");
@@ -302,7 +311,7 @@ public sealed class Issue4738InheritedTupleArgumentEmitTests
         return outputPath;
     }
 
-    private static (int ExitCode, string Output) RunCompiler(string sourcePath, string outputPath, string contractPath)
+    internal static (int ExitCode, string Output) RunCompiler(string sourcePath, string outputPath, string contractPath)
     {
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();

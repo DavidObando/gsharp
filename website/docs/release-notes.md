@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Inherited generic CLR method returns preserve source owner arguments** (issue #4785). Generic calls through a source-derived receiver now project the return from the actual declaring owner's symbolic arguments, including multilevel, reordered and nested bases, while keeping the method's own argument order and physical tuple types.
+
 - **Cross-assembly language-server navigation tests retain native C# provenance** (issue #4666). Both portable-PDB and G# Go-to-Definition tests now import a dedicated Roslyn-emitted assembly, require its portable sidecar PDB, and assert the exact `.cs` source path and span. Missing-PDB and same-named `.gs` fixtures must fail those same navigation oracles; migrated Core is no longer used as an assumed C# sibling.
 
 - **Generic inference accepts a comparer implementing multiple closed interfaces when other arguments determine the key type** (issue #4780). Symbolic and CLR inference no longer treat a non-unique interface projection as a contradictory bound or choose its first interface. Typed identity selectors now bind the self-migrated symbol-ordering tests without changing the comparer or generated assertions; unfixed type arguments, incompatible interfaces and violated constraints remain rejected.
