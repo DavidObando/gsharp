@@ -8352,6 +8352,11 @@ internal sealed class MemberLookup
             }
             else
             {
+                if (bounds.AmbiguousProjection[slot])
+                {
+                    result[slot] = SymbolicInferenceConflict;
+                }
+
                 continue;
             }
 
@@ -8906,7 +8911,7 @@ internal sealed class MemberLookup
             {
                 foreach (var openArgument in openArgs)
                 {
-                    AddSymbolicInferenceConflicts(openArgument, openMethod, bounds);
+                    MarkAmbiguousInferenceSlots(openArgument, openMethod, bounds);
                 }
 
                 return;
@@ -9167,7 +9172,7 @@ internal sealed class MemberLookup
         }
     }
 
-    private static void AddSymbolicInferenceConflicts(
+    private static void MarkAmbiguousInferenceSlots(
         Type openClr,
         MethodInfo openMethod,
         SymbolicInferenceBounds bounds)
@@ -9178,10 +9183,10 @@ internal sealed class MemberLookup
                     || openClr.DeclaringMethod.MetadataToken == openMethod.MetadataToken)
                 && (uint)openClr.GenericParameterPosition < (uint)bounds.Arity)
             {
-                bounds.Add(
-                    openClr.GenericParameterPosition,
-                    SymbolicInferenceConflict,
-                    SymbolicInferenceBoundKind.Exact);
+                // Multiple closed interfaces supply no unique inference bound.
+                // Other arguments may still fix this slot; applicability checks
+                // the resulting closed interface against the actual argument.
+                bounds.AmbiguousProjection[openClr.GenericParameterPosition] = true;
             }
 
             return;
@@ -9192,7 +9197,7 @@ internal sealed class MemberLookup
             var element = openClr.GetElementType();
             if (element != null)
             {
-                AddSymbolicInferenceConflicts(element, openMethod, bounds);
+                MarkAmbiguousInferenceSlots(element, openMethod, bounds);
             }
 
             return;
@@ -9202,7 +9207,7 @@ internal sealed class MemberLookup
         {
             foreach (var argument in openClr.GetGenericArguments())
             {
-                AddSymbolicInferenceConflicts(argument, openMethod, bounds);
+                MarkAmbiguousInferenceSlots(argument, openMethod, bounds);
             }
         }
     }
@@ -10100,6 +10105,7 @@ internal sealed class MemberLookup
             this.Exact = new List<TypeSymbol>?[arity];
             this.Lower = new List<TypeSymbol>?[arity];
             this.Upper = new List<TypeSymbol>?[arity];
+            this.AmbiguousProjection = new bool[arity];
         }
 
         public int Arity => this.Exact.Length;
@@ -10109,6 +10115,8 @@ internal sealed class MemberLookup
         public List<TypeSymbol>?[] Lower { get; }
 
         public List<TypeSymbol>?[] Upper { get; }
+
+        public bool[] AmbiguousProjection { get; }
 
         public void Add(int position, TypeSymbol type, SymbolicInferenceBoundKind kind)
         {

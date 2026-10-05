@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -231,7 +233,7 @@ public class Issue4770NullableClassifierCoalescingTests
             Assert.NotNull(method);
             Delegate callbackValue = method.CreateDelegate(callbackType);
             Assert.NotNull(holderConstructor.Invoke(new object[] { callbackValue }));
-            object[] arguments = { null, null };
+            object?[] arguments = { null, null };
             Assert.Equal(false, callbackValue.DynamicInvoke(arguments));
             Assert.Null(arguments[1]);
             Assert.Equal("member", key.GetProperty("StableMemberId").GetValue(constructor.Invoke(new object[] { "member", "hash" })));
