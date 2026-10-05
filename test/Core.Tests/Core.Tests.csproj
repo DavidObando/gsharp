@@ -35,6 +35,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="TestData/NativeMetadataContracts.cs.txt"
+                      LogicalName="GSharp.Core.Tests.NativeMetadataContracts.cs.txt"
+                      WithCulture="false" />
     <Compile Include="..\Shared\EmittedFixture.cs" Link="EmittedFixture.cs" />
     <Compile Include="..\Shared\EmittedOracle.cs" Link="EmittedOracle.cs" />
     <Compile Include="..\Shared\EmittedOracleOptions.cs" Link="EmittedOracleOptions.cs" />

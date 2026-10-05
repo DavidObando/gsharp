@@ -515,8 +515,8 @@ public class Adr0184CallerSideDefensiveCopyTests
 
     private static ImmutableArray<Diagnostic> BindWithFixtures(string source)
     {
-        var fixturePath = typeof(GSharp.Core.Tests.Fixtures.UnscopedRefIndexerFixture).Assembly.Location;
-        var resolver = ReferenceResolver.WithReferences(new[] { fixturePath });
+        using var fixture = NativeMetadataFixtures.Compile();
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixture.AssemblyPath });
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var globalScope = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(
             previous: null,
