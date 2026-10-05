@@ -108,7 +108,7 @@ Synthesized-member behavior for a zero-field data type:
 **Deferred/out of scope, not fixed by this amendment:**
 
 - Leaf-type-only equality for an `open` base type with derived data-type siblings is a pre-existing limitation independent of zero-field support: `Equals(Name other)` dispatches on the *declared* type of the typed overload, so two different sibling data types (e.g. `MfaChallenge` vs. `CvfChallenge`) are never equal to one another even when both are zero-field, which matches C# record semantics (sibling record types are never equal) and is not a new gap introduced here.
-- An abstract/open base record with only property overrides and no positional data of its own (e.g. Oahu's `CallbackChallenge` with only an abstract `Kind` property) is downgraded by `cs2gs` to a plain (non-`data`) class rather than an empty `data class` — this is separate, pre-existing `cs2gs` translator behavior (`RecordHasAutoPropertyDataMember`) unrelated to #2363's binder/emitter relaxation, and is unaffected by this amendment.
+- **Superseded translator limitation:** at the time of this amendment, `cs2gs` downgraded an abstract/open base record with only property overrides and no positional data (e.g. Oahu's `CallbackChallenge` with an abstract `Kind` property) to a plain class. Subsequent zero-field record support (#2704) preserves that shape as an abstract `data class`; the 2026-10-04 amendment below additionally preserves its native `IEquatable[Self]` contract. The old downgrade is not the current mapping.
 
 ## Amendment 2026-10-04: inherited typed equality and declared interfaces (#4777, #4675)
 
