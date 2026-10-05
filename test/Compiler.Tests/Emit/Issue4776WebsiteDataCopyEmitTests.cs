@@ -83,7 +83,7 @@ public sealed class Issue4776WebsiteDataCopyEmitTests
             IlVerifier.Verify(nativePath);
             IlVerifier.Verify(path);
             var assemblies = EmittedFixture.LoadTogether(nativePath, path);
-            var expected = File.ReadAllText(Path.Combine(root, "samples", "WebsiteData.golden"));
+            var expected = File.ReadAllText(Path.Combine(root, "samples", "WebsiteData.golden")).ReplaceLineEndings(Environment.NewLine);
             foreach (var assembly in assemblies)
             {
                 var entry = assembly.EntryPoint;
