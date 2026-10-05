@@ -217,9 +217,9 @@ public sealed class Issue4777ImportedRecordEqualityTests
     {
         var sourcePath = Path.Combine(directory, name + ".cs");
         var imagePath = Path.Combine(directory, name + ".dll");
-        File.WriteAllText(sourcePath, source);
+        File.WriteAllText(sourcePath, source, Encoding.UTF8);
         var compilation = CSharpCompilation.Create(name,
-            new[] { CSharpSyntaxTree.ParseText(SourceText.From(source, Encoding.UTF8), path: sourcePath) },
+            new[] { CSharpSyntaxTree.ParseText(SourceText.From(source, Encoding.UTF8, SourceHashAlgorithm.Sha256), path: sourcePath) },
             ReferenceResolver.HostTrustedPlatformAssemblyPaths().Select(path => MetadataReference.CreateFromFile(path))
                 .Concat(references.Select(path => MetadataReference.CreateFromFile(path))),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
