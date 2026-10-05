@@ -176,8 +176,6 @@ class Counter {
 }
 ```
 
-Indexers are properties named `this[...]` and lower to CLR `Item` default members:
-
 An abstract class can explicitly require property accessors without storage:
 
 ```gsharp
@@ -195,6 +193,8 @@ descendant may inherit them or use `abstract override prop` to reabstract a
 virtual property. A concrete `open prop Value int32 { get; init; }` still
 synthesizes backing storage, including inside an abstract owner. Abstract
 properties cannot have accessor bodies or private required accessors.
+
+Indexers are properties named `this[...]` and lower to CLR `Item` default members:
 
 ```gsharp
 class Buffer {
