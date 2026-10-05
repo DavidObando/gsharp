@@ -595,6 +595,20 @@ public sealed class TranslateStage : IMigrationStage
                     {
                         IsFromReferencedProject = isReferencedProject,
                     };
+                    if (context.Options.OutputLayout == MigrationOutputLayout.Repository &&
+                        RepositoryFileInventory.IsBuildOutputPath(Path.GetRelativePath(
+                            CanonicalRootPath.Resolve(context.Options.SourceRoot),
+                            CanonicalRootPath.Resolve(document.FilePath))) &&
+                        context.Options.RepositorySourceFiles?.Contains(Path.GetFullPath(document.FilePath)) == false)
+                    {
+                        emitted.GeneratedSource = GeneratedValidationSource.Capture(
+                            document.SyntaxTree.GetText().ToString(),
+                            Path.GetRelativePath(
+                                CanonicalRootPath.Resolve(context.Options.SourceRoot),
+                                CanonicalRootPath.Resolve(currentProject.ProjectPath))
+                                .Replace('\\', '/'));
+                    }
+
                     context.EmittedFiles.Add(emitted);
 
                     if (!isReferencedProject && formatFailure is not null)
