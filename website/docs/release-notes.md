@@ -16,6 +16,9 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- Split the growing cs2gs Issue4 CI workload into disjoint Issue4 and Issue47
+  bands, preserving every test and the existing 30-minute job budget.
+
 - **cs2gs keeps nil-observing reference casts and distinct constructed tuple contracts** (issue #4722). Built-in reference casts preserve nullable operator results until a coalescing fallback, while user-defined conversions, unboxing and non-null operator inputs retain their checks. Fixed-contract identity and sibling remapping preserve nested type-argument annotations, so an enabled contract cannot freeze a different oblivious implementation. Reporting fixtures use collectible, byte-loaded native assemblies that remain deletable on assertion failures.
 - **cs2gs reports converted generic-store checks independently of asserted inputs** (issue #4722). An authored `value!` still reports its own fail-fast input check; a nullable user-defined conversion result checked before a fixed generic store now has a separate `CS2GS-GENERIC-STORE-BRIDGE` report. Unchanged asserted values do not gain duplicate reports, and generated assertions and conversion evaluation are unchanged.
 - **Imported oblivious tuple contracts no longer freeze source implementations as non-null** (issue #4719). Imported declarations remain immutable, but concrete oblivious reference leaves are nil-compatible platform endpoints, not non-null locks. Inherited eligibility and shared-component lock seeding use the same contract decision, preserving legitimate nullable operator results while retaining explicit native non-null contracts, operator-input checks and open type-parameter rules.
