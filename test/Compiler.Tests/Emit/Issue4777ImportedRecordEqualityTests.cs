@@ -11,6 +11,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
@@ -65,6 +66,21 @@ public sealed class Issue4777ImportedRecordEqualityTests
             var nativeDeclaration = reordered ? "Leaf<T, U>" : "Leaf<T>";
             var nativeBase = reordered ? "Reordered<U, T>" : "Root<T>";
             var reference = Path.Combine(fixture.Directory, "Contracts.ref.dll");
+            File.WriteAllText(Path.Combine(fixture.Directory, "gsc-invocation.json"), JsonSerializer.Serialize(new
+            {
+                entry = "GSharp.Compiler.Program.Main",
+                compiler = typeof(Program).Assembly.Location,
+                compilerSha256 = Hash(typeof(Program).Assembly.Location),
+                core = typeof(TypeSymbol).Assembly.Location,
+                coreSha256 = Hash(typeof(TypeSymbol).Assembly.Location),
+                argv = new[]
+                {
+                    "/out:" + Path.Combine(fixture.Directory, "Contracts.dll"),
+                    "/target:library", "/targetframework:net10.0",
+                    Path.Combine(fixture.Directory, "Contracts.gs"),
+                    "/assemblyname:Contracts", "/r:" + root, "/refout:" + reference, "/debug:portable",
+                },
+            }));
             var library = fixture.Compile($$"""
                 package ImportedEquality
                 import System
@@ -218,10 +234,25 @@ public sealed class Issue4777ImportedRecordEqualityTests
         var sourcePath = Path.Combine(directory, name + ".cs");
         var imagePath = Path.Combine(directory, name + ".dll");
         File.WriteAllText(sourcePath, source, Encoding.UTF8);
+        var referencePaths = ReferenceResolver.HostTrustedPlatformAssemblyPaths().Concat(references).ToArray();
+        File.WriteAllText(sourcePath + ".inputs.json", JsonSerializer.Serialize(new
+        {
+            entry = "Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create/Emit",
+            sourcePath,
+            sourceSha256 = Hash(sourcePath),
+            imagePath,
+            pdbPath = Path.ChangeExtension(imagePath, ".pdb"),
+            outputKind = "DynamicallyLinkedLibrary",
+            nullableContext = "Enable",
+            deterministic = true,
+            debugInformationFormat = "PortablePdb",
+            roslyn = typeof(CSharpCompilation).Assembly.Location,
+            roslynSha256 = Hash(typeof(CSharpCompilation).Assembly.Location),
+            references = referencePaths.Select(path => new { path, sha256 = Hash(path) }),
+        }));
         var compilation = CSharpCompilation.Create(name,
             new[] { CSharpSyntaxTree.ParseText(SourceText.From(source, Encoding.UTF8, SourceHashAlgorithm.Sha256), path: sourcePath) },
-            ReferenceResolver.HostTrustedPlatformAssemblyPaths().Select(path => MetadataReference.CreateFromFile(path))
-                .Concat(references.Select(path => MetadataReference.CreateFromFile(path))),
+            referencePaths.Select(path => MetadataReference.CreateFromFile(path)),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
                 nullableContextOptions: NullableContextOptions.Enable, deterministic: true));
         using var image = File.Create(imagePath);
