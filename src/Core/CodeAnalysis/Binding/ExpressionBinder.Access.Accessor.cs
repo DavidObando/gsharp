@@ -110,14 +110,11 @@ internal sealed partial class ExpressionBinder
 
         // Issue #1069: a nested user type referenced by a qualified name from
         // outside its enclosing type (`Outer.Entry(...)`, `Outer.Inner().M()`).
-        // Nested types are also visible by their simple name in the flat package
-        // scope, so an enclosing-type qualifier in front of a nested-type
-        // construction/member-access is redundant: peel it off and bind the
-        // remainder by simple name. This mirrors how the enclosing type's own
-        // members reference a sibling nested type. It only fires when the left
-        // segment is a user aggregate type and the next segment names one of its
-        // nested types, and never for a bare-name terminal segment (handled as a
-        // type receiver below), so it cannot shadow ordinary static-member access.
+        // Keep the enclosing receiver when binding nested construction/member
+        // access, just as for a constructed generic receiver below. Simple-name
+        // rebinding would lose the owner or select a top-level homonym. This
+        // only fires when the next segment names a nested type; a bare terminal
+        // name remains a type receiver handled below.
         if (syntax.LeftPart is NameExpressionSyntax enclosingNameSyntax
             && syntax.RightPart is not NameExpressionSyntax
             && scope.TryLookupSymbol(enclosingNameSyntax.IdentifierToken.ValueText) is not VariableSymbol
@@ -129,48 +126,12 @@ internal sealed partial class ExpressionBinder
             && IsUserAggregateType(enclosingAliasType)
             && TryGetHeadIdentifier(syntax.RightPart, out var headIdentifier))
         {
-            if (syntax.RightPart is CallExpressionSyntax nestedCall
-                && scope.TryLookupNestedTypeAlias(
-                    enclosingAliasType,
-                    headIdentifier,
-                    -1,
-                    out var nestedCallType)
-                && nestedCallType is StructSymbol nestedClassDef)
+            // Qualified source construction uses the same receiver-aware path
+            // whether the enclosing type is generic or nongeneric (#4803).
+            if (enclosingAliasType is StructSymbol enclosingStruct
+                && IsNestedTypeOf(headIdentifier, enclosingStruct))
             {
-                return overloads.BindConstructorCallExpression(nestedCall, nestedClassDef);
-            }
-
-            var nestedAccess = syntax.RightPart as AccessorExpressionSyntax;
-            var nestedAccessCall = nestedAccess?.LeftPart as CallExpressionSyntax;
-            if (nestedAccess != null
-                && nestedAccessCall != null
-                && scope.TryLookupNestedTypeAlias(
-                    enclosingAliasType,
-                    headIdentifier,
-                    -1,
-                    out var nestedAccessType)
-                && nestedAccessType is StructSymbol nestedAccessClassDef)
-            {
-                var constructed = overloads.BindConstructorCallExpression(nestedAccessCall, nestedAccessClassDef);
-                return constructed is BoundErrorExpression
-                    ? constructed
-                    : BindAccessorStep(constructed, classSymbol: null, nestedAccess.RightPart);
-            }
-
-            // Issue #1174: when a top-level type shares the nested type's simple
-            // name, re-binding the right part by simple name would resolve to the
-            // top-level homonym (which holds the simple key). Resolve the nested
-            // type by (container, simpleName) and bind the qualified composite
-            // literal directly against the NESTED definition so its members
-            // resolve correctly.
-            if (syntax.RightPart is StructLiteralExpressionSyntax nestedLiteral)
-            {
-                var literalArity = nestedLiteral.TypeArgumentList != null ? nestedLiteral.TypeArgumentList.Arguments.Count : -1;
-                if (scope.TryLookupNestedTypeAlias(enclosingAliasType, headIdentifier, literalArity, out var nestedLiteralType)
-                    && nestedLiteralType is StructSymbol nestedStructDef)
-                {
-                    return BindStructLiteralExpression(nestedLiteral, nestedStructDef);
-                }
+                return BindUserTypeStaticAccessorStep(enclosingStruct, syntax.RightPart);
             }
 
             // No collision (the nested type still holds its simple key): peel off
@@ -2578,8 +2539,8 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Handles <c>TypeName.member</c> and <c>TypeName.method(args)</c> accessor
-    /// resolution for user-defined struct/class static members (ADR-0053).
+    /// Resolves user struct/class static members (ADR-0053) and nested
+    /// construction under the actual enclosing receiver.
     /// </summary>
     private BoundExpression BindUserTypeStaticAccessorStep(StructSymbol structSym, ExpressionSyntax rightPart)
     {
@@ -2644,7 +2605,24 @@ internal sealed partial class ExpressionBinder
                 return BindAccessorStep(head, null, nested.RightPart);
 
             case CallExpressionSyntax ce:
+                // Resolve the nested owner before treating the name as a shared
+                // method. Leave its own arguments to the constructor binder so
+                // explicit arguments and inference retain the enclosing vector.
+                if (TryResolveNestedTypeChainUnderReceiver(
+                    structSym,
+                    new NameExpressionSyntax(ce.SyntaxTree, ce.Identifier),
+                    out var nestedConstructorType,
+                    out _,
+                    ce.TypeArgumentList?.Arguments.Count ?? -1)
+                    && nestedConstructorType != null)
+                {
+                    return overloads.BindConstructorCallExpression(ce, nestedConstructorType);
+                }
+
                 return BindUserTypeStaticCall(structSym, ce);
+
+            case ObjectCreationExpressionSyntax { Target: { } target } creation:
+                return BindObjectInitializerSuffix(creation, BindUserTypeStaticAccessorStep(structSym, target));
 
             case CollectionInitializerExpressionSyntax { Target: { } target } collection:
                 return BindCollectionInitializerSuffix(collection, BindUserTypeStaticAccessorStep(structSym, target));
@@ -2760,12 +2738,14 @@ internal sealed partial class ExpressionBinder
     /// <param name="typeExpr">The nested-type-naming expression.</param>
     /// <param name="constructedStruct">The resolved constructed nested struct on success.</param>
     /// <param name="constructedEnum">The resolved constructed nested enum on success.</param>
+    /// <param name="preferredArity">A terminal constructor's own arity, or -1 when inferred.</param>
     /// <returns>Whether the expression named a nested type of the receiver.</returns>
     private bool TryResolveNestedTypeChainUnderReceiver(
         StructSymbol receiver,
         ExpressionSyntax typeExpr,
         out StructSymbol? constructedStruct,
-        out EnumSymbol? constructedEnum)
+        out EnumSymbol? constructedEnum,
+        int preferredArity = -1)
     {
         constructedStruct = null;
         constructedEnum = null;
@@ -2776,16 +2756,25 @@ internal sealed partial class ExpressionBinder
         }
 
         var enclosingArgs = FlattenConstructedEnclosingArguments(receiver);
-        TypeSymbol containerDef = receiver.Definition ?? receiver;
+        TypeSymbol container = receiver;
         for (var i = 0; i < segments.Count; i++)
         {
-            var arity = segments[i].Args.IsDefaultOrEmpty ? -1 : segments[i].Args.Length;
-            var lookupContainer = (containerDef as StructSymbol)?.Definition ?? containerDef;
+            var arity = segments[i].Args.IsDefaultOrEmpty
+                ? i == segments.Count - 1 ? preferredArity : -1
+                : segments[i].Args.Length;
+            var constructorArity = i == segments.Count - 1
+                && segments[i].Args.IsDefaultOrEmpty
+                && preferredArity >= 0;
+            var lookupContainer = (container as StructSymbol)?.Definition ?? container;
             TypeSymbol? nested;
-            if (!scope.TryLookupNestedTypeAlias(lookupContainer, segments[i].Name, arity, out nested))
+            if (!scope.TryLookupNestedTypeAlias(lookupContainer, segments[i].Name, arity, out nested)
+                && (!constructorArity
+                    || !scope.TryLookupNestedTypeAlias(lookupContainer, segments[i].Name, -1, out nested)))
             {
-                if (containerDef is StructSymbol containerStruct
-                    && scope.TryLookupNestedTypeAliasIncludingInherited(containerStruct, segments[i].Name, arity, out var inheritedNested, out var inheritedOwner))
+                if (container is StructSymbol containerStruct
+                    && (scope.TryLookupNestedTypeAliasIncludingInherited(containerStruct, segments[i].Name, arity, out var inheritedNested, out var inheritedOwner)
+                        || (constructorArity
+                            && scope.TryLookupNestedTypeAliasIncludingInherited(containerStruct, segments[i].Name, -1, out inheritedNested, out inheritedOwner))))
                 {
                     nested = inheritedNested;
                     enclosingArgs = FlattenConstructedEnclosingArguments(inheritedOwner);
@@ -2796,28 +2785,13 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            if (i < segments.Count - 1)
-            {
-                // Enclosing segment: accumulate its own arguments (if generic)
-                // onto the flattened vector threaded into the next level.
-                if (!segments[i].Args.IsDefaultOrEmpty)
-                {
-                    enclosingArgs = enclosingArgs.IsDefaultOrEmpty
-                        ? segments[i].Args
-                        : enclosingArgs.AddRange(segments[i].Args);
-                }
-
-                // nested is never null here: either TryLookupNestedTypeAlias
-                // above returned true ([NotNullWhen(true)]), or it failed and
-                // the recovery branch above reassigned it from inheritedNested
-                // (also [NotNullWhen(true)]) — every other path already
-                // returned false before reaching this point.
-                containerDef = nested!;
-                continue;
-            }
-
             if (nested is EnumSymbol nestedEnum)
             {
+                if (i < segments.Count - 1)
+                {
+                    return false;
+                }
+
                 constructedEnum = !enclosingArgs.IsDefaultOrEmpty
                     ? EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, enclosingArgs)
                     : nestedEnum.Definition ?? nestedEnum;
@@ -2848,7 +2822,16 @@ internal sealed partial class ExpressionBinder
                 constructedStruct = def;
             }
 
-            return true;
+            if (i == segments.Count - 1)
+            {
+                return true;
+            }
+
+            // Inherited nested lookup needs the constructed owner at every
+            // level, not just the accumulated arguments of its definition.
+            enclosingArgs = FlattenConstructedEnclosingArguments(constructedStruct);
+            container = constructedStruct;
+            constructedStruct = null;
         }
 
         return false;

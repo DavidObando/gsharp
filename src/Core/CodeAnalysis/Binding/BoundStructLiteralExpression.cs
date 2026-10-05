@@ -17,15 +17,29 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundStructLiteralExpression : BoundExpression
 {
     public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers)
+        : this(syntax, structType, initializers, copySource: null)
+    {
+    }
+
+    public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers, BoundExpression? copySource)
         : base(syntax)
     {
+        if (copySource != null && (!structType.IsClass || !structType.IsData || !initializers.IsEmpty))
+        {
+            throw new System.ArgumentException("A clone literal must be a data class without member initializers.", nameof(copySource));
+        }
+
         StructType = structType;
         Initializers = initializers;
+        CopySource = copySource;
     }
 
     public StructSymbol StructType { get; }
 
     public ImmutableArray<BoundFieldInitializer> Initializers { get; }
+
+    /// <summary>Gets the captured source for a data-class clone; null for ordinary construction.</summary>
+    public BoundExpression? CopySource { get; }
 
     public override TypeSymbol Type => StructType;
 
