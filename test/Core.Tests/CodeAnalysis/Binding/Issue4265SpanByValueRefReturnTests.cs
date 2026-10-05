@@ -253,8 +253,7 @@ public class Issue4265SpanByValueRefReturnTests
     [InlineData("UnscopedRefIndexerPropertyLevelFixture")]
     public void UnscopedRefFixture_CarriesTheAttribute(string typeName)
     {
-        var type = typeof(GSharp.Core.Tests.Fixtures.UnscopedRefIndexerFixture)
-            .Assembly.GetType("GSharp.Core.Tests.Fixtures." + typeName, throwOnError: true);
+        var type = NativeMetadataFixtures.GetType("GSharp.Core.Tests.Fixtures." + typeName);
         Assert.NotNull(type);
         var indexer = type!.GetProperty("Item");
         Assert.NotNull(indexer);
@@ -293,8 +292,8 @@ public class Issue4265SpanByValueRefReturnTests
 
     private static ImmutableArray<Diagnostic> BindWithFixtures(string source)
     {
-        var fixturePath = typeof(GSharp.Core.Tests.Fixtures.UnscopedRefIndexerFixture).Assembly.Location;
-        var resolver = ReferenceResolver.WithReferences(new[] { fixturePath });
+        using var fixture = NativeMetadataFixtures.Compile();
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixture.AssemblyPath });
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var globalScope = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(
             previous: null,
