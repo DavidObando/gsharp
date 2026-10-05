@@ -156,6 +156,11 @@ True
 
 The `.copy(...)` call and `with` expression produce modified values without mutating the original. Tuple and named deconstruction read fields from a data struct.
 
+For a data class, copying uses its clone/copy-constructor contract, retaining the
+runtime type and base, private, and readonly state without rerunning construction
+initializers. The receiver is evaluated once, then updates are applied once in
+written order.
+
 ## 4. Use a minimal data struct
 
 The smaller `DataStruct` sample shows synthesized string and equality behavior:

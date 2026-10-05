@@ -51,10 +51,13 @@ internal static class RepositoryFileInventory
         string[] segments = relativePath.Split(
             new[] { '/', '\\' },
             StringSplitOptions.RemoveEmptyEntries);
-        return segments.Any(segment =>
+        return IsBuildOutputPath(relativePath) || segments.Any(segment =>
             segment.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("TestResults", StringComparison.OrdinalIgnoreCase));
     }
+
+    internal static bool IsBuildOutputPath(string relativePath) =>
+        relativePath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("obj", StringComparison.OrdinalIgnoreCase));
 }
