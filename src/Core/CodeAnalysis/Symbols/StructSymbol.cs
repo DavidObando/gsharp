@@ -1672,46 +1672,24 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>
-    /// Issue #1087: gets the parameter types of <paramref name="constructor"/>
-    /// as observed on this (possibly constructed) symbol. For a constructed
-    /// closed generic type, the open-definition constructor's parameter types
-    /// have this symbol's type arguments substituted for the definition's type
-    /// parameters (e.g. <c>init(a T)</c> on <c>Base[T]</c> surfaces as
-    /// <c>init(a int32)</c> on <c>Base[int32]</c>); for a non-generic or open
-    /// symbol the declared parameter types are returned unchanged.
+    /// Gets the parameter types of <paramref name="constructor"/> in this
+    /// construction, substituting both enclosing and own type arguments through
+    /// the same member-type projection used by fields and properties.
     /// </summary>
     /// <param name="constructor">A constructor drawn from <see cref="EffectiveExplicitConstructors"/>.</param>
     /// <returns>The (substituted, when constructed) parameter types in declaration order.</returns>
     public ImmutableArray<TypeSymbol> GetConstructorParameterTypesForConstruction(ConstructorSymbol constructor)
     {
         var parameters = constructor.Parameters;
-        if (Definition == null
-            || TypeArguments.IsDefaultOrEmpty
-            || Definition.TypeParameters.IsDefaultOrEmpty
-            || parameters.IsDefaultOrEmpty)
+        if (parameters.IsDefaultOrEmpty)
         {
-            var asTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.IsDefaultOrEmpty ? 0 : parameters.Length);
-            if (!parameters.IsDefaultOrEmpty)
-            {
-                foreach (var p in parameters)
-                {
-                    asTypes.Add(p.Type);
-                }
-            }
-
-            return asTypes.ToImmutable();
-        }
-
-        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(Definition.TypeParameters.Length);
-        for (var i = 0; i < Definition.TypeParameters.Length && i < TypeArguments.Length; i++)
-        {
-            subst[Definition.TypeParameters[i]] = TypeArguments[i];
+            return ImmutableArray<TypeSymbol>.Empty;
         }
 
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
         foreach (var p in parameters)
         {
-            builder.Add(SubstituteTypeForConstruction(p.Type, subst, mapClrType));
+            builder.Add(SubstituteMemberType(p.Type));
         }
 
         return builder.MoveToImmutable();

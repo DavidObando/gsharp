@@ -152,6 +152,8 @@ Classes can have primary constructors, explicit `init` constructors, base clause
 
 Classes and structs can declare nested `class`, `struct`, `interface`, or `enum` types. A nested type can be referenced by simple name when unambiguous or by a qualified name such as `Outer.Inner`; qualified nested names also work in generic arguments and composite literals.
 
+Qualified constructor calls such as `Outer[int32].User()` also retain the enclosing construction and select the nested type's existing `init` overloads. The same call can appear in an expression-tree lambda (`() -> Outer[int32].User()`). Composite literals remain a separate construction form; replacing `()` with `{}` is not a constructor-binding workaround with equivalent initializer semantics.
+
 A primary-constructor parameter list accepts a trailing variadic `name ...T` parameter (`class`, `struct`, `data class`, `data struct`, `inline struct`). The variadic param promotes to a `[]T` auto-field with the same name and call binding follows the standard variadic pack / pass-through rules. 
 ```gsharp
 class Tags(name string, tags ...string) { }
