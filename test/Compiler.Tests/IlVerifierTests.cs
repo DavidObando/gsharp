@@ -10,6 +10,8 @@ using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 using Xunit.Sdk;
 
@@ -22,6 +24,100 @@ namespace GSharp.Compiler.Tests;
 /// </summary>
 public class IlVerifierTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VerifyCore_AcceptsNativeAssemblyWithNoncanonicalPath(bool relative)
+    {
+        var tempDir = Path.GetFullPath(Directory.CreateTempSubdirectory("gs_ilv_path_").FullName);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "nested"));
+            var outPath = Path.Combine(tempDir, "valid.dll");
+            var compilation = CSharpCompilation.Create(
+                "Valid",
+                new[] { CSharpSyntaxTree.ParseText("public static class Valid { public static int Value() => 42; }") },
+                new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var emit = compilation.Emit(outPath);
+            Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+
+            IlVerifier.Verify(outPath);
+            var noncanonicalPath = Path.Combine(tempDir, ".", "nested", "..", "valid.dll");
+            var assemblyPath = relative
+                ? Path.GetRelativePath(IlVerifier.FindRepoRoot(), noncanonicalPath)
+                : noncanonicalPath;
+            Assert.Equal(outPath, Path.GetFullPath(assemblyPath, IlVerifier.FindRepoRoot()));
+            Assert.NotEqual(outPath, assemblyPath);
+
+            IlVerifier.VerifyCore(
+                "dotnet",
+                new[] { "tool", "run", "ilverify" },
+                assemblyPath,
+                new[] { typeof(object).Assembly.Location },
+                ignoredErrorCodes: null,
+                includedScope: null,
+                excludedScope: null);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(0, "")]
+    [InlineData(0, "All Classes and Methods Verified.")]
+    [InlineData(0, "All Classes and Methods in other.dll Verified.")]
+    [InlineData(1, "matching")]
+    public void VerifyCore_RejectsMissingOrWrongMarkerAndNonzeroExit(int exitCode, string output)
+    {
+        var assemblyPath = typeof(IlVerifierTests).Assembly.Location;
+        var marker = output == "matching"
+            ? $"All Classes and Methods in {assemblyPath} Verified."
+            : output;
+        var child = CreateChildProcess(
+            $"[Console]::Out.Write('{marker.Replace("'", "''")}'); exit {exitCode}",
+            $"printf '%s' '{marker.Replace("'", "'\\''")}'; exit {exitCode}");
+        var exception = Assert.Throws<XunitException>(
+            () => IlVerifier.VerifyCore(
+                child.FileName,
+                child.ArgumentList.ToArray(),
+                assemblyPath,
+                Array.Empty<string>(),
+                ignoredErrorCodes: null,
+                includedScope: null,
+                excludedScope: null));
+
+        Assert.Contains(
+            exitCode == 0 ? "without confirming verification" : "(exit 1)",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0, "")]
+    [InlineData(0, "All Classes and Methods Verified.")]
+    [InlineData(0, "All Classes and Methods in other.dll Verified.")]
+    [InlineData(1, "matching")]
+    public void CreateChildProcess_WindowsCommandIsInvokedScriptBlock(int exitCode, string output)
+    {
+        const string AssemblyPath = @"C:\verifier fixture\test.dll";
+        var marker = output == "matching"
+            ? $"All Classes and Methods in {AssemblyPath} Verified."
+            : output;
+        var command = $"[Console]::Out.Write('{marker.Replace("'", "''")}'); exit {exitCode}";
+        var child = CreateChildProcess(command, string.Empty, windows: true);
+        child.ArgumentList.Add(AssemblyPath);
+        child.ArgumentList.Add("-s");
+        child.ArgumentList.Add("System.Private.CoreLib");
+
+        Assert.Equal("powershell.exe", child.FileName);
+        Assert.Equal(
+            new[] { "-NoProfile", "-NonInteractive", "-Command", $"& {{ {command} }}", AssemblyPath, "-s", "System.Private.CoreLib" },
+            child.ArgumentList.ToArray());
+    }
+
     [Fact]
     public void Verify_AcceptsValidEmittedAssembly_DoesNotThrow()
     {
@@ -305,21 +401,23 @@ public class IlVerifierTests
         }
     }
 
-    private static ProcessStartInfo CreateChildProcess(string windowsCommand, string unixCommand)
+    private static ProcessStartInfo CreateChildProcess(string windowsCommand, string unixCommand, bool? windows = null)
     {
-        var startInfo = new ProcessStartInfo(OperatingSystem.IsWindows() ? "powershell.exe" : "/bin/sh")
+        var isWindows = windows ?? OperatingSystem.IsWindows();
+        var startInfo = new ProcessStartInfo(isWindows ? "powershell.exe" : "/bin/sh")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        if (OperatingSystem.IsWindows())
+        if (isWindows)
         {
             startInfo.ArgumentList.Add("-NoProfile");
             startInfo.ArgumentList.Add("-NonInteractive");
             startInfo.ArgumentList.Add("-Command");
-            startInfo.ArgumentList.Add(windowsCommand);
+            // VerifyCore appends verifier arguments; keep them outside the invoked script.
+            startInfo.ArgumentList.Add($"& {{ {windowsCommand} }}");
         }
         else
         {
