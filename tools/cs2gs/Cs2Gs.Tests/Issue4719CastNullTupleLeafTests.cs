@@ -2861,18 +2861,21 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(true, false, false)]
-    [InlineData(false, true, false)]
-    [InlineData(true, true, false)]
-    [InlineData(false, false, true)]
-    [InlineData(true, false, true)]
-    [InlineData(false, true, true)]
-    [InlineData(true, true, true)]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(true, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(false, false, false, true)]
+    [InlineData(true, false, false, true)]
     public void TupleContractConsumer_IntermediateResultUsesImmediateOperatorInput(
         bool switchArm,
         bool strictInput,
-        bool generic)
+        bool generic,
+        bool nested)
     {
         string fixture = this.EmitFixture();
         string envelope = (strictInput ? "StrictConsumerEnvelope" : "ConsumerEnvelope")
@@ -2885,11 +2888,17 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
             branch = $"{(switchArm ? "checked" : "unchecked")}(({branch}))";
         }
 
+        if (nested)
+        {
+            branch = $"Nested ? ({branch}) : ({envelope})new NullableResultBox()";
+        }
+
         string printed = Translate($$"""
             using System;
             using Issue4719Fixture;
             public static class Obj {
                 public static bool Missing;
+                public static bool Nested = true;
                 public static int Reads;
                 public static int Decisions;
                 public static string Value { get { Reads++; return Missing ? "miss" : "keep"; } }

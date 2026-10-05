@@ -4358,14 +4358,23 @@ public sealed partial class CSharpToGSharpTranslator
         {
             crossedSuppression = false;
 
-            // A conditional or switch-expression ARM has no target of its own:
-            // it flows into whatever the whole `?:` / `switch` flows into, so the
-            // walk climbs to the outermost branching expression. `isBranchArm`
-            // records that it did.
+            // An arm follows its containing branches until a conversion's
+            // parameter or a declared sink supplies its immediate contract.
             SyntaxNode current = value;
             bool isBranchArm = false;
             while (true)
             {
+                if (isBranchArm
+                    && current is ExpressionSyntax branch
+                    && this.GetUserDefinedConversionInputOperator(
+                        branch,
+                        this.context.GetTypeInfo(branch).ConvertedType,
+                        out _) is { Parameters.Length: 1 } consumer)
+                {
+                    IParameterSymbol parameter = consumer.Parameters[0];
+                    return (parameter.Type, parameter);
+                }
+
                 if (current.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
                 {
                     current = current.Parent;
@@ -4392,16 +4401,6 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     break;
                 }
-            }
-
-            if (isBranchArm
-                && this.GetUserDefinedConversionInputOperator(
-                    (ExpressionSyntax)current,
-                    this.context.GetTypeInfo((ExpressionSyntax)current).ConvertedType,
-                    out _) is { Parameters.Length: 1 } consumer)
-            {
-                IParameterSymbol parameter = consumer.Parameters[0];
-                return (parameter.Type, parameter);
             }
 
             if (current.Parent is YieldStatementSyntax
