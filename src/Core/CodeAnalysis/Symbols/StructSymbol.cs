@@ -1742,16 +1742,24 @@ public sealed class StructSymbol : TypeSymbol
     internal ImmutableArray<(StructSymbol Owner, PropertySymbol Property, bool IsGetter)> GetUnimplementedAbstractPropertyAccessors()
     {
         var result = ImmutableArray.CreateBuilder<(StructSymbol Owner, PropertySymbol Property, bool IsGetter)>();
-        var effectiveAccessors = new Dictionary<string, bool>();
-        var requirements = new HashSet<string>();
+        var effectiveAccessors = new Dictionary<(object Slot, bool IsGetter), bool>();
+        var requirements = new HashSet<(object Slot, bool IsGetter)>();
         foreach (var owner in GetHierarchy())
         {
             foreach (var property in owner.Properties)
             {
-                var signature = property.Name + "|" + string.Join(",", property.Parameters.Select(parameter => parameter.Type.ToString()));
+                var slot = property;
+                while (slot.OverriddenProperty is { } overridden)
+                {
+                    slot = overridden;
+                }
+
+                // Constructed projections share the declaring syntax, not the
+                // property object. Hiding declarations start distinct slots.
+                object slotIdentity = slot.Declaration is { } declaration ? declaration : slot;
                 void Check(bool isGetter)
                 {
-                    var key = signature + (isGetter ? "|get" : "|set");
+                    var key = (slotIdentity, isGetter);
                     if (property.IsOverride || property.IsAbstract)
                     {
                         effectiveAccessors.TryAdd(key, !property.IsAbstract);

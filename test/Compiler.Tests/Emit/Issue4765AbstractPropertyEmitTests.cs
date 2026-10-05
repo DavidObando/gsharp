@@ -180,6 +180,33 @@ public sealed class Issue4765AbstractPropertyEmitTests
     }
 
     [Fact]
+    public void InheritedGenericOverrideDischargesTheOriginalAccessorSlots()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package GenericAbstract
+            public abstract class Base[T] { public abstract prop Value T { get; set; } }
+            public open class Middle[T] : Base[T] { public override prop Value T { get; set; } }
+            public class Item : Middle[int32] { }
+            public class Driver {
+                shared {
+                    public func Run() int32 {
+                        let item Base[int32] = Item()
+                        item.Value = 13
+                        return item.Value
+                    }
+                }
+            }
+            """, "GenericAbstract", false);
+        this.LogProduct(dll);
+        Verify(dll);
+        var assembly = EmittedFixture.Load(dll);
+        Assert.False(RequiredType(assembly, "GenericAbstract.Middle`1").IsAbstract);
+        Assert.False(RequiredType(assembly, "GenericAbstract.Item").IsAbstract);
+        Assert.Equal(13, RequiredType(assembly, "GenericAbstract.Driver").GetMethod("Run").Invoke(null, null));
+    }
+
+    [Fact]
     public void ExplicitReabstractOverridePreservesRoslynImportedSlotsAndProtectedInit()
     {
         using var native = new CSharpFixture("""
@@ -320,6 +347,7 @@ public sealed class Issue4765AbstractPropertyEmitTests
     [InlineData("open class Missing : Base { }", "get_Value")]
     [InlineData("class Missing : Base { public prop Value int32 { get; set; } }", "get_Value")]
     [InlineData("class Missing : Base { public override prop Value int32 -> 7 }", "set_Value")]
+    [InlineData("abstract class Hidden : Base { public open prop Value int32 { get; set; } } class Missing : Hidden { public override prop Value int32 { get; set; } }", "get_Value")]
     public void ConcreteDerivedMustImplementEveryRequiredAccessor(string declaration, string accessor)
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
