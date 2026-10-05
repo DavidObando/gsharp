@@ -38,9 +38,9 @@ public static class OverloadResolutionGenerators
         typeof(ushort),
     ];
 
-    internal static readonly ImmutableArray<MethodInfo> Methods = typeof(OverloadResolutionPropertyFixture)
+    internal static readonly ImmutableArray<MethodInfo> Methods = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionPropertyFixture")
         .GetMethods(BindingFlags.Public | BindingFlags.Static)
-        .Where(m => m.DeclaringType == typeof(OverloadResolutionPropertyFixture))
+        .Where(m => m.DeclaringType == NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionPropertyFixture"))
         .ToImmutableArray();
 
     private static readonly Gen<Type> TypeGen = Gen.Elements(ArgumentTypes.ToArray());
@@ -125,119 +125,6 @@ public static class OverloadResolutionGenerators
 
     internal static MethodInfo FindExactOneParameterMethod(Type argumentType)
         => FindOneParameterMethods().Single(m => m.GetParameters()[0].ParameterType == argumentType);
-}
-
-/// <summary>
-/// Fixture methods used by property-based overload-resolution tests.
-/// </summary>
-public static class OverloadResolutionPropertyFixture
-{
-    /// <summary>Accepts a Boolean value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Bool(bool value) => _ = value;
-
-    /// <summary>Accepts a byte value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Byte(byte value) => _ = value;
-
-    /// <summary>Accepts a char value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Char(char value) => _ = value;
-
-    /// <summary>Accepts a decimal value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Decimal(decimal value) => _ = value;
-
-    /// <summary>Accepts a double value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Double(double value) => _ = value;
-
-    /// <summary>Accepts a float value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Float(float value) => _ = value;
-
-    /// <summary>Accepts an int value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Int(int value) => _ = value;
-
-    /// <summary>Accepts a long value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Long(long value) => _ = value;
-
-    /// <summary>Accepts an object value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Object(object value) => _ = value;
-
-    /// <summary>Accepts an sbyte value.</summary>
-    /// <param name="value">The value.</param>
-    public static void SByte(sbyte value) => _ = value;
-
-    /// <summary>Accepts a short value.</summary>
-    /// <param name="value">The value.</param>
-    public static void Short(short value) => _ = value;
-
-    /// <summary>Accepts a string value.</summary>
-    /// <param name="value">The value.</param>
-    public static void String(string value) => _ = value;
-
-    /// <summary>Accepts a uint value.</summary>
-    /// <param name="value">The value.</param>
-    public static void UInt(uint value) => _ = value;
-
-    /// <summary>Accepts a ulong value.</summary>
-    /// <param name="value">The value.</param>
-    public static void ULong(ulong value) => _ = value;
-
-    /// <summary>Accepts a ushort value.</summary>
-    /// <param name="value">The value.</param>
-    public static void UShort(ushort value) => _ = value;
-
-    /// <summary>Accepts two int values.</summary>
-    /// <param name="first">The first value.</param>
-    /// <param name="second">The second value.</param>
-    public static void PairIntInt(int first, int second)
-    {
-        _ = first;
-        _ = second;
-    }
-
-    /// <summary>Accepts two long values.</summary>
-    /// <param name="first">The first value.</param>
-    /// <param name="second">The second value.</param>
-    public static void PairLongLong(long first, long second)
-    {
-        _ = first;
-        _ = second;
-    }
-
-    /// <summary>Accepts an int and a long.</summary>
-    /// <param name="first">The first value.</param>
-    /// <param name="second">The second value.</param>
-    public static void PairIntLong(int first, long second)
-    {
-        _ = first;
-        _ = second;
-    }
-
-    /// <summary>Accepts a long and an int.</summary>
-    /// <param name="first">The first value.</param>
-    /// <param name="second">The second value.</param>
-    public static void PairLongInt(long first, int second)
-    {
-        _ = first;
-        _ = second;
-    }
-
-    /// <summary>Accepts three int values.</summary>
-    /// <param name="first">The first value.</param>
-    /// <param name="second">The second value.</param>
-    /// <param name="third">The third value.</param>
-    public static void TripleInt(int first, int second, int third)
-    {
-        _ = first;
-        _ = second;
-        _ = third;
-    }
 }
 
 internal sealed class MethodIdentityComparer : IEqualityComparer<MethodInfo>

@@ -1985,8 +1985,12 @@ internal sealed class ConversionClassifier
         // measured it, and it changed nothing — the ordinary imported
         // instance-call path never consults it for parameter types. The gate
         // that actually decides is this inline one.
+        // Issue #4738: source classes inherit the same symbolic imported slots.
+        // Project through the actual declaring owner, not the receiver's
+        // argument order (an imported base may reorder or nest those arguments).
         if (method == null
-            || receiverType is not ImportedTypeSymbol imported
+            || receiverType == null
+            || MemberLookup.GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imported
             || imported.TypeArguments.IsDefaultOrEmpty
             || !imported.TypeArguments.Any(
                 static argument => TypeSymbol.RequiresSymbolicProjection(argument)
@@ -2002,7 +2006,16 @@ internal sealed class ConversionClassifier
             return null;
         }
 
-        var openDef = declaring.GetGenericTypeDefinition();
+        if (!MemberLookup.TryGetSymbolicDeclaringContext(
+                imported,
+                declaring,
+                out var openDef,
+                out var declaringTypeArguments)
+            || openDef == null)
+        {
+            return null;
+        }
+
         MethodInfo? openMethod = null;
         foreach (var candidate in openDef.GetMethods(
             BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
@@ -2077,7 +2090,7 @@ internal sealed class ConversionClassifier
         var mapped = MemberLookup.GetClrOpenParameterConversionTargetTypeSymbol(
             openParams[paramIndex],
             openDef,
-            imported.TypeArguments,
+            declaringTypeArguments,
             openMethod,
             effectiveMethodTypeArgs);
 

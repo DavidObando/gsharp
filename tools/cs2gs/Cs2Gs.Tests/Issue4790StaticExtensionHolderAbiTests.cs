@@ -11,6 +11,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
@@ -766,14 +767,225 @@ public class Issue4790StaticExtensionHolderAbiTests
         }, source, consumerSource);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SuspendingOwnedExtensions_PreserveDeclaredContextAndLogicalCompanion(bool marked)
+    {
+        string attribute = marked ? "[Suspending]" : string.Empty;
+        string source = $$"""
+            using System.Diagnostics.CodeAnalysis;
+            using System.Threading.Tasks;
+            using Gsharp.Concurrency;
+            namespace Issue4790.Suspension;
+            public sealed class Node
+            {
+                public TaskCompletionSource<int> Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                public int Calls;
+            }
+            public static class Holder
+            {
+                {{attribute}}
+                public static async ValueTask<int> Read([NotNull] this Node node, Context context)
+                {
+                    node.Calls++;
+                    return await node.Gate.Task;
+                }
+                {{attribute}}
+                public static async ValueTask Drain([NotNull] this Node node, Context context)
+                {
+                    node.Calls++;
+                    await node.Gate.Task;
+                }
+            }
+            """;
+        const string consumerSource = """
+            using Gsharp.Concurrency;
+            using Issue4790.Suspension;
+            public static class NativeConsumer
+            {
+                public static string Run()
+                {
+                    var node = new Node();
+                    var pending = node.Read(Context.None);
+                    string before = node.Calls + "," + pending.IsCompleted;
+                    node.Gate.SetResult(17);
+                    int result = pending.AsTask().GetAwaiter().GetResult();
+                    var other = new Node();
+                    var drain = other.Drain(Context.None);
+                    string drainBefore = other.Calls + "," + drain.IsCompleted;
+                    other.Gate.SetResult(23);
+                    drain.AsTask().GetAwaiter().GetResult();
+                    return before + "," + result + "," + node.Calls + "," + drainBefore + "," + other.Calls;
+                }
+            }
+            """;
+        WithProducts(source: source, consumerSource: consumerSource, assertion: (native, emitted, consumer) =>
+        {
+            Assert.Equal("1,False,17,1,1,False,1", RunConsumer(native, consumer));
+            Assert.Equal("1,False,17,1,1,False,1", RunConsumer(emitted, consumer));
+            Assembly nativeImage = consumer.LoadTogether(File.ReadAllBytes(native))[0];
+            Assembly emittedImage = consumer.LoadTogether(File.ReadAllBytes(emitted))[0];
+            Type nativeOwner = nativeImage.GetType("Issue4790.Suspension.Holder", throwOnError: true);
+            Type emittedOwner = emittedImage.GetType("Issue4790.Suspension.Holder", throwOnError: true);
+            Type receiver = emittedImage.GetType("Issue4790.Suspension.Node", throwOnError: true);
+            foreach (string name in new[] { "Read", "Drain" })
+            {
+                MethodInfo original = nativeOwner.GetMethod(name);
+                MethodInfo hosted = emittedOwner.GetMethod(name);
+                Assert.Equal(Contract(original), Contract(hosted));
+                Assert.True(hosted.IsPublic && hosted.IsStatic);
+                Assert.Equal(2, hosted.GetParameters().Length);
+                Assert.Single(hosted.GetCustomAttributesData(),
+                    a => a.AttributeType == typeof(Gsharp.Concurrency.SuspendingAttribute));
+                Assert.Equal(original.GetParameters()[0].GetCustomAttributesData().Select(a => a.AttributeType.FullName),
+                    hosted.GetParameters()[0].GetCustomAttributesData().Select(a => a.AttributeType.FullName));
+                MethodInfo companion = receiver.GetMethod(name);
+                Assert.Equal(hosted.ReturnType, companion.ReturnType);
+                Assert.Single(companion.GetParameters());
+                Assert.Equal(typeof(Gsharp.Concurrency.Context), companion.GetParameters()[0].ParameterType);
+                Assert.NotNull(companion.GetCustomAttribute<AsyncStateMachineAttribute>());
+                Assert.Single(companion.GetCustomAttributesData(),
+                    a => a.AttributeType == typeof(Gsharp.Concurrency.SuspendingAttribute));
+                object node = Activator.CreateInstance(receiver);
+                var gate = (TaskCompletionSource<int>)receiver.GetField("Gate").GetValue(node);
+                object pending = companion.Invoke(node, new object[] { Gsharp.Concurrency.Context.None });
+                Assert.Equal(1, receiver.GetField("Calls").GetValue(node));
+                if (name == "Read")
+                {
+                    var value = (ValueTask<int>)pending;
+                    Assert.False(value.IsCompleted);
+                    gate.SetResult(31);
+                    Assert.Equal(31, value.AsTask().GetAwaiter().GetResult());
+                }
+                else
+                {
+                    var value = (ValueTask)pending;
+                    Assert.False(value.IsCompleted);
+                    gate.SetResult(31);
+                    value.AsTask().GetAwaiter().GetResult();
+                }
+
+                Assert.Equal(1, receiver.GetField("Calls").GetValue(node));
+            }
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NonGenericTaskLikeForwarding_ReturnsTheOriginalEnvelope(bool valueTask)
+    {
+        string envelope = valueTask ? "ValueTask" : "Task";
+        string returned = valueTask ? "new ValueTask(node.Envelope)" : "node.Envelope";
+        string source = $$"""
+            using System.Threading.Tasks;
+            namespace Issue4790.NonGeneric;
+            public sealed class Node
+            {
+                public Task Envelope;
+                public int Calls;
+                public Node(Task envelope) { Envelope = envelope; }
+            }
+            public static class Holder
+            {
+                public static {{envelope}} Pass(this Node node)
+                {
+                    node.Calls++;
+                    return {{returned}};
+                }
+            }
+            """;
+        string task = valueTask ? "pending.AsTask()" : "pending";
+        string consumerSource = $$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4790.NonGeneric;
+            public static class NativeConsumer
+            {
+                public static string Run()
+                {
+                    var gate = new TaskCompletionSource<int>();
+                    var node = new Node(gate.Task);
+                    var pending = node.Pass();
+                    return ReferenceEquals(gate.Task, {{task}}) + "," + node.Calls + "," + pending.IsCompleted;
+                }
+            }
+            """;
+        WithProducts(source: source, consumerSource: consumerSource, assertion: (native, emitted, consumer) =>
+        {
+            Assert.Equal("True,1,False", RunConsumer(native, consumer));
+            Assert.Equal("True,1,False", RunConsumer(emitted, consumer));
+            Assembly image = consumer.LoadTogether(File.ReadAllBytes(emitted))[0];
+            Type receiver = image.GetType("Issue4790.NonGeneric.Node", throwOnError: true);
+            var gate = new TaskCompletionSource<int>();
+            object node = Activator.CreateInstance(receiver, gate.Task);
+            MethodInfo companion = receiver.GetMethod("Pass");
+            Assert.Null(companion.GetCustomAttribute<AsyncStateMachineAttribute>());
+            object pending = companion.Invoke(node, null);
+            Task actual = valueTask ? ((ValueTask)pending).AsTask() : (Task)pending;
+            Assert.Same(gate.Task, actual);
+            Assert.False(actual.IsCompleted);
+            Assert.Equal(1, receiver.GetField("Calls").GetValue(node));
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SuspendingOwnedExtensionWithoutContext_ReportsLocatedUnsupportedAbi(bool marked)
+    {
+        string attribute = marked ? "[Suspending]" : string.Empty;
+        string source = $$"""
+            using System.Threading.Tasks;
+            using Gsharp.Concurrency;
+            namespace Issue4790.Unrepresentable;
+            public sealed class Node { }
+            public static class Holder
+            {
+                {{attribute}}
+                public static async ValueTask<int> Read(this Node node)
+                {
+                    var context = Context.None;
+                    await Task.CompletedTask;
+                    return 17;
+                }
+            }
+            """;
+        MetadataReference runtime = MetadataReference.CreateFromFile(typeof(Gsharp.Concurrency.Context).Assembly.Location);
+        using var native = new CSharpFixture(source, new[] { runtime });
+        MethodInfo original = native.Load().GetType("Issue4790.Unrepresentable.Holder").GetMethod("Read");
+        Assert.Single(original.GetParameters());
+        Assert.True(original.IsPublic && original.IsStatic);
+        Assert.Equal(typeof(ValueTask<int>), original.ReturnType);
+        var tree = CSharpSyntaxTree.ParseText(source, path: "Producer.cs");
+        var references = CSharpProjectLoader.RuntimeReferences().Concat(new[] { runtime });
+        var compilation = CSharpCompilation.Create("UnsupportedSuspend", new[] { tree }, references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        Assert.DoesNotContain(compilation.GetDiagnostics(), d => d.Severity == DiagnosticSeverity.Error);
+        SemanticModel model = compilation.GetSemanticModel(tree);
+        var document = new LoadedDocument(tree.FilePath, tree, model);
+        var context = new TranslationContext(compilation, model, document.FilePath);
+        string rendered = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        TranslationDiagnostic diagnostic = Assert.Single(context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("native static-holder signature", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Equal("Producer.cs", diagnostic.Location.GetLineSpan().Path);
+        Assert.Contains("ValueTask<int> Read", source.Substring(
+            diagnostic.Location.SourceSpan.Start, diagnostic.Location.SourceSpan.Length), StringComparison.Ordinal);
+        Assert.DoesNotContain("func Read(", rendered, StringComparison.Ordinal);
+    }
+
     private static void WithProducts(
         Action<string, string, CSharpFixture> assertion,
         string source = Source,
         string consumerSource = Consumer)
     {
-        using var native = new CSharpFixture(source);
+        string runtime = typeof(Gsharp.Concurrency.Context).Assembly.Location;
+        MetadataReference runtimeReference = MetadataReference.CreateFromFile(runtime);
+        using var native = new CSharpFixture(source, new[] { runtimeReference });
         using var consumer = new CSharpFixture(consumerSource,
-            new[] { MetadataReference.CreateFromFile(native.AssemblyPath) });
+            new[] { MetadataReference.CreateFromFile(native.AssemblyPath), runtimeReference });
         string directory = Path.Combine(AppContext.BaseDirectory, "issue4790-fixtures",
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -793,7 +1005,8 @@ public class Issue4790StaticExtensionHolderAbiTests
 
             Microsoft.CodeAnalysis.SyntaxTree tree = CSharpSyntaxTree.ParseText(source,
                 new CSharpParseOptions(LanguageVersion.Latest), path: "Producer.cs");
-            string[] references = Directory.GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll");
+            string[] references = Directory.GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll")
+                .Append(runtime).ToArray();
             Assert.NotEmpty(references);
             CSharpCompilation compilation = CSharpCompilation.Create(
                 Path.GetFileNameWithoutExtension(native.AssemblyPath), new[] { tree },

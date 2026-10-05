@@ -309,6 +309,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            if (!this.CanPreserveSuspendingExtensionSignature(symbol, method))
+            {
+                return false;
+            }
+
             IParameterSymbol receiver = symbol.Parameters[0];
             return receiver.RefKind == RefKind.None &&
                 receiver.Type is INamedTypeSymbol receiverType &&
@@ -1287,14 +1292,25 @@ public sealed partial class CSharpToGSharpTranslator
             // touches the Gsharp.Concurrency runtime (or carries [Suspending])
             // is a G# `suspend func`; its return type is the awaited result,
             // exactly as B.23 unwraps `async Task<T>`.
-            bool isEmittedSuspend = !isOwnerScopedExtensionCompanion
-                && symbol != null && this.IsSuspendingCandidate(symbol, signatureFactsNode);
+            bool isEmittedSuspend = symbol != null
+                && this.IsSuspendingCandidate(symbol, signatureFactsNode);
+            if (isEmittedSuspend
+                && this.ownedExtensions.Contains(node)
+                && !this.CanPreserveSuspendingExtensionSignature(symbol, signatureFactsNode))
+            {
+                string message = $"owned suspending extension '{symbol.ContainingType.Name}.{symbol.Name}' cannot retain " +
+                    "its native static-holder signature: G# suspension would add a Context parameter " +
+                    "absent from the original declaration (ADR-0174 D7).";
+                this.context.ReportUnsupported(node, message);
+                return (null, false);
+            }
+
             GTypeReference returnType = this.MapReturnType(
                 symbol,
                 node,
                 unwrapValueTask: isEmittedSuspend,
                 iteratorBodySource: signatureFactsNode,
-                preserveEnvelope: isOwnerScopedExtensionCompanion);
+                preserveEnvelope: isOwnerScopedExtensionCompanion && !isEmittedSuspend);
             List<TypeParameter> typeParameters = this.MapMethodTypeParameters(
                 symbol,
                 isDeclaringPart ? symbol.PartialDefinitionPart : null);
@@ -1438,8 +1454,8 @@ public sealed partial class CSharpToGSharpTranslator
             // A rewritten analyzer test harness (#3686) delegates to the
             // synchronous G# verifier: there is nothing left to await, and an
             // `async` func returning `Task` cannot `return` a value.
-            // A direct companion returns the holder's envelope; only the
-            // original body executes an async or iterator state machine.
+            // Ordinary companions return the holder's envelope directly.
+            // Suspension instead shares the hosted logical-result contract.
             bool isEmittedAsync = !isOwnerScopedExtensionCompanion && !isAnalyzerHarness && !isEmittedSuspend
                 && symbol != null && symbol.IsAsync;
 
@@ -1450,7 +1466,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.MapLibraryImportMethodAttributes(node, symbol)
                 : isGeneratedRegexDefinition
                     ? this.MapGeneratedRegexMethodAttributes(node, symbol)
-                    : this.MapAttributes(node.AttributeLists);
+                    : this.MapAttributes(node.AttributeLists, isSuspendingDeclaration: isEmittedSuspend);
 
             // ADR-0192 §C: method-level attributes are unioned across the
             // parts by gsc, so each part carries only its OWN — `node` is the
@@ -1854,6 +1870,15 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool HasReceiverCompanion(IMethodSymbol method)
         {
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            if (original != null && original.DeclaringSyntaxReferences.Any(reference =>
+                reference.GetSyntax() is MethodDeclarationSyntax declaration
+                && this.ownedExtensions.Contains(declaration)
+                && !this.CanPreserveSuspendingExtensionSignature(original, declaration)))
+            {
+                return false;
+            }
+
             if (this.IsPreservedOwnedExtension(method)
                 && (method?.ReducedFrom ?? method).DeclaredAccessibility != Accessibility.Private)
             {
@@ -1865,7 +1890,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            IMethodSymbol original = method?.ReducedFrom ?? method;
             return !RequiresOwnerScopedExtension(original)
                 || this.CanEmitOwnerScopedReceiverCompanion(original);
         }

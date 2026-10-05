@@ -1474,7 +1474,9 @@ public sealed partial class CSharpToGSharpTranslator
                 .Any() == true;
         }
 
-        private List<AttributeUse> MapAttributes(IEnumerable<AttributeListSyntax> attributeLists)
+        private List<AttributeUse> MapAttributes(
+            IEnumerable<AttributeListSyntax> attributeLists,
+            bool isSuspendingDeclaration = false)
         {
             var attributes = new List<AttributeUse>();
             foreach (AttributeListSyntax list in attributeLists)
@@ -1505,6 +1507,16 @@ public sealed partial class CSharpToGSharpTranslator
                         attribute,
                         out INamedTypeSymbol attributeType,
                         out IAliasSymbol sourceAlias);
+
+                    // gsc stamps this marker for `suspend func`; copying the
+                    // authored marker as well would duplicate native metadata.
+                    if (isSuspendingDeclaration
+                        && attributeType is { Name: "SuspendingAttribute" }
+                        && IsConcurrencyRuntimeNamespace(attributeType.ContainingNamespace))
+                    {
+                        continue;
+                    }
+
                     this.typeMapper.TrackAttributeType(attributeType, sourceAlias);
 
                     var arguments = new List<AttributeArgument>();

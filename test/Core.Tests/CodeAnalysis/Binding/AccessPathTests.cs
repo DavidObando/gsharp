@@ -24,8 +24,8 @@ public class AccessPathTests
     [Fact]
     public void ClrMemberIdentityUsesModuleAndMetadataToken()
     {
-        var intProperty = typeof(GenericFixture<int>).GetProperty(nameof(GenericFixture<int>.Value));
-        var stringProperty = typeof(GenericFixture<string>).GetProperty(nameof(GenericFixture<string>.Value));
+        var intProperty = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.AccessPathTests+GenericFixture`1").MakeGenericType(typeof(int)).GetProperty("Value");
+        var stringProperty = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.AccessPathTests+GenericFixture`1").MakeGenericType(typeof(string)).GetProperty("Value");
 
         Assert.NotNull(intProperty);
         Assert.NotNull(stringProperty);
@@ -39,10 +39,5 @@ public class AccessPathTests
         Assert.Equal(first, second);
         Assert.True(first.StartsWith(second));
         Assert.Equal(first.GetHashCode(), second.GetHashCode());
-    }
-
-    private sealed class GenericFixture<T>
-    {
-        public T Value { get; set; }
     }
 }
