@@ -6,7 +6,9 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Collections.Immutable;
 using System.Linq;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Core.Tests;
@@ -21,6 +23,15 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>Issue #4796: with/copy uses the actual data-class clone, not a default constructor.</summary>
 public sealed class Issue4796GenericWithEmitTests
 {
+    [Fact]
+    public void OrdinaryLiteral_ThreeArgumentConstructorRemainsAvailable()
+    {
+        Assert.NotNull(typeof(BoundStructLiteralExpression).GetConstructor(new[]
+        {
+            typeof(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode), typeof(StructSymbol), typeof(ImmutableArray<BoundFieldInitializer>),
+        }));
+    }
+
     [Theory]
     [InlineData("int32", "int", "42", true)]
     [InlineData("string", "string", "\"payload\"", true)]
