@@ -159,6 +159,16 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         nameof(System.Linq.Expressions.Expression.Bind),
         typeof(MemberInfo),
         typeof(System.Linq.Expressions.Expression));
+    private static readonly MethodInfo ExpressionAssignMethod = GetRequiredMethod(
+        typeof(System.Linq.Expressions.Expression),
+        nameof(System.Linq.Expressions.Expression.Assign),
+        typeof(System.Linq.Expressions.Expression),
+        typeof(System.Linq.Expressions.Expression));
+    private static readonly MethodInfo ExpressionBlockMethod = GetRequiredMethod(
+        typeof(System.Linq.Expressions.Expression),
+        nameof(System.Linq.Expressions.Expression.Block),
+        typeof(IEnumerable<System.Linq.Expressions.ParameterExpression>),
+        typeof(IEnumerable<System.Linq.Expressions.Expression>));
     private static readonly MethodInfo ExpressionNewArrayInitMethod = GetRequiredMethod(
         typeof(System.Linq.Expressions.Expression),
         nameof(System.Linq.Expressions.Expression.NewArrayInit),
@@ -1093,9 +1103,64 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     {
         expression = null;
 
-        if (!TryMatchObjectInitializer(block, out var tempVariable, out var initializer, out var statements))
+        if (!TryMatchObjectInitializer(block, out var tempVariable, out var initializer, out var statements, out var captures))
         {
             return false;
+        }
+
+        if (!captures.IsDefaultOrEmpty)
+        {
+            // Spilled inputs are tree locals, not values evaluated while building
+            // the tree. Their assignments retain lexical order on every invocation.
+            var scopedMap = new Dictionary<VariableSymbol, LocalVariableSymbol>(parameterMap);
+            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>(captures.Length);
+            var declarations = ImmutableArray.CreateBuilder<BoundStatement>(captures.Length);
+            var expressions = ImmutableArray.CreateBuilder<BoundExpression>(captures.Length + 1);
+            foreach (var capture in captures)
+            {
+                var local = new LocalVariableSymbol($"<>exprParam{this.counter++}", isReadOnly: true, ParameterExpressionTypeSymbol);
+                var parameter = new BoundClrStaticCallExpression(
+                    capture.Syntax,
+                    ExpressionParameterMethod,
+                    ParameterExpressionTypeSymbol,
+                    ImmutableArray.Create<BoundExpression>(
+                        CreateTypeOf(capture.Variable.Type),
+                        new BoundLiteralExpression(null, capture.Variable.Name, TypeSymbol.String)));
+                declarations.Add(new BoundVariableDeclaration(capture.Syntax, local, parameter));
+                locals.Add(local);
+                expressions.Add(new BoundClrStaticCallExpression(
+                    capture.Syntax,
+                    ExpressionAssignMethod,
+                    ExpressionTypeSymbol,
+                    ImmutableArray.Create<BoundExpression>(
+                        UpcastToExpression(new BoundVariableExpression(capture.Syntax, local)),
+                        UpcastToExpression(this.TranslateExpression(
+                            Invariant.Required(capture.Initializer, "a spilled input has an initializer"),
+                            scopedMap)))));
+                scopedMap[capture.Variable] = local;
+            }
+
+            var construction = new BoundBlockExpression(
+                block.Syntax,
+                block.Statements.RemoveRange(0, captures.Length),
+                block.Expression);
+            if (!this.TryBuildObjectInitializerExpression(construction, scopedMap, out var result))
+            {
+                return false;
+            }
+
+            expressions.Add(result);
+            expression = new BoundBlockExpression(
+                block.Syntax,
+                declarations.MoveToImmutable(),
+                new BoundClrStaticCallExpression(
+                    block.Syntax,
+                    ExpressionBlockMethod,
+                    ExpressionTypeSymbol,
+                    ImmutableArray.Create<BoundExpression>(
+                        BuildParameterArray(locals),
+                        BuildExpressionArray(expressions))));
+            return true;
         }
 
         var translatedInitializer = this.TranslateExpression(initializer, parameterMap);
@@ -1473,28 +1538,40 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         BoundBlockExpression block,
         [NotNullWhen(true)] out VariableSymbol? receiver,
         [NotNullWhen(true)] out BoundExpression? initializer,
-        out ImmutableArray<BoundStatement> statements)
+        out ImmutableArray<BoundStatement> statements,
+        out ImmutableArray<BoundVariableDeclaration> captures)
     {
         receiver = null;
         initializer = null;
         statements = default;
+        captures = default;
 
-        if (block.Expression is not BoundVariableExpression result
-            || block.Statements.IsDefaultOrEmpty
-            || block.Statements[0] is not BoundVariableDeclaration declaration
-            || declaration.Initializer is null
-            || !ReferenceEquals(declaration.Variable, result.Variable))
+        if (block.Expression is not BoundVariableExpression result)
         {
-            // An object-initializer block always opens with an initialized
-            // temp (`var t = new T(); t.X = ...`), so a declaration with no
-            // initializer is not this shape.
             return false;
         }
 
-        receiver = declaration.Variable;
-        initializer = declaration.Initializer;
-        statements = block.Statements.RemoveAt(0);
-        return true;
+        var leading = ImmutableArray.CreateBuilder<BoundVariableDeclaration>();
+        for (var index = 0; index < block.Statements.Length; index++)
+        {
+            if (block.Statements[index] is not BoundVariableDeclaration { Initializer: not null } declaration)
+            {
+                return false;
+            }
+
+            if (ReferenceEquals(declaration.Variable, result.Variable))
+            {
+                receiver = declaration.Variable;
+                initializer = declaration.Initializer;
+                statements = block.Statements.RemoveRange(0, index + 1);
+                captures = leading.ToImmutable();
+                return true;
+            }
+
+            leading.Add(declaration);
+        }
+
+        return false;
     }
 
     private static bool ReferencesReceiver(BoundExpression? expression, VariableSymbol receiver)

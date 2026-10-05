@@ -1542,8 +1542,9 @@ internal sealed class TypeDefEmitter
 
     /// <summary>
     /// Issue #3219: emits the synthesized public initializer <c>.ctor</c>
-    /// for a value-kind struct whose declared field initializers include a
-    /// non-public field (see
+    /// for a value-kind struct with declaration initializers that require
+    /// constructor-owned initialization: non-public fields, a generic struct
+    /// or enclosing type, or primary parameters (see
     /// <see cref="ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor"/>).
     /// The body zero-initializes <c>this</c> and runs the declared instance
     /// field initializers in-type, so struct-literal sites can construct
