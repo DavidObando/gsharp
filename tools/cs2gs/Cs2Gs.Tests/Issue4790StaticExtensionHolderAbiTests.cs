@@ -257,6 +257,82 @@ public class Issue4790StaticExtensionHolderAbiTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void RefReturningOwnedExtensions_PreserveHolderAndCanonicalLiveAliases(bool readOnly)
+    {
+        string returnKind = readOnly ? "ref readonly" : "ref";
+        string source = $$"""
+            namespace Issue4790.Contracts;
+            public sealed class Node { public int Value = 4; }
+            public static class Holder
+            {
+                public static {{returnKind}} int Slot(this Node node) => ref node.Value;
+                public static {{returnKind}} int BlockSlot(this Node node) { return ref node.Value; }
+                public static int Exercise(Node node)
+                {
+                    {{returnKind}} int alias = ref node.Slot();
+                    node.Value += 3;
+                    return alias;
+                }
+            }
+            """;
+        string write = readOnly ? "node.Value = 24;" : "alias = 24;";
+        string consumerSource = $$"""
+            using System;
+            using Issue4790.Contracts;
+            public static class NativeConsumer
+            {
+                private delegate {{returnKind}} int OriginalSlot(Node node);
+                public static string Run()
+                {
+                    var node = new Node();
+                    OriginalSlot original = Holder.Slot;
+                    {{returnKind}} int alias = ref original(node);
+                    {{returnKind}} int block = ref Holder.BlockSlot(node);
+                    node.Value = 23;
+                    int observed = alias;
+                    {{write}}
+                    return string.Join(",", new object[] {
+                        observed, Holder.Exercise(node), block,
+                        original.Method.IsStatic && original.Method.DeclaringType == typeof(Holder) ? 1 : 0 });
+                }
+            }
+            """;
+        WithProducts((native, emitted, consumer) =>
+        {
+            Assert.Equal("23,27,27,1", RunConsumer(native, consumer));
+            Assert.Equal("23,27,27,1", RunConsumer(emitted, consumer));
+            Assembly[] images = {
+                consumer.LoadTogether(File.ReadAllBytes(native))[0],
+                consumer.LoadTogether(File.ReadAllBytes(emitted))[0],
+            };
+            foreach (string name in new[] { "Slot", "BlockSlot" })
+            {
+                MethodInfo expected = images[0].GetType("Issue4790.Contracts.Holder", throwOnError: true)
+                    .GetMethod(name, BindingFlags.Public | BindingFlags.Static);
+                MethodInfo original = images[1].GetType("Issue4790.Contracts.Holder", throwOnError: true)
+                    .GetMethod(name, BindingFlags.Public | BindingFlags.Static);
+                MethodInfo canonical = images[1].GetType("Issue4790.Contracts.Node", throwOnError: true)
+                    .GetMethod(name, BindingFlags.Public | BindingFlags.Instance);
+                Assert.NotNull(expected);
+                Assert.NotNull(original);
+                Assert.NotNull(canonical);
+                Assert.True(expected.ReturnType.IsByRef);
+                Assert.Equal(Contract(expected), Contract(original));
+                Assert.True(canonical.ReturnType.IsByRef);
+                Assert.False(canonical.IsStatic);
+                Assert.Equal(
+                    expected.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName),
+                    original.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName));
+                Assert.Equal(
+                    expected.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName),
+                    canonical.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName));
+            }
+        }, source, consumerSource);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void WithProducts_DeletesWorkspaceAfterAssertions(bool failAssertion)
     {
         string workspace = null;
@@ -371,7 +447,7 @@ public class Issue4790StaticExtensionHolderAbiTests
                 }),
                 result.ExitCode,
             }, new JsonSerializerOptions { WriteIndented = true }));
-            Assert.Equal(0, result.ExitCode);
+            Assert.True(result.ExitCode == 0, result.Output + Environment.NewLine + translated);
             Assert.True(File.Exists(emittedPath));
             assertion(nativePath, emittedPath, consumer);
         }

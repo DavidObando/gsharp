@@ -1822,7 +1822,7 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement statement = returnType == null
                 || asyncEnvelope is { IsGenericType: false }
                 ? new ExpressionStatement(forwarded)
-                : new ReturnStatement(forwarded);
+                : new ReturnStatement(forwarded, isRef: original.ReturnsByRef || original.ReturnsByRefReadonly);
             return new BlockStatement(new[] { statement });
         }
 
