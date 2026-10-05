@@ -731,7 +731,7 @@ public sealed partial class CSharpToGSharpTranslator
             SyntaxNode node = value;
             while (true)
             {
-                if (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+                if (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax)
                 {
                     node = node.Parent;
                     continue;

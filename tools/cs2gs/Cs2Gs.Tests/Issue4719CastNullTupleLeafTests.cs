@@ -2861,6 +2861,69 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void TupleContractSink_CheckedWholeTuplePreservesDestination(
+        bool uncheckedWrapper,
+        bool fixedDestination,
+        bool nullableInput)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                public static int Decisions;
+                #nullable enable
+                public static string{{(nullableInput ? "?" : string.Empty)}} Value {
+                    get {
+                        Reads++;
+                        return Missing ? {{(nullableInput ? "null" : "\"miss\"")}} : "keep";
+                    }
+                }
+                #nullable disable
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                {{(fixedDestination ? "#nullable enable" : string.Empty)}}
+                public static (NullableResultBox Value, int Code) Row(bool choose) =>
+                    {{(uncheckedWrapper ? "unchecked" : "checked")}}(
+                        ((Choose(choose) ? Value : new NullableResultBox(), 1)));
+                #nullable disable
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = Decisions = 0;
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool absent = false;
+                    int code = 0;
+                    try { var row = Row(choose); absent = row.Value == null; code = row.Code; }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool expectedAssertion = choose && missing
+                        && {{(fixedDestination || nullableInput ? "true" : "false")}};
+                    return asserted == expectedAssertion
+                        && (asserted || (absent == (choose && missing) && code == 1))
+                        && Reads == (choose ? 1 : 0) && Decisions == 1
+                        && Probe.Calls == (choose && !(missing
+                            && {{(nullableInput ? "true" : "false")}}) ? 1 : 0);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains(fixedDestination ? "Value NullableResultBox," : "Value NullableResultBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
     [InlineData(false, false, false, false)]
     [InlineData(true, false, false, false)]
     [InlineData(false, true, false, false)]
