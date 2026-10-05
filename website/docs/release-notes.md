@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Data-class `with` and `.copy(...)` use the existing clone contract** (issue #4796). Generic classes with a primary/base constructor no longer invoke a nonexistent parameterless constructor. Copies retain their constructed runtime type, source-base and private/readonly state, without rerunning field or base initializers; updates execute once in written order.
+
 - **cs2gs transports retained build-generated compilation inputs across validation roots and configurations** (issue #4801, ADR-0196). Validation manifests carry the actual producing source text, hash and project ownership for non-inventoried build inputs, including net10 and netstandard2.0 SDK declarations. Authored sources still require the clean authoritative corpus, and source-declared test counts and budgets are unchanged. Old manifests lacking generated evidence fail closed rather than inventing historical contents.
 
 - **Data-class copy constructors initialize imported record bases correctly** (issue #4789). The shared copy emitter now calls the accessible copy constructor on the actual direct CLR base, retaining symbolic generic arguments and base state before copying derived members. Object-root and source-base copying are unchanged; an imported non-object base without an accessible copy contract fails emission instead of producing invalid IL.
