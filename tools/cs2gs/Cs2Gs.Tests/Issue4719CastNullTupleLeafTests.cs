@@ -3650,6 +3650,125 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         Assert.True(executed.Output == expected + Environment.NewLine, printed + Environment.NewLine + executed.Output);
     }
 
+    [Theory]
+    [InlineData("interface", false, false)]
+    [InlineData("interface", true, false)]
+    [InlineData("base", true, false)]
+    [InlineData("shared", false, false)]
+    [InlineData("shared", true, false)]
+    [InlineData("interface", false, true)]
+    [InlineData("interface", true, true)]
+    [InlineData("base", true, true)]
+    [InlineData("shared", false, true)]
+    [InlineData("shared", true, true)]
+    public void TupleContractImport_PlatformEndpointsDoNotFreezeSourceComponents(
+        string contract,
+        bool strict,
+        bool strictInput)
+    {
+        string fixture = this.EmitFixture();
+        string native = strict ? "IStrictRows" : "IObliviousRows";
+        string inherited = contract == "base"
+            ? (strict ? "StrictRowsBase" : "ObliviousRowsBase")
+            : contract == "shared" ? "ISourceRows" : native;
+        string sourceContract = contract == "shared" ? $$"""
+            public interface ISourceRows {
+                (NullableResultBox Value, int Code) Read(bool choose);
+            }
+            public sealed class NativeAnchor : {{native}}, ISourceRows {
+                public (NullableResultBox Value, int Code) Read(bool choose) =>
+                    (new NullableResultBox(), 1);
+            }
+            """ : string.Empty;
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            using System;
+            using Issue4719Fixture;
+            {{sourceContract}}
+            public sealed class Rows : {{inherited}} {
+                public static int Reads;
+                public static int Decisions;
+                public static bool Missing;
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                #nullable {{(strictInput ? "enable" : "disable")}}
+                public static string{{(strictInput ? "?" : string.Empty)}} Input {
+                    get { Reads++; return Missing ? {{(strictInput ? "null" : "\"miss\"")}} : "keep"; }
+                }
+                #nullable disable
+                public {{(contract == "base" ? "override " : string.Empty)}}(NullableResultBox Value, int Code) Read(bool choose) =>
+                    (Choose(choose) ? Input : new NullableResultBox(), 1);
+            }
+            public static class Obj {
+                public static bool Check(bool choose, bool missing) {
+                    Probe.Reset();
+                    Rows.Reads = Rows.Decisions = 0;
+                    Rows.Missing = missing;
+                    {{inherited}} rows = new Rows();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        var row = rows.Read(choose);
+                        nil = row.Value == null;
+                        if (row.Code != 1) { return false; }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool expectedAssertion = choose && missing && {{(strict || strictInput ? "true" : "false")}};
+                    return asserted == expectedAssertion && (asserted || nil == (choose && missing))
+                        && Rows.Decisions == 1 && Rows.Reads == (choose ? 1 : 0)
+                        && Probe.Calls == (choose && !({{(strictInput ? "true" : "false")}} && missing) ? 1 : 0);
+                }
+                public static void Main() {
+                    bool valid = Check(false, false) && Check(true, false)
+                        && Check(false, true) && Check(true, true);
+                    Console.WriteLine(valid ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value NullableResultBox," : "Value NullableResultBox?", printed);
+        INamedTypeSymbol nativeType = Assert.IsAssignableFrom<INamedTypeSymbol>(
+            context.Compilation.GetTypeByMetadataName("Issue4719Fixture." + native));
+        IMethodSymbol method = Assert.Single(nativeType.GetMembers("Read").OfType<IMethodSymbol>());
+        INamedTypeSymbol tuple = Assert.IsAssignableFrom<INamedTypeSymbol>(method.ReturnType);
+        Assert.Equal(
+            strict ? NullableAnnotation.NotAnnotated : NullableAnnotation.None,
+            tuple.TupleElements[0].Type.NullableAnnotation);
+        Assert.False(ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+            context.Compilation, method, new[] { 0 }, context.SiblingCompilations));
+    }
+
+    [Fact]
+    public void TupleContractImport_OpenSlotsKeepReferenceValueAndUnconstrainedContracts()
+    {
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext("""
+            using System;
+            using Issue4719Fixture;
+            public static class Scope<T> {
+                public static T Read() => NativeNullableSlots.Row<T>(default(T)).Item1;
+            }
+            public static class Obj {
+                public static void Main() {
+                    var reference = NativeNullableSlots.Row<NullableResultBox>(new NullableResultBox());
+                    var value = NativeNullableSlots.Row<int>(7);
+                    object scopedReference = Scope<NullableResultBox>.Read();
+                    Console.WriteLine(reference.Item1 == null && reference.Item2 == 1
+                        && value.Item1 == 0 && value.Item2 == 1 && Scope<int>.Read() == 0
+                        && scopedReference == null ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Read() T", printed);
+        Assert.DoesNotContain("func Read() T?", printed);
+        INamedTypeSymbol nativeType = Assert.IsAssignableFrom<INamedTypeSymbol>(
+            context.Compilation.GetTypeByMetadataName("Issue4719Fixture.NativeNullableSlots"));
+        IMethodSymbol method = Assert.Single(nativeType.GetMembers("Row").OfType<IMethodSymbol>());
+        INamedTypeSymbol tuple = Assert.IsAssignableFrom<INamedTypeSymbol>(method.ReturnType);
+        ITypeParameterSymbol slot = Assert.IsAssignableFrom<ITypeParameterSymbol>(tuple.TupleElements[0].Type);
+        Assert.Equal(NullableAnnotation.Annotated, slot.NullableAnnotation);
+        Assert.False(slot.IsReferenceType);
+    }
+
     private string EmitFixture()
     {
         Directory.CreateDirectory(this.fixtureDirectory);
@@ -3744,6 +3863,15 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                     }
                     public interface IStrictGenericRows<T> where T : class {
                         (T Value, int Code) Required(T value);
+                    }
+                    public interface IStrictRows {
+                        (NullableResultBox Value, int Code) Read(bool choose);
+                    }
+                    public abstract class StrictRowsBase {
+                        public abstract (NullableResultBox Value, int Code) Read(bool choose);
+                    }
+                    public static class NativeNullableSlots {
+                        public static (T? Value, int Code) Row<T>(T value) => (default(T), 1);
                     }
                     public static class TupleContractSources {
                         public static T? Missing<T>(T value) where T : class {
@@ -3853,6 +3981,16 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                         public static System.Threading.Tasks.ValueTask<(NullableResultBox Required, int Code)> Read(GenericRowsBaseValueTask<NullableResultBox> rows, string value) => rows.Read(value);
                     }
                 #nullable disable
+                    public interface IObliviousRows {
+                        (NullableResultBox Value, int Code) Read(bool choose);
+                    }
+                    public abstract class ObliviousRowsBase {
+                        public abstract (NullableResultBox Value, int Code) Read(bool choose);
+                    }
+                    public sealed class NativeObliviousRows : IObliviousRows {
+                        public (NullableResultBox Value, int Code) Read(bool choose) =>
+                            (choose ? "miss" : "keep", 1);
+                    }
                     public struct Token {
                         public static explicit operator int(Token value) { Probe.Calls++; return 7; }
                     }

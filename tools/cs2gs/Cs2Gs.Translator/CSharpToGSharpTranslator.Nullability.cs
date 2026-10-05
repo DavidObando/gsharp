@@ -1841,9 +1841,7 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => null,
             };
 
-            return declaredType is { IsReferenceType: true }
-                and not ITypeParameterSymbol
-                && declaredType.NullableAnnotation == NullableAnnotation.None;
+            return ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(declaredType);
         }
 
         // Issue #4146 (Copilot review of #4128's fix): the assembly IDENTITIES

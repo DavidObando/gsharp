@@ -2302,9 +2302,7 @@ public sealed partial class CSharpToGSharpTranslator
             return !SymbolEqualityComparer.Default.Equals(
                     original.ContainingAssembly,
                     this.context.Compilation.Assembly)
-                && type is { IsReferenceType: true }
-                and not ITypeParameterSymbol
-                && type.NullableAnnotation == NullableAnnotation.None;
+                && ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(type);
         }
 
         // Issue #2113 follow-up: true when <paramref name="symbol"/> is a `let`

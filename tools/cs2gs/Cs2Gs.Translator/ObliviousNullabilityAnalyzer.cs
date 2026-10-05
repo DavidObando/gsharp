@@ -1081,6 +1081,13 @@ internal static class ObliviousNullabilityAnalyzer
             && IsDirectlyNullable(expression, model, respectNullGuards, readConversion: false);
     }
 
+    /// <summary>Reads the declared concrete-reference obliviousness used by imported contract readers.</summary>
+    /// <param name="type">The original signature position, before type-argument substitution.</param>
+    /// <returns>Whether the position is oblivious; open slots retain their type argument's contract.</returns>
+    internal static bool IsObliviousConcreteReferencePosition(ITypeSymbol type) =>
+        type is { IsReferenceType: true } and not ITypeParameterSymbol
+            && type.NullableAnnotation == NullableAnnotation.None;
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,
@@ -2257,8 +2264,8 @@ internal static class ObliviousNullabilityAnalyzer
 
         void FreezeNonNullableContract(TupleElementKey key)
         {
-            if (TuplePositionType(key.ContractSymbol, key.ContractPath) is { IsReferenceType: true } position
-                && !IsDeclaredNullablePosition(position)
+            if (TuplePositionType(key.ContractSymbol, key.ContractPath) is { IsReferenceType: true }
+                && !TupleContractPositionAcceptsNil(compilation, key.ContractSymbol, key.ContractPath)
                 && !CanPromoteTuplePosition(compilation, key.ContractSymbol, key.ContractPath))
             {
                 fixedTupleContracts.Add(key);
@@ -3980,8 +3987,7 @@ internal static class ObliviousNullabilityAnalyzer
 
         foreach (ISymbol contract in TupleContractDeclarations(compilation, contractSymbol))
         {
-            ITypeSymbol contractPosition = TuplePositionType(contract, contractPath);
-            if (contractPosition != null && IsDeclaredNullablePosition(contractPosition))
+            if (TupleContractPositionAcceptsNil(compilation, contract, contractPath))
             {
                 continue;
             }
@@ -3994,6 +4000,11 @@ internal static class ObliviousNullabilityAnalyzer
 
         return true;
     }
+
+    private static bool TupleContractPositionAcceptsNil(Compilation compilation, ISymbol symbol, string path) =>
+        IsDeclaredNullablePosition(TuplePositionType(symbol, path))
+            || (!IsSourceAssembly(compilation, symbol.ContainingAssembly)
+                && IsObliviousConcreteReferencePosition(TuplePositionType(symbol.OriginalDefinition, path)));
 
     private static ITypeSymbol TuplePositionType(ISymbol symbol, string path, bool requireTuple = false)
     {
