@@ -1541,7 +1541,7 @@ internal sealed class TypeDefEmitter
     }
 
     /// <summary>
-    /// Issue #3219: emits the synthesized public initializer <c>.ctor</c>
+    /// Issue #3219: emits the synthesized owning initializer <c>.ctor</c>
     /// for a value-kind struct with declaration initializers that require
     /// constructor-owned initialization: non-public fields, a generic struct
     /// or enclosing type, or primary parameters (see
