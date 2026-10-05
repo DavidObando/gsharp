@@ -6,9 +6,11 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Loader;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Xunit;
 
@@ -59,7 +61,10 @@ public class Issue4722ConvertedStoreReportingTests
             string fixture = Path.Combine(directory, native.Compilation.AssemblyName + ".dll");
             var emitted = native.Compilation.Emit(fixture);
             Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
-            MethodInfo conversion = Assembly.LoadFile(fixture).GetType("ReportBox").GetMethod("op_Implicit");
+            Assembly assembly = EmittedFixture.Load(fixture);
+            Assert.True(AssemblyLoadContext.GetLoadContext(assembly).IsCollectible);
+            Assert.Empty(assembly.Location);
+            MethodInfo conversion = assembly.GetType("ReportBox").GetMethod("op_Implicit");
             Assert.NotNull(conversion);
             var nullability = new NullabilityInfoContext();
             Assert.Equal(NullabilityState.Nullable, nullability.Create(conversion.ReturnParameter).ReadState);
@@ -103,6 +108,8 @@ public class Issue4722ConvertedStoreReportingTests
         {
             Directory.Delete(directory, recursive: true);
         }
+
+        Assert.False(Directory.Exists(directory));
     }
 
     [Theory]
@@ -132,5 +139,17 @@ public class Issue4722ConvertedStoreReportingTests
             context.Diagnostics, diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
         Assert.StartsWith("kind=forgiven,constructed-generic-member", site.Message, StringComparison.Ordinal);
         Assert.Equal(4, site.Location.GetLineSpan().StartLinePosition.Line);
+    }
+
+    [Fact]
+    public void NativeReportingFixture_IsDeletedWhenBindingAssertionFails()
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "issue4722-reporting");
+        Directory.CreateDirectory(root);
+        string[] before = Directory.GetDirectories(root).OrderBy(path => path).ToArray();
+        var failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() =>
+            this.AssertedInputAndNewConvertedResult_ReportDistinctSites("missing!"));
+        Assert.Contains("missing", failure.Message);
+        Assert.Equal(before, Directory.GetDirectories(root).OrderBy(path => path).ToArray());
     }
 }

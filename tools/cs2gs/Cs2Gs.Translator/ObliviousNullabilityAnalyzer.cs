@@ -1349,6 +1349,13 @@ internal static class ObliviousNullabilityAnalyzer
     {
         if (symbol is ITypeSymbol type)
         {
+            if (type is IArrayTypeSymbol array)
+            {
+                ITypeSymbol element = RemapToCompilation(targetCompilation, array.ElementType) as ITypeSymbol;
+                return element == null ? null : targetCompilation.CreateArrayTypeSymbol(element, array.Rank, array.ElementNullableAnnotation)
+                    .WithNullableAnnotation(array.NullableAnnotation);
+            }
+
             string reference = DocumentationCommentId.CreateReferenceId(symbol);
             ITypeSymbol remapped = reference == null
                 ? null
@@ -1356,6 +1363,28 @@ internal static class ObliviousNullabilityAnalyzer
                     .OfType<ITypeSymbol>()
                     .FirstOrDefault(candidate =>
                         Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity));
+            if (type is INamedTypeSymbol nested && nested.ContainingType is { IsDefinition: false } containing)
+            {
+                INamedTypeSymbol mappedOwner = RemapToCompilation(targetCompilation, containing) as INamedTypeSymbol;
+                remapped = mappedOwner?.GetTypeMembers(nested.Name, nested.Arity).FirstOrDefault();
+            }
+
+            if (type is INamedTypeSymbol named && !named.IsDefinition
+                && remapped is INamedTypeSymbol mappedNamed && named.Arity != 0)
+            {
+                var arguments = new ITypeSymbol[named.TypeArguments.Length];
+                for (int index = 0; index < arguments.Length; index++)
+                {
+                    arguments[index] = RemapToCompilation(targetCompilation, named.TypeArguments[index]) as ITypeSymbol;
+                    if (arguments[index] == null)
+                    {
+                        return null;
+                    }
+                }
+
+                remapped = mappedNamed.ConstructedFrom.Construct(arguments.ToImmutableArray(), named.TypeArgumentNullableAnnotations);
+            }
+
             return remapped?.WithNullableAnnotation(type.NullableAnnotation);
         }
 
@@ -6115,9 +6144,10 @@ internal static class ObliviousNullabilityAnalyzer
         // Tuple labels are rendered at each use, not part of contract identity.
         named = named.TupleUnderlyingType ?? named;
         ITypeSymbol[] arguments = named.TypeArguments.Select(NormalizeContractTupleNames).ToArray();
-        return arguments.SequenceEqual(named.TypeArguments, SymbolEqualityComparer.Default)
+        return arguments.SequenceEqual(named.TypeArguments, SymbolEqualityComparer.IncludeNullability)
             ? named
-            : named.ConstructedFrom.Construct(arguments);
+            : named.ConstructedFrom.Construct(arguments.ToImmutableArray(), named.TypeArgumentNullableAnnotations)
+                .WithNullableAnnotation(named.NullableAnnotation);
     }
 
     private readonly struct TupleElementKey
@@ -6190,14 +6220,14 @@ internal static class ObliviousNullabilityAnalyzer
         public static TupleContractKeyComparer Instance { get; } = new();
 
         public bool Equals(TupleElementKey x, TupleElementKey y) =>
-            SymbolEqualityComparer.Default.Equals(Owner(x), Owner(y))
+            SymbolEqualityComparer.IncludeNullability.Equals(Owner(x), Owner(y))
                 && string.Equals(x.ContractPath, y.ContractPath, System.StringComparison.Ordinal);
 
         public int GetHashCode(TupleElementKey obj)
         {
             ISymbol owner = Owner(obj);
             return System.HashCode.Combine(
-                owner == null ? 0 : SymbolEqualityComparer.Default.GetHashCode(owner),
+                owner == null ? 0 : SymbolEqualityComparer.IncludeNullability.GetHashCode(owner),
                 obj.ContractPath);
         }
 

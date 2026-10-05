@@ -4255,6 +4255,16 @@ public sealed partial class CSharpToGSharpTranslator
                     // the suppressed expression flows.
                     current = current.Parent;
                 }
+                else if (current.Parent is CastExpressionSyntax cast
+                    && this.context.SemanticModel.GetOperation(cast) is IConversionOperation { OperatorMethod: null } conversion
+                    && conversion.Type?.IsReferenceType == true
+                    && conversion.Operand.Type?.IsReferenceType == true
+                    && (conversion.Conversion.IsReference || conversion.Conversion.IsIdentity))
+                {
+                    // A built-in reference cast preserves nil; operators and
+                    // unboxing remain actual conversion-consumer boundaries.
+                    current = cast;
+                }
                 else if (current.Parent is ConditionalExpressionSyntax conditional
                     && (conditional.WhenTrue == current || conditional.WhenFalse == current))
                 {

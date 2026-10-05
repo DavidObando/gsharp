@@ -3544,6 +3544,305 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("(object)(Choose(choose) ? Value : new MaybeBox())")]
+    [InlineData("(object)(MaybeBox)(Choose(choose) ? Value : new MaybeBox())")]
+    [InlineData("(object)checked((MaybeBox)(Choose(choose) ? Value : new MaybeBox()))")]
+    [InlineData("(object)(Choose(choose) switch { true => Value, false => new MaybeBox() })")]
+    public void TupleContractRemapping_ReferenceCastsPreserveCoalescingNil(string converted)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Decisions;
+                public static int Fallbacks;
+                public static string Value { get { Reads++; return "x"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static object Fallback() { Fallbacks++; return new object(); }
+                public static (object Value, int Code) Row(bool choose) =>
+                    ({{converted}} ?? Fallback(), 1);
+                public static bool Check(bool choose) {
+                    Probe.Reset();
+                    Reads = Decisions = Fallbacks = 0;
+                    var row = Row(choose);
+                    return row.Value != null && row.Code == 1 && Decisions == 1
+                        && Reads == (choose ? 1 : 0) && Probe.Calls == (choose ? 1 : 0)
+                        && Fallbacks == (choose ? 1 : 0);
+                }
+                public static void Main() { Console.WriteLine(Check(true) && Check(false) ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_ReferenceCastsKeepStrictOperatorInputs(bool strictInput)
+    {
+        string fixture = this.EmitFixture();
+        string box = strictInput ? "MaybeStrictInputBox<string>" : "NullAcceptingBox";
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Fallbacks;
+                public static string? Value { get { Reads++; return null; } }
+                public static object Fallback() { Fallbacks++; return new object(); }
+                public static (object Value, int Code) Row(bool choose) =>
+                    ((object)(choose ? Value : new {{box}}()) ?? Fallback(), 1);
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Row(true).Value != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(Reads == 1 && {{(strictInput
+                        ? "asserted && Probe.Calls == 0 && Fallbacks == 0"
+                        : "!asserted && present && Probe.Calls == 1 && Fallbacks == 1")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(site => site.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId).ToArray();
+        if (strictInput)
+        {
+            TranslationDiagnostic input = Assert.Single(sites);
+            Assert.Contains("parameter 'value'", input.Message);
+            Assert.Equal("Value", input.Location.SourceTree.GetText().ToString(input.Location.SourceSpan));
+        }
+        else
+        {
+            Assert.Empty(sites);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_ReferenceCastsStopAtConversionConsumers(bool unboxing)
+    {
+        string fixture = this.EmitFixture();
+        string result = unboxing
+            ? "(int)(object)(choose ? \"miss\" : new NullableResultBox())"
+            : "((StrictConsumerEnvelope)(choose ? \"miss\" : new NullableResultBox())) ?? (StrictConsumerEnvelope)new NullableResultBox()";
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool choose = true;
+                    try { var converted = {{result}}; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("NullableResultBox?(\"miss\")!!", printed);
+        Assert.DoesNotContain(context.Diagnostics, site => site.Severity == TranslationSeverity.Unsupported);
+        if (!unboxing)
+        {
+            Assert.DoesNotContain(context.Diagnostics, site =>
+                site.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+        }
+        else
+        {
+            TranslationDiagnostic resultSite = Assert.Single(context.Diagnostics, site =>
+                site.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+            Assert.Equal("\"miss\"", resultSite.Location.SourceTree.GetText().ToString(resultSite.Location.SourceSpan));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_MixedConstructedAnnotationsKeepSeparateLocks(bool matchingContract)
+    {
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            using System;
+            using Issue4719Fixture;
+            #nullable enable
+            public sealed class FixedRows : IWholeRows<(MaybeBox Value, int Code)> {
+                #nullable disable
+                public (MaybeBox Value, int Code) Read(string value) => (value, 1);
+            }
+            #nullable {{(matchingContract ? "enable" : "disable")}}
+            public sealed class OtherRows : IWholeRows<(MaybeBox Value, int Code)> {
+                #nullable disable
+                public (MaybeBox Value, int Code) Read(string value) => (value, 1);
+            }
+            public static class Obj {
+                public static bool Check(string value) {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool nil = false;
+                    try { var row = new OtherRows().Read(value); nil = row.Value == null && row.Code == 1; }
+                    catch (NullReferenceException) { asserted = true; }
+                    return Probe.Calls == 1 && {{(matchingContract ? "asserted && !nil" : "!asserted && nil")}};
+                }
+                public static void Main() { Console.WriteLine(Check("miss") && Check("keep") ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        ISymbol other = Assert.Single(context.Compilation.GetTypeByMetadataName("OtherRows").GetMembers("Read"));
+        Assert.Equal(!matchingContract, ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+            context.Compilation, other, new[] { 0 }, context.SiblingCompilations));
+    }
+
+    [Theory]
+    [InlineData("string")]
+    [InlineData("string?")]
+    [InlineData("(string Value, int Code)")]
+    [InlineData("(string? Value, int Code)")]
+    [InlineData("System.Collections.Generic.List<string?>")]
+    [InlineData("string?[]")]
+    public void TupleContractRemapping_ConstructedTypeArgumentsRetainNestedAnnotations(string argument)
+    {
+        LoadedCSharpProject source = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", $$"""
+                #nullable enable
+                public sealed class Rows<T> { public T Read() => default!; }
+                public sealed class Consumer { public Rows<{{argument}}> Value; }
+                """) }, CSharpProjectLoader.RuntimeReferences(), "Annotations" + Guid.NewGuid().ToString("N"));
+        Assert.True(source.BoundWithoutErrors, string.Join(Environment.NewLine, source.ErrorDiagnostics));
+        Directory.CreateDirectory(this.fixtureDirectory);
+        string assembly = Path.Combine(this.fixtureDirectory, source.Compilation.AssemblyName + ".dll");
+        var emitted = source.Compilation.Emit(assembly);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        LoadedCSharpProject target = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Other.cs", "public sealed class Other { }") },
+            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(assembly)).ToArray());
+        IFieldSymbol field = Assert.Single(source.Compilation.GetTypeByMetadataName("Consumer").GetMembers("Value").OfType<IFieldSymbol>());
+        INamedTypeSymbol input = Assert.IsAssignableFrom<INamedTypeSymbol>(field.Type);
+        Type analyzer = typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer");
+        MethodInfo remapper = analyzer.GetMethod("RemapToCompilation", BindingFlags.NonPublic | BindingFlags.Static);
+        INamedTypeSymbol output = Assert.IsAssignableFrom<INamedTypeSymbol>(
+            remapper.Invoke(null, new object[] { target.Compilation, input }));
+        AssertAnnotations(input, output);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void TupleContractRemapping_SiblingConstructedAnnotationsKeepSeparateLocks(
+        bool matchingContract, bool reverseOrder)
+    {
+        string fixture = this.EmitFixture();
+        this.AssertSplitProjectsVerifyAndRun(new[]
+        {
+            """
+                using Issue4719Fixture;
+                #nullable enable
+                public sealed class FixedRows : IWholeRows<(MaybeBox Value, int Code)> {
+                    #nullable disable
+                    public (MaybeBox Value, int Code) Read(string value) => (value, 1);
+                }
+                """,
+            $$"""
+                using System;
+                using Issue4719Fixture;
+                #nullable {{(matchingContract ? "enable" : "disable")}}
+                public sealed class OtherRows : IWholeRows<(MaybeBox Value, int Code)> {
+                    #nullable disable
+                    public (MaybeBox Value, int Code) Read(string value) => (value, 1);
+                }
+                public static class Obj {
+                    public static bool Check(string value) {
+                        Probe.Reset();
+                        bool asserted = false;
+                        bool nil = false;
+                        try { var row = new OtherRows().Read(value); nil = row.Value == null && row.Code == 1; }
+                        catch (NullReferenceException) { asserted = true; }
+                        return Probe.Calls == 1 && {{(matchingContract ? "asserted && !nil" : "!asserted && nil")}};
+                    }
+                    public static void Main() { Console.WriteLine(Check("miss") && Check("keep") ? 15 : -1); }
+                }
+                """,
+        }, fixture, reverseOrder);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_NestedOwnersAndMethodArgumentsRetainAnnotations(bool genericMethod)
+    {
+        LoadedCSharpProject source = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", """
+                #nullable enable
+                public sealed class Outer<T> {
+                    public sealed class Rows<U> {
+                        public U Read() => default!;
+                        public V Read<V>(V value) => value;
+                    }
+                }
+                public sealed class Consumer { public Outer<string?>.Rows<object?> Value; }
+                """) }, CSharpProjectLoader.RuntimeReferences(), "Nested" + Guid.NewGuid().ToString("N"));
+        Assert.True(source.BoundWithoutErrors, string.Join(Environment.NewLine, source.ErrorDiagnostics));
+        Directory.CreateDirectory(this.fixtureDirectory);
+        string assembly = Path.Combine(this.fixtureDirectory, source.Compilation.AssemblyName + ".dll");
+        Assert.True(source.Compilation.Emit(assembly).Success);
+        LoadedCSharpProject target = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Other.cs", "public sealed class Other { }") },
+            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(assembly)).ToArray());
+        var field = Assert.Single(source.Compilation.GetTypeByMetadataName("Consumer").GetMembers("Value").OfType<IFieldSymbol>());
+        INamedTypeSymbol owner = Assert.IsAssignableFrom<INamedTypeSymbol>(field.Type);
+        IMethodSymbol input = owner.GetMembers("Read").OfType<IMethodSymbol>().Single(method => method.Arity == (genericMethod ? 1 : 0));
+        if (genericMethod)
+        {
+            input = input.Construct(source.Compilation.GetSpecialType(SpecialType.System_String).WithNullableAnnotation(NullableAnnotation.Annotated));
+        }
+
+        Type analyzer = typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer");
+        MethodInfo remapper = analyzer.GetMethod("RemapToCompilation", BindingFlags.NonPublic | BindingFlags.Static);
+        IMethodSymbol output = Assert.IsAssignableFrom<IMethodSymbol>(
+            remapper.Invoke(null, new object[] { target.Compilation, input }));
+        AssertAnnotations(input.ContainingType, output.ContainingType);
+        AssertAnnotations(input.ReturnType, output.ReturnType);
+        if (genericMethod)
+        {
+            AssertAnnotations(Assert.Single(input.TypeArguments), Assert.Single(output.TypeArguments));
+        }
+    }
+
+    private static void AssertAnnotations(ITypeSymbol input, ITypeSymbol output)
+    {
+        Assert.Equal(input.NullableAnnotation, output.NullableAnnotation);
+        Assert.Equal(input.SpecialType, output.SpecialType);
+        if (input is IArrayTypeSymbol array)
+        {
+            IArrayTypeSymbol mapped = Assert.IsAssignableFrom<IArrayTypeSymbol>(output);
+            Assert.Equal(array.Rank, mapped.Rank);
+            AssertAnnotations(array.ElementType, mapped.ElementType);
+        }
+        else if (input is INamedTypeSymbol named)
+        {
+            INamedTypeSymbol mapped = Assert.IsAssignableFrom<INamedTypeSymbol>(output);
+            Assert.Equal(named.TypeArgumentNullableAnnotations.ToArray(), mapped.TypeArgumentNullableAnnotations.ToArray());
+            Assert.Equal(named.TypeArguments.Length, mapped.TypeArguments.Length);
+            for (int index = 0; index < named.TypeArguments.Length; index++)
+            {
+                AssertAnnotations(named.TypeArguments[index], mapped.TypeArguments[index]);
+            }
+
+            if (named.ContainingType != null)
+            {
+                AssertAnnotations(named.ContainingType, mapped.ContainingType);
+            }
+        }
+    }
+
     private string[] AssertSplitProjectsVerifyAndRun(string[] sources, string fixture, bool reverseOrder)
     {
         Directory.CreateDirectory(Path.Combine(this.fixtureDirectory, "csharp"));
