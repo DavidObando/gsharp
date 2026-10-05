@@ -215,14 +215,12 @@ namespace Corpus.Adr0195
     }
 
     [Theory]
-    [InlineData("internal class Target { internal int Count; } internal static class Holder { internal static int Size(this Target value) => value.Count; }", false)]
-    [InlineData("internal class Target { internal int Count; } internal static class Holder { internal static int Size(this Target value) => value.Count; } internal class Use { System.Type Get() => typeof(Holder); }", true)]
-    [InlineData("public static class Holder { public static int Size(this string value) => value.Length; }", true)]
-    [InlineData("internal static class Holder {}", true)]
-    [InlineData("internal static class Holder { internal static int One() => 1; }", true)]
-    public void StaticClassMappingDiagnostic_DescribesOnlyARetainedSharedDeclaration(
-        string declaration,
-        bool retained)
+    [InlineData("internal class Target { internal int Count; } internal static class Holder { internal static int Size(this Target value) => value.Count; }")]
+    [InlineData("internal class Target { internal int Count; } internal static class Holder { internal static int Size(this Target value) => value.Count; } internal class Use { System.Type Get() => typeof(Holder); }")]
+    [InlineData("public static class Holder { public static int Size(this string value) => value.Length; }")]
+    [InlineData("internal static class Holder {}")]
+    [InlineData("internal static class Holder { internal static int One() => 1; }")]
+    public void StaticClassMappingDiagnostic_DescribesEveryNativeStaticHolder(string declaration)
     {
         var project = CSharpProjectLoader.LoadInMemory(new[] { ("Holder.cs", "namespace Corpus { " + declaration + " }") });
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
@@ -238,23 +236,22 @@ namespace Corpus.Adr0195
             diagnostic.ConstructKind == "ClassDeclaration"
             && diagnostic.Message.Contains("static class Holder", StringComparison.Ordinal)).ToArray();
 
-        if (retained)
+        var holder = Assert.Single(holders);
+        Assert.True(holder.IsShared);
+        Assert.DoesNotContain(holder.Members, member => member is SharedBlock);
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal(TranslationSeverity.Info, diagnostic.Severity);
+        Assert.Contains("'shared class'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.NotNull(diagnostic.Location);
+        Assert.Equal(document.FilePath, diagnostic.Location.SourceTree.FilePath);
+        if (unit.Members.OfType<TypeDeclaration>().SingleOrDefault(type => type.Name == "Target") is { } target)
         {
-            var holder = Assert.Single(holders);
-            Assert.True(holder.IsShared);
-            Assert.DoesNotContain(holder.Members, member => member is SharedBlock);
-            var diagnostic = Assert.Single(diagnostics);
-            Assert.Equal(TranslationSeverity.Info, diagnostic.Severity);
-            Assert.Contains("'shared class'", diagnostic.Message, StringComparison.Ordinal);
-            Assert.NotNull(diagnostic.Location);
-            Assert.Equal(document.FilePath, diagnostic.Location.SourceTree.FilePath);
-        }
-        else
-        {
-            Assert.Empty(holders);
-            var target = Assert.Single(unit.Members.OfType<TypeDeclaration>(), type => type.Name == "Target");
             Assert.Single(target.Members.OfType<MethodDeclaration>(), method => method.Name == "Size");
-            Assert.Empty(diagnostics);
+            MethodDeclaration original = Assert.Single(unit.Members.OfType<MethodDeclaration>(),
+                method => method.Name == "Size");
+            Assert.NotNull(original.Receiver);
+            Assert.Contains("ExtensionOwner(typeof(Holder))", GSharpPrinter.Print(unit), StringComparison.Ordinal);
+            Assert.Contains("Holder.Size(value)", GSharpPrinter.Print(unit), StringComparison.Ordinal);
         }
     }
 

@@ -319,8 +319,7 @@ namespace Cs2Gs.Tests
         [Fact]
         public void SystemObjectAlias_ReservesOwnedExtensionImports()
         {
-            string printed = TranslateFile(
-                "A.Host.cs",
+            IReadOnlyDictionary<string, string> files = TranslateFiles(
                 preservePartialParts: true,
                 ("A.Host.cs", """
                     namespace Demo;
@@ -341,6 +340,7 @@ namespace Cs2Gs.Tests
                         public static int Measure(this Host host) => 1;
                     }
                     """));
+            string printed = files["A.Host.cs"];
 
             Assert.Contains(
                 "import SystemObject = System.Text.StringBuilder",
@@ -352,20 +352,24 @@ namespace Cs2Gs.Tests
                 StringComparison.Ordinal);
             Assert.Contains("SystemObject_2()", printed, StringComparison.Ordinal);
             Assert.Contains("func Measure()", printed, StringComparison.Ordinal);
-            TranslationTestValidation.AssertBinds(printed);
+            Assert.Contains("HostExtensions.Measure(host)", printed, StringComparison.Ordinal);
+            Assert.Contains("shared class HostExtensions", files["B.Extensions.cs"], StringComparison.Ordinal);
+            Assert.Contains("ExtensionOwner(typeof(HostExtensions))", files["B.Extensions.cs"], StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(files.Values.ToArray());
 
             EmittedOracleResult result = EmittedOracle.Evaluate(
-                printed + Environment.NewLine + "Demo.Host.Run()");
+                files.Values.Append(
+                    "package Demo\nHost.Run() + \":\" + Host().Measure().ToString() + \":\" + HostExtensions.Measure(Host()).ToString()")
+                    .ToArray());
             Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
             Assert.Null(result.UnhandledException);
-            Assert.Equal("System.Object", result.Value);
+            Assert.Equal("System.Object:1:1", result.Value);
         }
 
         [Fact]
         public void SystemObjectAlias_ReservesTransitivePartialOwnedExtensionImports()
         {
-            string printed = TranslateFile(
-                "A.Primary.cs",
+            IReadOnlyDictionary<string, string> files = TranslateFiles(
                 preservePartialParts: false,
                 ("A.Primary.cs", """
                     namespace Demo;
@@ -396,6 +400,7 @@ namespace Cs2Gs.Tests
                         public static int Measure(this Outer.Nested value) => 1;
                     }
                     """));
+            string printed = files["A.Primary.cs"];
 
             Assert.Contains(
                 "import SystemObject = System.Text.StringBuilder",
@@ -408,13 +413,18 @@ namespace Cs2Gs.Tests
             Assert.Contains("SystemObject_2()", printed, StringComparison.Ordinal);
             Assert.Contains("class Nested", printed, StringComparison.Ordinal);
             Assert.Contains("func Measure()", printed, StringComparison.Ordinal);
-            TranslationTestValidation.AssertBinds(printed);
+            Assert.Contains("NestedExtensions.Measure(value)", printed, StringComparison.Ordinal);
+            Assert.Contains("shared class NestedExtensions", files["C.Extensions.cs"], StringComparison.Ordinal);
+            Assert.Contains("ExtensionOwner(typeof(NestedExtensions))", files["C.Extensions.cs"], StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(files.Values.ToArray());
 
             EmittedOracleResult result = EmittedOracle.Evaluate(
-                printed + Environment.NewLine + "Demo.Outer.Run()");
+                files.Values.Append(
+                    "package Demo\nOuter.Run() + \":\" + Outer.Nested().Measure().ToString() + \":\" + NestedExtensions.Measure(Outer.Nested()).ToString()")
+                    .ToArray());
             Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
             Assert.Null(result.UnhandledException);
-            Assert.Equal("System.Object", result.Value);
+            Assert.Equal("System.Object:1:1", result.Value);
         }
 
         [Fact]
@@ -1162,6 +1172,22 @@ namespace Cs2Gs.Tests
             OutputKind outputKind,
             params (string Path, string Source)[] sources)
         {
+            return TranslateFilesCore(targetPath, preservePartialParts, outputKind, sources)[targetPath];
+        }
+
+        private static IReadOnlyDictionary<string, string> TranslateFiles(
+            bool preservePartialParts,
+            params (string Path, string Source)[] sources)
+        {
+            return TranslateFilesCore(null, preservePartialParts, OutputKind.DynamicallyLinkedLibrary, sources);
+        }
+
+        private static IReadOnlyDictionary<string, string> TranslateFilesCore(
+            string targetPath,
+            bool preservePartialParts,
+            OutputKind outputKind,
+            params (string Path, string Source)[] sources)
+        {
             LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
                 sources,
                 outputKind: outputKind);
@@ -1170,16 +1196,22 @@ namespace Cs2Gs.Tests
                 "Snippets should bind with no C# errors: "
                     + string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
-            LoadedDocument document = project.Documents.Single(candidate =>
-                candidate.FilePath.EndsWith(targetPath, StringComparison.Ordinal));
-            var context = new TranslationContext(
-                project.Compilation,
-                document.SemanticModel,
-                document.FilePath);
-            CompilationUnit unit = new CSharpToGSharpTranslator(
-                preservePartialParts: preservePartialParts)
-                .TranslateDocument(document, context);
-            return GSharpPrinter.Print(unit);
+            var translated = new Dictionary<string, string>(StringComparer.Ordinal);
+            var translator = new CSharpToGSharpTranslator(preservePartialParts: preservePartialParts);
+            foreach (LoadedDocument document in project.Documents.Where(candidate =>
+                targetPath == null || candidate.FilePath.EndsWith(targetPath, StringComparison.Ordinal)))
+            {
+                var context = new TranslationContext(
+                    project.Compilation,
+                    document.SemanticModel,
+                    document.FilePath);
+                CompilationUnit unit = translator.TranslateDocument(document, context);
+                translated.Add(sources.Single(source =>
+                    document.FilePath.EndsWith(source.Path, StringComparison.Ordinal)).Path,
+                    GSharpPrinter.Print(unit));
+            }
+
+            return translated;
         }
     }
 }
