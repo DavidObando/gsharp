@@ -726,7 +726,9 @@ public sealed class StructSymbol : TypeSymbol
     /// parameterless constructor must remain distinct. Its total arity exceeds
     /// every authored signature, avoiding a collision without a source overload.
     /// </summary>
-    internal int LiteralInitializerMarkerCount => NeedsSynthesizedValueStructDefaultCtor && !HasPrimaryConstructor
+    internal int LiteralInitializerMarkerCount => Definition != null && !ReferenceEquals(Definition, this)
+        ? Definition.LiteralInitializerMarkerCount
+        : NeedsSynthesizedValueStructDefaultCtor && !HasPrimaryConstructor
         && ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty)
         ? ExplicitConstructors.Max(constructor => constructor.Parameters.Length) + 1
         : 0;

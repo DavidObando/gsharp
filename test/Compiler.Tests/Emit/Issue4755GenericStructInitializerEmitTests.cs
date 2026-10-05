@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
@@ -15,6 +16,198 @@ namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue4755GenericStructInitializerEmitTests
 {
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    [InlineData(3, false)]
+    [InlineData(3, true)]
+    public void AuthoredConstructor_BraceExpressionTreesSelectOwningMarkerSignature(int shape, bool overrideValue)
+    {
+        InDirectory(directory =>
+        {
+            var markers = shape switch { 0 => 2, 1 => 3, 2 => 1, _ => 0 };
+            var nativeType = shape switch { 1 => "Outer<int>.User", 2 => "User", _ => "User<int>" };
+            var sourceType = shape switch { 1 => "Outer[int32].User", 2 => "User", _ => "User[int32]" };
+            var nativeOther = shape switch
+            {
+                0 => "public User(bool ignored) { Effects.Body(\"B\"); Value = 88; }",
+                1 => "public User(bool ignored, bool other) { Effects.Body(\"B\"); Value = 88; }",
+                _ => "",
+            };
+            var sourceOther = shape switch
+            {
+                0 => "public init(ignored bool) { Effects.Body(\"B\")\nValue = 88 }",
+                1 => "public init(ignored bool, other bool) { Effects.Body(\"B\")\nValue = 88 }",
+                _ => "",
+            };
+            var markerParameters = string.Join(", ", Enumerable.Range(0, markers).Select(index => "bool marker" + index));
+            var nativeMembers = $$"""
+                private readonly int Hidden = Effects.Mark("H", 3);
+                public int Value = Effects.Mark("I", 7);
+                public int ReadHidden() => Hidden;
+                public User() { {{(markers == 0 ? "" : "Effects.Body(\"C\"); Value = 99;")}} }
+                {{nativeOther}}
+                {{(markers == 0 ? "" : "internal User(" + markerParameters + ") { }")}}
+                """;
+            var sourceMembers = $$"""
+                private let Hidden int32 = Effects.Mark("H", 3)
+                public var Value int32 = Effects.Mark("I", 7)
+                public func ReadHidden() int32 -> Hidden
+                {{(markers == 0 ? "" : "public init() { Effects.Body(\"C\")\nValue = 99 }")}}
+                {{sourceOther}}
+                """;
+            var nativeDeclaration = shape == 1
+                ? "public class Outer<T> { public struct User { " + nativeMembers + " } }"
+                : "public struct User" + (shape == 2 ? "" : "<T>") + " { " + nativeMembers + " }";
+            var sourceDeclaration = shape == 1
+                ? "class Outer[T] { public struct User { " + sourceMembers + " } }"
+                : "struct User" + (shape == 2 ? "" : "[T]") + " { " + sourceMembers + " }";
+            var native = EmitCSharp(directory, "NativeMarkerTree4755", $$"""
+                using System;
+                using System.Linq;
+                using System.Linq.Expressions;
+                using System.Reflection;
+                namespace NativeMarkerTree4755;
+                public static class Effects
+                {
+                    public static string Trace = "";
+                    public static int Calls, Overrides, Bodies;
+                    public static void Reset() { Trace = ""; Calls = Overrides = Bodies = 0; }
+                    public static int Mark(string label, int value) { Trace += label; Calls++; return value; }
+                    public static int Override(int value) { Trace += "O"; Overrides++; return value; }
+                    public static void Body(string label) { Trace += label; Bodies++; }
+                    public static string Describe(int first, int second, int hiddenFirst, int hiddenSecond) =>
+                        first + "/" + second + "/" + hiddenFirst + "/" + hiddenSecond + "/" +
+                        Trace + "/" + Calls + "/" + Overrides + "/" + Bodies;
+                }
+                {{nativeDeclaration}}
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        Effects.Reset();
+                        var parameter = Expression.Parameter(typeof(int), "value");
+                        var constructor = typeof({{nativeType}}).GetConstructor(
+                            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
+                            Enumerable.Repeat(typeof(bool), {{markers}}).ToArray(), null)
+                            ?? throw new InvalidOperationException("Owning initializer missing");
+                        var creation = Expression.New(constructor,
+                            Enumerable.Range(0, {{markers}}).Select(_ => Expression.Constant(false)));
+                        Expression body = creation;
+                        if ({{(overrideValue ? "true" : "false")}})
+                            body = Expression.MemberInit(creation, Expression.Bind(
+                                typeof({{nativeType}}).GetField("Value") ?? throw new InvalidOperationException("Value missing"),
+                                Expression.Call(typeof(Effects).GetMethod(nameof(Effects.Override)), parameter)));
+                        var compiled = Expression.Lambda<Func<int, {{nativeType}}>>(body, parameter).Compile();
+                        var first = compiled(9);
+                        var second = compiled(11);
+                        return Effects.Describe(first.Value, second.Value, first.ReadHidden(), second.ReadHidden());
+                    }
+                }
+                """);
+            var expected = overrideValue ? "9/11/3/3/HIOHIO/4/2/0" : "7/7/3/3/HIHI/4/0/0";
+            Assert.Equal(expected, Invoke(EmittedFixture.Load(native), "NativeMarkerTree4755.Oracle"));
+            var members = overrideValue ? "Value: Effects.Override(value)" : "";
+            var authoredControl = markers == 0 || shape == 1 ? "" : $$"""
+                public func AuthoredControl() string {
+                    Effects.Reset()
+                    let tree Expression[Func[{{sourceType}}]] = () -> {{sourceType}}()
+                    let compiled = tree.Compile()
+                    let first = compiled()
+                    let second = compiled()
+                    return Effects.Describe(first.Value, second.Value, first.ReadHidden(), second.ReadHidden())
+                }
+                """;
+            var emitted = Compile(directory, $$"""
+                package MarkerTree4755
+                import System
+                import System.Linq.Expressions
+                import NativeMarkerTree4755
+                {{sourceDeclaration}}
+                class Api {
+                    shared {
+                        public func GetTree() Expression[Func[int32, {{sourceType}}]] {
+                            return (value int32) -> {{sourceType}}{ {{members}} }
+                        }
+                        public func Run() string {
+                            Effects.Reset()
+                            let compiled = GetTree().Compile()
+                            let first = compiled(9)
+                            let second = compiled(11)
+                            return Effects.Describe(first.Value, second.Value, first.ReadHidden(), second.ReadHidden())
+                        }
+                        public func LiteralControl() string {
+                            Effects.Reset()
+                            let first = {{sourceType}}{ {{(overrideValue ? "Value: Effects.Override(9)" : "")}} }
+                            let second = {{sourceType}}{ {{(overrideValue ? "Value: Effects.Override(11)" : "")}} }
+                            return Effects.Describe(first.Value, second.Value, first.ReadHidden(), second.ReadHidden())
+                        }
+                        {{authoredControl}}
+                    }
+                }
+                """, native);
+            IlVerifier.Verify(emitted, new[] { native });
+            var assemblies = EmittedFixture.LoadTogether(native, emitted);
+            Assert.Equal(expected, Invoke(assemblies.Last(), "MarkerTree4755.Api", "LiteralControl"));
+            if (markers > 0 && shape != 1)
+            {
+                Assert.Equal("99/99/3/3/HICHIC/4/0/2", Invoke(assemblies.Last(), "MarkerTree4755.Api", "AuthoredControl"));
+            }
+
+            object actual = string.Empty;
+            var error = Record.Exception(() => actual = Invoke(assemblies.Last(), "MarkerTree4755.Api"));
+            Assert.Null(error);
+            Assert.Equal(expected, actual);
+            var effects = assemblies.First().GetType("NativeMarkerTree4755.Effects", throwOnError: true);
+            effects.GetMethod("Reset").Invoke(null, null);
+            var tree = Assert.IsAssignableFrom<LambdaExpression>(Invoke(assemblies.Last(), "MarkerTree4755.Api", "GetTree"));
+            Assert.Equal("", effects.GetField("Trace").GetValue(null));
+            var creation = overrideValue ? Assert.IsType<MemberInitExpression>(tree.Body).NewExpression : Assert.IsType<NewExpression>(tree.Body);
+            Assert.Equal(tree.ReturnType, creation.Constructor.DeclaringType);
+            Assert.Equal(markers == 0, creation.Constructor.IsPublic);
+            Assert.Equal(markers > 0, creation.Constructor.IsAssembly);
+            Assert.Equal(markers, creation.Constructor.GetParameters().Length);
+            Assert.Equal(markers, creation.Arguments.Count);
+            Assert.All(creation.Constructor.GetParameters(), parameter => Assert.Equal(typeof(bool), parameter.ParameterType));
+            Assert.All(creation.Arguments, argument => Assert.Equal(false, Assert.IsType<ConstantExpression>(argument).Value));
+            Assert.Equal(shape != 2, tree.ReturnType.IsGenericType);
+            if (shape != 2)
+            {
+                Assert.Equal(typeof(int), Assert.Single(tree.ReturnType.GetGenericArguments()));
+            }
+
+            var hidden = tree.ReturnType.GetField("Hidden", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.True(hidden.IsPrivate);
+            Assert.True(hidden.IsInitOnly);
+            Assert.Equal(tree.ReturnType, hidden.DeclaringType);
+            AssertNativeConsumer(directory, emitted, "MarkerTree4755.Api", expected, native);
+            if (markers > 0)
+            {
+                var consumer = EmitCSharp(directory, "NativeAuthoredMarkerControl4755", $$"""
+                    public static class NativeAuthoredMarkerControl4755
+                    {
+                        public static string Run()
+                        {
+                            NativeMarkerTree4755.Effects.Reset();
+                            var first = new MarkerTree4755.{{nativeType}}();
+                            var second = new MarkerTree4755.{{nativeType}}();
+                            return NativeMarkerTree4755.Effects.Describe(
+                                first.Value, second.Value, first.ReadHidden(), second.ReadHidden());
+                        }
+                    }
+                    """, native, emitted);
+                IlVerifier.Verify(consumer, new[] { native, emitted });
+                Assert.Equal("99/99/3/3/HICHIC/4/0/2",
+                    Invoke(EmittedFixture.LoadTogether(native, emitted, consumer).Last(), "NativeAuthoredMarkerControl4755"));
+            }
+
+        });
+    }
+
     [Theory]
     [InlineData(true, "definition")]
     [InlineData(false, "definition")]
