@@ -254,7 +254,8 @@ public sealed class Issue4801GeneratedValidationSourcesTests : IDisposable
         Assert.Equal(framework, target.ConstructorArguments[0].Value);
         Assert.Same(typeof(System.Runtime.Versioning.TargetFrameworkAttribute).Assembly, target.AttributeType.Assembly);
         CustomAttributeData configurationAttribute = Assert.Single(assembly.GetCustomAttributesData(),
-            a => a.AttributeType.FullName == "System.Reflection.AssemblyMetadataAttribute");
+            a => a.AttributeType.FullName == "System.Reflection.AssemblyMetadataAttribute" &&
+                a.ConstructorArguments[0].Value is "ProducerConfiguration");
         Assert.Equal("ProducerConfiguration", configurationAttribute.ConstructorArguments[0].Value);
         Assert.Equal(configuration, configurationAttribute.ConstructorArguments[1].Value);
         Type declaration = assembly.GetType("Native.Generated.Declaration", throwOnError: true);
