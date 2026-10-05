@@ -2467,7 +2467,9 @@ public static class GSharpPrinter
         sb.Append("func ");
         if (method.Receiver != null)
         {
-            sb.Append($"({method.Receiver.Name} {RenderType(method.Receiver.Type)}) ");
+            var receiverParameter = new Parameter(
+                method.Receiver.Name, method.Receiver.Type, attributes: method.Receiver.Attributes);
+            sb.Append($"({RenderParameter(receiverParameter)}) ");
         }
         else if (method.ExplicitInterfaceType != null)
         {

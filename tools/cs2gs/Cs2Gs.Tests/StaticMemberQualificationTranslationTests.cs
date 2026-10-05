@@ -3,10 +3,13 @@
 // </copyright>
 
 using System;
+using System.Reflection;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.Tests;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -112,14 +115,10 @@ namespace Corpus.StaticMember
     }
 
     [Fact]
-    public void PrivateHelper_OfExtensionBearingStaticClass_IsWidenedForLiftedCallers()
+    public void PrivateHelper_OfExtensionBearingStaticClass_RetainsNativeVisibility()
     {
-        // A `private` non-extension member of a `static class` that also declares
-        // extension methods becomes unreachable once those extension methods are
-        // lifted to top-level `func`s: the lifted func qualifies the sibling call
-        // through the owning type (`Helpers.SendOrPost`), and G# accessibility then
-        // rejects the class-private member (GS0472). The private modifier must be
-        // dropped so the qualified reference still binds.
+        // ExtensionOwner hosts the real body on Helpers, so its private sibling
+        // stays accessible without changing the native visibility contract.
         const string source = @"
 namespace Corpus.PrivateHelper
 {
@@ -135,7 +134,32 @@ namespace Corpus.PrivateHelper
         string rendered = TranslateAndPrint(source);
 
         Assert.Contains("Helpers.SendOrPost", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("private func SendOrPost", rendered, StringComparison.Ordinal);
+        Assert.Contains("private func SendOrPost", rendered, StringComparison.Ordinal);
+        Assert.Contains("ExtensionOwner(typeof(Helpers))", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(rendered + """
+
+            var calls = 0
+            Corpus.PrivateHelper.Helpers.Post(System.Threading.SynchronizationContext(), func () { calls++ })
+            calls
+            """);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(1, result.Value);
+        using var native = new CSharpFixture(source);
+        foreach (Assembly image in new[] { native.Load(), result.Assembly })
+        {
+            Type holder = image.GetType("Corpus.PrivateHelper.Helpers", throwOnError: true);
+            Assert.True(holder.IsAbstract && holder.IsSealed);
+            MethodInfo helper = holder.GetMethod("SendOrPost", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(helper);
+            Assert.True(helper.IsPrivate);
+            Assert.Null(holder.GetMethod("SendOrPost", BindingFlags.Public | BindingFlags.Static));
+            MethodInfo original = holder.GetMethod("Post", BindingFlags.Public | BindingFlags.Static);
+            Assert.NotNull(original);
+            Assert.Equal(typeof(System.Threading.SynchronizationContext), original.GetParameters()[0].ParameterType);
+            Assert.Equal(typeof(Action), original.GetParameters()[1].ParameterType);
+        }
     }
 
     private static string TranslateAndPrint(string source)

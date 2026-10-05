@@ -680,11 +680,6 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol returnType,
             ISymbol symbol)
         {
-            if (!this.IsObliviousCompilation())
-            {
-                return mapped;
-            }
-
             var path = new List<int>();
 
             // The analyzer keys iterator leaves under the declared envelope.
@@ -715,7 +710,7 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol typeSymbol,
             BaseObjectCreationExpressionSyntax creation)
         {
-            if (type == null || typeSymbol == null || !this.IsObliviousCompilation())
+            if (type == null || typeSymbol == null)
             {
                 return type;
             }
@@ -736,7 +731,7 @@ public sealed partial class CSharpToGSharpTranslator
             SyntaxNode node = value;
             while (true)
             {
-                if (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+                if (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax)
                 {
                     node = node.Parent;
                     continue;
@@ -804,6 +799,10 @@ public sealed partial class CSharpToGSharpTranslator
                 case ReturnStatementSyntax returnStatement:
                     return this.context.SemanticModel
                         .GetEnclosingSymbol(returnStatement.SpanStart) as IMethodSymbol;
+
+                case YieldStatementSyntax yieldStatement:
+                    return this.context.SemanticModel
+                        .GetEnclosingSymbol(yieldStatement.SpanStart) as IMethodSymbol;
 
                 case ArrowExpressionClauseSyntax arrow:
                     return this.context.SemanticModel.GetDeclaredSymbol(arrow.Parent);
@@ -1842,9 +1841,7 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => null,
             };
 
-            return declaredType is { IsReferenceType: true }
-                and not ITypeParameterSymbol
-                && declaredType.NullableAnnotation == NullableAnnotation.None;
+            return ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(declaredType);
         }
 
         // Issue #4146 (Copilot review of #4128's fix): the assembly IDENTITIES

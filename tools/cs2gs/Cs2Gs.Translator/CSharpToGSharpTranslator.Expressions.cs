@@ -2302,9 +2302,7 @@ public sealed partial class CSharpToGSharpTranslator
             return !SymbolEqualityComparer.Default.Equals(
                     original.ContainingAssembly,
                     this.context.Compilation.Assembly)
-                && type is { IsReferenceType: true }
-                and not ITypeParameterSymbol
-                && type.NullableAnnotation == NullableAnnotation.None;
+                && ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(type);
         }
 
         // Issue #2113 follow-up: true when <paramref name="symbol"/> is a `let`
@@ -2691,14 +2689,17 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateValueWithNullForgiveness(ExpressionSyntax value)
         {
             GExpression translated = this.TranslateExpression(value);
+            (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
+            if (this.GetUserDefinedConversionInputOperator(value, targetType, out _) != null)
+            {
+                return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol);
+            }
 
             if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
                 || this.PlatformTypedImportNeedsNoBridge(value))
             {
                 return translated;
             }
-
-            (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
 
             // Issue #3848: the unconditional branch below predates any promotion
             // that could make a RETURN position nullable, so it asserts without
@@ -2775,8 +2776,58 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression translated,
             ITypeSymbol targetType,
             ISymbol targetSymbol,
-            bool includePromotedValue)
+            bool includePromotedValue,
+            bool operatorInput = false)
         {
+            bool convertsValue = false;
+            bool resultAcceptsNil = !operatorInput && this.BranchResultAcceptsNil(value, out _);
+            IMethodSymbol conversionOperator = operatorInput
+                ? null
+                : this.GetUserDefinedConversionInputOperator(value, targetType, out convertsValue);
+            if (!operatorInput
+                && (conversionOperator != null || this.FlowsThroughUserDefinedConversion(value))
+                && this.GetFixedElementDestinationType(value, targetSymbol) is { } projectedTarget
+                && SymbolEqualityComparer.Default.Equals(projectedTarget, targetType))
+            {
+                targetType = projectedTarget;
+            }
+
+            if (conversionOperator != null)
+            {
+                IParameterSymbol parameter = conversionOperator.Parameters[0];
+                GExpression operatorOperand = this.ReportStoreBridge(
+                    value,
+                    translated,
+                    this.ForgiveNullableReferenceValueCore(
+                        value, translated, parameter.Type, parameter, includePromotedValue, operatorInput: true),
+                    parameter,
+                    parameter.Type);
+                if (convertsValue
+                    && !resultAcceptsNil
+                    && this.TargetWillRemainNonNullableReference(targetType, targetSymbol))
+                {
+                    GTypeReference resultType = this.MapDelegateLikeReturnType(
+                        conversionOperator, isAsync: false, value.GetLocation());
+                    if (ObliviousNullabilityAnalyzer.IsDirectlyNullable(
+                        ObliviousNullabilityAnalyzer.GetResultConversion(value, this.context.SemanticModel),
+                        this.context.SemanticModel,
+                        respectNullGuards: true))
+                    {
+                        resultType = MakeNullable(resultType);
+                    }
+
+                    if (resultType.IsNullable)
+                    {
+                        // Assert the converted result, never its null-accepting input.
+                        GExpression converted = EnsureNonNullAssertion(new ConversionExpression(resultType, operatorOperand));
+                        this.state.MaterializedConversionResults[converted] = conversionOperator;
+                        return converted;
+                    }
+                }
+
+                return operatorOperand;
+            }
+
             // ADR-0186 step 6 (PR 0): a `T!` value flowing into a non-null
             // target is checked by gsc at that coercion (§4).
             if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
@@ -2814,6 +2865,7 @@ public sealed partial class CSharpToGSharpTranslator
                     || (!this.IsObliviousCompilation()
                         && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull));
             if (translated is NonNullAssertionExpression
+                || resultAcceptsNil
                 || IsNullOrSuppressedNull(value)
                 || value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
@@ -2846,13 +2898,23 @@ public sealed partial class CSharpToGSharpTranslator
             bool generatedPromotedValue = !isFlowNarrowedLocal
                 && !this.IsObliviousCompilation()
                 && this.IsGeneratedDeclarationPromotedValue(value);
+
+            // A fixed reference-type parameter can still receive a known-nil result.
+            bool directlyNullableResult = !operatorInput
+                && targetSymbol != null
+                && targetType is ITypeParameterSymbol { IsReferenceType: true }
+                && ObliviousNullabilityAnalyzer.IsDirectlyNullable(
+                    this.context.SemanticModel.GetOperation(value),
+                    this.context.SemanticModel,
+                    respectNullGuards: true);
             if (!flowRequiresAssertion
-                && !this.NullableReferenceValueMayBeNull(value)
-                    && !generatedPromotedValue
-                    && !(includePromotedValue
-                        && !isFlowNarrowedLocal
-                        && this.IsObliviousCompilation()
-                        && this.IsNullablePromotedValue(value)))
+                && !this.NullableReferenceValueMayBeNull(value, respectDeclaredAnnotations: targetSymbol != null)
+                && !directlyNullableResult
+                && !generatedPromotedValue
+                && !(includePromotedValue
+                    && !isFlowNarrowedLocal
+                    && this.IsObliviousCompilation()
+                    && this.IsNullablePromotedValue(value)))
             {
                 return translated;
             }
@@ -3961,7 +4023,7 @@ public sealed partial class CSharpToGSharpTranslator
                     || declaredType?.NullableAnnotation == NullableAnnotation.Annotated);
         }
 
-        private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
+        private bool NullableReferenceValueMayBeNull(ExpressionSyntax value, bool respectDeclaredAnnotations = false)
         {
             bool nullableForEachBinding = this.IsNullableForEachBindingUse(value);
             bool managedArrayGenericResult =
@@ -4018,17 +4080,17 @@ public sealed partial class CSharpToGSharpTranslator
             bool nullableByShape = value switch
             {
                 ParenthesizedExpressionSyntax parenthesized =>
-                    this.NullableReferenceValueMayBeNull(parenthesized.Expression),
+                    this.NullableReferenceValueMayBeNull(parenthesized.Expression, respectDeclaredAnnotations),
                 CastExpressionSyntax cast =>
-                    this.NullableReferenceValueMayBeNull(cast.Expression),
+                    this.NullableReferenceValueMayBeNull(cast.Expression, respectDeclaredAnnotations),
                 ConditionalExpressionSyntax conditional =>
-                    this.NullableReferenceValueMayBeNull(conditional.WhenTrue)
-                        || this.NullableReferenceValueMayBeNull(conditional.WhenFalse),
+                    this.NullableReferenceValueMayBeNull(conditional.WhenTrue, respectDeclaredAnnotations)
+                        || this.NullableReferenceValueMayBeNull(conditional.WhenFalse, respectDeclaredAnnotations),
                 SwitchExpressionSyntax switchExpression => switchExpression.Arms.Any(arm =>
-                    this.NullableReferenceValueMayBeNull(arm.Expression)),
+                    this.NullableReferenceValueMayBeNull(arm.Expression, respectDeclaredAnnotations)),
                 BinaryExpressionSyntax coalesce
                     when coalesce.IsKind(SyntaxKind.CoalesceExpression) =>
-                        this.NullableReferenceValueMayBeNull(coalesce.Right),
+                        this.NullableReferenceValueMayBeNull(coalesce.Right, respectDeclaredAnnotations),
                 AssignmentExpressionSyntax assignment =>
                     this.PatternLocalUsesNullableStorage(assignment.Left),
                 _ => false,
@@ -4036,7 +4098,9 @@ public sealed partial class CSharpToGSharpTranslator
 
             return nullableByShape
                 || type.NullableAnnotation == NullableAnnotation.Annotated
-                || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated;
+                || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated
+                || (respectDeclaredAnnotations
+                    && this.GetDeclaredValueType(value)?.NullableAnnotation == NullableAnnotation.Annotated);
         }
 
         private bool IsImportedObliviousCollectionElement(
@@ -4068,19 +4132,71 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        // Whether `node` reaches its sink through a cast that calls a
-        // user-defined conversion operator. Such a cast is an invocation
-        // boundary: the value feeds the operator's (non-null) parameter, not
-        // the sink that receives the converted result, so that sink is not the
-        // value's target. ResolveValueSink walks casts, so this is asked first.
+        private IMethodSymbol GetUserDefinedConversionInputOperator(
+            ExpressionSyntax value,
+            ITypeSymbol resultType,
+            out bool convertsValue)
+        {
+            convertsValue = true;
+            for (IConversionOperation conversion = ObliviousNullabilityAnalyzer.GetResultConversion(
+                    value, this.context.SemanticModel);
+                conversion is { IsImplicit: true };
+                conversion = conversion.Operand as IConversionOperation)
+            {
+                if (conversion.OperatorMethod is { Parameters.Length: 1 } method)
+                {
+                    return method;
+                }
+            }
+
+            ExpressionSyntax current = value;
+            while (current.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
+            {
+                current = (ExpressionSyntax)current.Parent;
+            }
+
+            if (current.Parent is CastExpressionSyntax cast && cast.Expression == current)
+            {
+                for (IConversionOperation conversion = ObliviousNullabilityAnalyzer.GetResultConversion(
+                        cast, this.context.SemanticModel);
+                    conversion != null;
+                    conversion = conversion.Operand as IConversionOperation)
+                {
+                    if (conversion.OperatorMethod is { Parameters.Length: 1 } method)
+                    {
+                        convertsValue = false;
+                        return method;
+                    }
+                }
+            }
+
+            return ObliviousNullabilityAnalyzer.GetContextualOperator(
+                value, this.context.SemanticModel, resultType) is { Parameters.Length: 1 } contextualOperator
+                    ? contextualOperator
+                    : null;
+        }
+
+        // Whether `node` reaches its sink through a conversion that calls a
+        // user-defined conversion operator. The input obeys the operator's
+        // parameter contract, not the contract of the converted-result sink.
         private bool FlowsThroughUserDefinedConversion(SyntaxNode node)
         {
-            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            while (node is ExpressionSyntax expression)
             {
-                if (node.Parent is CastExpressionSyntax cast
-                    && this.context.SemanticModel.GetOperation(cast) is IConversionOperation { OperatorMethod: not null })
+                for (IConversionOperation conversion = ObliviousNullabilityAnalyzer.GetResultConversion(
+                        expression, this.context.SemanticModel);
+                    conversion != null;
+                    conversion = conversion.Operand as IConversionOperation)
                 {
-                    return true;
+                    if (conversion.OperatorMethod != null)
+                    {
+                        return true;
+                    }
+                }
+
+                if (node.Parent is not (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax))
+                {
+                    break;
                 }
 
                 node = node.Parent;
@@ -4132,11 +4248,22 @@ public sealed partial class CSharpToGSharpTranslator
             while (true)
             {
                 if (current.Parent is ParenthesizedExpressionSyntax
+                    or CheckedExpressionSyntax
                     or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
                 {
                     // `!` has no runtime meaning: the arm still flows wherever
                     // the suppressed expression flows.
                     current = current.Parent;
+                }
+                else if (current.Parent is CastExpressionSyntax cast
+                    && this.context.SemanticModel.GetOperation(cast) is IConversionOperation { OperatorMethod: null } conversion
+                    && conversion.Type?.IsReferenceType == true
+                    && conversion.Operand.Type?.IsReferenceType == true
+                    && (conversion.Conversion.IsReference || conversion.Conversion.IsIdentity))
+                {
+                    // A built-in reference cast preserves nil; operators and
+                    // unboxing remain actual conversion-consumer boundaries.
+                    current = cast;
                 }
                 else if (current.Parent is ConditionalExpressionSyntax conditional
                     && (conditional.WhenTrue == current || conditional.WhenFalse == current))
@@ -4196,9 +4323,14 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool IsNilArm(ExpressionSyntax arm)
             {
-                while (arm is ParenthesizedExpressionSyntax parenthesized)
+                while (arm is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
                 {
-                    arm = parenthesized.Expression;
+                    arm = arm switch
+                    {
+                        ParenthesizedExpressionSyntax parenthesized => parenthesized.Expression,
+                        CheckedExpressionSyntax checkedExpression => checkedExpression.Expression,
+                        _ => arm,
+                    };
                 }
 
                 // `default(T)` is nil for a reference type or Nullable<T>,
@@ -4234,15 +4366,24 @@ public sealed partial class CSharpToGSharpTranslator
         {
             crossedSuppression = false;
 
-            // A conditional or switch-expression ARM has no target of its own:
-            // it flows into whatever the whole `?:` / `switch` flows into, so the
-            // walk climbs to the outermost branching expression. `isBranchArm`
-            // records that it did.
+            // An arm follows its containing branches until a conversion's
+            // parameter or a declared sink supplies its immediate contract.
             SyntaxNode current = value;
             bool isBranchArm = false;
             while (true)
             {
-                if (current.Parent is ParenthesizedExpressionSyntax)
+                if (isBranchArm
+                    && current is ExpressionSyntax branch
+                    && this.GetUserDefinedConversionInputOperator(
+                        branch,
+                        this.context.GetTypeInfo(branch).ConvertedType,
+                        out _) is { Parameters.Length: 1 } consumer)
+                {
+                    IParameterSymbol parameter = consumer.Parameters[0];
+                    return (parameter.Type, parameter);
+                }
+
+                if (current.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
                 {
                     current = current.Parent;
                 }
@@ -4268,6 +4409,13 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     break;
                 }
+            }
+
+            if (current.Parent is YieldStatementSyntax
+                && this.context.SemanticModel.GetEnclosingSymbol(value.SpanStart) is IMethodSymbol iterator
+                && this.GetIteratorStoreSlot(value, iterator) is { } iteratorSlot)
+            {
+                return (iteratorSlot, iterator);
             }
 
             ISymbol target = current.Parent switch
