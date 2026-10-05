@@ -10,6 +10,8 @@ using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 using Xunit.Sdk;
 
@@ -22,6 +24,77 @@ namespace GSharp.Compiler.Tests;
 /// </summary>
 public class IlVerifierTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VerifyCore_AcceptsNativeAssemblyWithNoncanonicalPath(bool relative)
+    {
+        var tempDir = Path.GetFullPath(Directory.CreateTempSubdirectory("gs_ilv_path_").FullName);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "nested"));
+            var outPath = Path.Combine(tempDir, "valid.dll");
+            var compilation = CSharpCompilation.Create(
+                "Valid",
+                new[] { CSharpSyntaxTree.ParseText("public static class Valid { public static int Value() => 42; }") },
+                new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var emit = compilation.Emit(outPath);
+            Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+
+            IlVerifier.Verify(outPath);
+            var noncanonicalPath = Path.Combine(tempDir, ".", "nested", "..", "valid.dll");
+            var assemblyPath = relative
+                ? Path.GetRelativePath(IlVerifier.FindRepoRoot(), noncanonicalPath)
+                : noncanonicalPath;
+            Assert.Equal(outPath, Path.GetFullPath(assemblyPath, IlVerifier.FindRepoRoot()));
+            Assert.NotEqual(outPath, assemblyPath);
+
+            IlVerifier.VerifyCore(
+                "dotnet",
+                new[] { "tool", "run", "ilverify" },
+                assemblyPath,
+                new[] { typeof(object).Assembly.Location },
+                ignoredErrorCodes: null,
+                includedScope: null,
+                excludedScope: null);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(0, "")]
+    [InlineData(0, "All Classes and Methods Verified.")]
+    [InlineData(0, "All Classes and Methods in other.dll Verified.")]
+    [InlineData(1, "matching")]
+    public void VerifyCore_RejectsMissingOrWrongMarkerAndNonzeroExit(int exitCode, string output)
+    {
+        var assemblyPath = typeof(IlVerifierTests).Assembly.Location;
+        var marker = output == "matching"
+            ? $"All Classes and Methods in {assemblyPath} Verified."
+            : output;
+        var child = CreateChildProcess(
+            $"[Console]::Out.Write('{marker.Replace("'", "''")}'); exit {exitCode}",
+            $"printf '%s' '{marker.Replace("'", "'\\''")}'; exit {exitCode}");
+        var exception = Assert.Throws<XunitException>(
+            () => IlVerifier.VerifyCore(
+                child.FileName,
+                child.ArgumentList.ToArray(),
+                assemblyPath,
+                Array.Empty<string>(),
+                ignoredErrorCodes: null,
+                includedScope: null,
+                excludedScope: null));
+
+        Assert.Contains(
+            exitCode == 0 ? "without confirming verification" : "(exit 1)",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Verify_AcceptsValidEmittedAssembly_DoesNotThrow()
     {
