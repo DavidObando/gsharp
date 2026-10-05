@@ -18,7 +18,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     private readonly DiagnosticBag diagnostics;
     private readonly Dictionary<TypeSymbol, TypeSymbol?> required = new();
     private readonly HashSet<VariableSymbol> managedLocations = new();
-    private readonly HashSet<FunctionSymbol> analyzedFunctions = new();
+    private readonly HashSet<(FunctionSymbol Function, StructSymbol? InitializerOwner)> analyzedFunctions = new();
     private readonly HashSet<StructSymbol> analyzedInitializerConstructions = new();
     private StructSymbol? initializerOwner;
     private bool analyzingStateMachine;
@@ -273,7 +273,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void AnalyzeFunction(FunctionSymbol function, BoundBlockStatement body)
     {
-        if (!this.analyzedFunctions.Add(function))
+        if (!this.analyzedFunctions.Add((function, this.initializerOwner)))
         {
             return;
         }

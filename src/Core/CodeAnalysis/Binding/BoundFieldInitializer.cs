@@ -48,7 +48,10 @@ public sealed record BoundFieldInitializer
     /// <summary>Gets the targeted property, or <see langword="null"/> when this initializer targets a field.</summary>
     public PropertySymbol? Property { get; }
 
-    public BoundExpression Value { get; }
+    public BoundExpression Value { get; init; }
+
+    /// <summary>Gets a value indicating whether this entry was copied from a declaration rather than authored at the literal site.</summary>
+    public bool IsDeclarationInitializer { get; init; }
 
     /// <summary>Gets the name of the targeted member (field or property).</summary>
     // Field and Property are an either-or pair: every constructor sets exactly

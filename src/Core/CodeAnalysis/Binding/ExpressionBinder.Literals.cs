@@ -2609,7 +2609,7 @@ internal sealed partial class ExpressionBinder
 
                 if (structSymbol.InstanceFieldInitializers.TryGetValue(field, out var initExpr))
                 {
-                    inits.Add(new BoundFieldInitializer(field, initExpr));
+                    inits.Add(new BoundFieldInitializer(field, initExpr) { IsDeclarationInitializer = true });
                     seenFieldNames.Add(field.Name);
                 }
             }

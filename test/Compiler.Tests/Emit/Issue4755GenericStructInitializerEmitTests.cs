@@ -16,6 +16,184 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue4755GenericStructInitializerEmitTests
 {
     [Theory]
+    [InlineData(true, "definition")]
+    [InlineData(false, "definition")]
+    [InlineData(true, "generic")]
+    [InlineData(false, "generic")]
+    [InlineData(true, "enclosing")]
+    public void RewrittenDeclarationInitializers_RunOnceAndPreserveAuthoredOverrides(bool primary, string shape)
+    {
+        InDirectory(directory =>
+        {
+            var native = EmitCSharp(directory, "NativeInterpolation4755", """
+                namespace NativeInterpolation4755;
+                public static class Provider<T>
+                {
+                    public static int Calls, Arguments, Overrides;
+                    public static string Trace = "";
+                    public static void Reset() { Calls = Arguments = Overrides = 0; Trace = ""; }
+                    public static int Argument() { Arguments++; Trace += "A"; return 7; }
+                    public static int Next() { Calls++; Trace += "I"; return Calls; }
+                    public static string Override() { Overrides++; Trace += "O"; return "override"; }
+                }
+                public struct Primary(int value)
+                {
+                    public int Value = value;
+                    public string Text = $"{Provider<int>.Next()}";
+                }
+                public struct Plain
+                {
+                    public int Value;
+                    private int marker = 0;
+                    public string Text = $"{Provider<int>.Next()}";
+                    public Plain() { }
+                }
+                public static class Oracle
+                {
+                    public static string RunPrimary()
+                    {
+                        Provider<int>.Reset();
+                        var first = new Primary(Provider<int>.Argument());
+                        var second = new Primary(Provider<int>.Argument()) { Text = Provider<int>.Override() };
+                        return first.Text + "/" + second.Text + "/" + Provider<int>.Calls + "/" +
+                            Provider<int>.Arguments + "/" + Provider<int>.Overrides + "/" + Provider<int>.Trace;
+                    }
+                    public static string RunPlain()
+                    {
+                        Provider<int>.Reset();
+                        var first = new Plain { Value = Provider<int>.Argument() };
+                        var second = new Plain { Value = Provider<int>.Argument(), Text = Provider<int>.Override() };
+                        return first.Text + "/" + second.Text + "/" + Provider<int>.Calls + "/" +
+                            Provider<int>.Arguments + "/" + Provider<int>.Overrides + "/" + Provider<int>.Trace;
+                    }
+                }
+                """);
+            var expected = primary ? "1/override/2/2/1/AIAIO" : "1/override/2/2/1/IAIAO";
+            Assert.Equal(expected, Invoke(EmittedFixture.Load(native), "NativeInterpolation4755.Oracle", primary ? "RunPrimary" : "RunPlain"));
+            IlVerifier.Verify(native);
+            var parameter = shape == "definition" ? "int32" : "T";
+            var declaration = $$"""
+                struct Item{{(shape == "generic" ? "[T]" : string.Empty)}}{{(primary ? "(Value int32)" : string.Empty)}} {
+                    {{(primary ? string.Empty : "public var Value int32\nprivate let Marker int32 = 0")}}
+                    public var Text string = "${Provider[{{parameter}}].Next()}"
+                }
+                """;
+            if (shape == "enclosing")
+            {
+                declaration = "class Outer[T] { public " + declaration + " }";
+            }
+
+            var target = shape switch
+            {
+                "generic" => "Item[int32]",
+                "enclosing" => "Outer[int32].Item",
+                _ => "Item",
+            };
+            var emitted = Compile(directory, $$"""
+                package RewrittenInitializers4755
+                import NativeInterpolation4755
+                {{declaration}}
+                class Api {
+                    shared {
+                        public func Run() string {
+                            Provider[int32].Reset()
+                            let first = {{target}}{Value: Provider[int32].Argument()}
+                            let second = {{target}}{Value: Provider[int32].Argument(), Text: Provider[int32].Override()}
+                            return first.Text + "/" + second.Text + "/" + Provider[int32].Calls.ToString() + "/" +
+                                Provider[int32].Arguments.ToString() + "/" + Provider[int32].Overrides.ToString() + "/" + Provider[int32].Trace
+                        }
+                    }
+                }
+                """, native);
+            IlVerifier.Verify(emitted, new[] { native });
+            AssertNativeConsumer(directory, emitted, "RewrittenInitializers4755.Api", expected, native);
+        });
+    }
+
+    [Theory]
+    [InlineData("return default")]
+    [InlineData("let next = func () T { return default }\nreturn next()")]
+    [InlineData("let next = func () T { let leaf = func () T { return default }\nreturn leaf() }\nreturn next()")]
+    [InlineData("let next[U] = func (input U) T { return default }\nreturn next[int32](1)")]
+    public void InitializerFunctions_AreAnalyzedForEachConstructedOwner(string body)
+    {
+        InDirectory(directory =>
+        {
+            var result = TryCompile(directory, $$"""
+                package FunctionContexts4755
+                struct S[T] {
+                    public var Factory () -> T = func () T { {{body}} }
+                }
+                class Api {
+                    shared {
+                        public func Bad() readonly managed[int32] {
+                            let scalar = S[int32]{}
+                            let number = scalar.Factory()
+                            let managed = S[readonly managed[int32]]{}
+                            return managed.Factory()
+                        }
+                    }
+                }
+                """, typeof(Gsharp.Values.ReadOnlyManagedRef<>).Assembly.Location);
+            Assert.Equal(1, result.Code);
+            Assert.Contains("error GS0604:", result.Output, StringComparison.Ordinal);
+            Assert.Contains("default would synthesize a null non-null managed-reference slot", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("error GS0005:", result.Output, StringComparison.Ordinal);
+            Assert.False(File.Exists(result.AssemblyPath));
+        });
+    }
+
+    [Theory]
+    [InlineData("return default")]
+    [InlineData("let next = func () T { return default }\nreturn next()")]
+    [InlineData("let next = func () T { let leaf = func () T { return default }\nreturn leaf() }\nreturn next()")]
+    [InlineData("let next[U] = func (input U) T { return default }\nreturn next[int32](1)")]
+    public void InitializerFunctions_PreserveLegalScalarAndNullableConstructedOwners(string body)
+    {
+        InDirectory(directory =>
+        {
+            var values = typeof(Gsharp.Values.ReadOnlyManagedRef<>).Assembly.Location;
+            var native = EmitCSharp(directory, "NativeFunctionContexts4755", """
+                namespace NativeFunctionContexts4755;
+                public struct S<T>
+                {
+                    public System.Func<T> Factory = () => { T Next<U>(U input) => default(T); return Next(1); };
+                    public S() { }
+                }
+                public static class Oracle
+                {
+                    public static string Run() => new S<int>().Factory() + "/" +
+                        (new S<string>().Factory() == null) + "/" +
+                        (new S<Gsharp.Values.ReadOnlyManagedRef<int>>().Factory() == null);
+                }
+                """, values);
+            const string expected = "0/True/True";
+            Assert.Equal(expected, Invoke(EmittedFixture.LoadTogether(values, native).Last(), "NativeFunctionContexts4755.Oracle"));
+            IlVerifier.Verify(native, new[] { values });
+            var emitted = Compile(directory, $$"""
+                package LegalFunctionContexts4755
+                struct S[T] {
+                    public var Factory () -> T = func () T { {{body}} }
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let scalar = S[int32]{}
+                            let text = S[string?]{}
+                            let managed = S[readonly managed[int32]?]{}
+                            return scalar.Factory().ToString() + "/" + (text.Factory() == nil).ToString() + "/" +
+                                (managed.Factory() == nil).ToString()
+                        }
+                    }
+                }
+                """, values);
+            IlVerifier.Verify(emitted, new[] { values });
+            AssertNativeConsumer(directory, emitted, "LegalFunctionContexts4755.Api", expected, values);
+        });
+    }
+
+    [Theory]
     [InlineData("readonly managed[int32]", "false", false)]
     [InlineData("managed[int32]", "false", false)]
     [InlineData("[1]readonly managed[int32]", "false", false)]

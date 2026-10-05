@@ -147,9 +147,6 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         // Primary parameters belong to the owning constructor, not the literal
         // site. Capture supplied values in lexical order before mapping them to
         // parameters; constructor-owned declaration expressions run only there.
-        var declared = new HashSet<BoundExpression>(
-            type.Definition.InstanceFieldInitializers.Values,
-            ReferenceEqualityComparer.Instance);
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var supplied = new Dictionary<FieldSymbol, BoundExpression>();
         var remaining = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
@@ -162,7 +159,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
 
         foreach (var initializer in node.Initializers)
         {
-            if (initializer.Field != null && declared.Contains(initializer.Value))
+            if (initializer.IsDeclarationInitializer)
             {
                 continue;
             }
@@ -176,9 +173,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
                 continue;
             }
 
-            remaining.Add(initializer.Field != null
-                ? new BoundFieldInitializer(initializer.Field, value, initializer.FieldDeclaringType)
-                : new BoundFieldInitializer(Invariant.Required(initializer.Property, "a literal initializer has a field or property"), value));
+            remaining.Add(initializer with { Value = value });
         }
 
         var arguments = ImmutableArray.CreateBuilder<BoundExpression>(type.PrimaryConstructorParameters.Length);
