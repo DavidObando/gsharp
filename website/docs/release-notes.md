@@ -22,7 +22,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 - Declaration initializer provenance now survives lowering, so struct literal
   initializers run once without suppressing authored overrides. Managed-reference
-  safety also checks initializer functions separately for each constructed owner. (0.5 line)
+  safety also checks initializer functions separately for each constructed owner.
 
 - **Expression-tree brace literals retain initializer-only constructor semantics** (issue #4755). Owning value-struct initializers select their exact hidden marker signature rather than an authored parameterless constructor; later explicit member writes remain ordered after declaration initialization. Authored constructor calls retain their original body and metadata.
 
