@@ -336,6 +336,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0617 | Error | A `shared` class declares an `init(…)` constructor, a primary constructor, a `deinit`, a `shared { }` block, or an `open` or `override` method, property or event (ADR-0195). | A shared class has only shared members, declared directly in its body, and a shared member is never virtual; remove the declaration or modifier, or drop `shared`. |
 | GS0618 | Error | `shared` is combined with `open`, `sealed`, `abstract` or `data` (ADR-0195). | A shared class is neither inheritable nor instantiable; remove the conflicting modifier. |
 | GS0619 | Error | A `shared` class lists a base class or an interface (ADR-0195). | Remove the base-type clause, or drop `shared`. |
+| GS0620 | Error | An explicit abstract property has a non-abstract owner, a private required accessor, a body or bare auto-property form, or a conflicting `open` or explicit-interface modifier (ADR-0197). | Declare an abstract class and a non-private, bodyless accessor list; use `abstract override prop` to reabstract a base slot. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |
