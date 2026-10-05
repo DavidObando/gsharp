@@ -256,7 +256,7 @@ public class Issue4770NullableClassifierCoalescingTests
         }
         """;
 
-    private static object Invoke(Assembly assembly, string method) =>
+    private static object? Invoke(Assembly assembly, string method) =>
         assembly.GetType("Issue4770.Probe").GetMethod(method).Invoke(null, null);
 
     private static string ExtractClassifier(string root)
