@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -177,6 +179,7 @@ public sealed class ValidationManifest
                 CsFilePath = csFilePath,
                 RelativeCsPath = relativeCsPath,
                 FromReferencedProject = file.IsFromReferencedProject,
+                GeneratedSource = file.GeneratedSource,
             });
         }
 
@@ -328,15 +331,38 @@ public sealed class ValidationManifest
             }
 
             csPath = ResolveWithinRoot(sourceRoot, relativeCsPath);
-            if (!File.Exists(csPath))
+            if (file.GeneratedSource is not null)
+            {
+                if (this.SourceRoot is null || !RepositoryFileInventory.IsBuildOutputPath(relativeCsPath))
+                {
+                    throw new InvalidOperationException(
+                        $"Validation source '{relativeCsPath}' is not a portable build-generated input.");
+                }
+
+                string owner = ResolveWithinRoot(sourceRoot, file.GeneratedSource.SourceProjectPath);
+                bool ownsApp = string.Equals(
+                    owner,
+                    CanonicalRootPath.Resolve(context.App.ProjectPath),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+                if (!File.Exists(owner) || ownsApp == file.FromReferencedProject)
+                {
+                    throw new InvalidOperationException(
+                        $"Generated validation source '{relativeCsPath}' has inconsistent project ownership.");
+                }
+
+                file.GeneratedSource.Validate();
+            }
+            else if (!File.Exists(csPath))
             {
                 throw new InvalidOperationException(
                     $"Validation source '{relativeCsPath}' is missing from authoritative corpus '{sourceRoot}'.");
             }
-
-            // Unlike the best-effort Fact reader, replay must not silently
-            // lose authoritative source evidence to a stale/unreadable path.
-            using FileStream source = File.OpenRead(csPath);
+            else
+            {
+                // Unlike the best-effort Fact reader, replay must not silently
+                // lose authoritative source evidence to a stale/unreadable path.
+                using FileStream source = File.OpenRead(csPath);
+            }
 
             if (!File.Exists(gsPath))
             {
@@ -350,6 +376,7 @@ public sealed class ValidationManifest
                 File.ReadAllText(gsPath))
             {
                 IsFromReferencedProject = file.FromReferencedProject,
+                GeneratedSource = file.GeneratedSource,
             });
         }
     }
@@ -484,4 +511,46 @@ public sealed class ValidationManifestFile
     [JsonPropertyName("relativeCsPath")]
     [JsonPropertyOrder(4)]
     public string RelativeCsPath { get; set; }
+
+    /// <summary>Gets or sets captured build-generated source evidence; absent for authored and old inputs.</summary>
+    [JsonPropertyName("generatedSource")]
+    [JsonPropertyOrder(5)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GeneratedValidationSource GeneratedSource { get; set; }
+}
+
+/// <summary>
+/// The actual text of a retained build-generated compilation input, not a
+/// recipe for regenerating it in the validator's configuration.
+/// </summary>
+public sealed class GeneratedValidationSource
+{
+    /// <summary>Gets or sets the corpus-relative project that contributed this compilation input.</summary>
+    [JsonPropertyName("sourceProjectPath")]
+    public string SourceProjectPath { get; set; }
+
+    /// <summary>Gets or sets the producing syntax tree's complete source text.</summary>
+    [JsonPropertyName("text")]
+    public string Text { get; set; }
+
+    /// <summary>Gets or sets SHA-256 of the UTF-8 source text, without an encoding preamble.</summary>
+    [JsonPropertyName("sha256")]
+    public string Sha256 { get; set; }
+
+    internal static GeneratedValidationSource Capture(string text, string sourceProjectPath) => new GeneratedValidationSource
+    {
+        SourceProjectPath = sourceProjectPath,
+        Text = text,
+        Sha256 = Hash(text),
+    };
+
+    internal void Validate()
+    {
+        if (this.Text is null || !string.Equals(this.Sha256, Hash(this.Text), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Generated validation source text is absent or its SHA-256 disagrees.");
+        }
+    }
+
+    private static string Hash(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 }
