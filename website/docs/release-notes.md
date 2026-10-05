@@ -16,6 +16,11 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **cs2gs self-hosting guards remapped type arguments before storing them**
+  (issue #4722). Failed sibling remapping returns before publishing a nullable
+  result into a fixed non-null Roslyn type-argument array; constructed and
+  nested imported contract annotations remain intact.
+
 - **Data-class `with` and `.copy(...)` use the existing clone contract** (issue #4796). Generic classes with a primary/base constructor no longer invoke a nonexistent parameterless constructor. Copies retain their constructed runtime type, source-base and private/readonly state, without rerunning field or base initializers; updates execute once in written order.
 
 - **cs2gs keeps nil-observing reference casts and distinct constructed tuple contracts** (issue #4722). Built-in reference casts preserve nullable operator results until a coalescing fallback, while user-defined conversions, unboxing and non-null operator inputs retain their checks. Fixed-contract identity and sibling remapping preserve nested type-argument annotations, so an enabled contract cannot freeze a different oblivious implementation. Reporting fixtures use collectible, byte-loaded native assemblies that remain deletable on assertion failures.

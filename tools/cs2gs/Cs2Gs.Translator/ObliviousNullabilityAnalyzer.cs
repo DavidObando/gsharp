@@ -1375,11 +1375,13 @@ internal static class ObliviousNullabilityAnalyzer
                 var arguments = new ITypeSymbol[named.TypeArguments.Length];
                 for (int index = 0; index < arguments.Length; index++)
                 {
-                    arguments[index] = RemapToCompilation(targetCompilation, named.TypeArguments[index]) as ITypeSymbol;
-                    if (arguments[index] == null)
+                    ITypeSymbol mappedArgument = RemapToCompilation(targetCompilation, named.TypeArguments[index]) as ITypeSymbol;
+                    if (mappedArgument == null)
                     {
                         return null;
                     }
+
+                    arguments[index] = mappedArgument;
                 }
 
                 remapped = mappedNamed.ConstructedFrom.Construct(arguments.ToImmutableArray(), named.TypeArgumentNullableAnnotations);
