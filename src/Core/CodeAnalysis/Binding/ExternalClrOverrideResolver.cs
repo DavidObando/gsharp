@@ -108,6 +108,7 @@ internal static class ExternalClrOverrideResolver
         TypeSymbol propertyType,
         bool hasGetter,
         bool hasSetter,
+        bool isInitOnly,
         Accessibility getterAccessibility,
         Accessibility setterAccessibility,
         ReferenceResolver references,
@@ -137,6 +138,11 @@ internal static class ExternalClrOverrideResolver
             }
 
             sawName = true;
+
+            if (setter != null && ImportedTypeSymbol.IsInitOnlySetter(setter) != isInitOnly)
+            {
+                continue;
+            }
 
             // Issue #3879: the by-ref return is part of the property signature,
             // not a decoration on it. A CLR by-ref property reports its type as

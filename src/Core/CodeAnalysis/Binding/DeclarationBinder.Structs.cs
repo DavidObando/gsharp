@@ -2107,6 +2107,7 @@ internal sealed partial class DeclarationBinder
                             propType,
                             hasGetter,
                             hasSetter,
+                            isInitOnly,
                             getterAccessibility,
                             setterAccessibility,
                             binderCtx.References,

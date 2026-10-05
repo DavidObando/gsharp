@@ -54,7 +54,9 @@ abstract class Middle : Base {
   implement a virtual slot (`GS0387`).
 - Concrete overrides use the existing auto-property or computed-property
   machinery. Source override checks preserve the base accessor's visibility
-  and distinguish `set` from `init`.
+  and distinguish `set` from `init`. Imported property matching uses the
+  existing CLR init-only reader to enforce the same distinction, including
+  reabstract overrides; a mismatch reports `GS0185` before emission.
 - Existing concrete auto-properties, including `open` get/init properties in
   abstract owners, keep their storage and concrete methods. The established
   bodyless `open` getter-only contract remains supported.
