@@ -160,7 +160,6 @@ public sealed partial class CSharpToGSharpTranslator
             if (value == null
                 || ReferenceEquals(original, bridged)
                 || bridged is not NonNullAssertionExpression assertion
-                || original is NonNullAssertionExpression
                 || this.IsWithinExpressionTreeLambda(value))
             {
                 return bridged;
