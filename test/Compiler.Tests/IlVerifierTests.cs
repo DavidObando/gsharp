@@ -95,6 +95,29 @@ public class IlVerifierTests
             StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(0, "")]
+    [InlineData(0, "All Classes and Methods Verified.")]
+    [InlineData(0, "All Classes and Methods in other.dll Verified.")]
+    [InlineData(1, "matching")]
+    public void CreateChildProcess_WindowsCommandIsInvokedScriptBlock(int exitCode, string output)
+    {
+        const string AssemblyPath = @"C:\verifier fixture\test.dll";
+        var marker = output == "matching"
+            ? $"All Classes and Methods in {AssemblyPath} Verified."
+            : output;
+        var command = $"[Console]::Out.Write('{marker.Replace("'", "''")}'); exit {exitCode}";
+        var child = CreateChildProcess(command, string.Empty, windows: true);
+        child.ArgumentList.Add(AssemblyPath);
+        child.ArgumentList.Add("-s");
+        child.ArgumentList.Add("System.Private.CoreLib");
+
+        Assert.Equal("powershell.exe", child.FileName);
+        Assert.Equal(
+            new[] { "-NoProfile", "-NonInteractive", "-Command", $"& {{ {command} }}", AssemblyPath, "-s", "System.Private.CoreLib" },
+            child.ArgumentList.ToArray());
+    }
+
     [Fact]
     public void Verify_AcceptsValidEmittedAssembly_DoesNotThrow()
     {
@@ -378,21 +401,23 @@ public class IlVerifierTests
         }
     }
 
-    private static ProcessStartInfo CreateChildProcess(string windowsCommand, string unixCommand)
+    private static ProcessStartInfo CreateChildProcess(string windowsCommand, string unixCommand, bool? windows = null)
     {
-        var startInfo = new ProcessStartInfo(OperatingSystem.IsWindows() ? "powershell.exe" : "/bin/sh")
+        var isWindows = windows ?? OperatingSystem.IsWindows();
+        var startInfo = new ProcessStartInfo(isWindows ? "powershell.exe" : "/bin/sh")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        if (OperatingSystem.IsWindows())
+        if (isWindows)
         {
             startInfo.ArgumentList.Add("-NoProfile");
             startInfo.ArgumentList.Add("-NonInteractive");
             startInfo.ArgumentList.Add("-Command");
-            startInfo.ArgumentList.Add(windowsCommand);
+            // VerifyCore appends verifier arguments; keep them outside the invoked script.
+            startInfo.ArgumentList.Add($"& {{ {windowsCommand} }}");
         }
         else
         {
