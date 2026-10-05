@@ -151,7 +151,9 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
         Assert.Equal(NullableAnnotation.Annotated, tuple.TupleElements[0].Type.NullableAnnotation);
         Assert.Equal(SpecialType.System_Int32, tuple.TupleElements[1].Type.SpecialType);
         Assert.Equal(native.Compilation.Assembly.Identity, mapped.ContainingAssembly.Identity);
-        foreach (IMethodSymbol member in input.GetMembers("Read").OfType<IMethodSymbol>())
+        IMethodSymbol[] members = input.GetMembers("Read").OfType<IMethodSymbol>().ToArray();
+        Assert.Equal(2, members.Length);
+        foreach (IMethodSymbol member in members)
         {
             IMethodSymbol constructed = member.Arity == 0 ? member : member.Construct(
                 native.Compilation.GetSpecialType(SpecialType.System_String).WithNullableAnnotation(NullableAnnotation.Annotated));
