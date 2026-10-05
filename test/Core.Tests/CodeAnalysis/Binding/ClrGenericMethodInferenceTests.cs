@@ -2,8 +2,14 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
+using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Emit;
 using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -95,6 +101,75 @@ let found = Enumerable.Contains(s, 2)
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
+    }
+
+    [Theory]
+    [InlineData(typeof(ObjectFirstComparer<>))]
+    [InlineData(typeof(StringFirstComparer<>))]
+    public void ConstructedDefinitionFallback_DoesNotInferFromMultipleComparerProjections(Type definition)
+    {
+        var marker = NewMarkerType();
+        var argument = definition.MakeGenericType(marker);
+        Assert.Equal("TypeBuilderInstantiation", argument.GetType().Name);
+        Assert.Throws<NotSupportedException>(() => argument.GetInterfaces());
+        Assert.Equal(2, definition.GetInterfaces().Length);
+
+        var infer = typeof(InferenceFixture).GetMethod(nameof(InferenceFixture.Infer));
+        Assert.NotNull(infer);
+        Assert.False(ClrOverloadResolution.TryInferTypeArguments(infer, [argument], out _));
+
+        var select = typeof(InferenceFixture).GetMethod(nameof(InferenceFixture.Select));
+        Assert.NotNull(select);
+        Assert.True(ClrOverloadResolution.TryInferTypeArguments(select, [argument, typeof(string)], out var inferred));
+        Assert.Equal(new[] { typeof(string) }, inferred);
+    }
+
+    [Fact]
+    public void ConstructedDefinitionFallback_SubstitutesTheUniqueComparerProjection()
+    {
+        var marker = NewMarkerType();
+        var argument = typeof(SingleComparer<>).MakeGenericType(marker);
+        Assert.Equal("TypeBuilderInstantiation", argument.GetType().Name);
+        Assert.Throws<NotSupportedException>(() => argument.GetInterfaces());
+
+        var infer = typeof(InferenceFixture).GetMethod(nameof(InferenceFixture.Infer));
+        Assert.NotNull(infer);
+        Assert.True(ClrOverloadResolution.TryInferTypeArguments(infer, [argument], out var inferred));
+        Assert.Equal(new Type[] { marker }, inferred);
+    }
+
+    private static TypeBuilder NewMarkerType()
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("Issue4780ConstructedDefinition"),
+            AssemblyBuilderAccess.Run);
+        return assembly.DefineDynamicModule("Main").DefineType("Marker", TypeAttributes.Public);
+    }
+
+    private sealed class ObjectFirstComparer<TMarker> : IComparer<object>, IComparer<string>
+    {
+        public int Compare(object? x, object? y) => 0;
+
+        public int Compare(string? x, string? y) => 0;
+    }
+
+    private sealed class StringFirstComparer<TMarker> : IComparer<string>, IComparer<object>
+    {
+        public int Compare(string? x, string? y) => 0;
+
+        public int Compare(object? x, object? y) => 0;
+    }
+
+    private sealed class SingleComparer<T> : IComparer<T>
+    {
+        public int Compare(T? x, T? y) => 0;
+    }
+
+    private static class InferenceFixture
+    {
+        public static Type Infer<T>(IComparer<T> comparer) => typeof(T);
+
+        public static Type Select<T>(IComparer<T> comparer, T value) => typeof(T);
     }
 
     private static EmittedOracleResult Evaluate(string source)
