@@ -103,7 +103,7 @@ public sealed class StructSymbol : TypeSymbol
     private FunctionSymbol? dataEqualsSelf;
     private FunctionSymbol? dataEqualsObject;
     private FunctionSymbol? dataEqualsBase;
-    private StructSymbol? dataEqualsBaseOwner;
+    private TypeSymbol? dataEqualsBaseOwner;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructSymbol"/> class.
@@ -697,15 +697,15 @@ public sealed class StructSymbol : TypeSymbol
     {
         get
         {
-            var directBase = BaseClass;
-            if (!IsData || !IsClass || directBase?.IsData != true)
+            var directBase = DataEqualityMemberModel.GetDirectBase(this, out var importedMethod);
+            if (directBase is null)
             {
                 return null;
             }
 
             if (!ReferenceEquals(dataEqualsBaseOwner, directBase))
             {
-                dataEqualsBase = DataEqualityMemberModel.Create(this, directBase, isOverride: true);
+                dataEqualsBase = DataEqualityMemberModel.Create(this, directBase, isOverride: true, importedMethod);
                 dataEqualsBaseOwner = directBase;
             }
 

@@ -1069,12 +1069,12 @@ internal sealed class DataStructSynthesizer
                 il.OpCode(ILOpCode.Ceq);
                 il.Branch(ILOpCode.Brfalse, retFalse);
 
-                if (structSym.BaseClass is { IsData: true } dataBase)
+                if (this.TryResolveDirectBaseEqualsToken(structSym, out var baseEqualsToken))
                 {
                     il.LoadArgument(0);
                     il.LoadArgument(1);
                     il.OpCode(ILOpCode.Call);
-                    il.Token(this.resolveUserInstanceMethodToken(dataBase, dataBase.DataEqualsSelf));
+                    il.Token(baseEqualsToken);
                     il.Branch(ILOpCode.Brfalse, retFalse);
                 }
             }
@@ -1156,11 +1156,28 @@ internal sealed class DataStructSynthesizer
             this.FinishInlineBody(il),
             this.EmitEqualityParameter(method.Parameters[0]));
         this.cache.MethodHandles[method] = handle;
-        var dataBase = Invariant.Required(structSym.BaseClass, "typed-base equality has a direct data base");
+        if (!this.TryResolveDirectBaseEqualsToken(structSym, out var baseEqualsToken))
+        {
+            throw new InvalidOperationException($"Data class '{structSym.Name}' has no direct typed-base equality slot.");
+        }
+
         this.emitCtx.Metadata.AddMethodImplementation(
             this.cache.StructTypeDefs[structSym],
             handle,
-            this.resolveUserInstanceMethodToken(dataBase, dataBase.DataEqualsSelf));
+            baseEqualsToken);
+    }
+
+    private bool TryResolveDirectBaseEqualsToken(StructSymbol owner, out EntityHandle token)
+    {
+        var directBase = DataEqualityMemberModel.GetDirectBase(owner, out var importedMethod);
+        token = directBase switch
+        {
+            null => default,
+            _ when importedMethod is not null => this.resolveImportedMethodRef(importedMethod, directBase),
+            StructSymbol sourceBase => this.resolveUserInstanceMethodToken(sourceBase, sourceBase.DataEqualsSelf),
+            _ => throw new InvalidOperationException($"Data class '{owner.Name}' has an unsupported direct equality owner."),
+        };
+        return !token.IsNil;
     }
 
     private ParameterHandle EmitEqualityParameter(ParameterSymbol parameter)

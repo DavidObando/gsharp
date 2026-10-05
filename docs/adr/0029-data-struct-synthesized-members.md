@@ -124,6 +124,14 @@ Class equality operators use the same virtual self comparison after their
 existing null checks. Runtime-type discrimination, zero-field behavior and
 value-data field comparison remain intact.
 
+The immediate-base decision is shared for source data bases and imported record
+bases. An imported base uses its actual declared virtual `Equals(Base)` slot:
+receiver-aware projection supplies the parameter contract, and the existing
+member-reference emitter retains the symbolic generic owner. The self comparison
+calls that slot nonvirtually; the forwarding override explicitly implements the
+same slot. This includes cross-assembly symbolic generic record bases without
+changing imported-base admissibility or other record ABI features.
+
 These signatures participate in ordinary member lookup, constructed-owner
 projection, MethodDef row planning and implementation/reference assembly
 emission. Typed parameters are named `other`: reference-data parameters admit
