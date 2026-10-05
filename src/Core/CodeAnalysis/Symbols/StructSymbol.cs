@@ -100,6 +100,7 @@ public sealed class StructSymbol : TypeSymbol
     private InterfaceArraySnapshot? substitutedInterfaces;
     private TypeArraySnapshot? substitutedImplementedClrInterfaces;
     private TypeSnapshot? substitutedImportedBaseType;
+    private FunctionSymbol? dataClassCloneMethod;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructSymbol"/> class.
@@ -732,6 +733,35 @@ public sealed class StructSymbol : TypeSymbol
         && ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty)
         ? ExplicitConstructors.Max(constructor => constructor.Parameters.Length) + 1
         : 0;
+
+    /// <summary>Gets the definition-owned symbol for the emitted data-class clone slot.</summary>
+    internal FunctionSymbol DataClassCloneMethod
+    {
+        get
+        {
+            if (Definition != null && !ReferenceEquals(Definition, this))
+            {
+                return Definition.DataClassCloneMethod;
+            }
+
+            if (dataClassCloneMethod != null)
+            {
+                return dataClassCloneMethod;
+            }
+
+            var clone = new FunctionSymbol(
+                "<Clone>$",
+                ImmutableArray<ParameterSymbol>.Empty,
+                this,
+                declaration: null,
+                package: null,
+                accessibility: Accessibility.Public,
+                receiverType: this,
+                isOpen: true,
+                isOverride: false);
+            return Interlocked.CompareExchange(ref dataClassCloneMethod, clone, null) ?? clone;
+        }
+    }
 
     /// <summary>Sets <see cref="Symbol.ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>
