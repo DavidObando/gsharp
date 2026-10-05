@@ -127,7 +127,7 @@ internal static class IlVerifier
             excludedScope: null);
     }
 
-    private static void VerifyCore(
+    internal static void VerifyCore(
         string command,
         IReadOnlyList<string> leadingArgs,
         string assemblyPath,
@@ -219,7 +219,7 @@ internal static class IlVerifier
             throw new XunitException(message);
         }
 
-        var successMarker = $"All Classes and Methods in {assemblyPath} Verified.";
+        var successMarker = $"All Classes and Methods in {Path.GetFullPath(assemblyPath, psi.WorkingDirectory)} Verified.";
         if (!stdout.Contains(successMarker, StringComparison.Ordinal))
         {
             throw new XunitException(

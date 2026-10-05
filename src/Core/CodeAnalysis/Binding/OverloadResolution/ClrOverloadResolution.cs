@@ -8237,23 +8237,25 @@ internal static class ClrOverloadResolution
             // throw on BaseType traversal; fall through to interface walk.
         }
 
-        var projected = FindClosedGenericFromDefinition(type, openDefinition, openDefName);
-        if (projected != null)
-        {
-            return projected;
-        }
-
+        // Like symbolic hierarchy inference, multiple instantiations contribute
+        // no bound: another argument must fix the slot before applicability.
+        Type? matched = null;
         var ifaces = ClrTypeUtilities.SafeGetInterfaces(type);
 
         foreach (var iface in ifaces)
         {
             if (iface.IsGenericType && MatchesOpenDefinition(iface.GetGenericTypeDefinition(), openDefinition, openDefName))
             {
-                return iface;
+                if (matched != null && !ClrTypeUtilities.AreSame(matched, iface))
+                {
+                    return null;
+                }
+
+                matched = iface;
             }
         }
 
-        return null;
+        return matched ?? FindClosedGenericFromDefinition(type, openDefinition, openDefName);
     }
 
     private static Type? FindClosedGenericFromDefinition(Type type, Type openDefinition, string? openDefinitionName)
@@ -8268,12 +8270,18 @@ internal static class ClrOverloadResolution
             var definition = type.GetGenericTypeDefinition();
             var parameters = definition.GetGenericArguments();
             var arguments = type.GetGenericArguments();
+            Type? matched = null;
             foreach (var candidate in definition.GetInterfaces())
             {
                 var projected = Project(candidate);
                 if (projected != null)
                 {
-                    return projected;
+                    if (matched != null && !ClrTypeUtilities.AreSame(matched, projected))
+                    {
+                        return null;
+                    }
+
+                    matched = projected;
                 }
             }
 
@@ -8282,11 +8290,16 @@ internal static class ClrOverloadResolution
                 var projected = Project(candidate);
                 if (projected != null)
                 {
-                    return projected;
+                    if (matched != null && !ClrTypeUtilities.AreSame(matched, projected))
+                    {
+                        return null;
+                    }
+
+                    matched = projected;
                 }
             }
 
-            return null;
+            return matched;
 
             Type? Project(Type candidate)
             {

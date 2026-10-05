@@ -48,7 +48,7 @@ public sealed partial class CSharpToGSharpTranslator
         // Issue #1072: G# follows Kotlin-style nullability, so `nil`-safety is
         // enforced by the static type, not by a `!!`-on-`nil` escape hatch. A C#
         // symbol DECLARED non-nullable (`T`) but defensively compared against
-        // `null` (`== null` / `!= null`) or assigned `null` / `null!` is, in
+        // `null`, coalesced in local storage, or assigned `null` / `null!` is, in
         // truth, nullable: faithfully it must render `T?` so the `== nil`/`!= nil`
         // guard type-checks (gsc only permits `== nil` on a nullable operand,
         // otherwise GS0129). Returns true when <paramref name="symbol"/> is used
@@ -92,7 +92,7 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // The #1072 usage scan proper: whether `scope` compares `symbol` with
-        // `null`, assigns it `null`, `??=`-assigns it, tests it `is null`, or
+        // `null`, assigns it `null`, coalesces a local, tests it `is null`, or
         // initializes it to `null`. `model` binds `scope`'s tree — this
         // compilation's own model, or (for a member another project of the run
         // declares, see DeclaringCompilationPromotes) the declaring
@@ -100,7 +100,7 @@ public sealed partial class CSharpToGSharpTranslator
         private static bool ScopeUsesAsNullable(SemanticModel model, ISymbol symbol, SyntaxNode scope)
         {
             bool BindsTo(ExpressionSyntax expression) =>
-                model.GetSymbolInfo(expression).Symbol is { } bound
+                model.GetSymbolInfo(Unparenthesize(expression)).Symbol is { } bound
                     && SymbolEqualityComparer.Default.Equals(bound, symbol);
 
             foreach (SyntaxNode node in scope.DescendantNodes())
@@ -131,6 +131,15 @@ public sealed partial class CSharpToGSharpTranslator
                     case AssignmentExpressionSyntax coalesceAssignment
                         when coalesceAssignment.IsKind(SyntaxKind.CoalesceAssignmentExpression)
                             && BindsTo(coalesceAssignment.Left):
+                        return true;
+
+                    // A local fallback must observe the original nil, not an
+                    // assertion inserted at its store. Defensive coalescing
+                    // in a fixed parameter/member does not widen its contract.
+                    case BinaryExpressionSyntax coalesce
+                        when coalesce.IsKind(SyntaxKind.CoalesceExpression)
+                            && symbol is ILocalSymbol
+                            && BindsTo(coalesce.Left):
                         return true;
 
                     case IsPatternExpressionSyntax isPattern
