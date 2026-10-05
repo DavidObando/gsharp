@@ -1436,6 +1436,7 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteStructLiteralExpression(BoundStructLiteralExpression node)
     {
+        var copySource = node.CopySource == null ? null : RewriteExpression(node.CopySource);
         ImmutableArray<BoundFieldInitializer>.Builder? builder = null;
         for (var i = 0; i < node.Initializers.Length; i++)
         {
@@ -1460,7 +1461,9 @@ public abstract class BoundTreeRewriter
             }
         }
 
-        return builder == null ? node : new BoundStructLiteralExpression(node.Syntax, node.StructType, builder.ToImmutable());
+        return builder == null && copySource == node.CopySource
+            ? node
+            : new BoundStructLiteralExpression(node.Syntax, node.StructType, builder?.ToImmutable() ?? node.Initializers, copySource);
     }
 
     /// <summary>Rewrites a block expression.</summary>

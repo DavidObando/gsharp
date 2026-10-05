@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Data-class `with` and `.copy(...)` use the existing clone contract** (issue #4796). Generic classes with a primary/base constructor no longer invoke a nonexistent parameterless constructor. Copies retain their constructed runtime type, source-base and private/readonly state, without rerunning field or base initializers; updates execute once in written order.
+
 - **Cross-assembly language-server navigation tests retain native C# provenance** (issue #4666). Both portable-PDB and G# Go-to-Definition tests now import a dedicated Roslyn-emitted assembly, require its portable sidecar PDB, and assert the exact `.cs` source path and span. Missing-PDB and same-named `.gs` fixtures must fail those same navigation oracles; migrated Core is no longer used as an assumed C# sibling.
 
 - **Generic inference accepts a comparer implementing multiple closed interfaces when other arguments determine the key type** (issue #4780). Symbolic and CLR inference no longer treat a non-unique interface projection as a contradictory bound or choose its first interface. Typed identity selectors now bind the self-migrated symbol-ordering tests without changing the comparer or generated assertions; unfixed type arguments, incompatible interfaces and violated constraints remain rejected.
