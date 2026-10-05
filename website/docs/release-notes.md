@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Compiler test IL verification accepts noncanonical assembly paths** (issue #4784). The strict success marker now uses the same absolute path normalization as the verifier process, including dot segments and paths relative to its repository working directory. Exact assembly identity and nonzero-exit rejection are unchanged; this repairs migration-proof infrastructure, not compiler output or inference.
+
 - **Inherited generic CLR calls preserve source-typed tuple arguments** (issue #4738). Argument conversion now projects through the inherited member's actual generic owner, including reordered base arguments, rather than constructing an erased `ValueTuple<object, …>` for a source-typed slot. Nested and long tuples retain their physical element types and evaluation order; genuine object slots still use their intended conversions.
 
 - **The nullable-classifier reflection test remains self-migratable** (issue #4779). Its intentional null input/out argument storage now declares nullable object elements, so the containing test class compiles as G# without widening fixed production contracts or changing the reflection assertions.
