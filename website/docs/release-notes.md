@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **cs2gs transports retained build-generated compilation inputs across validation roots and configurations** (issue #4801, ADR-0196). Validation manifests carry the actual producing source text, hash and project ownership for non-inventoried build inputs, including net10 and netstandard2.0 SDK declarations. Authored sources still require the clean authoritative corpus, and source-declared test counts and budgets are unchanged. Old manifests lacking generated evidence fail closed rather than inventing historical contents.
+
 - Declaration initializer provenance now survives lowering, so struct literal
   initializers run once without suppressing authored overrides. Managed-reference
   safety also checks initializer functions separately for each constructed owner. (0.5 line)

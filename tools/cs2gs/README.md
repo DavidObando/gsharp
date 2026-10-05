@@ -206,6 +206,17 @@ to create a shared G# SDK pin in the migrated repository. The checked-in root
 updates buildable nested G# SDK scopes to the resolved local package version.
 Validation shards follow the migrated tree's recorded pin.
 
+Validation manifests retain original source provenance (ADR-0196, issue #4801).
+Authored sources, including inventoried checked-in generated code, must hydrate
+from the authoritative `--corpus` tree and fail if missing or outside that root.
+Retained compilation inputs under non-inventoried `bin`/`obj` build directories
+instead carry their actual producing syntax-tree text, SHA-256 and project
+ownership in `generatedSource`. A clean Release validator can replay a Debug
+producer without reading stale producer paths or regenerating different source.
+The original source-declared Fact count and budget policy are unchanged.
+Old manifests without generated evidence still fail on absent intermediates;
+they must be produced again, not repaired by guessing historical contents.
+
 ### The PR-time translation guard (issue #3836)
 
 CI **compiles** the repository's C# sources. The gate **translates** them and
