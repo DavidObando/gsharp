@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Native non-sealed record bases use CLR inheritance eligibility** (issue #4807). Ordinary and closed-generic imported records now follow the same imported-base constructor and copy paths as symbolic generic records, instead of being rejected by G# source-only `open` policy. Real CLR sealed bases and closed G# source bases remain rejected; imported equality dispatch is a separate concern.
+
 - **Data-class copy constructors initialize imported record bases correctly** (issue #4789). The shared copy emitter now calls the accessible copy constructor on the actual direct CLR base, retaining symbolic generic arguments and base state before copying derived members. Object-root and source-base copying are unchanged; an imported non-object base without an accessible copy contract fails emission instead of producing invalid IL.
 
 - **Inherited generic CLR method returns preserve source owner arguments** (issue #4785). Generic calls through a source-derived receiver now project the return from the actual declaring owner's symbolic arguments, including multilevel, reordered and nested bases, while keeping the method's own argument order and physical tuple types.

@@ -747,7 +747,9 @@ internal sealed partial class DeclarationBinder
                         continue;
                     }
 
-                    if (resolved is StructSymbol baseStruct && baseStruct.IsClass)
+                    // Imported semantic aggregates still follow CLR inheritance
+                    // eligibility and constructor binding, not source `open` policy.
+                    if (resolved is StructSymbol baseStruct && baseStruct.IsClass && baseStruct.ClrType == null)
                     {
                         // Issue #949: reject genuine self-inheritance
                         // (`class A : A`, or the generic `class A[T] : A[T]`)
