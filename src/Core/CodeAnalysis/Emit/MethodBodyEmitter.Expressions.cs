@@ -1190,7 +1190,7 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitStructLiteral(BoundStructLiteralExpression literal)
     {
-        if (literal.CopySource != null)
+        if (literal.CopySource != null && literal.StructType.IsClass)
         {
             this.EmitExpression(literal.CopySource);
             if (literal.StructType.IsClass)
