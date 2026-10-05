@@ -102,6 +102,13 @@ The nullability contract's enclosing reference-typed signature preserves
 Roslyn's original inherited `NullableContext(1)` placement, including the
 nested value container's `NullableContext(0)` override.
 
+Cross-assembly language-server navigation tests follow the same rule (#4666):
+emit a physical Roslyn assembly and portable sidecar PDB from C# source data,
+reference that assembly explicitly from the G# consumer, and assert the exact
+native `.cs` path and sequence-point span. The ambient Core or test assembly
+is not a native fixture. A missing PDB must fail the positive oracle, and a
+same-named `.gs` document must not satisfy it.
+
 Source-inspection guards have the same provenance requirement. A guard that
 parses C# or inventories literal C# signatures must use the original tree
 selected by `CS2GS_TEST_SOURCE_ROOT` (`Core.Tests.TestSource` or the corresponding
