@@ -254,6 +254,37 @@ public class Issue4790StaticExtensionHolderAbiTests
                 string.Join(":", parameter.Name, parameter.GenericParameterAttributes,
                     string.Join(",", parameter.GetGenericParameterConstraints().Select(type => type.FullName))))));
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WithProducts_DeletesWorkspaceAfterAssertions(bool failAssertion)
+    {
+        string workspace = null;
+        var expected = new InvalidOperationException("cleanup witness");
+        void Run() => WithProducts((native, emitted, consumer) =>
+        {
+            workspace = Path.GetDirectoryName(Path.GetDirectoryName(native));
+            Assert.True(Directory.Exists(workspace));
+            Assert.Equal(RunConsumer(native, consumer), RunConsumer(emitted, consumer));
+            if (failAssertion)
+            {
+                throw expected;
+            }
+        });
+
+        if (failAssertion)
+        {
+            Assert.Same(expected, Assert.Throws<InvalidOperationException>(Run));
+        }
+        else
+        {
+            Run();
+        }
+
+        Assert.NotNull(workspace);
+        Assert.False(Directory.Exists(workspace));
+    }
+
     private static string RunConsumer(string target, CSharpFixture consumer)
     {
         Assembly[] images = consumer.LoadTogether(
@@ -275,72 +306,79 @@ public class Issue4790StaticExtensionHolderAbiTests
         string directory = Path.Combine(AppContext.BaseDirectory, "issue4790-fixtures",
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        string nativeDirectory = Path.Combine(directory, "native");
-        string emittedDirectory = Path.Combine(directory, "gs");
-        Directory.CreateDirectory(nativeDirectory);
-        Directory.CreateDirectory(emittedDirectory);
-        string nativePath = Path.Combine(nativeDirectory, Path.GetFileName(native.AssemblyPath));
-        string emittedPath = Path.Combine(emittedDirectory, Path.GetFileName(native.AssemblyPath));
-        string consumerPath = Path.Combine(directory, Path.GetFileName(consumer.AssemblyPath));
-        File.Copy(native.AssemblyPath, nativePath);
-        File.Copy(consumer.AssemblyPath, consumerPath);
-        File.WriteAllText(Path.Combine(directory, "Producer.cs.txt"), source);
-        File.WriteAllText(Path.Combine(directory, "Consumer.cs.txt"), consumerSource);
-
-        Microsoft.CodeAnalysis.SyntaxTree tree = CSharpSyntaxTree.ParseText(source,
-            new CSharpParseOptions(LanguageVersion.Latest), path: "Producer.cs");
-        string[] references = Directory.GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll");
-        Assert.NotEmpty(references);
-        CSharpCompilation compilation = CSharpCompilation.Create(
-            Path.GetFileNameWithoutExtension(native.AssemblyPath), new[] { tree },
-            references.Select(path => MetadataReference.CreateFromFile(path)),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        Assert.DoesNotContain(compilation.GetDiagnostics(),
-            diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
-        SemanticModel model = compilation.GetSemanticModel(tree);
-        var document = new LoadedDocument(tree.FilePath, tree, model);
-        var context = new TranslationContext(compilation, model, document.FilePath);
-        string translated = GSharpPrinter.Print(
-            new CSharpToGSharpTranslator().TranslateDocument(document, context));
-        Assert.DoesNotContain(context.Diagnostics,
-            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        string gs = Path.Combine(directory, "Producer.gs");
-        File.WriteAllText(gs, translated);
-        string compiler = GscInvoker.Resolve(null, "Release", AppContext.BaseDirectory);
-        Assert.NotNull(compiler);
-        string[] arguments = new[] {
-            compiler, "/target:library", "/out:" + emittedPath,
-            "/assemblyname:" + Path.GetFileNameWithoutExtension(nativePath),
-        }.Concat(references.Select(reference => "/reference:" + reference))
-            .Concat(new[] { gs }).ToArray();
-        ProcessRunResult result = ProcessRunner.Run("dotnet", arguments);
-        File.WriteAllText(Path.Combine(directory, "gsc.stdout"), result.Output);
-        File.WriteAllText(Path.Combine(directory, "products.json"), JsonSerializer.Serialize(new
+        try
         {
-            NativeProducer = new { Kind = "Explicit Roslyn CSharpFixture", Source = source },
-            ConsumerProducer = new { Kind = "Explicit Roslyn CSharpFixture, compiled once", Consumer = consumerSource },
-            Compiler = new { Path = compiler, Sha256 = Hash(compiler) },
-            Translator = new {
-                Path = typeof(CSharpToGSharpTranslator).Assembly.Location,
-                Sha256 = Hash(typeof(CSharpToGSharpTranslator).Assembly.Location),
-            },
-            TestAssemblySha256 = Hash(typeof(Issue4790StaticExtensionHolderAbiTests).Assembly.Location),
-            Native = new { Path = nativePath, Sha256 = Hash(nativePath) },
-            Consumer = new { Path = consumerPath, Sha256 = Hash(consumerPath) },
-            Emitted = File.Exists(emittedPath) ? new {
-                Path = emittedPath, Sha256 = Hash(emittedPath),
-                Identity = AssemblyName.GetAssemblyName(emittedPath).FullName,
-            } : null,
-            GscArgv = arguments,
-            FrameworkReferences = references.Select(reference => new {
-                Path = reference, Sha256 = Hash(reference),
-                Identity = AssemblyName.GetAssemblyName(reference).FullName,
-            }),
-            result.ExitCode,
-        }, new JsonSerializerOptions { WriteIndented = true }));
-        Assert.Equal(0, result.ExitCode);
-        Assert.True(File.Exists(emittedPath));
-        assertion(nativePath, emittedPath, consumer);
+            string nativeDirectory = Path.Combine(directory, "native");
+            string emittedDirectory = Path.Combine(directory, "gs");
+            Directory.CreateDirectory(nativeDirectory);
+            Directory.CreateDirectory(emittedDirectory);
+            string nativePath = Path.Combine(nativeDirectory, Path.GetFileName(native.AssemblyPath));
+            string emittedPath = Path.Combine(emittedDirectory, Path.GetFileName(native.AssemblyPath));
+            string consumerPath = Path.Combine(directory, Path.GetFileName(consumer.AssemblyPath));
+            File.Copy(native.AssemblyPath, nativePath);
+            File.Copy(consumer.AssemblyPath, consumerPath);
+            File.WriteAllText(Path.Combine(directory, "Producer.cs.txt"), source);
+            File.WriteAllText(Path.Combine(directory, "Consumer.cs.txt"), consumerSource);
+
+            Microsoft.CodeAnalysis.SyntaxTree tree = CSharpSyntaxTree.ParseText(source,
+                new CSharpParseOptions(LanguageVersion.Latest), path: "Producer.cs");
+            string[] references = Directory.GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll");
+            Assert.NotEmpty(references);
+            CSharpCompilation compilation = CSharpCompilation.Create(
+                Path.GetFileNameWithoutExtension(native.AssemblyPath), new[] { tree },
+                references.Select(path => MetadataReference.CreateFromFile(path)),
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.DoesNotContain(compilation.GetDiagnostics(),
+                diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            var document = new LoadedDocument(tree.FilePath, tree, model);
+            var context = new TranslationContext(compilation, model, document.FilePath);
+            string translated = GSharpPrinter.Print(
+                new CSharpToGSharpTranslator().TranslateDocument(document, context));
+            Assert.DoesNotContain(context.Diagnostics,
+                diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+            string gs = Path.Combine(directory, "Producer.gs");
+            File.WriteAllText(gs, translated);
+            string compiler = GscInvoker.Resolve(null, "Release", AppContext.BaseDirectory);
+            Assert.NotNull(compiler);
+            string[] arguments = new[] {
+                compiler, "/target:library", "/out:" + emittedPath,
+                "/assemblyname:" + Path.GetFileNameWithoutExtension(nativePath),
+            }.Concat(references.Select(reference => "/reference:" + reference))
+                .Concat(new[] { gs }).ToArray();
+            ProcessRunResult result = ProcessRunner.Run("dotnet", arguments);
+            File.WriteAllText(Path.Combine(directory, "gsc.stdout"), result.Output);
+            File.WriteAllText(Path.Combine(directory, "products.json"), JsonSerializer.Serialize(new
+            {
+                NativeProducer = new { Kind = "Explicit Roslyn CSharpFixture", Source = source },
+                ConsumerProducer = new { Kind = "Explicit Roslyn CSharpFixture, compiled once", Consumer = consumerSource },
+                Compiler = new { Path = compiler, Sha256 = Hash(compiler) },
+                Translator = new {
+                    Path = typeof(CSharpToGSharpTranslator).Assembly.Location,
+                    Sha256 = Hash(typeof(CSharpToGSharpTranslator).Assembly.Location),
+                },
+                TestAssemblySha256 = Hash(typeof(Issue4790StaticExtensionHolderAbiTests).Assembly.Location),
+                Native = new { Path = nativePath, Sha256 = Hash(nativePath) },
+                Consumer = new { Path = consumerPath, Sha256 = Hash(consumerPath) },
+                Emitted = File.Exists(emittedPath) ? new {
+                    Path = emittedPath, Sha256 = Hash(emittedPath),
+                    Identity = AssemblyName.GetAssemblyName(emittedPath).FullName,
+                } : null,
+                GscArgv = arguments,
+                FrameworkReferences = references.Select(reference => new {
+                    Path = reference, Sha256 = Hash(reference),
+                    Identity = AssemblyName.GetAssemblyName(reference).FullName,
+                }),
+                result.ExitCode,
+            }, new JsonSerializerOptions { WriteIndented = true }));
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(File.Exists(emittedPath));
+            assertion(nativePath, emittedPath, consumer);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static string Hash(string path) => Convert.ToHexString(
