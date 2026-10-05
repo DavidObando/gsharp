@@ -218,7 +218,7 @@ public sealed partial class TestParityStage : IMigrationStage
             if (file.IsFromReferencedProject ||
                 string.IsNullOrEmpty(file.CsFilePath) ||
                 !counted.Add(file.CsFilePath) ||
-                !File.Exists(file.CsFilePath))
+                (file.GeneratedSource is null && !File.Exists(file.CsFilePath)))
             {
                 continue;
             }
@@ -226,7 +226,7 @@ public sealed partial class TestParityStage : IMigrationStage
             string source;
             try
             {
-                source = File.ReadAllText(file.CsFilePath);
+                source = file.GeneratedSource?.Text ?? File.ReadAllText(file.CsFilePath);
             }
             catch (IOException)
             {
