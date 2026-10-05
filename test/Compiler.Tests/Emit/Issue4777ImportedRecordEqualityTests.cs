@@ -35,6 +35,188 @@ public sealed class Issue4777ImportedRecordEqualityTests
     }
 
     [Theory]
+    [InlineData(false, false, "self")]
+    [InlineData(true, false, "self")]
+    [InlineData(false, false, "base")]
+    [InlineData(true, false, "base")]
+    [InlineData(false, true, "both")]
+    [InlineData(true, true, "both")]
+    public void ImportedOrdinaryClass_DomainEqualityIsNotARecordSlot(bool generic, bool final, string path)
+    {
+        Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"));
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        try
+        {
+            var nativeRoot = generic ? "Root<T>" : "Root";
+            var nativeLeaf = generic ? "Leaf<T>" : "Leaf";
+            var closedRoot = generic ? "Root<string>" : "Root";
+            var closedLeaf = generic ? "Leaf<string>" : "Leaf";
+            var gsRoot = generic ? "Root[T]" : "Root";
+            var gsLeaf = generic ? "Leaf[T any]" : "Leaf";
+            var gsSelf = generic ? "Leaf[T]" : "Leaf";
+            var source = $$"""
+                package OrdinaryEquality
+                import System
+                public data class {{gsLeaf}}(Extra int32) : {{gsRoot}}(0), IEquatable[{{gsSelf}}]
+                """;
+            var root = CompileNative(fixture.Directory, "RootContracts", $$"""
+                using System;
+                namespace OrdinaryEquality;
+                public class Domain<T> {
+                    public virtual bool Equals(T? other) => false;
+                }
+                public class {{nativeRoot}} : Domain<{{nativeRoot}}>, IEquatable<{{nativeRoot}}> {
+                    public static int Calls;
+                    public int Tag;
+                    public Root(int tag) => Tag = tag;
+                    protected Root({{nativeRoot}} original) => Tag = original.Tag;
+                    public {{(final ? "sealed override" : "override")}} bool Equals({{nativeRoot}}? other) {
+                        Calls++;
+                        return other != null && Tag == other.Tag;
+                    }
+                }
+                """);
+            var reference = Path.Combine(fixture.Directory, "Contracts.ref.dll");
+            File.WriteAllText(Path.Combine(fixture.Directory, "gsc-invocation.json"), JsonSerializer.Serialize(new
+            {
+                entry = "GSharp.Compiler.Program.Main",
+                compiler = typeof(Program).Assembly.Location,
+                compilerSha256 = Hash(typeof(Program).Assembly.Location),
+                core = typeof(TypeSymbol).Assembly.Location,
+                coreSha256 = Hash(typeof(TypeSymbol).Assembly.Location),
+                argv = new[]
+                {
+                    "/out:" + Path.Combine(fixture.Directory, "Contracts.dll"),
+                    "/target:library", "/targetframework:net10.0",
+                    Path.Combine(fixture.Directory, "Contracts.gs"),
+                    "/assemblyname:Contracts", "/r:" + root, "/refout:" + reference, "/debug:portable",
+                },
+            }));
+            var library = fixture.Compile(source, "Contracts", executable: false,
+                "/assemblyname:Contracts", "/r:" + root, "/refout:" + reference, "/debug:portable");
+            var nativeDirectory = Path.Combine(fixture.Directory, "native");
+            Directory.CreateDirectory(nativeDirectory);
+            var native = CompileNative(nativeDirectory, "Contracts", $$"""
+                using System;
+                [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+                namespace OrdinaryEquality;
+                public sealed class {{nativeLeaf}} : {{nativeRoot}}, IEquatable<{{nativeLeaf}}> {
+                    public int Extra { get; }
+                    public Leaf(int extra) : base(0) => Extra = extra;
+                    public bool Equals({{nativeLeaf}}? other) =>
+                        other != null && GetType() == other.GetType() && Extra == other.Extra;
+                    public override bool Equals(object? other) => other is {{nativeLeaf}} leaf && Equals(leaf);
+                    public override int GetHashCode() => Extra;
+                    public static bool operator ==({{nativeLeaf}}? left, {{nativeLeaf}}? right) =>
+                        ReferenceEquals(left, right) || left is not null && left.Equals(right);
+                    public static bool operator !=({{nativeLeaf}}? left, {{nativeLeaf}}? right) => !(left == right);
+                }
+                """, root);
+            var consumer = CompileNative(fixture.Directory, "Consumer", $$"""
+                using System;
+                using System.Collections.Generic;
+                using OrdinaryEquality;
+                public static class Consumer {
+                    public static string Run(string path) {
+                        var first = new {{closedLeaf}}(7) { Tag = 41 };
+                        var inherited = new {{closedLeaf}}(7) { Tag = 42 };
+                        var derived = new {{closedLeaf}}(8) { Tag = 41 };
+                        var same = new {{closedLeaf}}(7) { Tag = 41 };
+                        {{closedRoot}} receiver = first;
+                        Func<{{closedLeaf}}?, bool> selfGroup = first.Equals;
+                        Func<object?, bool> objectGroup = first.Equals;
+                        Func<{{closedRoot}}?, bool> baseGroup = receiver.Equals;
+                        if (path != "base") {
+                            {{closedRoot}}.Calls = 0;
+                            foreach (var (other, equal) in new[] { (inherited, true), (derived, false), (same, true) })
+                                foreach (var result in new[] {
+                                    first.Equals(other), ((object)first).Equals(other),
+                                    ((IEquatable<{{closedLeaf}}>)first).Equals(other),
+                                    selfGroup(other), objectGroup(other),
+                                    EqualityComparer<{{closedLeaf}}>.Default.Equals(first, other),
+                                    first == other, !(first != other)
+                                })
+                                    if (result != equal) throw new Exception("ordinary self structural path");
+                            if ({{closedRoot}}.Calls != 0) throw new Exception("ordinary self invoked domain equality");
+                            if (first.Equals(({{closedLeaf}}?)null) || selfGroup(null) || objectGroup(null)
+                                || first == null || null == first || !(first != null))
+                                throw new Exception("ordinary self null control");
+                        }
+                        if (path != "self") {
+                            {{closedRoot}}.Calls = 0;
+                            foreach (var (other, equal) in new[] {
+                                (inherited, false), (derived, true), (same, true), (({{closedLeaf}}?)null, false)
+                            })
+                                foreach (var result in new[] {
+                                    receiver.Equals(other),
+                                    ((IEquatable<{{closedRoot}}>)first).Equals(other),
+                                    baseGroup(other),
+                                    EqualityComparer<{{closedRoot}}>.Default.Equals(first, other)
+                                })
+                                    if (result != equal) throw new Exception("ordinary base domain path");
+                            // EqualityComparer handles null without invoking the domain slot.
+                            if ({{closedRoot}}.Calls != 15) throw new Exception("ordinary base domain call count:" + {{closedRoot}}.Calls);
+                        }
+                        {{closedLeaf}}? absent = null;
+                        if (!(absent == null) || absent != null || first.Tag != 41 || first.Extra != 7)
+                            throw new Exception("ordinary null/state control");
+                        return "ordinary:" + path + ":structural/domain/null/state";
+                    }
+                }
+                """, root, reference);
+            foreach (var image in new[] { root, native, library })
+            {
+                IlVerifier.Verify(image, new[] { root });
+            }
+
+            IlVerifier.Verify(consumer, new[] { root, native });
+            IlVerifier.Verify(consumer, new[] { root, library });
+            var expected = "ordinary:" + path + ":structural/domain/null/state";
+            Assert.Equal(expected, RunConsumer(root, native, consumer, path));
+            Assert.Equal(expected, RunConsumer(root, library, consumer, path));
+            this.output.WriteLine("SAME ordinary native consumer SHA256=" + Hash(consumer));
+            var assemblies = EmittedFixture.LoadTogether(root, library);
+            var leaf = assemblies[1].GetType("OrdinaryEquality.Leaf" + (generic ? "`1" : ""))
+                ?? throw new InvalidOperationException("Missing ordinary leaf.");
+            if (generic)
+            {
+                leaf = leaf.MakeGenericType(typeof(string));
+            }
+
+            var directBase = leaf.BaseType ?? throw new InvalidOperationException("Missing ordinary base.");
+            var inheritedSlot = leaf.GetMethod("Equals", new[] { directBase })
+                ?? throw new InvalidOperationException("Missing domain equality.");
+            Assert.Equal(directBase, inheritedSlot.DeclaringType);
+            Assert.Equal(final, inheritedSlot.IsFinal);
+            Assert.Equal(directBase, leaf.GetInterfaceMap(typeof(IEquatable<>).MakeGenericType(directBase))
+                .TargetMethods.Single().DeclaringType);
+            var selfEquals = leaf.GetMethod("Equals", new[] { leaf })
+                ?? throw new InvalidOperationException("Missing ordinary self equality.");
+            Assert.True(selfEquals.IsFinal);
+            Assert.DoesNotContain(IlInstructionReader.Read(selfEquals.GetMethodBody()?.GetILAsByteArray()
+                ?? throw new InvalidOperationException("Missing ordinary equality body.")), instruction =>
+                instruction.MetadataToken is int token
+                && selfEquals.Module.ResolveMethod(token, leaf.GetGenericArguments(), null) is { } target
+                && target.Name == "Equals" && target.DeclaringType == directBase);
+            Assert.Equal(EqualityRows(library, expectedCount: 2), EqualityRows(reference, expectedCount: 2));
+            using var references = ReferenceResolver.WithReferences(
+                ReferenceResolver.HostTrustedPlatformAssemblyPaths().Append(root).ToArray());
+            var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(
+                references, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(source)) { IsLibrary = true };
+            Assert.Empty(compilation.GlobalScope.Diagnostics);
+            var symbol = Assert.Single(compilation.GlobalScope.Structs, type => type.Name == "Leaf");
+            var query = new MemberQuery(true, false, false, MemberKinds.Method);
+            Assert.Null(symbol.DataEqualsBase);
+            Assert.Equal(2, symbol.GetMethods("Equals").Length);
+            Assert.Equal<FunctionSymbol>(symbol.GetMethods("Equals"), TypeMemberModel.GetMethods(symbol, "Equals", query));
+        }
+        finally
+        {
+            PreserveEvidence(fixture.Directory, $"ordinary-{generic}-{final}-{path}");
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void ImportedRecord_OptionalParameterNamePreservesSignatureAndDispatch(bool unnamed)
@@ -393,7 +575,7 @@ public sealed class Issue4777ImportedRecordEqualityTests
             ?? throw new InvalidOperationException("Missing native consumer.")).Invoke(null, new object[] { difference });
     }
 
-    private static string[] EqualityRows(string path)
+    private static string[] EqualityRows(string path, int expectedCount = 3)
     {
         using var stream = File.OpenRead(path);
         using var pe = new PEReader(stream);
@@ -409,15 +591,22 @@ public sealed class Issue4777ImportedRecordEqualityTests
                         + string.Join(",", parameter.GetCustomAttributes().Select(attribute =>
                             Convert.ToHexString(metadata.GetBlobBytes(metadata.GetCustomAttribute(attribute).Value))));
                 }))).ToArray();
-        Assert.Equal(3, rows.Length);
+        Assert.Equal(expectedCount, rows.Length);
         var implementations = metadata.TypeDefinitions
             .SelectMany(handle => metadata.GetTypeDefinition(handle).GetMethodImplementations())
             .Select(handle => metadata.GetMethodImplementation(handle))
             .Where(implementation => implementation.MethodDeclaration.Kind == HandleKind.MemberReference)
             .Select(implementation => metadata.GetMemberReference((MemberReferenceHandle)implementation.MethodDeclaration))
             .Where(member => metadata.GetString(member.Name) == "Equals").ToArray();
-        Assert.NotEmpty(implementations);
-        Assert.Contains(implementations, member => member.Parent.Kind == HandleKind.TypeSpecification);
+        if (expectedCount == 2)
+        {
+            Assert.Empty(implementations);
+        }
+        else
+        {
+            Assert.NotEmpty(implementations);
+            Assert.Contains(implementations, member => member.Parent.Kind == HandleKind.TypeSpecification);
+        }
         return rows;
     }
 

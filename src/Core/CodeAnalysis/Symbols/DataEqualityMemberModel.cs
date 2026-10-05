@@ -35,6 +35,13 @@ internal static class DataEqualityMemberModel
             return null;
         }
 
+        if ((!ImportedAssemblySemantics.TryGetTypeSemantics(clrBase, out var semantics)
+             && !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(clrBase, out semantics))
+            || !semantics.IsData)
+        {
+            return null;
+        }
+
         foreach (var method in ClrTypeUtilities.SafeGetMethods(
                      clrBase, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
         {

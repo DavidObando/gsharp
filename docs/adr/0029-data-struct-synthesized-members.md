@@ -108,7 +108,7 @@ Synthesized-member behavior for a zero-field data type:
 **Deferred/out of scope, not fixed by this amendment:**
 
 - Leaf-type-only equality for an `open` base type with derived data-type siblings is a pre-existing limitation independent of zero-field support: `Equals(Name other)` dispatches on the *declared* type of the typed overload, so two different sibling data types (e.g. `MfaChallenge` vs. `CvfChallenge`) are never equal to one another even when both are zero-field, which matches C# record semantics (sibling record types are never equal) and is not a new gap introduced here.
-- **Superseded translator limitation:** at the time of this amendment, `cs2gs` downgraded an abstract/open base record with only property overrides and no positional data (e.g. Oahu's `CallbackChallenge` with an abstract `Kind` property) to a plain class. Subsequent zero-field record support (#2704) preserves that shape as an abstract `data class`; the 2026-10-04 amendment below additionally preserves its native `IEquatable[Self]` contract. The old downgrade is not the current mapping.
+- **Superseded translator limitation:** at the time of this amendment, `cs2gs` downgraded an abstract/open base record with only property overrides and no positional data (e.g. Oahu's `CallbackChallenge` with an abstract `Kind` property) to a plain class. Subsequent zero-field record support (#2363) preserves that shape as an abstract `data class`; the 2026-10-04 amendment below additionally preserves its native `IEquatable[Self]` contract. The old downgrade is not the current mapping.
 
 ## Amendment 2026-10-04: inherited typed equality and declared interfaces (#4777, #4675)
 
@@ -125,7 +125,11 @@ existing null checks. Runtime-type discrimination, zero-field behavior and
 value-data field comparison remain intact.
 
 The immediate-base decision is shared for source data bases and imported record
-bases. An imported base uses its actual declared virtual `Equals(Base)` slot:
+bases. Imported data/record semantics must first be recognized by the existing
+assembly marker or C# record-shape detector; an ordinary CLR class's virtual
+`Equals(Self)` alone is not a record contract. Such domain equality remains
+inherited and is not called by synthesized self equality or given a forwarding
+override. An imported record base uses its actual declared virtual `Equals(Base)` slot:
 receiver-aware projection supplies the parameter contract, and the existing
 member-reference emitter retains the symbolic generic owner. The self comparison
 calls that slot nonvirtually; the forwarding override explicitly implements the
