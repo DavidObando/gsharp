@@ -8,13 +8,13 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
-using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Cs2Gs.Pipeline;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -235,34 +235,31 @@ public sealed class Issue4801GeneratedValidationSourcesTests : IDisposable
 
     public void Dispose()
     {
-        if (Environment.GetEnvironmentVariable("CS2GS_4801_EVIDENCE_ROOT") is null)
+        if (Environment.GetEnvironmentVariable("CS2GS_4801_EVIDENCE_ROOT") is null && Directory.Exists(this.root))
         {
             Directory.Delete(this.root, recursive: true);
+            Console.WriteLine("native fixture root deleted: " + this.root);
         }
     }
 
     private static void AssertNative(string path, string framework, string configuration)
     {
-        var load = new AssemblyLoadContext("issue4801", isCollectible: true);
-        try
-        {
-            Assembly assembly = load.LoadFromAssemblyPath(path);
-            CustomAttributeData target = Assert.Single(assembly.GetCustomAttributesData(),
-                a => a.AttributeType.FullName == "System.Runtime.Versioning.TargetFrameworkAttribute");
-            Assert.Equal(framework, target.ConstructorArguments[0].Value);
-            CustomAttributeData configurationAttribute = Assert.Single(assembly.GetCustomAttributesData(),
-                a => a.AttributeType.FullName == "System.Reflection.AssemblyMetadataAttribute");
-            Assert.Equal("ProducerConfiguration", configurationAttribute.ConstructorArguments[0].Value);
-            Assert.Equal(configuration, configurationAttribute.ConstructorArguments[1].Value);
-            Type declaration = assembly.GetType("Native.Generated.Declaration", throwOnError: true);
-            Assert.Equal(73, declaration.GetMethod("Value").Invoke(null, null));
-            Assert.NotNull(assembly.GetType("Native.Generated.Extra"));
-        }
-
-        finally
-        {
-            load.Unload();
-        }
+        Assembly assembly = EmittedFixture.Load(path);
+        Assert.True(assembly.IsCollectible);
+        Assert.Empty(assembly.Location);
+        Console.WriteLine("native byte-load: " + path + " MVID " + assembly.ManifestModule.ModuleVersionId +
+            " SHA256 " + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+        CustomAttributeData target = Assert.Single(assembly.GetCustomAttributesData(),
+            a => a.AttributeType.FullName == "System.Runtime.Versioning.TargetFrameworkAttribute");
+        Assert.Equal(framework, target.ConstructorArguments[0].Value);
+        Assert.Same(typeof(System.Runtime.Versioning.TargetFrameworkAttribute).Assembly, target.AttributeType.Assembly);
+        CustomAttributeData configurationAttribute = Assert.Single(assembly.GetCustomAttributesData(),
+            a => a.AttributeType.FullName == "System.Reflection.AssemblyMetadataAttribute");
+        Assert.Equal("ProducerConfiguration", configurationAttribute.ConstructorArguments[0].Value);
+        Assert.Equal(configuration, configurationAttribute.ConstructorArguments[1].Value);
+        Type declaration = assembly.GetType("Native.Generated.Declaration", throwOnError: true);
+        Assert.Equal(73, declaration.GetMethod("Value").Invoke(null, null));
+        Assert.NotNull(assembly.GetType("Native.Generated.Extra"));
     }
 
     private static void AssertNativeSources(string assemblyPath)
