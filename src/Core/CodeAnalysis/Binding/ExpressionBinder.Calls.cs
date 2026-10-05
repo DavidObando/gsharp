@@ -54,8 +54,8 @@ internal sealed partial class ExpressionBinder
         // platform receiver is a coercion to non-null (checked and unwrapped).
         receiver = binderCtx.InsertPlatformCheck(receiver, diagnosticLocation, "a copy/with receiver");
 
-        // Source data classes use their emitted clone slot; source data structs
-        // and imported records retain their existing member-copy paths below.
+        // Classes copy through their existing clone/copy-constructor contract;
+        // reconstructing a literal can lose base/private state or invent .ctor().
         var normalizedReceiverType = ImportedTypeSymbol.NormalizeSemanticAggregate(
             receiver.Type,
             receiver.Type.ClrType,
@@ -81,9 +81,40 @@ internal sealed partial class ExpressionBinder
         var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, structType);
         scope.TryDeclareVariable(tempVar);
 
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(null, tempVar, receiver));
+        LocalVariableSymbol? copiedClass = null;
+        if (structType.IsClass)
+        {
+            var captured = new BoundVariableExpression(null, tempVar);
+            BoundExpression clone;
+            if (structType.ClrType is { } importedType)
+            {
+                var cloneMethods = ClrTypeUtilities.SafeGetMethods(importedType, BindingFlags.Public | BindingFlags.Instance)
+                    .Where(method => method.Name == "<Clone>$"
+                        && !method.IsGenericMethod && method.GetParameters().Length == 0
+                        && ClrTypeUtilities.AreSame(method.ReturnType, importedType))
+                    .Take(2).ToArray();
+                if (cloneMethods.Length != 1)
+                {
+                    Diagnostics.ReportUnableToFindMember(diagnosticLocation, "<Clone>$");
+                    return new BoundErrorExpression(null);
+                }
+
+                clone = new BoundImportedInstanceCallExpression(null, captured, cloneMethods[0], structType, ImmutableArray<BoundExpression>.Empty);
+            }
+            else
+            {
+                clone = new BoundStructLiteralExpression(null, structType, ImmutableArray<BoundFieldInitializer>.Empty, captured);
+            }
+
+            copiedClass = new LocalVariableSymbol(tempName + "result", isReadOnly: true, structType);
+            scope.TryDeclareVariable(copiedClass);
+            statements.Add(new BoundVariableDeclaration(null, copiedClass, clone));
+        }
+
         var seen = new HashSet<string>();
         var explicitValues = new Dictionary<string, (FieldSymbol? Field, PropertySymbol? Property, BoundExpression Value)>();
-        var orderedOverrides = ImmutableArray.CreateBuilder<(BoundFieldInitializer Initializer, StructSymbol DeclaringType)>();
         foreach (var initSyntax in overrides)
         {
             var memberName = initSyntax.FieldIdentifier.ValueText;
@@ -105,8 +136,12 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var fieldValueExpr = BindExpression(initSyntax.Value, field.Type);
+                if (copiedClass != null)
+                {
+                    statements.Add(new BoundExpressionStatement(initSyntax, new BoundFieldAssignmentExpression(initSyntax, copiedClass, fieldDeclaringType, field, fieldValueExpr)));
+                }
+
                 explicitValues[memberName] = (field, null, fieldValueExpr);
-                orderedOverrides.Add((new BoundFieldInitializer(field, fieldValueExpr, fieldDeclaringType), fieldDeclaringType));
                 continue;
             }
 
@@ -125,48 +160,21 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propertyValueExpr = BindExpression(initSyntax.Value, property.Type);
+                if (copiedClass != null)
+                {
+                    statements.Add(new BoundExpressionStatement(initSyntax, new BoundPropertyAssignmentExpression(initSyntax, new BoundVariableExpression(null, copiedClass), propertyDeclaringType, property, propertyValueExpr)));
+                }
+
                 explicitValues[memberName] = (null, property, propertyValueExpr);
-                orderedOverrides.Add((new BoundFieldInitializer(property, propertyValueExpr), propertyDeclaringType));
                 continue;
             }
 
             Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName);
         }
 
-        if (structType.IsClass && structType.ClrType == null)
+        if (copiedClass != null)
         {
-            // A record copy uses its existing clone slot, not an authored or
-            // guessed default constructor, and preserves get-only storage.
-            var cloneVar = new LocalVariableSymbol(
-                "$clone" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture),
-                isReadOnly: true,
-                structType);
-            scope.TryDeclareVariable(cloneVar);
-            var cloneReceiver = new BoundVariableExpression(null, cloneVar);
-            var clone = new BoundUserInstanceCallExpression(
-                null,
-                new BoundVariableExpression(null, tempVar),
-                structType.DataClassCloneMethod,
-                ImmutableArray<BoundExpression>.Empty,
-                returnTypeOverride: structType);
-            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            statements.Add(new BoundVariableDeclaration(null, tempVar, receiver));
-            statements.Add(new BoundVariableDeclaration(null, cloneVar, clone));
-            foreach (var (initializer, declaringType) in orderedOverrides)
-            {
-                BoundExpression assignment = initializer.Field != null
-                    ? new BoundFieldAssignmentExpression(
-                        null, cloneVar, declaringType, initializer.Field, initializer.Value)
-                    : new BoundPropertyAssignmentExpression(
-                        null,
-                        cloneReceiver,
-                        declaringType,
-                        Invariant.Required(initializer.Property, "a with update targets a field or property"),
-                        initializer.Value);
-                statements.Add(new BoundExpressionStatement(null, assignment));
-            }
-
-            return new BoundBlockExpression(null, statements.ToImmutable(), cloneReceiver);
+            return new BoundBlockExpression(null, statements.ToImmutable(), new BoundVariableExpression(null, copiedClass));
         }
 
         var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
@@ -205,9 +213,8 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        var declaration = new BoundVariableDeclaration(null, tempVar, receiver);
         var literal = new BoundStructLiteralExpression(null, structType, initializers.ToImmutable());
-        return new BoundBlockExpression(null, ImmutableArray.Create<BoundStatement>(declaration), literal);
+        return new BoundBlockExpression(null, statements.ToImmutable(), literal);
     }
 
     private BoundExpression BindObjectCreationExpression(ObjectCreationExpressionSyntax syntax)

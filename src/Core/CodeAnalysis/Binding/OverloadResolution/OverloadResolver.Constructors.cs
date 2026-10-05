@@ -120,7 +120,7 @@ internal sealed partial class OverloadResolver
         // Issue #306: a class declaring an explicit `init(...)` constructor is
         // constructed against that constructor's parameter list rather than a
         // primary-constructor parameter list.
-        if (classType.ExplicitConstructor != null)
+        if (!classType.EffectiveExplicitConstructors.IsDefaultOrEmpty)
         {
             return BindExplicitConstructorCallExpression(syntax, classType);
         }
