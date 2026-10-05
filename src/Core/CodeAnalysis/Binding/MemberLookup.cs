@@ -8108,11 +8108,14 @@ internal sealed class MemberLookup
         var openMethod = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
         receiverOpenDef = null;
         receiverTypeArgs = default;
-        if (receiverType is ImportedTypeSymbol imp && imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty)
+        if (receiverType != null
+            && GetProjectionReceiverImportedType(receiverType) is ImportedTypeSymbol imp
+            && TryGetSymbolicDeclaringContext(
+                imp,
+                closed.DeclaringType,
+                out receiverOpenDef,
+                out receiverTypeArgs))
         {
-            receiverOpenDef = imp.OpenDefinition;
-            receiverTypeArgs = imp.TypeArguments;
-
             // Issue #2375: `closed.GetGenericMethodDefinition()` only opens the
             // METHOD's own generic parameters — it leaves the DECLARING TYPE's
             // type arguments exactly as closed on `closed` (e.g. `object` when
@@ -8123,11 +8126,10 @@ internal sealed class MemberLookup
             // `Builder<TEntity>.WithOne<TRelated>() : DependentBuilder<TRelated,
             // TEntity>`), this left the second slot permanently erased to
             // `object` even though the method-level slot recovered correctly.
-            // Re-resolve the truly-open method (both type- and method-level
-            // parameters unbound) from the receiver's OWN open declaring type by
-            // metadata-token match — the same recovery already used by
-            // `MemberLookup.TryGetOpenInstanceMethod` /
-            // `GetClrReceiverProjectedReturnTypeSymbol`.
+            // Issue #4785: source-derived receivers carry those arguments on
+            // their nearest imported base. Use the actual declaring owner's
+            // projected vector, including reordered/nested inherited arguments,
+            // then reopen both levels by metadata token and module.
             var reopened = TryGetOpenMethodOnDeclaringType(receiverOpenDef, openMethod);
             if (reopened != null)
             {

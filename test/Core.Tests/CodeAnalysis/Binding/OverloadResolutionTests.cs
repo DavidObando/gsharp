@@ -23,8 +23,8 @@ public class OverloadResolutionTests
     [Fact]
     public void Resolve_PrefersIdentityOverWidening()
     {
-        var resolved = Resolve(nameof(Fixture.F_Int_Long), nameof(Fixture.F_Long_Long), new[] { typeof(int), typeof(long) });
-        Assert.Equal(nameof(Fixture.F_Int_Long), resolved.Name);
+        var resolved = Resolve("F_Int_Long", "F_Long_Long", new[] { typeof(int), typeof(long) });
+        Assert.Equal("F_Int_Long", resolved.Name);
     }
 
     [Fact]
@@ -32,8 +32,8 @@ public class OverloadResolutionTests
     {
         // int → long is implicit and long → float is implicit, so long is a
         // better conversion target than float per C# §7.5.3.4.
-        var resolved = Resolve(nameof(Fixture.F_Long), nameof(Fixture.F_Float), new[] { typeof(int) });
-        Assert.Equal(nameof(Fixture.F_Long), resolved.Name);
+        var resolved = Resolve("F_Long", "F_Float", new[] { typeof(int) });
+        Assert.Equal("F_Long", resolved.Name);
     }
 
     [Fact]
@@ -41,8 +41,8 @@ public class OverloadResolutionTests
     {
         // short → int is implicit and int → double is implicit, so int beats
         // double when binding a short argument.
-        var resolved = Resolve(nameof(Fixture.F_Int), nameof(Fixture.F_Double), new[] { typeof(short) });
-        Assert.Equal(nameof(Fixture.F_Int), resolved.Name);
+        var resolved = Resolve("F_Int", "F_Double", new[] { typeof(short) });
+        Assert.Equal("F_Int", resolved.Name);
     }
 
     [Fact]
@@ -50,8 +50,8 @@ public class OverloadResolutionTests
     {
         // From a short argument, neither int→uint nor uint→int is implicit.
         // The signed/unsigned subclause of §7.5.3.4 picks the signed target.
-        var resolved = Resolve(nameof(Fixture.F_Int), nameof(Fixture.F_UInt), new[] { typeof(short) });
-        Assert.Equal(nameof(Fixture.F_Int), resolved.Name);
+        var resolved = Resolve("F_Int", "F_UInt", new[] { typeof(short) });
+        Assert.Equal("F_Int", resolved.Name);
     }
 
     [Fact]
@@ -60,8 +60,8 @@ public class OverloadResolutionTests
         // From an int argument, neither float→decimal nor decimal→float is
         // implicit, and neither type appears in the signed-vs-unsigned table,
         // so the two widenings tie and the resolver reports ambiguity.
-        var first = typeof(Fixture).GetMethod(nameof(Fixture.F_Float), BindingFlags.Public | BindingFlags.Static);
-        var second = typeof(Fixture).GetMethod(nameof(Fixture.F_Decimal), BindingFlags.Public | BindingFlags.Static);
+        var first = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_Float", BindingFlags.Public | BindingFlags.Static);
+        var second = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_Decimal", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { first, second }, new[] { typeof(int) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
     }
@@ -75,11 +75,11 @@ public class OverloadResolutionTests
         // declaring type, name, generic arity, and parameter types, so they
         // must collapse to a single representative rather than being reported
         // as a spurious ambiguity.
-        var method = typeof(Fixture).GetMethod(nameof(Fixture.F_Int), BindingFlags.Public | BindingFlags.Static);
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_Int", BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(method);
         var result = ClrOverloadResolution.Resolve(new[] { method, method }, new[] { typeof(int) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(Fixture.F_Int), result.Best.Name);
+        Assert.Equal("F_Int", result.Best.Name);
     }
 
     [Fact]
@@ -87,10 +87,10 @@ public class OverloadResolutionTests
     {
         // (int, int) args; pick F_Long_Long over F_Float_Float for both args.
         var resolved = Resolve(
-            nameof(Fixture.F_Long_Long),
-            nameof(Fixture.F_Float_Float),
+            "F_Long_Long",
+            "F_Float_Float",
             new[] { typeof(int), typeof(int) });
-        Assert.Equal(nameof(Fixture.F_Long_Long), resolved.Name);
+        Assert.Equal("F_Long_Long", resolved.Name);
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class OverloadResolutionTests
     [Fact]
     public void InferTypeArguments_Identity_BindsTFromArgument()
     {
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Identity), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Identity", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(string) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(string) }, typeArgs);
@@ -124,7 +124,7 @@ public class OverloadResolutionTests
     [Fact]
     public void InferTypeArguments_PairWithConsistentBounds_Succeeds()
     {
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Pair", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(int) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int) }, typeArgs);
@@ -133,7 +133,7 @@ public class OverloadResolutionTests
     [Fact]
     public void InferTypeArguments_PairWithConflictingBounds_Fails()
     {
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Pair", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(string) }, out var typeArgs);
         Assert.False(ok);
         Assert.Null(typeArgs);
@@ -142,7 +142,7 @@ public class OverloadResolutionTests
     [Fact]
     public void InferTypeArguments_TwoParam_BindsBothIndependently()
     {
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_TwoParam), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_TwoParam", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(string) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int), typeof(string) }, typeArgs);
@@ -151,7 +151,7 @@ public class OverloadResolutionTests
     [Fact]
     public void InferTypeArguments_Array_UnwrapsElementType()
     {
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Array), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Array", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int[]) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int) }, typeArgs);
@@ -160,7 +160,7 @@ public class OverloadResolutionTests
     [Fact]
     public void InferTypeArguments_Enumerable_FromList_WalksInterface()
     {
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Enumerable", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(System.Collections.Generic.List<int>) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int) }, typeArgs);
@@ -171,7 +171,7 @@ public class OverloadResolutionTests
     {
         // #611: an array `int[]` implements IEnumerable<int>; the inference
         // should walk interfaces and find T = int.
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Enumerable", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int[]) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int) }, typeArgs);
@@ -181,7 +181,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_Enumerable_FromStringArray_WalksInterface()
     {
         // #611: string[] → IEnumerable<string> inference.
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Enumerable", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(string[]) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(string) }, typeArgs);
@@ -190,7 +190,7 @@ public class OverloadResolutionTests
     [Fact]
     public void InferTypeArguments_Dictionary_BindsBothKeyAndValue()
     {
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_DictionaryFromValues), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_DictionaryFromValues", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(
             open,
             new[] { typeof(System.Collections.Generic.Dictionary<string, int>) },
@@ -207,7 +207,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_Pair_NonNullableAndNullableEnum_PromotesToNullable()
     {
         // Issue #661: G_Pair<T>(T, T) with (Quality, Quality?) must infer T = Quality?
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Pair", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality), typeof(Quality?) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(Quality?) }, typeArgs);
@@ -217,7 +217,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_Pair_NullableEnumAndNonNullable_PromotesToNullable()
     {
         // Issue #661: symmetric — G_Pair<T>(T, T) with (Quality?, Quality) must infer T = Quality?
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Pair", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality?), typeof(Quality) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(Quality?) }, typeArgs);
@@ -227,7 +227,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_Pair_BothNullableEnum_InfersNullable()
     {
         // Both operands nullable — should infer T = Quality? trivially.
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Pair", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality?), typeof(Quality?) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(Quality?) }, typeArgs);
@@ -237,7 +237,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_Pair_BothNonNullableEnum_InfersNonNullable()
     {
         // Both non-nullable — should infer T = Quality.
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Pair", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality), typeof(Quality) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(Quality) }, typeArgs);
@@ -247,7 +247,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_Pair_NonNullableAndNullableInt_PromotesToNullable()
     {
         // Regression guard: the int case must still work.
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Pair", BindingFlags.Public | BindingFlags.Static);
         var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(int?) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int?) }, typeArgs);
@@ -257,7 +257,7 @@ public class OverloadResolutionTests
     public void Resolve_EqualLike_NonNullableEnumAndNullableEnum_Resolves()
     {
         // Issue #661: Assert.Equal(Quality.High, actual) where actual : Quality?
-        var candidates = typeof(EqualLike)
+        var candidates = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike")
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == "Equal");
         var result = ClrOverloadResolution.Resolve(candidates, new[] { typeof(Quality), typeof(Quality?) });
@@ -269,7 +269,7 @@ public class OverloadResolutionTests
     public void Resolve_EqualLike_NullableEnumAndNonNullableEnum_Resolves()
     {
         // Issue #661: symmetric case.
-        var candidates = typeof(EqualLike)
+        var candidates = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike")
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == "Equal");
         var result = ClrOverloadResolution.Resolve(candidates, new[] { typeof(Quality?), typeof(Quality) });
@@ -298,7 +298,7 @@ public class OverloadResolutionTests
     {
         // G_Pair<T>(T, T) called with (int, string) cannot infer T — the
         // candidate must be dropped silently (NoneApplicable, not Ambiguous).
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Pair", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(int), typeof(string) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
@@ -310,7 +310,7 @@ public class OverloadResolutionTests
         // JsonSerializerOptions? options = null). Passing a single (string)
         // argument must infer TValue = string and close the method even though
         // the declared arity is 2 with a trailing optional parameter.
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_SerializeLike), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_SerializeLike", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.False(result.Best.IsGenericMethodDefinition);
@@ -324,7 +324,7 @@ public class OverloadResolutionTests
         // When the candidate was loaded under a different context, they must be
         // projected before MakeGenericMethod. Verify the projection callback is
         // invoked for the inferred argument and that its result is honored.
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Identity), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Identity", BindingFlags.Public | BindingFlags.Static);
         var seen = new System.Collections.Generic.List<Type>();
         Type Project(Type t)
         {
@@ -344,10 +344,10 @@ public class OverloadResolutionTests
         // Issue #327: O_OneOptional(int, CancellationToken = default) is
         // applicable when called with a single int argument; the optional
         // trailing parameter is omitted. Mirrors HttpResponse.WriteAsync(text).
-        var method = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("O_OneOptional", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(Fixture.O_OneOptional), result.Best.Name);
+        Assert.Equal("O_OneOptional", result.Best.Name);
     }
 
     [Fact]
@@ -355,7 +355,7 @@ public class OverloadResolutionTests
     {
         // The same candidate is still applicable when the optional argument is
         // supplied explicitly.
-        var method = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("O_OneOptional", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { method }, new[] { typeof(int), typeof(System.Threading.CancellationToken) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
     }
@@ -365,7 +365,7 @@ public class OverloadResolutionTests
     {
         // O_Required(int, int) has no optional parameters; calling with a single
         // argument leaves a non-optional parameter unfilled and is not applicable.
-        var method = typeof(Fixture).GetMethod(nameof(Fixture.O_Required), BindingFlags.Public | BindingFlags.Static);
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("O_Required", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
@@ -377,11 +377,11 @@ public class OverloadResolutionTests
         // O_TwoOptional(int, CancellationToken = default, CancellationToken =
         // default) both apply to a single int argument. The overload requiring
         // fewer omitted optionals wins (C# §7.5.3.2).
-        var oneOpt = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
-        var twoOpt = typeof(Fixture).GetMethod(nameof(Fixture.O_TwoOptional), BindingFlags.Public | BindingFlags.Static);
+        var oneOpt = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("O_OneOptional", BindingFlags.Public | BindingFlags.Static);
+        var twoOpt = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("O_TwoOptional", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { oneOpt, twoOpt }, new[] { typeof(int) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(Fixture.O_OneOptional), result.Best.Name);
+        Assert.Equal("O_OneOptional", result.Best.Name);
     }
 
     [Fact]
@@ -403,8 +403,8 @@ public class OverloadResolutionTests
 
     private static MethodInfo Resolve(string a, string b, Type[] argTypes)
     {
-        var first = typeof(Fixture).GetMethod(a, BindingFlags.Public | BindingFlags.Static);
-        var second = typeof(Fixture).GetMethod(b, BindingFlags.Public | BindingFlags.Static);
+        var first = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod(a, BindingFlags.Public | BindingFlags.Static);
+        var second = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod(b, BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(first);
         Assert.NotNull(second);
         var result = ClrOverloadResolution.Resolve(new[] { first, second }, argTypes);
@@ -422,19 +422,19 @@ public class OverloadResolutionTests
         // pick the Func<Task<TResult>> overload so the whole task binds to
         // Task<TResult>, matching C#'s preference for the task-returning
         // delegate overload for an async lambda.
-        var funcTResult = typeof(Fixture).GetMethod(nameof(Fixture.Run_FuncTResult), BindingFlags.Public | BindingFlags.Static);
-        var funcTaskTResult = typeof(Fixture).GetMethod(nameof(Fixture.Run_FuncTaskTResult), BindingFlags.Public | BindingFlags.Static);
+        var funcTResult = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("Run_FuncTResult", BindingFlags.Public | BindingFlags.Static);
+        var funcTaskTResult = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("Run_FuncTaskTResult", BindingFlags.Public | BindingFlags.Static);
         var argType = typeof(System.Func<System.Threading.Tasks.Task<object>>);
 
         // Candidate order must not matter — both orderings resolve to the
         // Func<Task<TResult>> overload without ambiguity.
         var forward = ClrOverloadResolution.Resolve(new[] { funcTResult, funcTaskTResult }, new[] { argType });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, forward.Outcome);
-        Assert.Equal(nameof(Fixture.Run_FuncTaskTResult), forward.Best.Name);
+        Assert.Equal("Run_FuncTaskTResult", forward.Best.Name);
 
         var reverse = ClrOverloadResolution.Resolve(new[] { funcTaskTResult, funcTResult }, new[] { argType });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, reverse.Outcome);
-        Assert.Equal(nameof(Fixture.Run_FuncTaskTResult), reverse.Best.Name);
+        Assert.Equal("Run_FuncTaskTResult", reverse.Best.Name);
 
         // The winning overload closes over TResult = object, so its return type
         // is Task<object>, NOT Task<Task<object>>.
@@ -453,13 +453,13 @@ public class OverloadResolutionTests
         // Func<object>) must NOT be pulled onto the Func<Task<TResult>>
         // overload — only the Func<TResult> overload applies, so the new
         // betterness rule must leave this case untouched.
-        var funcTResult = typeof(Fixture).GetMethod(nameof(Fixture.Run_FuncTResult), BindingFlags.Public | BindingFlags.Static);
-        var funcTaskTResult = typeof(Fixture).GetMethod(nameof(Fixture.Run_FuncTaskTResult), BindingFlags.Public | BindingFlags.Static);
+        var funcTResult = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("Run_FuncTResult", BindingFlags.Public | BindingFlags.Static);
+        var funcTaskTResult = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("Run_FuncTaskTResult", BindingFlags.Public | BindingFlags.Static);
         var argType = typeof(System.Func<object>);
 
         var result = ClrOverloadResolution.Resolve(new[] { funcTResult, funcTaskTResult }, new[] { argType });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(Fixture.Run_FuncTResult), result.Best.Name);
+        Assert.Equal("Run_FuncTResult", result.Best.Name);
     }
 
     [Fact]
@@ -468,14 +468,14 @@ public class OverloadResolutionTests
         // ADR-0055 Tier 4 (#369): an interpolated-string argument keeps its
         // natural `string` type for applicability, so the `string` overload (an
         // identity conversion) beats the `FormattableString` overload.
-        var stringOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_String), BindingFlags.Public | BindingFlags.Static);
-        var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
+        var stringOverload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_String", BindingFlags.Public | BindingFlags.Static);
+        var formattableOverload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_FormattableString", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(
             new[] { stringOverload, formattableOverload },
             new[] { typeof(string) },
             interpolatedStringArgs: new[] { true });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(Fixture.F_String), result.Best.Name);
+        Assert.Equal("F_String", result.Best.Name);
     }
 
     [Fact]
@@ -483,13 +483,13 @@ public class OverloadResolutionTests
     {
         // With only a FormattableString overload, the flagged interpolated-string
         // argument is applicable thanks to the Tier 4 relaxation.
-        var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
+        var formattableOverload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_FormattableString", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(
             new[] { formattableOverload },
             new[] { typeof(string) },
             interpolatedStringArgs: new[] { true });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(Fixture.F_FormattableString), result.Best.Name);
+        Assert.Equal("F_FormattableString", result.Best.Name);
     }
 
     [Fact]
@@ -498,7 +498,7 @@ public class OverloadResolutionTests
         // Regression guard: without the interpolated-string flag a plain `string`
         // argument must NOT convert to FormattableString, so the overload is not
         // applicable. This keeps ordinary string arguments unaffected.
-        var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
+        var formattableOverload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_FormattableString", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(
             new[] { formattableOverload },
             new[] { typeof(string) });
@@ -510,14 +510,14 @@ public class OverloadResolutionTests
     {
         // FormattableString implements IFormattable, so it is the more specific
         // (better) target when both overloads apply to an interpolated string.
-        var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
-        var iformattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_IFormattable), BindingFlags.Public | BindingFlags.Static);
+        var formattableOverload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_FormattableString", BindingFlags.Public | BindingFlags.Static);
+        var iformattableOverload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_IFormattable", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(
             new[] { iformattableOverload, formattableOverload },
             new[] { typeof(string) },
             interpolatedStringArgs: new[] { true });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(Fixture.F_FormattableString), result.Best.Name);
+        Assert.Equal("F_FormattableString", result.Best.Name);
     }
 
     [Fact]
@@ -537,13 +537,13 @@ public class OverloadResolutionTests
         // vs Assert.Equal<T>(T, T) (generic). Both apply to (string, string) with
         // identity conversions, but per C# §7.5.3.2 the non-generic overload is
         // preferred. Without this tie-break, users had to write `Equal[string]`.
-        var nonGeneric = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_StringString), BindingFlags.Public | BindingFlags.Static);
-        var generic = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_TT), BindingFlags.Public | BindingFlags.Static);
+        var nonGeneric = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Equal_StringString", BindingFlags.Public | BindingFlags.Static);
+        var generic = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Equal_TT", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(
             new[] { generic, nonGeneric },
             new[] { typeof(string), typeof(string) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(EqualLike.Equal_StringString), result.Best.Name);
+        Assert.Equal("Equal_StringString", result.Best.Name);
         Assert.False(result.Best.IsGenericMethod);
     }
 
@@ -555,7 +555,7 @@ public class OverloadResolutionTests
         // generic Equal<T>(T, T, IEqualityComparer<T>), and string/comparison
         // overloads that take extra optional trailing booleans. (string, string)
         // resolves uniquely to the non-generic Equal(string, string).
-        var candidates = typeof(EqualLike)
+        var candidates = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike")
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == "Equal" || m.Name.StartsWith("Equal_", StringComparison.Ordinal))
             .ToList();
@@ -583,8 +583,8 @@ public class OverloadResolutionTests
         // explicit type-argument path picks the generic Equal<T>(T, T) and
         // closes it with T=string. Verifies the explicit-arg path isn't
         // broken by the new non-generic-preference tie-breaker.
-        var generic = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_TT), BindingFlags.Public | BindingFlags.Static);
-        var nonGeneric = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_StringString), BindingFlags.Public | BindingFlags.Static);
+        var generic = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Equal_TT", BindingFlags.Public | BindingFlags.Static);
+        var nonGeneric = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Equal_StringString", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(
             new[] { generic, nonGeneric },
             new[] { typeof(string), typeof(string) },
@@ -602,7 +602,7 @@ public class OverloadResolutionTests
         // identity conversion. The string-typed overloads are not applicable
         // and the numeric-widening to other overloads would lose on conversion
         // ranking, so the resolver returns a unique best without ambiguity.
-        var candidates = typeof(EqualLike)
+        var candidates = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike")
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == "Equal")
             .ToList();
@@ -617,7 +617,7 @@ public class OverloadResolutionTests
     {
         // Issue #505 companion: same reasoning for NotEqual. Non-generic
         // NotEqual(string, string) wins over generic NotEqual<T>(T, T).
-        var candidates = typeof(EqualLike)
+        var candidates = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike")
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == "NotEqual")
             .ToList();
@@ -637,9 +637,9 @@ public class OverloadResolutionTests
         // types, both reachable from the argument by reference conversion),
         // the resolver returns Ambiguous with the competing candidates so the
         // caller can format them into the GS0160 diagnostic.
-        var first = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IA), BindingFlags.Public | BindingFlags.Static);
-        var second = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IB), BindingFlags.Public | BindingFlags.Static);
-        var result = ClrOverloadResolution.Resolve(new[] { first, second }, new[] { typeof(EqualLike.BothAB) });
+        var first = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Take_IA", BindingFlags.Public | BindingFlags.Static);
+        var second = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Take_IB", BindingFlags.Public | BindingFlags.Static);
+        var result = ClrOverloadResolution.Resolve(new[] { first, second }, new[] { NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike+BothAB") });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
         Assert.Equal(2, result.Ambiguous.Length);
         var signatures = result.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature).ToArray();
@@ -652,7 +652,7 @@ public class OverloadResolutionTests
     {
         // Issue #505: the diagnostic helper must surface a readable signature
         // including the closed generic type arguments.
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Identity), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Identity", BindingFlags.Public | BindingFlags.Static);
         var closed = open.MakeGenericMethod(typeof(string));
         var formatted = ClrOverloadResolution.FormatMethodSignature(closed);
         Assert.Equal("G_Identity[String](String)", formatted);
@@ -661,7 +661,7 @@ public class OverloadResolutionTests
     [Fact]
     public void FormatMethodSignature_FormatsNonGenericMethod_PlainParens()
     {
-        var method = typeof(Fixture).GetMethod(nameof(Fixture.F_Int), BindingFlags.Public | BindingFlags.Static);
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("F_Int", BindingFlags.Public | BindingFlags.Static);
         var formatted = ClrOverloadResolution.FormatMethodSignature(method);
         Assert.Equal("F_Int(Int32)", formatted);
     }
@@ -671,7 +671,7 @@ public class OverloadResolutionTests
     {
         // Generic parameter types like IEnumerable<T> should be rendered with
         // bracketed arguments rather than mangled (`IEnumerable`1`) names.
-        var method = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+Fixture").GetMethod("G_Enumerable", BindingFlags.Public | BindingFlags.Static);
         var closed = method.MakeGenericMethod(typeof(int));
         var formatted = ClrOverloadResolution.FormatMethodSignature(closed);
         Assert.Equal("G_Enumerable[Int32](IEnumerable[Int32])", formatted);
@@ -686,7 +686,7 @@ public class OverloadResolutionTests
         // int argument must NOT bind. The MetadataLoadContext-style path won't
         // throw from MakeGenericMethod, so the explicit constraint check has
         // to drop the candidate.
-        var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyClass), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ConstraintFixture").GetMethod("OnlyClass", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(int) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
@@ -694,7 +694,7 @@ public class OverloadResolutionTests
     [Fact]
     public void Resolve_DropsCandidate_WhenStructConstraintViolatedByReferenceType()
     {
-        var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyStruct), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ConstraintFixture").GetMethod("OnlyStruct", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
@@ -704,7 +704,7 @@ public class OverloadResolutionTests
     {
         // `where T : struct` rejects Nullable<T> — int? is not a "non-nullable
         // value type" per ECMA-335.
-        var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyStruct), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ConstraintFixture").GetMethod("OnlyStruct", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(int?) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
@@ -714,7 +714,7 @@ public class OverloadResolutionTests
     {
         // ConstraintFixture.OnlyNew<T>() where T : new() — string has no
         // public parameterless ctor.
-        var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyNew), BindingFlags.Public | BindingFlags.Static);
+        var open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ConstraintFixture").GetMethod("OnlyNew", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
@@ -725,23 +725,23 @@ public class OverloadResolutionTests
         // The repro from issue #750: two extensions with identical parameter
         // shape (modulo the receiver), disjoint class/struct constraints. The
         // binder must pick the class overload when called with a string.
-        var both = typeof(MapLike)
+        var both = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+MapLike")
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Where(m => m.Name == nameof(MapLike.Map));
+            .Where(m => m.Name == "Map");
         var result = ClrOverloadResolution.Resolve(both, new[] { typeof(string), typeof(Func<string, string>) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         // Class overload's T resolves to string; struct overload couldn't infer
         // T at all from a string receiver.
         Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
-        Assert.Equal(typeof(MapLike), result.Best.DeclaringType);
+        Assert.Equal(NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+MapLike"), result.Best.DeclaringType);
     }
 
     [Fact]
     public void Resolve_DisjointClassStructOverloads_PicksStructForNullableValueType()
     {
-        var both = typeof(MapLike)
+        var both = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+MapLike")
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Where(m => m.Name == nameof(MapLike.Map));
+            .Where(m => m.Name == "Map");
         var result = ClrOverloadResolution.Resolve(both, new[] { typeof(int?), typeof(Func<int, int>) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         // Struct overload binds T = int.
@@ -757,7 +757,7 @@ public class OverloadResolutionTests
         var all = ThreeWayCandidates();
         var result = ClrOverloadResolution.Resolve(all, new[] { typeof(int) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(typeof(ThreeWayStruct), result.Best.DeclaringType);
+        Assert.Equal(NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ThreeWayStruct"), result.Best.DeclaringType);
     }
 
     [Fact]
@@ -766,7 +766,7 @@ public class OverloadResolutionTests
         var all = ThreeWayCandidates();
         var result = ClrOverloadResolution.Resolve(all, new[] { typeof(string) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(typeof(ThreeWayClass), result.Best.DeclaringType);
+        Assert.Equal(NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ThreeWayClass"), result.Best.DeclaringType);
     }
 
     [Fact]
@@ -778,7 +778,7 @@ public class OverloadResolutionTests
         var all = ThreeWayCandidates();
         var result = ClrOverloadResolution.Resolve(all, new[] { typeof(int?) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(typeof(ThreeWayNone), result.Best.DeclaringType);
+        Assert.Equal(NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ThreeWayNone"), result.Best.DeclaringType);
     }
 
     [Fact]
@@ -789,8 +789,8 @@ public class OverloadResolutionTests
         // tie-break; the existing ambiguity diagnostic fires.
         var all = new[]
         {
-            typeof(AmbiguousSameShapeA).GetMethod(nameof(AmbiguousSameShapeA.Take), BindingFlags.Public | BindingFlags.Static),
-            typeof(AmbiguousSameShapeB).GetMethod(nameof(AmbiguousSameShapeB.Take), BindingFlags.Public | BindingFlags.Static),
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+AmbiguousSameShapeA").GetMethod("Take", BindingFlags.Public | BindingFlags.Static),
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+AmbiguousSameShapeB").GetMethod("Take", BindingFlags.Public | BindingFlags.Static),
         };
         var result = ClrOverloadResolution.Resolve(all, new[] { typeof(string) });
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
@@ -811,8 +811,8 @@ public class OverloadResolutionTests
         // still shared static state, some iterations would race and resolve
         // to the wrong candidate (or throw NullReferenceException from a
         // hook nulled out mid-flight by another thread).
-        var takeIA = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IA), BindingFlags.Public | BindingFlags.Static);
-        var takeIB = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IB), BindingFlags.Public | BindingFlags.Static);
+        var takeIA = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Take_IA", BindingFlags.Public | BindingFlags.Static);
+        var takeIB = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Take_IB", BindingFlags.Public | BindingFlags.Static);
         var candidates = new[] { takeIA, takeIB };
 
         void RunFor(Type wantInterface, string expectedName, int iterations, List<Exception> errors)
@@ -846,8 +846,8 @@ public class OverloadResolutionTests
 
         var errors = new List<Exception>();
         const int iterations = 500;
-        var taskA = System.Threading.Tasks.Task.Run(() => RunFor(typeof(EqualLike.IA), nameof(EqualLike.Take_IA), iterations, errors));
-        var taskB = System.Threading.Tasks.Task.Run(() => RunFor(typeof(EqualLike.IB), nameof(EqualLike.Take_IB), iterations, errors));
+        var taskA = System.Threading.Tasks.Task.Run(() => RunFor(NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike+IA"), "Take_IA", iterations, errors));
+        var taskB = System.Threading.Tasks.Task.Run(() => RunFor(NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike+IB"), "Take_IB", iterations, errors));
         await System.Threading.Tasks.Task.WhenAll(taskA, taskB);
 
         Assert.Empty(errors);
@@ -862,8 +862,8 @@ public class OverloadResolutionTests
         // must not corrupt the outer call's own hook. With hooks threaded as
         // parameters instead of mutable statics, the outer closure is captured
         // by value and is unaffected by whatever the nested call does.
-        var takeIA = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IA), BindingFlags.Public | BindingFlags.Static);
-        var takeIB = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IB), BindingFlags.Public | BindingFlags.Static);
+        var takeIA = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Take_IA", BindingFlags.Public | BindingFlags.Static);
+        var takeIB = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike").GetMethod("Take_IB", BindingFlags.Public | BindingFlags.Static);
         var candidates = new[] { takeIA, takeIB };
 
         var nestedCallCount = 0;
@@ -872,7 +872,7 @@ public class OverloadResolutionTests
             new[] { typeof(object) },
             supplementaryInterfaceCheck: (source, target) =>
             {
-                if (target == typeof(EqualLike.IA))
+                if (target == NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike+IA"))
                 {
                     // Nested resolution, run from *inside* the outer hook,
                     // using a DIFFERENT hook that targets IB. Under the old
@@ -885,9 +885,9 @@ public class OverloadResolutionTests
                     var nested = ClrOverloadResolution.Resolve(
                         candidates,
                         new[] { typeof(object) },
-                        supplementaryInterfaceCheck: (nestedSource, nestedTarget) => nestedTarget == typeof(EqualLike.IB));
+                        supplementaryInterfaceCheck: (nestedSource, nestedTarget) => nestedTarget == NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+EqualLike+IB"));
                     Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, nested.Outcome);
-                    Assert.Equal(nameof(EqualLike.Take_IB), nested.Best.Name);
+                    Assert.Equal("Take_IB", nested.Best.Name);
                     return true;
                 }
 
@@ -896,230 +896,13 @@ public class OverloadResolutionTests
 
         Assert.True(nestedCallCount > 0);
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, outerResult.Outcome);
-        Assert.Equal(nameof(EqualLike.Take_IA), outerResult.Best.Name);
+        Assert.Equal("Take_IA", outerResult.Best.Name);
     }
 
     private static IEnumerable<MethodInfo> ThreeWayCandidates()
     {
-        yield return typeof(ThreeWayClass).GetMethod(nameof(ThreeWayClass.Choose), BindingFlags.Public | BindingFlags.Static);
-        yield return typeof(ThreeWayStruct).GetMethod(nameof(ThreeWayStruct.Choose), BindingFlags.Public | BindingFlags.Static);
-        yield return typeof(ThreeWayNone).GetMethod(nameof(ThreeWayNone.Choose), BindingFlags.Public | BindingFlags.Static);
-    }
-
-    public static class Fixture
-    {
-        public static void F_Int(int x) { _ = x; }
-
-        public static void F_UInt(uint x) { _ = x; }
-
-        public static void F_Long(long x) { _ = x; }
-
-        public static void F_Float(float x) { _ = x; }
-
-        public static void F_Decimal(decimal x) { _ = x; }
-
-        public static void F_Double(double x) { _ = x; }
-
-        public static void F_Int_Long(int a, long b) { _ = a; _ = b; }
-
-        public static void F_Long_Long(long a, long b) { _ = a; _ = b; }
-
-        public static void F_Float_Float(float a, float b) { _ = a; _ = b; }
-
-        // Generic fixtures for TryInferTypeArguments tests below.
-        public static T G_Identity<T>(T x) => x;
-
-        public static void G_Pair<T>(T a, T b) { _ = a; _ = b; }
-
-        public static void G_TwoParam<TA, TB>(TA a, TB b) { _ = a; _ = b; }
-
-        public static void G_Array<T>(T[] xs) { _ = xs; }
-
-        public static void G_Enumerable<T>(System.Collections.Generic.IEnumerable<T> xs) { _ = xs; }
-
-        public static void G_DictionaryFromValues<TK, TV>(System.Collections.Generic.Dictionary<TK, TV> map) { _ = map; }
-
-        // Issue #321 fixture: optional trailing parameter on an open generic
-        // method (mirrors JsonSerializer.Serialize<TValue>(TValue, options = null)).
-        public static string G_SerializeLike<TValue>(TValue value, object options = null) => value?.ToString();
-
-        // Issue #327: optional-parameter fixtures.
-        public static void O_OneOptional(int a, System.Threading.CancellationToken token = default) { _ = a; _ = token; }
-
-        public static void O_TwoOptional(int a, System.Threading.CancellationToken first = default, System.Threading.CancellationToken second = default) { _ = a; _ = first; _ = second; }
-
-        public static void O_Required(int a, int b) { _ = a; _ = b; }
-
-        // ADR-0055 Tier 4 (#369): fixtures for interpolated-string → formattable
-        // applicability and tie-breaking.
-        public static void F_String(string s) { _ = s; }
-
-        public static void F_FormattableString(System.FormattableString fs) { _ = fs; }
-
-        public static void F_IFormattable(System.IFormattable f) { _ = f; }
-
-        // Issue #2172: mirrors the Task.Run overload pair — a Func<TResult> form
-        // and a Func<Task<TResult>> form. For a task-returning lambda argument
-        // (natural type Func<Task<object>>) the Func<Task<TResult>> form must
-        // win (TResult = object → returns Task<object>), not the Func<TResult>
-        // form (TResult = Task<object> → returns Task<Task<object>>).
-        public static System.Threading.Tasks.Task<TResult> Run_FuncTResult<TResult>(System.Func<TResult> function) => System.Threading.Tasks.Task.Run(function);
-
-        public static System.Threading.Tasks.Task<TResult> Run_FuncTaskTResult<TResult>(System.Func<System.Threading.Tasks.Task<TResult>> function) => System.Threading.Tasks.Task.Run(function);
-    }
-
-    /// <summary>
-    /// Issue #505: fixture that mirrors the xUnit
-    /// <c>Assert.Equal</c>/<c>Assert.NotEqual</c> overload set responsible for
-    /// the original ambiguous-overload diagnostic. The shape is deliberately
-    /// representative: a generic two-parameter form, a generic three-parameter
-    /// form with a comparer, a non-generic <c>(string, string)</c> form, and a
-    /// non-generic <c>(string, string, ...)</c> form with trailing optionals.
-    /// </summary>
-    public static class EqualLike
-    {
-        public static void Equal<T>(T expected, T actual) { _ = expected; _ = actual; }
-
-        public static void Equal<T>(T expected, T actual, System.Collections.Generic.IEqualityComparer<T> comparer) { _ = expected; _ = actual; _ = comparer; }
-
-        public static void Equal(string expected, string actual) { _ = expected; _ = actual; }
-
-        public static void Equal(string expected, string actual, bool ignoreCase = false, bool ignoreLineEndingDifferences = false, bool ignoreWhiteSpaceDifferences = false, bool ignoreAllWhiteSpace = false)
-        {
-            _ = expected;
-            _ = actual;
-            _ = ignoreCase;
-            _ = ignoreLineEndingDifferences;
-            _ = ignoreWhiteSpaceDifferences;
-            _ = ignoreAllWhiteSpace;
-        }
-
-        public static void NotEqual<T>(T expected, T actual) { _ = expected; _ = actual; }
-
-        public static void NotEqual(string expected, string actual) { _ = expected; _ = actual; }
-
-        // Companion overloads referenced by Resolve_PrefersNonGenericOverGeneric_FromStringStringArgs
-        // when it needs the two specific MethodInfo handles by name.
-        public static void Equal_TT<T>(T expected, T actual) => Equal(expected, actual);
-
-        public static void Equal_StringString(string expected, string actual) => Equal(expected, actual);
-
-        // Truly-ambiguous case: two non-generic overloads taking unrelated
-        // interfaces. A receiver implementing both leaves the resolver unable
-        // to pick a single best candidate.
-        public interface IA
-        {
-        }
-
-        public interface IB
-        {
-        }
-
-        public sealed class BothAB : IA, IB
-        {
-        }
-
-        public static void Take_IA(IA a) { _ = a; }
-
-        public static void Take_IB(IB b) { _ = b; }
-    }
-
-    // ----- Issue #750 / ADR-0088 fixtures -----
-    //
-    // C# does not allow two methods in the same class to differ only by
-    // generic constraint (CS0111 — constraints are not part of the signature).
-    // The fixtures below split candidates across companion classes so the
-    // resolver still sees the same name from multiple sources, mirroring how
-    // the binder enumerates extension methods.
-
-    public static class ConstraintFixture
-    {
-        public static void OnlyClass<T>(T x)
-            where T : class
-        {
-            _ = x;
-        }
-
-        public static void OnlyStruct<T>(T x)
-            where T : struct
-        {
-            _ = x;
-        }
-
-        public static void OnlyNew<T>()
-            where T : new()
-        {
-        }
-    }
-
-    public static class MapLike
-    {
-        // Reference-typed receiver: `T? self` with `where T : class` lowers to
-        // a bare `T` parameter at the IL level (nullable annotation only).
-        public static U Map<T, U>(T self, Func<T, U> f)
-            where T : class
-            where U : class
-        {
-            return self is null ? null : f(self);
-        }
-
-        // Value-typed receiver: `T? self` with `where T : struct` lowers to
-        // a `Nullable<T>` parameter at the IL level. This is the only shape
-        // axis C# can overload on, so today both overloads coexist — but the
-        // G# binder used to drop the constraint check and pick the wrong one
-        // when the receiver type was a Nullable<value-type>.
-        public static U? Map<T, U>(T? self, Func<T, U> f)
-            where T : struct
-            where U : struct
-        {
-            return self.HasValue ? f(self.Value) : default(U?);
-        }
-    }
-
-    public static class ThreeWayClass
-    {
-        public static string Choose<T>(T x)
-            where T : class
-        {
-            _ = x;
-            return "class";
-        }
-    }
-
-    public static class ThreeWayStruct
-    {
-        public static string Choose<T>(T x)
-            where T : struct
-        {
-            _ = x;
-            return "struct";
-        }
-    }
-
-    public static class ThreeWayNone
-    {
-        public static string Choose<T>(T x)
-        {
-            _ = x;
-            return "none";
-        }
-    }
-
-    public static class AmbiguousSameShapeA
-    {
-        public static void Take<T>(T x)
-            where T : class
-        {
-            _ = x;
-        }
-    }
-
-    public static class AmbiguousSameShapeB
-    {
-        public static void Take<T>(T x)
-            where T : class
-        {
-            _ = x;
-        }
+        yield return NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ThreeWayClass").GetMethod("Choose", BindingFlags.Public | BindingFlags.Static);
+        yield return NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ThreeWayStruct").GetMethod("Choose", BindingFlags.Public | BindingFlags.Static);
+        yield return NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.OverloadResolutionTests+ThreeWayNone").GetMethod("Choose", BindingFlags.Public | BindingFlags.Static);
     }
 }

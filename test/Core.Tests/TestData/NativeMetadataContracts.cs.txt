@@ -1,0 +1,702 @@
+// <copyright file="NativeMetadataContracts.cs.txt" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+#nullable enable
+namespace GSharp.Core.Tests.CodeAnalysis.Symbols
+{
+using System;
+using System.Collections.Generic;
+public class ClrNullabilityTests
+{
+    // Preserve the original harness's enclosing NullableContext(1), inherited by Sample and GenericSurface.
+    private static void NullableContextAnchor(string value)
+    {
+    }
+
+    public sealed class PairContainer<TFirst, TSecond>
+    {
+    }
+
+    public struct ValueContainer<T>
+    {
+    }
+
+    /// <summary>
+    /// Carries the C# 8 nullability annotations we need to test against.
+    /// Compiled with the explicit nullable context above — the
+    /// <c>?</c> on <see cref="AnnotatedReturn"/> emits a
+    /// <c>[NullableContextAttribute(2)]</c> on the method and the
+    /// non-annotated <see cref="NonNullReturn"/> picks up the
+    /// <c>[NullableContextAttribute(1)]</c> from the enclosing type.
+    /// </summary>
+    public class Sample
+    {
+        public static PairContainer<T, string?> MakeStructPair<T>()
+            where T : struct
+        {
+            return new PairContainer<T, string?>();
+        }
+
+        public static ValueContainer<T> MakeStructValue<T>()
+            where T : struct
+        {
+            return default;
+        }
+
+        public string? AnnotatedReturn()
+        {
+            return null;
+        }
+
+        public string NonNullReturn()
+        {
+            return string.Empty;
+        }
+
+        // Issue #1701: stand-ins for a ref-returning indexer's dereferenced
+        // element type. A genuine `ref T?` indexer is not exercisable through
+        // G# surface syntax today (Span/ReadOnlySpan element T is always
+        // value-typed in practice), so these validate the routed helper
+        // (`ClrNullability.GetPropertyElementTypeSymbol`) directly: it must
+        // read the `[NullableAttribute]` metadata off the declaring property
+        // and apply it to the supplied (dereferenced) element type, exactly
+        // like `GetPropertyTypeSymbol` does for the non-byref case.
+        public string? AnnotatedProperty => null;
+
+        public string NonNullProperty => string.Empty;
+
+        public Dictionary<string, string?> GetDictionary()
+        {
+            return new Dictionary<string, string?>();
+        }
+
+        public List<string?> GetList()
+        {
+            return new List<string?>();
+        }
+
+        public GenericSurface<string?> GetNullableSurface()
+        {
+            return new GenericSurface<string?>(null);
+        }
+
+        public GenericSurface<string> GetNonNullSurface()
+        {
+            return new GenericSurface<string>(string.Empty);
+        }
+
+        public int AcceptFunc(Func<string?, int> f)
+        {
+            return f(null);
+        }
+
+        public string?[,] GetNullableElementGrid()
+        {
+            return new string?[1, 1];
+        }
+
+        public string?[,]? GetNullableGrid()
+        {
+            return null;
+        }
+    }
+
+    public sealed class GenericSurface<T>
+    {
+        public GenericSurface(T value)
+        {
+            Property = value;
+            Field = value;
+        }
+
+        public T Property { get; set; }
+
+        public T Field;
+
+        public List<T> Nested { get; } = new();
+
+        public T this[int index]
+        {
+            get => Property;
+            set => Property = value;
+        }
+
+        public T Get() => Property;
+
+        public void Set(T value) => Property = value;
+
+        public bool TryGet(out T value)
+        {
+            value = Property;
+            return true;
+        }
+    }
+}
+}
+
+#nullable disable
+namespace GSharp.Core.Tests.CodeAnalysis.Binding
+{
+using System;
+using System.Collections.Generic;
+public class OverloadResolutionTests
+{
+    public static class Fixture
+    {
+        public static void F_Int(int x) { _ = x; }
+
+        public static void F_UInt(uint x) { _ = x; }
+
+        public static void F_Long(long x) { _ = x; }
+
+        public static void F_Float(float x) { _ = x; }
+
+        public static void F_Decimal(decimal x) { _ = x; }
+
+        public static void F_Double(double x) { _ = x; }
+
+        public static void F_Int_Long(int a, long b) { _ = a; _ = b; }
+
+        public static void F_Long_Long(long a, long b) { _ = a; _ = b; }
+
+        public static void F_Float_Float(float a, float b) { _ = a; _ = b; }
+
+        // Generic fixtures for TryInferTypeArguments tests below.
+        public static T G_Identity<T>(T x) => x;
+
+        public static void G_Pair<T>(T a, T b) { _ = a; _ = b; }
+
+        public static void G_TwoParam<TA, TB>(TA a, TB b) { _ = a; _ = b; }
+
+        public static void G_Array<T>(T[] xs) { _ = xs; }
+
+        public static void G_Enumerable<T>(System.Collections.Generic.IEnumerable<T> xs) { _ = xs; }
+
+        public static void G_DictionaryFromValues<TK, TV>(System.Collections.Generic.Dictionary<TK, TV> map) { _ = map; }
+
+        // Issue #321 fixture: optional trailing parameter on an open generic
+        // method (mirrors JsonSerializer.Serialize<TValue>(TValue, options = null)).
+        public static string G_SerializeLike<TValue>(TValue value, object options = null) => value?.ToString();
+
+        // Issue #327: optional-parameter fixtures.
+        public static void O_OneOptional(int a, System.Threading.CancellationToken token = default) { _ = a; _ = token; }
+
+        public static void O_TwoOptional(int a, System.Threading.CancellationToken first = default, System.Threading.CancellationToken second = default) { _ = a; _ = first; _ = second; }
+
+        public static void O_Required(int a, int b) { _ = a; _ = b; }
+
+        // ADR-0055 Tier 4 (#369): fixtures for interpolated-string → formattable
+        // applicability and tie-breaking.
+        public static void F_String(string s) { _ = s; }
+
+        public static void F_FormattableString(System.FormattableString fs) { _ = fs; }
+
+        public static void F_IFormattable(System.IFormattable f) { _ = f; }
+
+        // Issue #2172: mirrors the Task.Run overload pair — a Func<TResult> form
+        // and a Func<Task<TResult>> form. For a task-returning lambda argument
+        // (natural type Func<Task<object>>) the Func<Task<TResult>> form must
+        // win (TResult = object → returns Task<object>), not the Func<TResult>
+        // form (TResult = Task<object> → returns Task<Task<object>>).
+        public static System.Threading.Tasks.Task<TResult> Run_FuncTResult<TResult>(System.Func<TResult> function) => System.Threading.Tasks.Task.Run(function);
+
+        public static System.Threading.Tasks.Task<TResult> Run_FuncTaskTResult<TResult>(System.Func<System.Threading.Tasks.Task<TResult>> function) => System.Threading.Tasks.Task.Run(function);
+    }
+
+    /// <summary>
+    /// Issue #505: fixture that mirrors the xUnit
+    /// <c>Assert.Equal</c>/<c>Assert.NotEqual</c> overload set responsible for
+    /// the original ambiguous-overload diagnostic. The shape is deliberately
+    /// representative: a generic two-parameter form, a generic three-parameter
+    /// form with a comparer, a non-generic <c>(string, string)</c> form, and a
+    /// non-generic <c>(string, string, ...)</c> form with trailing optionals.
+    /// </summary>
+    public static class EqualLike
+    {
+        public static void Equal<T>(T expected, T actual) { _ = expected; _ = actual; }
+
+        public static void Equal<T>(T expected, T actual, System.Collections.Generic.IEqualityComparer<T> comparer) { _ = expected; _ = actual; _ = comparer; }
+
+        public static void Equal(string expected, string actual) { _ = expected; _ = actual; }
+
+        public static void Equal(string expected, string actual, bool ignoreCase = false, bool ignoreLineEndingDifferences = false, bool ignoreWhiteSpaceDifferences = false, bool ignoreAllWhiteSpace = false)
+        {
+            _ = expected;
+            _ = actual;
+            _ = ignoreCase;
+            _ = ignoreLineEndingDifferences;
+            _ = ignoreWhiteSpaceDifferences;
+            _ = ignoreAllWhiteSpace;
+        }
+
+        public static void NotEqual<T>(T expected, T actual) { _ = expected; _ = actual; }
+
+        public static void NotEqual(string expected, string actual) { _ = expected; _ = actual; }
+
+        // Companion overloads referenced by Resolve_PrefersNonGenericOverGeneric_FromStringStringArgs
+        // when it needs the two specific MethodInfo handles by name.
+        public static void Equal_TT<T>(T expected, T actual) => Equal(expected, actual);
+
+        public static void Equal_StringString(string expected, string actual) => Equal(expected, actual);
+
+        // Truly-ambiguous case: two non-generic overloads taking unrelated
+        // interfaces. A receiver implementing both leaves the resolver unable
+        // to pick a single best candidate.
+        public interface IA
+        {
+        }
+
+        public interface IB
+        {
+        }
+
+        public sealed class BothAB : IA, IB
+        {
+        }
+
+        public static void Take_IA(IA a) { _ = a; }
+
+        public static void Take_IB(IB b) { _ = b; }
+    }
+
+    // ----- Issue #750 / ADR-0088 fixtures -----
+    //
+    // C# does not allow two methods in the same class to differ only by
+    // generic constraint (CS0111 — constraints are not part of the signature).
+    // The fixtures below split candidates across companion classes so the
+    // resolver still sees the same name from multiple sources, mirroring how
+    // the binder enumerates extension methods.
+
+    public static class ConstraintFixture
+    {
+        public static void OnlyClass<T>(T x)
+            where T : class
+        {
+            _ = x;
+        }
+
+        public static void OnlyStruct<T>(T x)
+            where T : struct
+        {
+            _ = x;
+        }
+
+        public static void OnlyNew<T>()
+            where T : new()
+        {
+        }
+    }
+
+    public static class MapLike
+    {
+        // Reference-typed receiver: `T? self` with `where T : class` lowers to
+        // a bare `T` parameter at the IL level (nullable annotation only).
+        public static U Map<T, U>(T self, Func<T, U> f)
+            where T : class
+            where U : class
+        {
+            return self is null ? null : f(self);
+        }
+
+        // Value-typed receiver: `T? self` with `where T : struct` lowers to
+        // a `Nullable<T>` parameter at the IL level. This is the only shape
+        // axis C# can overload on, so today both overloads coexist — but the
+        // G# binder used to drop the constraint check and pick the wrong one
+        // when the receiver type was a Nullable<value-type>.
+        public static U? Map<T, U>(T? self, Func<T, U> f)
+            where T : struct
+            where U : struct
+        {
+            return self.HasValue ? f(self.Value) : default(U?);
+        }
+    }
+
+    public static class ThreeWayClass
+    {
+        public static string Choose<T>(T x)
+            where T : class
+        {
+            _ = x;
+            return "class";
+        }
+    }
+
+    public static class ThreeWayStruct
+    {
+        public static string Choose<T>(T x)
+            where T : struct
+        {
+            _ = x;
+            return "struct";
+        }
+    }
+
+    public static class ThreeWayNone
+    {
+        public static string Choose<T>(T x)
+        {
+            _ = x;
+            return "none";
+        }
+    }
+
+    public static class AmbiguousSameShapeA
+    {
+        public static void Take<T>(T x)
+            where T : class
+        {
+            _ = x;
+        }
+    }
+
+    public static class AmbiguousSameShapeB
+    {
+        public static void Take<T>(T x)
+            where T : class
+        {
+            _ = x;
+        }
+    }
+}
+}
+
+#nullable disable
+namespace GSharp.Core.Tests.CodeAnalysis.Binding
+{
+using System;
+using System.Collections.Generic;
+public class Issue1482NumericWideningLatticeTests
+{
+    public static class NIntFixture
+    {
+        public static void TakeInt64(long x) => _ = x;
+
+        public static void TakeUInt64(ulong x) => _ = x;
+
+        public static void TakeDouble(double x) => _ = x;
+    }
+}
+}
+
+#nullable disable
+namespace GSharp.Core.Tests.CodeAnalysis.Binding
+{
+using System;
+using System.Collections.Generic;
+public class Issue3834GenericMethodClosureDiagnosticsTests
+{
+    public static class ConstraintFixture
+    {
+        public static void Dependent<TBase, TDerived>()
+            where TDerived : TBase
+        {
+        }
+
+        public static T Identity<T>(T value) => value;
+
+        public static void Mixed<TErased, TConcrete>()
+            where TConcrete : CrossContextBase
+        {
+        }
+    }
+
+    public class CrossContextBase
+    {
+    }
+
+    public sealed class CrossContextDerived : CrossContextBase
+    {
+    }
+}
+}
+
+#nullable disable
+namespace GSharp.Core.Tests.CodeAnalysis.Binding
+{
+using System;
+using System.Collections.Generic;
+public class AccessPathTests
+{
+    private sealed class GenericFixture<T>
+    {
+        public T Value { get; set; }
+    }
+}
+}
+
+#nullable disable
+namespace GSharp.Core.Tests.CodeAnalysis.Binding
+{
+using System;
+using System.Collections.Generic;
+public class Issue3394InlineOutTupleBindingTests
+{
+    private static void InvariantPair<T>(
+        System.Collections.Generic.List<T> first,
+        System.Collections.Generic.List<T> second)
+    {
+    }
+
+    private static void DirectPair<T>(T first, T second)
+    {
+    }
+
+    private static void ByRefPair<T>(ref T first, ref T second)
+    {
+    }
+
+    private static void InvariantParams<T>(params System.Collections.Generic.List<T>[] values)
+    {
+    }
+
+    private static void UpperPair<T>(System.Action<T> first, System.Action<T> second)
+    {
+    }
+
+    private static class OptionalNullFixture
+    {
+        public static void Accept(string value = null)
+        {
+        }
+    }
+
+    private class InferenceBase
+    {
+    }
+
+    private sealed class InferenceDerived : InferenceBase
+    {
+    }
+}
+}
+
+#nullable disable
+namespace GSharp.Core.Tests.CodeAnalysis.Binding
+{
+using System;
+using System.Collections.Generic;
+/// <summary>
+/// Fixture methods used by property-based overload-resolution tests.
+/// </summary>
+public static class OverloadResolutionPropertyFixture
+{
+    /// <summary>Accepts a Boolean value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Bool(bool value) => _ = value;
+
+    /// <summary>Accepts a byte value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Byte(byte value) => _ = value;
+
+    /// <summary>Accepts a char value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Char(char value) => _ = value;
+
+    /// <summary>Accepts a decimal value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Decimal(decimal value) => _ = value;
+
+    /// <summary>Accepts a double value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Double(double value) => _ = value;
+
+    /// <summary>Accepts a float value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Float(float value) => _ = value;
+
+    /// <summary>Accepts an int value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Int(int value) => _ = value;
+
+    /// <summary>Accepts a long value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Long(long value) => _ = value;
+
+    /// <summary>Accepts an object value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Object(object value) => _ = value;
+
+    /// <summary>Accepts an sbyte value.</summary>
+    /// <param name="value">The value.</param>
+    public static void SByte(sbyte value) => _ = value;
+
+    /// <summary>Accepts a short value.</summary>
+    /// <param name="value">The value.</param>
+    public static void Short(short value) => _ = value;
+
+    /// <summary>Accepts a string value.</summary>
+    /// <param name="value">The value.</param>
+    public static void String(string value) => _ = value;
+
+    /// <summary>Accepts a uint value.</summary>
+    /// <param name="value">The value.</param>
+    public static void UInt(uint value) => _ = value;
+
+    /// <summary>Accepts a ulong value.</summary>
+    /// <param name="value">The value.</param>
+    public static void ULong(ulong value) => _ = value;
+
+    /// <summary>Accepts a ushort value.</summary>
+    /// <param name="value">The value.</param>
+    public static void UShort(ushort value) => _ = value;
+
+    /// <summary>Accepts two int values.</summary>
+    /// <param name="first">The first value.</param>
+    /// <param name="second">The second value.</param>
+    public static void PairIntInt(int first, int second)
+    {
+        _ = first;
+        _ = second;
+    }
+
+    /// <summary>Accepts two long values.</summary>
+    /// <param name="first">The first value.</param>
+    /// <param name="second">The second value.</param>
+    public static void PairLongLong(long first, long second)
+    {
+        _ = first;
+        _ = second;
+    }
+
+    /// <summary>Accepts an int and a long.</summary>
+    /// <param name="first">The first value.</param>
+    /// <param name="second">The second value.</param>
+    public static void PairIntLong(int first, long second)
+    {
+        _ = first;
+        _ = second;
+    }
+
+    /// <summary>Accepts a long and an int.</summary>
+    /// <param name="first">The first value.</param>
+    /// <param name="second">The second value.</param>
+    public static void PairLongInt(long first, int second)
+    {
+        _ = first;
+        _ = second;
+    }
+
+    /// <summary>Accepts three int values.</summary>
+    /// <param name="first">The first value.</param>
+    /// <param name="second">The second value.</param>
+    /// <param name="third">The third value.</param>
+    public static void TripleInt(int first, int second, int third)
+    {
+        _ = first;
+        _ = second;
+        _ = third;
+    }
+}
+}
+
+#nullable disable
+namespace GSharp.Core.Tests.CodeAnalysis.Documentation
+{
+using System;
+using System.Collections.Generic;
+/// <summary>
+/// Local sample surface giving the provider deterministic shapes (multidim arrays,
+/// nullables) that are rare in the BCL but must be encoded exactly.
+/// </summary>
+public static class DocIdSamples
+{
+    /// <summary>Sample with a rank-2 array parameter.</summary>
+    /// <param name="grid">A grid.</param>
+    public static void TakesGrid(int[,] grid)
+    {
+    }
+
+    /// <summary>Sample with a nullable value-type parameter.</summary>
+    /// <param name="value">A nullable.</param>
+    public static void TakesNullable(int? value)
+    {
+    }
+}
+}
+
+#nullable disable
+// <copyright file="UnscopedRefIndexerFixture.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+namespace GSharp.Core.Tests.Fixtures
+{
+using System.Diagnostics.CodeAnalysis;
+
+/// <summary>
+/// Soundness-guard regression fixture (found reviewing issue #4265 / PR #4274,
+/// before merge): a byref-like (<c>ref struct</c>) CLR type whose indexer
+/// getter is marked <c>[UnscopedRef]</c> — a legitimate, fully-supported C# 11+
+/// pattern (no <c>unsafe</c>, no IL authoring) that returns a <c>ref</c> into
+/// the RECEIVER'S OWN storage (<see cref="value"/>) rather than an
+/// encapsulated referent the receiver merely wraps (unlike
+/// <c>Span[T]</c>/<c>ReadOnlySpan[T]</c>, whose indexers always return a ref
+/// into caller-owned storage the span was constructed over). Real C# rejects
+/// forwarding such a member through a BY-VALUE parameter (CS8166) because
+/// <c>[UnscopedRef]</c> inverts the receiver's contribution to the call's
+/// ref-safe-context from "safe-to-escape" (caller scope) to
+/// "ref-safe-context" (function-local, exactly like the receiver's own
+/// storage). Before the guard in <c>RefCapabilities.IsUnscopedRefIndexerGetter</c>
+/// / <c>StatementBinder.HasFunctionLocalRefScope</c>'s <c>BoundClrIndexExpression</c>
+/// case, gsc did not consult this attribute at all and treated ANY byref-like
+/// CLR indexer target as safe-to-forward — confirmed exploitable: a G#
+/// function forwarding <c>buf[0]</c> from a by-value <see cref="UnscopedRefIndexerFixture"/>
+/// parameter compiled clean and returned a reference into the callee's own
+/// dead stack frame (an intervening call's locals silently corrupted the
+/// "aliased" value on read-back).
+/// </summary>
+public ref struct UnscopedRefIndexerFixture
+{
+    private int value;
+
+    /// <summary>Initializes a new instance seeded with <paramref name="seed"/>.</summary>
+    /// <param name="seed">The initial value of the fixture's own storage.</param>
+    public UnscopedRefIndexerFixture(int seed)
+    {
+        this.value = seed;
+    }
+
+    /// <summary>
+    /// Gets a <c>ref</c> to this instance's OWN <see cref="value"/> field —
+    /// the unsafe shape this fixture exists to probe. Legal C# only because
+    /// of <c>[UnscopedRef]</c>; without it, this getter would not compile at
+    /// all (CS8170).
+    /// </summary>
+    /// <param name="i">Unused; present only to match indexer syntax.</param>
+    public ref int this[int i]
+    {
+        [UnscopedRef]
+        get { return ref this.value; }
+    }
+}
+
+/// <summary>
+/// Same unsafe shape as <see cref="UnscopedRefIndexerFixture"/>, but with
+/// <c>[UnscopedRef]</c> placed on the PROPERTY itself via the
+/// expression-bodied indexer spelling, rather than on the <c>get</c>
+/// accessor. C# accepts the attribute on either the accessor or the
+/// property (confirmed against a real compiled indexer of each shape); an
+/// initial version of <c>RefCapabilities.IsUnscopedRefIndexerGetter</c>
+/// checked only <c>PropertyInfo.GetGetMethod()</c>'s attributes and missed
+/// this spelling entirely, leaving the same dangling-reference hole open
+/// for it. This fixture exists so both attribute placements are covered.
+/// </summary>
+public ref struct UnscopedRefIndexerPropertyLevelFixture
+{
+    private int value;
+
+    /// <summary>Initializes a new instance seeded with <paramref name="seed"/>.</summary>
+    /// <param name="seed">The initial value of the fixture's own storage.</param>
+    public UnscopedRefIndexerPropertyLevelFixture(int seed)
+    {
+        this.value = seed;
+    }
+
+    /// <summary>Gets a <c>ref</c> to this instance's OWN <see cref="value"/> field.</summary>
+    /// <param name="i">Unused; present only to match indexer syntax.</param>
+    [UnscopedRef]
+    public ref int this[int i] => ref this.value;
+}
+
+}
