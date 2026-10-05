@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Compiler test IL verification accepts noncanonical assembly paths** (issue #4784). The strict success marker now uses the same absolute path normalization as the verifier process, including dot segments and paths relative to its repository working directory. Exact assembly identity and nonzero-exit rejection are unchanged; this repairs migration-proof infrastructure, not compiler output or inference.
+
 - **The nullable-classifier reflection test remains self-migratable** (issue #4779). Its intentional null input/out argument storage now declares nullable object elements, so the containing test class compiles as G# without widening fixed production contracts or changing the reflection assertions.
 
 - **cs2gs artifact replay preserves original source identity across checkout relocation** (issue #4752). Validation manifests now export corpus-relative C# source and project metadata; legacy manifests recover only an unambiguous full-path repository mapping. Missing or invalid authoritative sources fail explicitly instead of silently reducing the source-declared Fact count to zero. Linked-source and referenced-project ownership, original per-name oracles and the existing parity budget policy are unchanged; this does not establish a runtime hang cause or test-suite completion.
