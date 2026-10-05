@@ -129,7 +129,7 @@ public sealed partial class CSharpToGSharpTranslator
             return new EnumDeclaration(
                 this.EmittedName(symbol, node.Identifier.ValueText),
                 cases,
-                MapVisibility(symbol, this.context, node, preserveStaticClassPrivate: true),
+                MapVisibility(symbol, this.context, node),
                 attributes: this.MapAttributes(node.AttributeLists));
         }
 
@@ -619,8 +619,7 @@ public sealed partial class CSharpToGSharpTranslator
         private Visibility MapVisibility(
             ISymbol symbol,
             TranslationContext context,
-            SyntaxNode node,
-            bool preserveStaticClassPrivate = false)
+            SyntaxNode node)
         {
             if (symbol is null)
             {
@@ -634,34 +633,14 @@ public sealed partial class CSharpToGSharpTranslator
                     // positions, so it is omitted (ADR-0115 §B.10).
                     return Visibility.Default;
                 case Accessibility.Private:
-                    // Issues #4301/#4472: see IsMemberOfKeptTopLevelProgram. This must
-                    // precede the extension-owner rule below: a kept top-level
-                    // Program can also declare extension methods, but its
+                    // Issues #4301/#4472: a kept top-level Program can also
+                    // declare extension methods, but its
                     // remaining members still need `internal` so hoisted
                     // top-level statements can reach them.
                     if (!IsExplicitInterfaceImplementation(symbol) &&
                         IsMemberOfKeptTopLevelProgram(symbol))
                     {
                         return Visibility.Internal;
-                    }
-
-                    // A `private` static member of a `static class` that ALSO
-                    // declares extension methods becomes unreachable once those
-                    // methods are lifted to top-level `func`s (ADR-0115 §B.5): the
-                    // lifted func qualifies the sibling reference through the owning
-                    // type (`Owner.Helper`), but G# accessibility then treats the
-                    // former class-private member as inaccessible (GS0472). Widen it
-                    // to the position default so the qualified reference still binds
-                    // (a private helper of a static utility class is an internal
-                    // implementation detail with no external callers to over-expose).
-                    // Issue #3413 owners with private nested aggregates keep their
-                    // extension bodies as in-owner static helpers, so their private
-                    // siblings remain reachable and must not be widened.
-                    if (!preserveStaticClassPrivate &&
-                        IsMemberOfExtensionBearingStaticClass(symbol) &&
-                        !HasPrivateNestedAggregate(symbol.ContainingType))
-                    {
-                        return Visibility.Default;
                     }
 
                     return Visibility.Private;
@@ -720,36 +699,6 @@ public sealed partial class CSharpToGSharpTranslator
                 IEventSymbol @event => !@event.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
                 _ => false,
             };
-
-        /// <summary>
-        /// Returns <see langword="true"/> when <paramref name="symbol"/> is a member
-        /// of a <c>static class</c> that also declares at least one extension method.
-        /// Such a class is normally decomposed at translation time — its extension
-        /// methods are lifted to top-level receiver-clause <c>func</c>s (ADR-0115
-        /// §B.5) — so any sibling <c>private</c> member the lifted funcs reference
-        /// must be widened to stay reachable across the resulting file scope (would
-        /// otherwise be GS0472). Issue #3413's private-nested-owner exception is
-        /// applied by the caller.
-        /// </summary>
-        private static bool IsMemberOfExtensionBearingStaticClass(ISymbol symbol)
-        {
-            if (symbol.ContainingType is not INamedTypeSymbol container
-                || !container.IsStatic
-                || container.TypeKind != TypeKind.Class)
-            {
-                return false;
-            }
-
-            foreach (ISymbol member in container.GetMembers())
-            {
-                if (member is IMethodSymbol { IsExtensionMethod: true })
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
 
         /// <summary>
         /// Issue #950: returns <see langword="true"/> when <paramref name="type"/>
@@ -2037,7 +1986,7 @@ public sealed partial class CSharpToGSharpTranslator
                 baseConstructorArguments: baseConstructorArguments,
                 interfaces: interfaces,
                 members: members,
-                visibility: MapVisibility(symbol, this.context, node, preserveStaticClassPrivate: true),
+                visibility: MapVisibility(symbol, this.context, node),
                 isOpen: isOpen && !isAbstract,
                 isAbstract: isAbstract,
                 attributes: this.MapAttributes(mergedAttributeLists),

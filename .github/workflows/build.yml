@@ -112,7 +112,9 @@ jobs:
 
       - name: Generate test matrix
         id: matrix
-        run: echo "matrix=$(python3 build/generate-ci-test-matrix.py)" >> "$GITHUB_OUTPUT"
+        run: |
+          python3 build/test-ci-test-matrix.py
+          echo "matrix=$(python3 build/generate-ci-test-matrix.py)" >> "$GITHUB_OUTPUT"
 
   tests:
     name: tests (${{ matrix.name }})

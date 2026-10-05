@@ -159,18 +159,38 @@ public sealed partial class CSharpToGSharpTranslator
             // cannot throw there and is not reported.
             if (value == null
                 || ReferenceEquals(original, bridged)
-                || bridged is not NonNullAssertionExpression
-                || original is NonNullAssertionExpression
+                || bridged is not NonNullAssertionExpression assertion
                 || this.IsWithinExpressionTreeLambda(value))
             {
                 return bridged;
             }
 
-            (ISymbol finalStore, ITypeSymbol resolvedSlotType) = this.ResolveFinalStore(value);
-            if (finalStore != null)
+            bool operatorInput = targetSymbol is IParameterSymbol
+                { ContainingSymbol: IMethodSymbol operatorMethod }
+                && operatorMethod.MethodKind == MethodKind.Conversion;
+            if (!operatorInput
+                && ReferenceEquals(assertion.Operand, original))
             {
-                targetSymbol = finalStore;
-                knownSlotType ??= resolvedSlotType;
+                ITypeSymbol conversionTarget = knownSlotType
+                    ?? this.GetFixedElementDestinationType(value, targetSymbol)
+                    ?? ObliviousNullabilityAnalyzer.SymbolValueType(targetSymbol);
+                if (this.GetUserDefinedConversionInputOperator(value, conversionTarget, out _) is { } conversionOperator)
+                {
+                    // An input assertion guards the operator parameter, not its result's store.
+                    targetSymbol = conversionOperator.Parameters[0];
+                    knownSlotType = conversionOperator.Parameters[0].Type;
+                    operatorInput = true;
+                }
+            }
+
+            if (!operatorInput)
+            {
+                (ISymbol finalStore, ITypeSymbol resolvedSlotType) = this.ResolveFinalStore(value);
+                if (finalStore != null)
+                {
+                    targetSymbol = finalStore;
+                    knownSlotType ??= resolvedSlotType;
+                }
             }
 
             string kind = this.ClassifyGenericStoreSlot(value, targetSymbol, knownSlotType, out ITypeSymbol slotType, out bool resultDependsOnSlot);
@@ -645,12 +665,18 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // A bound generic iterator returns one of the enumerable/enumerator
-            // envelopes. Unwrap its declared element contract before following
-            // the tuple path; the forgiven operand may have a different type.
+            // envelopes. Use MapReturnType's emitted scalar element contract
+            // before following the tuple path; the operand may have another type.
             ITypeSymbol slotType = iterator.ReturnType is INamedTypeSymbol returnType
                 && returnType.TypeArguments.Length == 1
                     ? returnType.TypeArguments[0]
                     : this.context.GetTypeInfo(yielded.Expression).ConvertedType;
+            if (iterator.ReturnType is INamedTypeSymbol { Name: "IEnumerable" }
+                && this.AwaitedReturnIsTainted(slotType, iterator))
+            {
+                slotType = slotType.WithNullableAnnotation(NullableAnnotation.Annotated);
+            }
+
             return GetTupleSlot(slotType, tupleIndices);
         }
 

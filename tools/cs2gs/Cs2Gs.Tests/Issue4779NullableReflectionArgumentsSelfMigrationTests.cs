@@ -179,6 +179,7 @@ public sealed class Issue4779NullableReflectionArgumentsSelfMigrationTests
                 {
                     nameof(Issue4770NullableClassifierCoalescingTests.DefensiveCoalescing_DoesNotWidenFixedParameterOrMemberContracts),
                     nameof(Issue4770NullableClassifierCoalescingTests.OriginalParamsControl_CompilesVerifiesAndRuns),
+                    nameof(Issue4770NullableClassifierCoalescingTests.FixedNonNullContract_RetainsRequiredBridge),
                 })
                 {
                     MethodInfo control = type.GetMethod(name);
