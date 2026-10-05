@@ -136,7 +136,7 @@ for flat enums. `sealed interface` works analogously.
 
 Plain `class Foo` (no `open`, no `sealed`) is still CLR-sealed by
 default — the distinction is *open* (any package can subclass) vs.
-*sealed-hierarchy* (only same-package subclasses, exhaustiveness-bound)
+*sealed-hierarchy* (only declaring-assembly subclasses, exhaustiveness-bound)
 vs. *closed* (no subclasses, plain `class`).
 
 Cross-assembly import preserves this restriction through the existing
