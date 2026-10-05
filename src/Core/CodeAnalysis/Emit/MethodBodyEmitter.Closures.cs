@@ -470,30 +470,6 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
-    /// Issue #4393: the type a method group's function token is parented at:
-    /// the function's declaring class as <paramref name="receiver"/>'s
-    /// hierarchy instantiates it (<c>Base[string]</c> for a receiver
-    /// <c>DC : Base[string]</c>, <c>Base[T]</c> for <c>Derived[T] : Base[T]</c>),
-    /// or the receiver itself when it declares the function.
-    /// </summary>
-    private static StructSymbol ResolveMethodGroupOwner(StructSymbol receiver, FunctionSymbol function)
-    {
-        if (function.ReceiverType is not StructSymbol declaring)
-        {
-            return receiver;
-        }
-
-        var declaringDefinition = declaring.Definition ?? declaring;
-        if (ReferenceEquals(receiver.Definition ?? receiver, declaringDefinition))
-        {
-            return receiver;
-        }
-
-        return receiver.FindConstructedGenericBase(
-            definition => ReferenceEquals(definition, declaringDefinition)) ?? declaring;
-    }
-
-    /// <summary>
     /// Emits the shared prologue of a user method-group-to-delegate
     /// conversion: it resolves the function pointer token and leaves the
     /// delegate-constructor operands on the stack — <c>ldnull; ldftn ftn</c>
@@ -516,7 +492,7 @@ internal sealed partial class MethodBodyEmitter
         if (methodGroup.Receiver?.Type is StructSymbol receiverStruct
             && function.ReceiverType is StructSymbol)
         {
-            var owner = ResolveMethodGroupOwner(receiverStruct, function);
+            var owner = ResolveUserInstanceMethodOwner(receiverStruct, function);
             ftnToken = this.outer.userTokens.ResolveUserInstanceMethodToken(owner, function);
         }
         else if (this.outer.cache.FunctionHandles.TryGetValue(function, out var staticHandle)

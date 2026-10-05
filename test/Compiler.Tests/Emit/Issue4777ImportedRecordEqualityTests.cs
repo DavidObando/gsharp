@@ -35,6 +35,180 @@ public sealed class Issue4777ImportedRecordEqualityTests
     }
 
     [Theory]
+    [InlineData(false, "ordinary")]
+    [InlineData(true, "ordinary")]
+    [InlineData(false, "constrained")]
+    [InlineData(true, "constrained")]
+    [InlineData(false, "methodgroup")]
+    [InlineData(true, "methodgroup")]
+    public void ConstructedSourceBase_OrdinaryCallsAndGroupsUseDeclaringEquality(bool genericReceiver, string path)
+    {
+        Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"));
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        try
+        {
+            var receiver = genericReceiver ? "Middle[string]" : "Closed";
+            var nativeReceiver = genericReceiver ? "Middle<string>" : "Closed";
+            var constrained = path == "constrained";
+            var comparison = path == "methodgroup"
+                ? "let equals Func[Root[string]?, bool] = left.Equals\nreturn NativeOracle.Observe(equals(right), expected)"
+                : "return NativeOracle.Observe(left.Equals(right), expected)";
+            var root = CompileNative(fixture.Directory, "NativeOracle", """
+                using System;
+                namespace ConstructedEquality;
+                public static class NativeOracle {
+                    public static int Calls;
+                    public static bool Observe(bool actual, bool expected) {
+                        Calls++;
+                        if (actual != expected) throw new Exception("constructed inherited equality");
+                        return actual;
+                    }
+                }
+                """);
+            var source = $$"""
+                package ConstructedEquality
+                import System
+                public open data class Root[T any](Tag int32) : IEquatable[Root[T]]
+                public open class Middle[T any](State int32) : Root[T](0) {
+                    public func ReadState() int32 -> State
+                }
+                public open class Closed(State int32) : Middle[string](State)
+                public class Checks {
+                    shared {
+                        public func Compare{{(constrained ? "[U " + receiver + "]" : "")}}(
+                            left {{(constrained ? "U" : receiver)}}, right Root[string]?, expected bool) bool {
+                            {{comparison}}
+                        }
+                    }
+                }
+                """;
+            var reference = Path.Combine(fixture.Directory, "Contracts.ref.dll");
+            File.WriteAllText(Path.Combine(fixture.Directory, "gsc-invocation.json"), JsonSerializer.Serialize(new
+            {
+                entry = "GSharp.Compiler.Program.Main",
+                compiler = typeof(Program).Assembly.Location,
+                compilerSha256 = Hash(typeof(Program).Assembly.Location),
+                core = typeof(TypeSymbol).Assembly.Location,
+                coreSha256 = Hash(typeof(TypeSymbol).Assembly.Location),
+                argv = new[]
+                {
+                    "/out:" + Path.Combine(fixture.Directory, "Contracts.dll"),
+                    "/target:library", "/targetframework:net10.0",
+                    Path.Combine(fixture.Directory, "Contracts.gs"),
+                    "/assemblyname:Contracts", "/r:" + root, "/refout:" + reference, "/debug:portable",
+                },
+            }));
+            var library = fixture.Compile(source, "Contracts", executable: false,
+                "/assemblyname:Contracts", "/r:" + root, "/refout:" + reference, "/debug:portable");
+            var nativeDirectory = Path.Combine(fixture.Directory, "native");
+            Directory.CreateDirectory(nativeDirectory);
+            // C# records cannot have an ordinary class descendant; this native CLR oracle
+            // spells the same root equality contract explicitly for that legal G# shape.
+            var native = CompileNative(nativeDirectory, "Contracts", $$"""
+                using System;
+                [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+                namespace ConstructedEquality;
+                public class Root<T> : IEquatable<Root<T>> {
+                    public int Tag { get; init; }
+                    public Root(int tag) => Tag = tag;
+                    public virtual bool Equals(Root<T>? other) =>
+                        other != null && GetType() == other.GetType() && Tag == other.Tag;
+                    public override bool Equals(object? other) => other is Root<T> root && Equals(root);
+                    public override int GetHashCode() => Tag;
+                }
+                public class Middle<T> : Root<T> {
+                    public int State { get; init; }
+                    public Middle(int state) : base(0) => State = state;
+                    public int ReadState() => State;
+                }
+                public class Closed : Middle<string> {
+                    public Closed(int state) : base(state) { }
+                }
+                public class Checks {
+                    public static bool Compare{{(constrained ? "<U>" : "")}}(
+                        {{(constrained ? "U" : nativeReceiver)}} left, Root<string>? right, bool expected)
+                        {{(constrained ? "where U : " + nativeReceiver : "")}} {
+                        {{(path == "methodgroup"
+                            ? "Func<Root<string>?, bool> equals = left.Equals;\nreturn NativeOracle.Observe(equals(right), expected);"
+                            : "return NativeOracle.Observe(left.Equals(right), expected);")}}
+                    }
+                }
+                """, root);
+            var consumer = CompileNative(fixture.Directory, "Consumer", $$"""
+                using System;
+                using ConstructedEquality;
+                public static class Consumer {
+                    public static string Run(string ignored) {
+                        var first = new {{nativeReceiver}}(7) { Tag = 41 };
+                        var same = new {{nativeReceiver}}(7) { Tag = 41 };
+                        var inherited = new {{nativeReceiver}}(7) { Tag = 42 };
+                        var ordinary = new {{nativeReceiver}}(8) { Tag = 41 };
+                        NativeOracle.Calls = 0;
+                        if (!Checks.Compare(first, same, true)
+                            || Checks.Compare(first, inherited, false)
+                            || !Checks.Compare(first, ordinary, true)
+                            || Checks.Compare(first, null, false))
+                            throw new Exception("constructed caller control");
+                        if (NativeOracle.Calls != 4 || first.Tag != 41 || first.ReadState() != 7)
+                            throw new Exception("constructed call-count/state control");
+                        return "constructed/equal/inherited-difference/ordinary-state/null";
+                    }
+                }
+                """, root, reference);
+            foreach (var image in new[] { root, native, library, reference })
+            {
+                IlVerifier.Verify(image, new[] { root });
+            }
+
+            IlVerifier.Verify(consumer, new[] { root, native });
+            IlVerifier.Verify(consumer, new[] { root, library });
+            var expected = "constructed/equal/inherited-difference/ordinary-state/null";
+            var nativeResult = RunConsumer(root, native, consumer, path);
+            var gsharpResult = RunConsumer(root, library, consumer, path);
+            Assert.Equal(expected, nativeResult);
+            Assert.Equal(expected, gsharpResult);
+            File.WriteAllText(Path.Combine(fixture.Directory, "same-consumer-runtime.json"), JsonSerializer.Serialize(new
+            {
+                path, genericReceiver, consumerSha256 = Hash(consumer), nativeResult, gsharpResult, expected,
+            }));
+            this.output.WriteLine("SAME constructed native consumer SHA256=" + Hash(consumer));
+            Assert.Equal(EqualityRows(library, expectedCount: 2), EqualityRows(reference, expectedCount: 2));
+            var assemblies = EmittedFixture.LoadTogether(root, library);
+            var checks = assemblies[1].GetType("ConstructedEquality.Checks")
+                ?? throw new InvalidOperationException("Missing constructed checks.");
+            var method = checks.GetMethod("Compare") ?? throw new InvalidOperationException("Missing constructed comparison.");
+            var instructions = IlInstructionReader.Read(method.GetMethodBody()?.GetILAsByteArray()
+                ?? throw new InvalidOperationException("Missing constructed comparison body."));
+            var equality = Assert.Single(instructions, instruction =>
+                instruction.MetadataToken is int token
+                && method.Module.ResolveMethod(token, null, method.GetGenericArguments()) is { } target
+                && target.Name == "Equals");
+            Assert.Equal(path == "methodgroup" ? OpCodes.Ldvirtftn : OpCodes.Callvirt, equality.OpCode);
+            var equalityTarget = method.Module.ResolveMethod(
+                equality.MetadataToken ?? throw new InvalidOperationException("Missing equality token."),
+                null, method.GetGenericArguments()) ?? throw new InvalidOperationException("Missing equality target.");
+            var owner = equalityTarget.DeclaringType ?? throw new InvalidOperationException("Missing equality owner.");
+            Assert.Equal("Root`1", owner.Name);
+            Assert.Equal(new[] { typeof(string) }, owner.GetGenericArguments());
+            Assert.Equal(owner, Assert.Single(equalityTarget.GetParameters()).ParameterType);
+            using var references = ReferenceResolver.WithReferences(
+                ReferenceResolver.HostTrustedPlatformAssemblyPaths().Append(root).ToArray());
+            var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(
+                references, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(source)) { IsLibrary = true };
+            Assert.Empty(compilation.GlobalScope.Diagnostics);
+            var middle = Assert.Single(compilation.GlobalScope.Structs, type => type.Name == "Middle");
+            var inheritedRoot = middle.BaseClass ?? throw new InvalidOperationException("Missing constructed source base.");
+            Assert.NotSame(inheritedRoot.Definition, inheritedRoot);
+            Assert.Contains(inheritedRoot.DataEqualsSelf, TypeMemberModel.GetMethods(
+                middle, "Equals", new MemberQuery(true, false, true, MemberKinds.Method)));
+        }
+        finally
+        {
+            PreserveEvidence(fixture.Directory, $"constructed-{genericReceiver}-{path}");
+        }
+    }
+
+    [Theory]
     [InlineData(false, false, "self")]
     [InlineData(true, false, "self")]
     [InlineData(false, false, "base")]

@@ -149,6 +149,10 @@ Compiler-owned typed slots participate in the shared declared-member projection
 used by normal calls, named arguments, method groups and completion, not only
 interface conformance and emission. Imported CLR members retain their actual
 signatures without additional synthetic duplicates.
+Ordinary and class-constrained calls use the same receiver-aware declaring-owner
+resolution as method groups, including lazy equality slots inherited from a
+constructed source generic base; token resolution does not require those
+constructed signatures to have their own open MethodDef cache entries.
 The same projection includes the already synthesized `Equals(object? obj)`
 override, so exposing typed equality does not hide object calls or object-typed
 method groups. Its parameter name and nullability use the existing CLR
