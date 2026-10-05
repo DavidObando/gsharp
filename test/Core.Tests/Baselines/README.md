@@ -71,3 +71,20 @@ The ADR-0190 native-slice implementation adds `samples/NativeSlices.gs` with a
 non-null baseline. Its reviewed diff adds only that sample; every pre-existing
 hash remains unchanged. The emitted stereo witness also independently verifies
 caller-visible value-frame writes and zero allocations in its warmed-up loop.
+
+The #4777/#4675 data-equality repair intentionally changes eleven existing
+sample hashes. Compiler-owned typed equality has a virtual self slot (final for
+value data and non-extensible classes), parameters are named `other` and `obj`,
+and the nullable reference parameter contracts are emitted. Value-data self
+parameters remain values. Class equality operators dispatch through that self
+slot rather than repeating field comparisons; this preserves most-derived
+equality through inherited calls.
+
+The reviewed before/after images reproduce the original and new gate hashes.
+All method counts and decoded signatures, including init modifiers, are
+unchanged. Outside the class operators, instruction changes are only metadata
+token relocation from the added nullable attribute references. All eleven
+samples execute with identical stdout, and both image banks pass unsuppressed
+IL verification. Only those eleven hashes changed; the byte-identical gate,
+sample inventory and existing null entries are unchanged. This sample-baseline
+acceptance does not update the Core public-API golden or certify Core ABI parity.
