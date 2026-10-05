@@ -78,3 +78,10 @@ instead of reconstructing a parameterless instance and rewriting untouched
 members. `Issue4776WebsiteDataCopyEmitTests` pins the real gsc/native C# clone
 calls, strict IL verification, unchanged output and original/copy identity and
 values. No hashing or baseline-acceptance policy changes accompany that update.
+
+The bounded follow-up updates only `samples/WebsiteKotlin.gs` for the same
+typed-clone correction. `Issue4776WebsiteKotlinCopyEmitTests` uses the actual
+sample and native Developer contract to pin one clone before the Years update,
+unchanged Name storage, original/copy identity and values, and nullable-label
+output. Together these corrections replace exactly two hashes; every other
+baseline byte remains unchanged.
