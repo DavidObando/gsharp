@@ -964,11 +964,9 @@ public sealed partial class CSharpToGSharpTranslator
 
         /// <summary>
         /// Determines whether a C# property is a plain auto-property whose value
-        /// is set once at construction — a get-only auto-property (<c>{ get; }</c>)
-        /// or a get+init auto-property (<c>{ get; init; }</c>), body-less, no
-        /// <c>set</c> accessor. Both shapes have a backing field settable only in
-        /// the declaring type's constructor; they map to an init-only G#
-        /// auto-property (OD-T1; issue #946 for the init-accessor case).
+        /// is set only during construction — bodyless <c>{ get; }</c> or
+        /// <c>{ get; init; }</c>. Consumers requiring a truly getter-only
+        /// contract must also require the Roslyn property's SetMethod to be absent.
         /// </summary>
         private static bool IsGetOnlyAutoProperty(PropertyDeclarationSyntax prop)
         {

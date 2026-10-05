@@ -359,28 +359,13 @@ public sealed class StructSymbol : TypeSymbol
             // substitution-aware unimplemented-method computation so a class that
             // inherits a constructed generic base (e.g. `Derived : Base[int32]`)
             // and overrides every abstract member is correctly treated as concrete.
-            bool HasUnimplementedAbstractProperties()
-            {
-                var effectiveProperties = new Dictionary<string, PropertySymbol>();
-                foreach (var current in GetHierarchy())
-                {
-                    foreach (var property in current.Properties)
-                    {
-                        var key = property.Name + "|" + string.Join(",", property.Parameters.Select(p => p.Type.ToString()));
-                        effectiveProperties.TryAdd(key, property);
-                    }
-                }
-
-                return effectiveProperties.Values.Any(property => property.IsAbstract);
-            }
-
             // ADR-0195 / issue #4674: an explicitly `abstract` or `shared` class is
             // abstract whatever its members are.
             return IsDeclaredAbstract
                 || IsSharedClass
                 || (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
                 || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
-                || HasUnimplementedAbstractProperties()
+                || !GetUnimplementedAbstractPropertyAccessors().IsDefaultOrEmpty
                 || ExternalClrOverrideResolver.HasUnimplementedAbstractMembers(this);
         }
     }
@@ -1750,6 +1735,47 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         return builder.MoveToImmutable();
+    }
+
+    /// <summary>Gets the abstract source property accessors left unimplemented by actual overrides.</summary>
+    /// <returns>The owning types, properties and required accessor kinds.</returns>
+    internal ImmutableArray<(StructSymbol Owner, PropertySymbol Property, bool IsGetter)> GetUnimplementedAbstractPropertyAccessors()
+    {
+        var result = ImmutableArray.CreateBuilder<(StructSymbol Owner, PropertySymbol Property, bool IsGetter)>();
+        var effectiveAccessors = new Dictionary<string, bool>();
+        var requirements = new HashSet<string>();
+        foreach (var owner in GetHierarchy())
+        {
+            foreach (var property in owner.Properties)
+            {
+                var signature = property.Name + "|" + string.Join(",", property.Parameters.Select(parameter => parameter.Type.ToString()));
+                void Check(bool isGetter)
+                {
+                    var key = signature + (isGetter ? "|get" : "|set");
+                    if (property.IsOverride || property.IsAbstract)
+                    {
+                        effectiveAccessors.TryAdd(key, !property.IsAbstract);
+                    }
+
+                    if (property.IsAbstract && requirements.Add(key) && !effectiveAccessors[key])
+                    {
+                        result.Add((owner, property, isGetter));
+                    }
+                }
+
+                if (property.HasGetter)
+                {
+                    Check(isGetter: true);
+                }
+
+                if (property.HasSetter)
+                {
+                    Check(isGetter: false);
+                }
+            }
+        }
+
+        return result.ToImmutable();
     }
 
     /// <summary>

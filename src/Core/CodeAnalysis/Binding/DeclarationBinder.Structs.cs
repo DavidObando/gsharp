@@ -1985,6 +1985,24 @@ internal sealed partial class DeclarationBinder
                     }
                 }
 
+                var isExplicitAbstract = propSyntax.AbstractModifier != null;
+                if (isExplicitAbstract)
+                {
+                    isAutoProperty = false;
+                    if (!structSymbol.IsDeclaredAbstract
+                        || propSyntax.OpenModifier != null
+                        || propSyntax.HasExplicitInterfaceClause
+                        || propAccessibility == Accessibility.Private
+                        || (getterAccessibility == Accessibility.Private && hasGetter)
+                        || (setterAccessibility == Accessibility.Private && hasSetter)
+                        || propSyntax.OpenBraceToken == null
+                        || propSyntax.Accessors.IsDefaultOrEmpty
+                        || propSyntax.Accessors.Any(accessor => accessor.Body != null))
+                    {
+                        Diagnostics.ReportInvalidAbstractProperty(propSyntax.Identifier.Location, propName);
+                    }
+                }
+
                 // ADR-0118 / issue #944: there is no auto-indexer form — an
                 // indexer must declare a get and/or set accessor with a body.
                 if (isIndexer && isAutoProperty)
@@ -2006,7 +2024,7 @@ internal sealed partial class DeclarationBinder
                     writeAccessor: propSyntax.Accessors.FirstOrDefault(a => a.IsSetterOrInit));
 
                 // Validate: open only on open class
-                bool isVirtual = propSyntax.OpenModifier != null;
+                bool isVirtual = propSyntax.OpenModifier != null || isExplicitAbstract;
                 bool isOverride = propSyntax.OverrideModifier != null;
 
                 if (isVirtual && !structSymbol.IsOpen)
@@ -2036,6 +2054,13 @@ internal sealed partial class DeclarationBinder
                             // then returned a managed pointer through a slot the
                             // caller reads by value. The two directions are both
                             // wrong and both report the same signature mismatch.
+                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
+                        }
+                        else if ((hasGetter && !baseProp.HasGetter)
+                            || (hasSetter && (!baseProp.HasSetter || isInitOnly != baseProp.IsInitOnly))
+                            || (hasGetter && getterAccessibility != baseProp.GetterAccessibility)
+                            || (hasSetter && setterAccessibility != baseProp.SetterAccessibility))
+                        {
                             Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
                         }
                         else if (PropertyOverrideTypeConforms(structSymbol, baseProp, propType))
@@ -2189,7 +2214,7 @@ internal sealed partial class DeclarationBinder
                     // Issue #946: the write accessor is either `set` or `init`.
                     var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetterOrInit);
 
-                    if (hasGetter && getAccessor?.Body != null)
+                    if (hasGetter && (getAccessor?.Body != null || isExplicitAbstract))
                     {
                         // Issue #3223: a property override is itself overridable —
                         // the override-validation rule above accepts a base
@@ -2212,7 +2237,11 @@ internal sealed partial class DeclarationBinder
                             getterAccessibility,
                             receiverType: structSymbol,
                             isOpen: isVirtual || isOverride,
-                            isOverride: isOverride);
+                            isOverride: isOverride)
+                        {
+                            IsAbstract = isExplicitAbstract,
+                            OverriddenMethod = overriddenProperty?.GetterSymbol,
+                        };
 
                         // Issue #3879: the by-ref return lives on the ACCESSOR
                         // symbol as well as the property. The getter's body is
@@ -2223,10 +2252,10 @@ internal sealed partial class DeclarationBinder
                         getterSymbol.ReturnRefKind = propReturnRefKind;
                         getterSymbol.ExternalOverriddenMethod = propertySymbol.ExternalOverriddenGetter;
                         propertySymbol.GetterSymbol = getterSymbol;
-                        propertySymbol.GetterBodySyntax = getAccessor.Body;
+                        propertySymbol.GetterBodySyntax = getAccessor?.Body;
                     }
 
-                    if (hasSetter && setAccessor?.Body != null)
+                    if (hasSetter && (setAccessor?.Body != null || isExplicitAbstract))
                     {
                         var setterParam = new ParameterSymbol(setterParamName, propType);
                         var setterParameters = isIndexer
@@ -2245,11 +2274,15 @@ internal sealed partial class DeclarationBinder
                             setterAccessibility,
                             receiverType: structSymbol,
                             isOpen: isVirtual || isOverride,
-                            isOverride: isOverride);
+                            isOverride: isOverride)
+                        {
+                            IsAbstract = isExplicitAbstract,
+                            OverriddenMethod = overriddenProperty?.SetterSymbol,
+                        };
                         setterSymbol.IsInitOnlySetter = isInitOnly;
                         setterSymbol.ExternalOverriddenMethod = propertySymbol.ExternalOverriddenSetter;
                         propertySymbol.SetterSymbol = setterSymbol;
-                        propertySymbol.SetterBodySyntax = setAccessor.Body;
+                        propertySymbol.SetterBodySyntax = setAccessor?.Body;
                     }
                 }
 
@@ -3074,6 +3107,12 @@ internal sealed partial class DeclarationBinder
             var staticPropertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
             foreach (var propSyntax in syntax.SharedBlock.Properties)
             {
+                if (propSyntax.AbstractModifier != null)
+                {
+                    Diagnostics.ReportInvalidAbstractProperty(propSyntax.Identifier.Location, propSyntax.Identifier.ValueText);
+                    continue;
+                }
+
                 // ADR-0118 / issue #944: a `shared` (static) indexer has no CLR
                 // representation — report a clean diagnostic rather than crashing.
                 if (propSyntax.IsIndexer)

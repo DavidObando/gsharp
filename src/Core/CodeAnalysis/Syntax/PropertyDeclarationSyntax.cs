@@ -14,6 +14,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
     private SyntaxToken? staticModifier;
+    private SyntaxToken? abstractModifier;
     private SyntaxToken? explicitInterfaceOpenParenToken;
     private TypeClauseSyntax? explicitInterfaceType;
     private SyntaxToken? explicitInterfaceCloseParenToken;
@@ -76,6 +77,17 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
 
     /// <summary>Gets the optional <c>override</c> contextual keyword.</summary>
     public SyntaxToken? OverrideModifier { get; }
+
+    /// <summary>Gets or sets the explicit <c>abstract</c> property modifier.</summary>
+    public SyntaxToken? AbstractModifier
+    {
+        get => abstractModifier;
+        set
+        {
+            abstractModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>
     /// Gets or sets the <c>shared</c> contextual keyword token when this property

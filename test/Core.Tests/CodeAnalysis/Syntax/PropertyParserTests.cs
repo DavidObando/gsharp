@@ -14,6 +14,26 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// </summary>
 public class PropertyParserTests
 {
+    [Theory]
+    [InlineData("abstract", false)]
+    [InlineData("abstract override", true)]
+    [InlineData("override abstract", true)]
+    public void ExplicitAbstractProperty_PreservesModifierChildrenAndAccessorShape(string modifiers, bool overrides)
+    {
+        var tree = SyntaxTree.Parse($"package P\nabstract class Owner {{ public {modifiers} prop $package int32 {{ get; protected init; }} }}");
+        Assert.Empty(tree.Diagnostics);
+        var property = Assert.Single(Assert.Single(tree.Root.Members.OfType<StructDeclarationSyntax>()).Properties);
+        Assert.Equal("abstract", property.AbstractModifier?.Text);
+        Assert.Equal(overrides, property.OverrideModifier != null);
+        Assert.Null(property.OpenModifier);
+        Assert.Equal("package", property.Identifier.ValueText);
+        Assert.Equal(2, property.Accessors.Length);
+        Assert.Contains(property.AbstractModifier, property.GetChildren());
+        Assert.All(property.Accessors, accessor => Assert.Null(accessor.Body));
+        Assert.True(property.Accessors[1].IsInit);
+        Assert.Equal(SyntaxKind.ProtectedKeyword, property.Accessors[1].AccessibilityModifier?.Kind);
+    }
+
     [Fact]
     public void ParsesAutoProperty()
     {

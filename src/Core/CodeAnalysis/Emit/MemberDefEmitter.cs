@@ -606,6 +606,15 @@ internal sealed class MemberDefEmitter
                     }
                     else
                     {
+                        if (prop.IsInitOnly)
+                        {
+                            var isExternalInit = this.wellKnown.GetIsExternalInitTypeRef();
+                            if (!isExternalInit.IsNil)
+                            {
+                                r.CustomModifiers().AddModifier(isExternalInit, isOptional: false);
+                            }
+                        }
+
                         r.Void();
                     }
                 },
@@ -623,18 +632,35 @@ internal sealed class MemberDefEmitter
                 });
 
         var accessibility = isGetter ? prop.GetterAccessibility : prop.SetterAccessibility;
+        var firstParameter = this.nextParameterHandle();
+        for (var index = 0; index < prop.Parameters.Length; index++)
+        {
+            this.emitCtx.Metadata.AddParameter(
+                ParameterAttributes.None,
+                this.emitCtx.Metadata.GetOrAddString(prop.Parameters[index].Name),
+                sequenceNumber: index + 1);
+        }
+
+        if (!isGetter)
+        {
+            this.emitCtx.Metadata.AddParameter(
+                ParameterAttributes.None,
+                this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName),
+                sequenceNumber: prop.Parameters.Length + 1);
+        }
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: AccessibilityMap.ToMethodVisibility(accessibility)
                 | MethodAttributes.SpecialName
                 | MethodAttributes.HideBySig
                 | MethodAttributes.Virtual
                 | MethodAttributes.Abstract
-                | MethodAttributes.NewSlot,
+                | (prop.IsOverride ? 0 : MethodAttributes.NewSlot),
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString($"{(isGetter ? "get" : "set")}_{prop.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: -1,
-            parameterList: this.nextParameterHandle());
+            parameterList: firstParameter);
     }
 
     /// <summary>

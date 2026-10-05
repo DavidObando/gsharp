@@ -1099,6 +1099,12 @@ public sealed partial class DiagnosticBag
         string className)
     => Report(location, DiagnosticDescriptors.AbstractMethodRequiresOpenClass, methodName, className);
 
+    /// <summary>Reports an invalid explicit abstract property declaration.</summary>
+    /// <param name="location">The declaration location.</param>
+    /// <param name="propertyName">The property name.</param>
+    public void ReportInvalidAbstractProperty(TextLocation location, string propertyName)
+        => Report(location, DiagnosticDescriptors.InvalidAbstractProperty, propertyName);
+
     /// <summary>
     /// Reports GS0370 — ADR-0118 / issue #944: an indexer member
     /// (<c>prop this[…] T { … }</c>) was declared with no index parameters.

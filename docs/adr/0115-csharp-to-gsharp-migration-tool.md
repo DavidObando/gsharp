@@ -368,6 +368,13 @@ with a triage note.
 
 #### B.11 Members: fields, properties, constructors, statics, enums, attributes
 
+Issue #4765 / ADR-0197 adds explicit `abstract prop` and `abstract override
+prop` for Roslyn abstract property contracts, including positional record
+declarations. Abstract get/set requirements retain their accessor lists instead
+of being collapsed to the concrete auto-property shorthand. A get/init override
+with an initializer keeps its init accessor and privately initialized storage;
+only a truly getter-only override uses the getter-only backing-field lowering.
+
 - **Fields** require `var`/`let` (ADR-0067, §B.3).
 - **Properties** → `prop Name T` for auto-properties, with `{ get { … } set(v) { … } }` bodies for computed/custom accessors (ADR-0051, `samples/PropertyRef/Lib/Lib.gs`). `open prop`/`override prop` mirror method virtuality. A C# **`init` accessor** maps to the first-class G# `init` accessor (issue #946); an init-only auto-property `{ get; init; }` keeps its explicit accessors (it is *not* collapsed to the read-write `prop Name T` auto form, which would lose the init-only semantics). *(Superseded note: earlier revisions mapped C# `init` to G# `set` with an Info gap diagnostic because G# had no `init` accessor; that gap is now closed.)*
 - **Constructors** → `init(params) { … }`, chaining via `: Base(args)` (ADR-0065). C# primary constructors / positional records map to the G# primary-constructor `Name(params)` head.

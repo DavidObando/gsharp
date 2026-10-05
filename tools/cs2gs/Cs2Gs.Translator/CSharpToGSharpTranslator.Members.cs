@@ -3118,7 +3118,7 @@ public sealed partial class CSharpToGSharpTranslator
             // private backing field (seeded with the initializer above) plus a
             // computed arrow reading it.
             if ((lowersToBackingField
-                    || (isOverride && !isStatic && node.Initializer != null && IsGetOnlyAutoProperty(node)))
+                    || (isOverride && !isStatic && node.Initializer != null && symbol?.SetMethod == null && IsGetOnlyAutoProperty(node)))
                 && fieldKeywordBackingName != null)
             {
                 arrowBody = new ReturnStatement(new IdentifierExpression(fieldKeywordBackingName));
@@ -3127,7 +3127,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             // Interface members are implicitly abstract; canonical G# interface
             // members carry no `open` modifier (ADR-0115 §B.6).
-            bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
+            bool isAbstract = symbol?.IsAbstract == true && symbol.ContainingType.TypeKind != TypeKind.Interface;
+            bool isOpen = !isAbstract && this.IsMemberEmittedOpen(symbol, isOverride);
 
             // Issue #2362, ADR-0149: see the matching visibility comment in
             // TranslateMethod for the full rationale — a G# user-interface
@@ -3150,7 +3151,8 @@ public sealed partial class CSharpToGSharpTranslator
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfacePropertyType,
                 isRefReturn: isRefReturnProperty,
-                isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true);
+                isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true,
+                isAbstract: isAbstract);
 
             return (property, isStatic, backingField);
         }
@@ -3158,7 +3160,7 @@ public sealed partial class CSharpToGSharpTranslator
         private static bool IsExplicitPositionalAutoProperty(
             PropertyDeclarationSyntax node,
             IPropertySymbol symbol)
-            => symbol is { IsStatic: false, ContainingType.IsRecord: true }
+            => symbol is { IsStatic: false, IsAbstract: false, ContainingType.IsRecord: true }
                 && GetPrimaryConstructorParameterList(symbol.ContainingType)?.Parameters
                     .Any(parameter => parameter.Identifier.ValueText == symbol.Name) == true
                 && node.AccessorList?.Accessors.All(accessor => accessor.Body == null && accessor.ExpressionBody == null) == true;

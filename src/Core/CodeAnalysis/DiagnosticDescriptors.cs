@@ -614,6 +614,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor SharedClassCannotDeclare = new("GS0617", DiagnosticSeverity.Error, "Shared class '{0}' cannot declare {1}: every member of a shared class is shared, and it has no instance constructor, finalizer or nested 'shared' block (ADR-0195).");
     internal static readonly DiagnosticDescriptor SharedClassModifierConflict = new("GS0618", DiagnosticSeverity.Error, "'shared' cannot be combined with '{0}': a shared class is neither inheritable nor instantiable (ADR-0195).");
     internal static readonly DiagnosticDescriptor SharedClassCannotHaveBaseTypes = new("GS0619", DiagnosticSeverity.Error, "Shared class '{0}' cannot declare a base class or implement interfaces (ADR-0195).");
+    internal static readonly DiagnosticDescriptor InvalidAbstractProperty = new("GS0620", DiagnosticSeverity.Error, "Abstract property '{0}' requires an abstract class, a non-private bodyless accessor list, and no 'open' or explicit-interface modifier.");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

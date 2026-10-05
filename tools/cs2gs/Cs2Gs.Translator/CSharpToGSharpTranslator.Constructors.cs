@@ -315,7 +315,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             bool isOverride = symbol != null && symbol.IsOverride;
-            bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
+            bool isAbstract = symbol?.IsAbstract == true && symbol.ContainingType.TypeKind != TypeKind.Interface;
+            bool isOpen = !isAbstract && this.IsMemberEmittedOpen(symbol, isOverride);
 
             // ADR-0149: see the matching visibility comment in
             // TranslatePropertyDeclaration for the full rationale — a G#
@@ -339,7 +340,8 @@ public sealed partial class CSharpToGSharpTranslator
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfaceIndexerType,
                 isRefReturn: isRefReturnIndexer,
-                isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true);
+                isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true,
+                isAbstract: isAbstract);
 
             return (property, isStatic);
         }
@@ -371,6 +373,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             IReadOnlyList<AccessorDeclarationSyntax> declared = node.AccessorList.Accessors;
+            var propertySymbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
+            bool isContract = propertySymbol != null
+                && (propertySymbol.IsAbstract || propertySymbol.ContainingType?.TypeKind == TypeKind.Interface);
 
             bool anyBodied = declared.Any(a => a.Body != null || a.ExpressionBody != null);
             bool hasSet = declared.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration));
@@ -382,6 +387,7 @@ public sealed partial class CSharpToGSharpTranslator
             // init-only auto-property (get + init) keeps its explicit accessors so
             // the init-only semantics are preserved (issue #946).
             if (!anyBodied
+                && !isContract
                 && hasGet
                 && hasSet
                 && fieldKeywordBackingName == null
@@ -403,14 +409,10 @@ public sealed partial class CSharpToGSharpTranslator
             // carry no backing field and remain read-only contracts.
             if (!anyBodied && hasGet && !hasSet && !hasInit)
             {
-                var propSymbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
-                bool isContract = propSymbol != null &&
-                    (propSymbol.IsAbstract ||
-                        propSymbol.ContainingType?.TypeKind == TypeKind.Interface);
-                bool keepsGetOnlyShape = propSymbol != null
-                    && !propSymbol.IsStatic
-                    && !propSymbol.IsVirtual
-                    && !propSymbol.IsOverride;
+                bool keepsGetOnlyShape = propertySymbol != null
+                    && !propertySymbol.IsStatic
+                    && !propertySymbol.IsVirtual
+                    && !propertySymbol.IsOverride;
                 if (!isContract && keepsGetOnlyShape)
                 {
                     return new List<PropertyAccessor>

@@ -130,10 +130,10 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets a value indicating whether this property declares an abstract accessor slot.</summary>
     public bool IsAbstract =>
         MetadataIsAbstract
-        ?? (IsVirtual
+        ?? (Declaration?.AbstractModifier != null || (IsVirtual
             && !IsOverride
             && !IsAutoProperty
-            && ((HasGetter && GetterBodySyntax == null) || (HasSetter && SetterBodySyntax == null)));
+            && ((HasGetter && GetterBodySyntax == null) || (HasSetter && SetterBodySyntax == null))));
 
     /// <summary>Gets the setter parameter name (defaults to "value").</summary>
     public string SetterParameterName { get; }

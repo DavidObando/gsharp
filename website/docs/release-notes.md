@@ -16,16 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **cs2gs preserves nullable inferred locals inside lambdas** (issue #4826). Local nullability scans now stay in the declaring lambda block, so a `Record.Exception` result observed by `Assert.Null` remains nullable instead of gaining a checked `!!` assertion.
-
-- **Copies retain construction provenance** (issues #4776 and #4796). Data-struct `with` and `.copy(...)` copy existing storage without rerunning primary constructors or declaration initializers. Expression-tree source data-class copies use the exact virtual clone before ordered updates, retaining private/base state and invocation-time, once-only evaluation rather than constructing a fresh object.
-  - The emitted-PE baseline now records the intentional storage-copy IL in `DataStructErgonomics` and `WebsiteSwift`; real gsc/native C# oracles pin fresh-construction counts, strict IL, output and original/copy state. The other 158 sample entries and hash policy are unchanged.
-
-- **cs2gs converges linked-source nullability across repository projects** (issue #4817). Shared declarations are remapped by identical source path and content before assembly identity, so null evidence from any linking project produces one order-independent signature. The linked-output consistency check remains strict.
-
-- **Hierarchy-policy metadata has reviewed emitted-PE baselines** (PR #4808). The 48 affected sample hashes now include the intentional inheritance-mode transport; all other sample hashes and existing compile exceptions are preserved. Method bodies, fields, and CLR slots are unchanged. Generated-source replay checks producer configuration by its unique metadata key, without excluding hierarchy records.
-
-- **Imported G# sealed hierarchies retain their declaring-assembly restriction** (issue #4807, PR #4808). Class semantics metadata now records inheritance mode, so foreign plain/data subclasses cannot treat a sealed hierarchy's intentionally non-sealed CLR image as open, including closed and symbolic generics and reference assemblies. Native non-sealed records and same-compilation sealed hierarchies remain legal. Legacy marked G# producers must be rebuilt to establish external inheritance permission.
+- **Explicit abstract properties retain storage-free CLR contracts** (issues #4765 and #4715, ADR-0197). `abstract prop` and `abstract override prop` preserve getter/setter/init requirements, accessor visibility and virtual slots; concrete descendants must implement every required accessor. cs2gs propagates C# abstractness explicitly across ordinary classes and positional, partial and generic records, while initialized get/init overrides retain their backing storage and init accessor. Existing concrete open auto-properties and getter-only contracts are unchanged.
 
 - **cs2gs self-hosting guards remapped type arguments before storing them**
   (issue #4722). Failed sibling remapping returns before publishing a nullable
