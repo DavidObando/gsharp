@@ -131,6 +131,9 @@ member-reference emitter retains the symbolic generic owner. The self comparison
 calls that slot nonvirtually; the forwarding override explicitly implements the
 same slot. This includes cross-assembly symbolic generic record bases without
 changing imported-base admissibility or other record ABI features.
+Imported parameter names are retained when present; absent optional CLR name
+metadata uses the existing positional `arg{Position}` import fallback without
+changing the signature or its nullability.
 
 These signatures participate in ordinary member lookup, constructed-owner
 projection, MethodDef row planning and implementation/reference assembly

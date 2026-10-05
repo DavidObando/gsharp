@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
@@ -31,6 +32,127 @@ public sealed class Issue4777ImportedRecordEqualityTests
     public Issue4777ImportedRecordEqualityTests(ITestOutputHelper output)
     {
         this.output = output;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedRecord_OptionalParameterNamePreservesSignatureAndDispatch(bool unnamed)
+    {
+        Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"));
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        try
+        {
+            var root = CompileNative(fixture.Directory, "RootContracts", """
+                namespace OptionalName;
+                public record Root<T> {
+                    public int Tag;
+                    public Root(int tag) => Tag = tag;
+                }
+                """);
+            if (unnamed)
+            {
+                ClearTypedEqualsParameterName(root);
+            }
+
+            var reference = Path.Combine(fixture.Directory, "Contracts.ref.dll");
+            var library = fixture.Compile("""
+                package OptionalName
+                import System
+                public data class Leaf[T any](Extra int32) : Root[T](0), IEquatable[Leaf[T]]
+                """, "Contracts", executable: false,
+                "/assemblyname:Contracts", "/r:" + root, "/refout:" + reference, "/debug:portable");
+            var nativeDirectory = Path.Combine(fixture.Directory, "native");
+            Directory.CreateDirectory(nativeDirectory);
+            var native = CompileNative(nativeDirectory, "Contracts", """
+                [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+                namespace OptionalName;
+                public sealed record Leaf<T>(int Extra) : Root<T>(0);
+                """, root);
+            var consumer = CompileNative(fixture.Directory, "Consumer", """
+                using System;
+                using OptionalName;
+                public static class Consumer {
+                    public static string Run(string ignored) {
+                        var first = new Leaf<string>(7) { Tag = 41 };
+                        var same = new Leaf<string>(7) { Tag = 41 };
+                        var inherited = new Leaf<string>(7) { Tag = 42 };
+                        var derived = new Leaf<string>(8) { Tag = 41 };
+                        Root<string> receiver = first;
+                        Func<Root<string>?, bool> equals = receiver.Equals;
+                        foreach (var different in new[] { inherited, derived })
+                            if (first.Equals(different) || receiver.Equals(different)
+                                || ((object)first).Equals(different)
+                                || ((IEquatable<Root<string>>)first).Equals(different)
+                                || ((IEquatable<Leaf<string>>)first).Equals(different)
+                                || equals(different) || first == different || !(first != different))
+                                throw new Exception("optional-name difference");
+                        if (!first.Equals(same) || !receiver.Equals(same) || !equals(same)
+                            || first.Equals((Leaf<string>?)null) || equals(null))
+                            throw new Exception("optional-name equal/null control");
+                        return "optional-name/equal/inherited/derived/null";
+                    }
+                }
+                """, root, reference);
+            foreach (var image in new[] { root, native, library })
+            {
+                IlVerifier.Verify(image, new[] { root });
+            }
+
+            IlVerifier.Verify(consumer, new[] { root, native });
+            IlVerifier.Verify(consumer, new[] { root, library });
+            Assert.Equal("optional-name/equal/inherited/derived/null", RunConsumer(root, native, consumer, ""));
+            Assert.Equal("optional-name/equal/inherited/derived/null", RunConsumer(root, library, consumer, ""));
+            var assemblies = EmittedFixture.LoadTogether(root, library);
+            var leaf = (assemblies[1].GetType("OptionalName.Leaf`1")
+                ?? throw new InvalidOperationException("Missing optional-name leaf.")).MakeGenericType(typeof(string));
+            var directBase = leaf.BaseType ?? throw new InvalidOperationException("Missing optional-name base.");
+            var slot = leaf.GetMethod("Equals", new[] { directBase })
+                ?? throw new InvalidOperationException("Missing optional-name override.");
+            var parameter = Assert.Single(slot.GetParameters());
+            Assert.Equal(unnamed ? "arg0" : "other", parameter.Name);
+            Assert.Equal(NullabilityState.Nullable, new NullabilityInfoContext().Create(parameter).ReadState);
+            Assert.Equal(directBase, slot.GetBaseDefinition().DeclaringType);
+            Assert.Equal(EqualityRows(library), EqualityRows(reference));
+        }
+        finally
+        {
+            PreserveEvidence(fixture.Directory, unnamed ? "optional-unnamed" : "optional-named");
+        }
+    }
+
+    private static void ClearTypedEqualsParameterName(string path)
+    {
+        var original = File.ReadAllBytes(path);
+        var type = EmittedFixture.Load(original).GetType("OptionalName.Root`1")
+            ?? throw new InvalidOperationException("Missing native root.");
+        var slot = type.GetMethod("Equals", new[] { type })
+            ?? throw new InvalidOperationException("Missing native typed slot.");
+        using var pe = new PEReader(new MemoryStream(original));
+        var metadata = pe.GetMetadataReader();
+        var method = metadata.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(slot.MetadataToken & 0xFFFFFF));
+        var parameterHandle = Assert.Single(method.GetParameters(),
+            handle => metadata.GetParameter(handle).SequenceNumber == 1);
+        var rowSize = metadata.GetTableRowSize(TableIndex.Param);
+        var offset = pe.PEHeaders.MetadataStartOffset + metadata.GetTableMetadataOffset(TableIndex.Param)
+            + ((MetadataTokens.GetRowNumber(parameterHandle) - 1) * rowSize) + 4;
+        var mutated = (byte[])original.Clone();
+        Array.Clear(mutated, offset, rowSize - 4);
+        var differences = Enumerable.Range(0, original.Length).Where(i => original[i] != mutated[i]).ToArray();
+        Assert.NotEmpty(differences);
+        Assert.All(differences, index => Assert.InRange(index, offset, offset + rowSize - 5));
+        File.WriteAllBytes(path + ".named-original", original);
+        File.WriteAllText(path + ".name-mutation.json", JsonSerializer.Serialize(new
+        {
+            offset,
+            stringIndexWidth = rowSize - 4,
+            changedOffsets = differences,
+            originalSha256 = Convert.ToHexString(SHA256.HashData(original)),
+            mutatedSha256 = Convert.ToHexString(SHA256.HashData(mutated)),
+            mvid = slot.Module.ModuleVersionId,
+            token = slot.MetadataToken,
+        }));
+        File.WriteAllBytes(path, mutated);
     }
 
     [Theory]

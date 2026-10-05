@@ -74,7 +74,7 @@ internal static class DataEqualityMemberModel
             : MemberLookup.GetClrMethodParameterTypeSymbol(signatureType, importedMethod, 0);
         var parameterName = importedMethod is null
             ? "other"
-            : Invariant.Required(importedMethod.GetParameters()[0].Name, "record equality has a named parameter");
+            : importedMethod.GetParameters()[0].Name ?? $"arg{importedMethod.GetParameters()[0].Position}";
         return new FunctionSymbol(
             "Equals",
             ImmutableArray.Create(new ParameterSymbol(parameterName, parameterType)),
