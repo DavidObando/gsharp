@@ -284,6 +284,12 @@ public sealed class EmittedGsFile
     public string GSharpSource { get; }
 
     /// <summary>
+    /// Gets or sets the producing compilation's build-generated source evidence.
+    /// Authored sources (including checked-in generated code) have no payload.
+    /// </summary>
+    public GeneratedValidationSource GeneratedSource { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this file was emitted from a
     /// referenced (<c>ProjectReference</c>) project rather than the app under
     /// migration. Such files are included as compile inputs so the app's uses of
