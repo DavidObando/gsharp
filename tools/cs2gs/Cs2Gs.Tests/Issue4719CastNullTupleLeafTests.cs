@@ -3688,20 +3688,22 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                 public static int Reads;
                 public static int Decisions;
                 public static bool Missing;
+                public static bool NullInput;
                 public static bool Choose(bool choose) { Decisions++; return choose; }
                 #nullable {{(strictInput ? "enable" : "disable")}}
                 public static string{{(strictInput ? "?" : string.Empty)}} Input {
-                    get { Reads++; return Missing ? {{(strictInput ? "null" : "\"miss\"")}} : "keep"; }
+                    get { Reads++; return {{(strictInput ? "NullInput ? null :" : string.Empty)}} Missing ? "miss" : "keep"; }
                 }
                 #nullable disable
                 public {{(contract == "base" ? "override " : string.Empty)}}(NullableResultBox Value, int Code) Read(bool choose) =>
                     (Choose(choose) ? Input : new NullableResultBox(), 1);
             }
             public static class Obj {
-                public static bool Check(bool choose, bool missing) {
+                public static bool Check(bool choose, bool missing, bool nullInput) {
                     Probe.Reset();
                     Rows.Reads = Rows.Decisions = 0;
                     Rows.Missing = missing;
+                    Rows.NullInput = nullInput;
                     {{inherited}} rows = new Rows();
                     bool nil = false;
                     bool asserted = false;
@@ -3711,14 +3713,16 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                         if (row.Code != 1) { return false; }
                     }
                     catch (NullReferenceException) { asserted = true; }
-                    bool expectedAssertion = choose && missing && {{(strict || strictInput ? "true" : "false")}};
+                    bool rejectedInput = choose && nullInput && {{(strictInput ? "true" : "false")}};
+                    bool expectedAssertion = rejectedInput || choose && missing && {{(strict ? "true" : "false")}};
                     return asserted == expectedAssertion && (asserted || nil == (choose && missing))
                         && Rows.Decisions == 1 && Rows.Reads == (choose ? 1 : 0)
-                        && Probe.Calls == (choose && !({{(strictInput ? "true" : "false")}} && missing) ? 1 : 0);
+                        && Probe.Calls == (choose && !rejectedInput ? 1 : 0);
                 }
                 public static void Main() {
-                    bool valid = Check(false, false) && Check(true, false)
-                        && Check(false, true) && Check(true, true);
+                    bool valid = Check(false, false, false) && Check(true, false, false)
+                        && Check(false, true, false) && Check(true, true, false)
+                        && Check(false, true, true) && Check(true, true, true);
                     Console.WriteLine(valid ? 15 : -1);
                 }
             }
