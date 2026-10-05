@@ -3470,15 +3470,12 @@ public sealed partial class CSharpToGSharpTranslator
         // omitted defaults are materialized at translated call sites.
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
         {
-            // `DescendantNodes()` excludes the node itself — local functions that
-            // ARE a top-level statement of the block must be included explicitly;
-            // local functions nested inside other local functions' bodies must be
-            // included too (mutual recursion crosses that nesting — issue #3399's
-            // ProjectRegionsForDefiniteReturn shape: a nested helper calling its
-            // outer siblings).
+            // Callable storage belongs to this declaring block's activation.
+            // Descendant helpers are registered by their own block, never folded
+            // into an enclosing cycle's shared slots (#4802). Dependency scans
+            // still inspect nested bodies for references to these siblings.
             var localFunctionStatements = statements
-                .SelectMany(statement => statement.DescendantNodes().Prepend(statement))
-                .Distinct()
+                .OfType<LocalFunctionStatementSyntax>()
                 .ToList();
             var functions = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
             var excluded = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
@@ -3698,9 +3695,7 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                // An outer block's registration (which walks descendant local
-                // functions) is always processed before the nested block's own, so
-                // a fully-registered group here is a re-discovery — keep the first.
+                // A registering caller may revisit this same statement sequence.
                 if (group.All(f => this.state.RecursiveLocalFunctionGroups.ContainsKey(f.Symbol)))
                 {
                     continue;
