@@ -85,3 +85,16 @@ sample and native Developer contract to pin one clone before the Years update,
 unchanged Name storage, original/copy identity and values, and nullable-label
 output. Together these corrections replace exactly two hashes; every other
 baseline byte remains unchanged.
+
+The value-copy follow-up changes only `samples/DataStructErgonomics.gs` and
+`samples/WebsiteSwift.gs` in the complete 160-entry inventory. Their copies now
+load existing `Point` storage instead of reconstructing it with `initobj`.
+Only the entry-point IL and its larger local signature substantively change;
+shifted metadata blob indices still reference identical signatures and
+attributes. `Issue4776ValueCopySampleEmitTests` uses both actual samples and
+explicitly Roslyn-compiled native record structs to pin fresh-construction
+counts, strict whole-image IL verification, output and original/copy state.
+The unchanged test DLL fails precisely on the extra constructions with the
+pre-copy-fix compiler and passes after restoration. All other 158 entries,
+including the five existing null entries, and the hashing policy remain
+unchanged.
