@@ -15,6 +15,140 @@ namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue4755GenericStructInitializerEmitTests
 {
+    [Theory]
+    [InlineData("readonly managed[int32]", "false", false)]
+    [InlineData("managed[int32]", "false", false)]
+    [InlineData("[1]readonly managed[int32]", "false", false)]
+    [InlineData("(readonly managed[int32], int32)", "false", false)]
+    [InlineData("readonly managed[int32]", "", false)]
+    [InlineData("readonly managed[int32]", "false", true)]
+    public void ExplicitConstructedConstructors_RejectRequiredDeclarationDefaults(string argumentType, string arguments, bool nested)
+    {
+        InDirectory(directory =>
+        {
+            var source = $$"""
+                package ExplicitDefaults4755
+                struct S[T](Value T) {
+                    private var Copy T = default
+                    public init(flag bool) { }
+                    public init() { }
+                }
+                {{(nested ? "struct Outer[T] { private var Inner S[T] = S[T](false)\npublic init(flag bool) { } }" : string.Empty)}}
+                func Bad() { let item = {{(nested ? "Outer" : "S")}}[{{argumentType}}]({{arguments}}) }
+                """;
+            var result = TryCompile(directory, source, typeof(Gsharp.Values.ReadOnlyManagedRef<>).Assembly.Location);
+            Assert.Equal(1, result.Code);
+            Assert.Contains("default would synthesize a null non-null managed-reference slot", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", result.Output, StringComparison.Ordinal);
+            Assert.False(File.Exists(result.AssemblyPath));
+            var offset = source.IndexOf("default", StringComparison.Ordinal);
+            Assert.True(offset >= 0);
+            var line = source[..offset].Count(character => character == '\n') + 1;
+            var column = offset - source.LastIndexOf('\n', offset);
+            Assert.Contains($"Fixture.gs({line},{column},{line},{column + "default".Length}): error GS0604:", result.Output, StringComparison.Ordinal);
+            Assert.Single(result.Output.Split('\n'), text => text.Contains("error GS0604:", StringComparison.Ordinal));
+        });
+    }
+
+    [Fact]
+    public void ExplicitConstructedConstructors_PreserveLegalDefaultsAndBodyAssignments()
+    {
+        InDirectory(directory =>
+        {
+            var values = typeof(Gsharp.Values.ReadOnlyManagedRef<>).Assembly.Location;
+            var native = EmitCSharp(directory, "NativeExplicitDefaults4755", """
+                namespace NativeExplicitDefaults4755;
+                public static class Effects
+                {
+                    public static string Trace = "";
+                    public static bool Argument() { Trace += "A"; return false; }
+                    public static int Observe() { Trace += "B"; return 9; }
+                }
+                public static class Factory
+                {
+                    public static Gsharp.Values.ReadOnlyManagedRef<int> Make() =>
+                        Gsharp.Values.ReadOnlyManagedRef<int>.FromArray(new[] { 7 }, 0);
+                    public static bool MissingReference(string value) => value == null;
+                }
+                public struct S<T>(T value)
+                {
+                    public T Value = value;
+                    private T copy = default;
+                    public S(bool flag) : this(default(T)) { Effects.Trace += "C"; }
+                    public T Read() => copy;
+                }
+                public struct Assigned<T>
+                {
+                    public T Value;
+                    public Assigned(T value) { Value = value; Effects.Trace += "R"; }
+                }
+                public struct Concrete
+                {
+                    private int copy = Effects.Observe();
+                    public Concrete(bool flag) { Effects.Trace += "N"; }
+                    public int Read() => copy;
+                }
+                public static class Oracle
+                {
+                    public static string Run()
+                    {
+                        var scalar = new S<int>(Effects.Argument());
+                        var text = new S<string>(false);
+                        var nullable = new S<string>(false);
+                        var nullableHandle = new S<Gsharp.Values.ReadOnlyManagedRef<int>>(false);
+                        var assigned = new Assigned<Gsharp.Values.ReadOnlyManagedRef<int>>(Factory.Make());
+                        var ordinary = new S<int>(7);
+                        var concrete = new Concrete(false);
+                        return scalar.Read() + "/" + Factory.MissingReference(text.Read()) + "/" +
+                            (nullable.Read() == null) + "/" + (nullableHandle.Read() == null) + "/" +
+                            assigned.Value.Borrow() + "/" + ordinary.Read() + "/" + ordinary.Value + "/" +
+                            concrete.Read() + "/" + Effects.Trace;
+                    }
+                }
+                """, values);
+            const string expected = "0/True/True/True/7/0/7/9/ACCCCRBN";
+            Assert.Equal(expected, Invoke(EmittedFixture.LoadTogether(values, native).Last(), "NativeExplicitDefaults4755.Oracle"));
+            IlVerifier.Verify(native, new[] { values });
+            var emitted = Compile(directory, """
+                package ExplicitDefaults4755Controls
+                import NativeExplicitDefaults4755
+                struct S[T](Value T) {
+                    private var Copy T = default
+                    public init(flag bool) { Effects.Trace += "C" }
+                    public func Read() T -> Copy
+                }
+                struct Assigned[T] {
+                    public var Value T
+                    public init(value T) { Value = value Effects.Trace += "R" }
+                }
+                struct Concrete {
+                    private var Copy int32 = Effects.Observe()
+                    public init(flag bool) { Effects.Trace += "N" }
+                    public func Read() int32 -> Copy
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            let scalar = S[int32](Effects.Argument())
+                            let text = S[string](false)
+                            let nullable = S[string?](false)
+                            let nullableHandle = S[readonly managed[int32]?](false)
+                            let assigned = Assigned[readonly managed[int32]](Factory.Make())
+                            let ordinary = S[int32]{Value: 7}
+                            let concrete = Concrete(false)
+                            return scalar.Read().ToString() + "/" + Factory.MissingReference(text.Read()).ToString() + "/" +
+                                (nullable.Read() == nil).ToString() + "/" + (nullableHandle.Read() == nil).ToString() + "/" +
+                                (*assigned.Value).ToString() + "/" + ordinary.Read().ToString() + "/" + ordinary.Value.ToString() + "/" +
+                                concrete.Read().ToString() + "/" + Effects.Trace
+                        }
+                    }
+                }
+                """, native, values);
+            IlVerifier.Verify(emitted, new[] { native, values });
+            AssertNativeConsumer(directory, emitted, "ExplicitDefaults4755Controls.Api", expected, native, values);
+        });
+    }
+
     [Fact]
     public void ImportedPrimaryMagicCollections_RetainClrLiteralInitialization()
     {

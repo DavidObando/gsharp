@@ -483,6 +483,21 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     private void CheckConstruction(StructSymbol type, BoundExpression node, IEnumerable<FieldSymbol?> initialized, bool explicitConstructor)
     {
         type = this.initializerOwner?.SubstituteMemberType(type) as StructSymbol ?? type;
+
+        // Declaration expressions also execute in authored constructors.
+        // Check their defaults in the actual constructed owning scope first.
+        if (!ReferenceEquals(type, type.Definition) && this.analyzedInitializerConstructions.Add(type))
+        {
+            var previousOwner = this.initializerOwner;
+            this.initializerOwner = type;
+            foreach (var initializer in type.Definition.InstanceFieldInitializers.Values)
+            {
+                this.VisitExpression(initializer);
+            }
+
+            this.initializerOwner = previousOwner;
+        }
+
         if (explicitConstructor || (type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty)
             && node is not BoundStructLiteralExpression { StructType.NeedsSynthesizedValueStructDefaultCtor: true }))
         {
@@ -510,20 +525,6 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             {
                 this.Report(node, $"construction must initialize non-null managed-reference field '{field.Name}'");
             }
-        }
-
-        // Declaration expressions stay in their owning scope. Query their
-        // missing defaults through the same substitution as constructed fields.
-        if (!ReferenceEquals(type, type.Definition) && this.analyzedInitializerConstructions.Add(type))
-        {
-            var previousOwner = this.initializerOwner;
-            this.initializerOwner = type;
-            foreach (var initializer in type.Definition.InstanceFieldInitializers.Values)
-            {
-                this.VisitExpression(initializer);
-            }
-
-            this.initializerOwner = previousOwner;
         }
     }
 
