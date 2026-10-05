@@ -4366,7 +4366,7 @@ public sealed partial class CSharpToGSharpTranslator
             bool isBranchArm = false;
             while (true)
             {
-                if (current.Parent is ParenthesizedExpressionSyntax)
+                if (current.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
                 {
                     current = current.Parent;
                 }
@@ -4392,6 +4392,16 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     break;
                 }
+            }
+
+            if (isBranchArm
+                && this.GetUserDefinedConversionInputOperator(
+                    (ExpressionSyntax)current,
+                    this.context.GetTypeInfo((ExpressionSyntax)current).ConvertedType,
+                    out _) is { Parameters.Length: 1 } consumer)
+            {
+                IParameterSymbol parameter = consumer.Parameters[0];
+                return (parameter.Type, parameter);
             }
 
             if (current.Parent is YieldStatementSyntax

@@ -1208,7 +1208,7 @@ internal static class ObliviousNullabilityAnalyzer
                 symbol,
                 path,
                 siblingCompilations,
-                new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance))))
+                new HashSet<TupleElementQuery>(TupleElementQueryComparer.ContractInstance))))
         {
             return false;
         }
@@ -1297,7 +1297,7 @@ internal static class ObliviousNullabilityAnalyzer
 
         foreach ((TupleElementKey target, TupleElementKey source) in result.TupleContractEdges)
         {
-            if (TupleElementKeyComparer.Instance.Equals(target, key)
+            if (TupleContractKeyComparer.Instance.Equals(target, key)
                 && IsTupleContractFixedCore(
                     compilation, source.ContractSymbol, source.ContractPath, siblingCompilations, visited))
             {
@@ -2085,7 +2085,7 @@ internal static class ObliviousNullabilityAnalyzer
     private static TaintResult Compute(Compilation compilation)
     {
         var tainted = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-        var tupleTainted = new HashSet<TupleElementKey>(TupleElementKeyComparer.Instance);
+        var tupleTainted = new HashSet<TupleElementKey>(TupleContractKeyComparer.Instance);
 
         // Transitive edges: (target <- source). If `source` is tainted then
         // `target` becomes tainted. Both are canonicalized declaration symbols
@@ -2168,7 +2168,7 @@ internal static class ObliviousNullabilityAnalyzer
 
         // A signature component shares one contract, even when only one
         // implementation inherits a fixed non-null metadata position.
-        var fixedTupleContracts = new HashSet<TupleElementKey>(TupleElementKeyComparer.Instance);
+        var fixedTupleContracts = new HashSet<TupleElementKey>(TupleContractKeyComparer.Instance);
         foreach ((TupleElementKey target, TupleElementKey source) in tupleContractEdges)
         {
             FreezeNonNullableContract(target);
@@ -2191,7 +2191,9 @@ internal static class ObliviousNullabilityAnalyzer
 
         tupleEdges.AddRange(tupleContractEdges);
 
+        // Filter each declaration's seeds before sharing projected type-argument evidence.
         tupleTainted.RemoveWhere(key => !CanPromote(key));
+        tupleTainted = new HashSet<TupleElementKey>(tupleTainted, TupleElementKeyComparer.Instance);
         tupleEdges.RemoveAll(edge => !CanPromote(edge.Target));
         tupleScalarEdges.RemoveAll(edge => !CanPromote(edge.Target));
 
@@ -2220,7 +2222,7 @@ internal static class ObliviousNullabilityAnalyzer
 
             foreach ((ISymbol target, TupleElementKey source) in scalarTupleEdges)
             {
-                if (!tainted.Contains(target) && tupleTainted.Contains(source))
+                if (!tainted.Contains(target) && CanPromote(source) && tupleTainted.Contains(source))
                 {
                     tainted.Add(target);
                     changed = true;
@@ -2229,7 +2231,7 @@ internal static class ObliviousNullabilityAnalyzer
 
             foreach ((TupleElementKey target, TupleElementKey source) in tupleEdges)
             {
-                if (!tupleTainted.Contains(target) && tupleTainted.Contains(source))
+                if (!tupleTainted.Contains(target) && CanPromote(source) && tupleTainted.Contains(source))
                 {
                     tupleTainted.Add(target);
                     changed = true;
@@ -6172,6 +6174,28 @@ internal static class ObliviousNullabilityAnalyzer
         }
     }
 
+    private sealed class TupleContractKeyComparer : IEqualityComparer<TupleElementKey>
+    {
+        public static TupleContractKeyComparer Instance { get; } = new();
+
+        public bool Equals(TupleElementKey x, TupleElementKey y) =>
+            SymbolEqualityComparer.Default.Equals(Owner(x), Owner(y))
+                && string.Equals(x.ContractPath, y.ContractPath, System.StringComparison.Ordinal);
+
+        public int GetHashCode(TupleElementKey obj)
+        {
+            ISymbol owner = Owner(obj);
+            return System.HashCode.Combine(
+                owner == null ? 0 : SymbolEqualityComparer.Default.GetHashCode(owner),
+                obj.ContractPath);
+        }
+
+        private static ISymbol Owner(TupleElementKey key) =>
+            OwningMember(key.ContractSymbol) is INamedTypeSymbol named
+                ? NormalizeContractTupleNames(named)
+                : OwningMember(key.ContractSymbol);
+    }
+
     private sealed class ScalarQueryComparer : IEqualityComparer<ScalarQuery>
     {
         public static ScalarQueryComparer Instance { get; } = new();
@@ -6193,16 +6217,25 @@ internal static class ObliviousNullabilityAnalyzer
 
     private sealed class TupleElementQueryComparer : IEqualityComparer<TupleElementQuery>
     {
-        public static TupleElementQueryComparer Instance { get; } = new();
+        private readonly IEqualityComparer<TupleElementKey> keys;
+
+        private TupleElementQueryComparer(IEqualityComparer<TupleElementKey> keys)
+        {
+            this.keys = keys;
+        }
+
+        public static TupleElementQueryComparer Instance { get; } = new(TupleElementKeyComparer.Instance);
+
+        public static TupleElementQueryComparer ContractInstance { get; } = new(TupleContractKeyComparer.Instance);
 
         public bool Equals(TupleElementQuery x, TupleElementQuery y) =>
             ReferenceEquals(x.Compilation, y.Compilation)
-                && TupleElementKeyComparer.Instance.Equals(x.Key, y.Key);
+                && this.keys.Equals(x.Key, y.Key);
 
         public int GetHashCode(TupleElementQuery obj) =>
             System.HashCode.Combine(
                 System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj.Compilation),
-                TupleElementKeyComparer.Instance.GetHashCode(obj.Key));
+                this.keys.GetHashCode(obj.Key));
     }
 
     private sealed class TaintResult

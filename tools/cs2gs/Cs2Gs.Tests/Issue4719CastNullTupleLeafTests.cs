@@ -2861,6 +2861,215 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void TupleContractConsumer_IntermediateResultUsesImmediateOperatorInput(
+        bool switchArm,
+        bool strictInput,
+        bool generic)
+    {
+        string fixture = this.EmitFixture();
+        string envelope = (strictInput ? "StrictConsumerEnvelope" : "ConsumerEnvelope")
+            + (generic ? "<string>" : string.Empty);
+        string branch = switchArm
+            ? "Choose(choose) switch { true => Value, false => new NullableResultBox() }"
+            : "Choose(choose) ? Value : new NullableResultBox()";
+        if (generic)
+        {
+            branch = $"{(switchArm ? "checked" : "unchecked")}(({branch}))";
+        }
+
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                public static int Decisions;
+                public static string Value { get { Reads++; return Missing ? "miss" : "keep"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static {{envelope}} Make(bool choose) => {{branch}};
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = Decisions = 0;
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool observed = false;
+                    try { observed = Make(choose).Missing; }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool expectedAssertion = {{(strictInput ? "choose && missing" : "false")}};
+                    return asserted == expectedAssertion
+                        && (asserted || observed == (choose && missing))
+                        && Reads == (choose ? 1 : 0) && Decisions == 1
+                        && Probe.Calls == (asserted ? 1 : choose ? 2 : 1);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractConsumer_FinalResultRetainsItsOwnFixedContract(bool switchArm)
+    {
+        string fixture = this.EmitFixture();
+        string branch = switchArm
+            ? "Choose(choose) switch { true => Value, false => new NullableResultBox() }"
+            : "Choose(choose) ? Value : new NullableResultBox()";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                public static int Decisions;
+                public static string Value { get { Reads++; return Missing ? "miss" : "keep"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                #nullable enable
+                public static NullableConsumerEnvelope Make(bool choose) => {{branch}};
+                #nullable disable
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = Decisions = 0;
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Make(choose) != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    return asserted == (choose && missing) && (asserted || present)
+                        && Reads == (choose ? 1 : 0) && Decisions == 1
+                        && Probe.Calls == (choose ? 2 : 1);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TupleContractConsumer_UnrelatedGenericMembersDoNotShareFixedLocks(
+        bool overload,
+        bool fixedSeed)
+    {
+        (string printed, string fixture) =
+            this.TranslateUnrelatedGenericMemberContracts(nativeContract: false, overload, fixedSeed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TupleContractConsumer_NativeGenericDeclarationsKeepSeparateLockIdentity(
+        bool overload,
+        bool fixedSeed)
+    {
+        // Native open-generic tuple implementation matching is independently tracked in #4626.
+        this.TranslateUnrelatedGenericMemberContracts(nativeContract: true, overload, fixedSeed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractConsumer_SiblingGenericMembersKeepSeparateLockIdentity(bool overload)
+    {
+        string fixture = this.EmitFixture();
+        string optional = overload ? "Required" : "Optional";
+        string[] sources =
+        {
+            $$"""
+                #nullable enable
+                public interface IStrictRows<T> where T : class {
+                    (T Value, int Code) Required(T value);
+                }
+                #nullable disable
+                public sealed class Rows<T> : IStrictRows<T> where T : class {
+                    public (T Value, int Code) Required(T value) => (value, 1);
+                    public (T Value, int Code) {{optional}}(T value, bool missing) =>
+                        (missing ? null : value, 2);
+                }
+                """,
+            $$"""
+                using System;
+                public static class Obj {
+                    public static void Main() {
+                        var rows = new Rows<string>();
+                        IStrictRows<string> strict = rows;
+                        Console.WriteLine(rows.{{optional}}("keep", false).Item1 == "keep"
+                            && rows.{{optional}}("keep", true).Item1 == null
+                            && strict.Required("keep").Item1 == "keep" ? 15 : -1);
+                    }
+                }
+                """,
+        };
+        string[] printed = this.AssertSplitProjectsVerifyAndRun(sources, fixture, reverseOrder: false);
+        Assert.Contains($"{optional}(value T, missing bool) (Value T?, Code int32)", printed[0]);
+        Assert.Contains("Required(value T) (Value T, Code int32)", printed[0]);
+    }
+
+    private (string Printed, string Fixture) TranslateUnrelatedGenericMemberContracts(
+        bool nativeContract,
+        bool overload,
+        bool fixedSeed)
+    {
+        string fixture = this.EmitFixture();
+        string contract = nativeContract ? "IStrictGenericRows<T>" : "IStrictRows<T>";
+        string declaration = nativeContract ? string.Empty : """
+            #nullable enable
+            public interface IStrictRows<T> where T : class {
+                (T Value, int Code) Required(T value);
+            }
+            #nullable disable
+            """;
+        string optional = overload ? "Required" : "Optional";
+        string requiredValue = fixedSeed ? "TupleContractSources.Missing(value)" : "value";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            {{declaration}}
+            public sealed class Rows<T> : {{contract}} where T : class {
+                public (T Value, int Code) Required(T value) => ({{requiredValue}}, 1);
+                public (T Value, int Code) {{optional}}(T value, bool missing) =>
+                    (missing ? null : value, 2);
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    var rows = new Rows<string>();
+                    bool optional = rows.{{optional}}("keep", false).Value == "keep"
+                        && rows.{{optional}}("keep", true).Value == null;
+                    bool asserted = false;
+                    bool required = false;
+                    try { required = (({{contract.Replace("<T>", "<string>", StringComparison.Ordinal)}})rows).Required("keep").Value == "keep"; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(optional && asserted == {{(fixedSeed ? "true" : "false")}}
+                        && (asserted || required) && Probe.Calls == {{(fixedSeed ? "1" : "0")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains($"{optional}(value T, missing bool) (Value T?, Code int32)", printed);
+        Assert.Contains("Required(value T) (Value T, Code int32)", printed);
+        return (printed, fixture);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void TupleContractConversion_NullableDestinationPreservesImplicitOperator(bool switchArm)
@@ -3421,6 +3630,53 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
                         public static implicit operator CastOutputBox?(CastInputBox value) {
                             Probe.Calls++;
                             return new CastOutputBox();
+                        }
+                    }
+                    public sealed class ConsumerEnvelope {
+                        private ConsumerEnvelope(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator ConsumerEnvelope(NullableResultBox? value) {
+                            Probe.Calls++;
+                            return new ConsumerEnvelope(value == null);
+                        }
+                    }
+                    public sealed class ConsumerEnvelope<T> {
+                        private ConsumerEnvelope(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator ConsumerEnvelope<T>(NullableResultBox? value) {
+                            Probe.Calls++;
+                            return new ConsumerEnvelope<T>(value == null);
+                        }
+                    }
+                    public sealed class StrictConsumerEnvelope {
+                        private StrictConsumerEnvelope(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator StrictConsumerEnvelope(NullableResultBox value) {
+                            Probe.Calls++;
+                            return new StrictConsumerEnvelope(value == null);
+                        }
+                    }
+                    public sealed class StrictConsumerEnvelope<T> {
+                        private StrictConsumerEnvelope(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator StrictConsumerEnvelope<T>(NullableResultBox value) {
+                            Probe.Calls++;
+                            return new StrictConsumerEnvelope<T>(value == null);
+                        }
+                    }
+                    public sealed class NullableConsumerEnvelope {
+                        public static implicit operator NullableConsumerEnvelope?(NullableResultBox? value) {
+                            Probe.Calls++;
+                            return value == null ? null : new NullableConsumerEnvelope();
+                        }
+                    }
+                    public interface IStrictGenericRows<T> where T : class {
+                        (T Value, int Code) Required(T value);
+                    }
+                    public static class TupleContractSources {
+                        public static T? Missing<T>(T value) where T : class {
+                            Probe.Calls++;
+                            return null;
                         }
                     }
                     public sealed class StrictInputBox<T> where T : class {
