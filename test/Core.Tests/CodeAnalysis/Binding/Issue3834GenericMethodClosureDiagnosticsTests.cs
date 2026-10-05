@@ -27,8 +27,8 @@ public class Issue3834GenericMethodClosureDiagnosticsTests
     [Fact]
     public void RuntimeConstraintFailure_RemainsOrdinaryCandidateRejection()
     {
-        MethodInfo open = typeof(ConstraintFixture).GetMethod(
-            nameof(ConstraintFixture.Dependent),
+        MethodInfo open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3834GenericMethodClosureDiagnosticsTests+ConstraintFixture").GetMethod(
+            "Dependent",
             BindingFlags.Public | BindingFlags.Static);
 
         var result = ClrOverloadResolution.Resolve(
@@ -42,8 +42,8 @@ public class Issue3834GenericMethodClosureDiagnosticsTests
     [Fact]
     public void RuntimeByRefLikeArgument_RemainsOrdinaryCandidateRejection()
     {
-        MethodInfo open = typeof(ConstraintFixture).GetMethod(
-            nameof(ConstraintFixture.Identity),
+        MethodInfo open = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3834GenericMethodClosureDiagnosticsTests+ConstraintFixture").GetMethod(
+            "Identity",
             BindingFlags.Public | BindingFlags.Static);
 
         var result = ClrOverloadResolution.Resolve(
@@ -128,7 +128,7 @@ public class Issue3834GenericMethodClosureDiagnosticsTests
     [Fact]
     public void ErasedSymbol_DoesNotHideCrossContextConcreteArgument()
     {
-        byte[] image = File.ReadAllBytes(typeof(Issue3834GenericMethodClosureDiagnosticsTests).Assembly.Location);
+        byte[] image = NativeMetadataFixtures.Image;
         var firstContext = new IsolatedLoadContext("issue3834-mixed-first");
         var secondContext = new IsolatedLoadContext("issue3834-mixed-second");
 
@@ -136,10 +136,10 @@ public class Issue3834GenericMethodClosureDiagnosticsTests
         {
             Assembly firstAssembly = Load(firstContext, image);
             Assembly secondAssembly = Load(secondContext, image);
-            Type firstFixture = GetRequiredType(firstAssembly, typeof(ConstraintFixture).FullName);
-            Type secondDerived = GetRequiredType(secondAssembly, typeof(CrossContextDerived).FullName);
+            Type firstFixture = GetRequiredType(firstAssembly, NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3834GenericMethodClosureDiagnosticsTests+ConstraintFixture").FullName);
+            Type secondDerived = GetRequiredType(secondAssembly, NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3834GenericMethodClosureDiagnosticsTests+CrossContextDerived").FullName);
             MethodInfo open = firstFixture.GetMethod(
-                nameof(ConstraintFixture.Mixed),
+                "Mixed",
                 BindingFlags.Public | BindingFlags.Static);
             var erased = new TypeParameterSymbol(
                 "TErased",
@@ -157,7 +157,7 @@ public class Issue3834GenericMethodClosureDiagnosticsTests
                     explicitTypeArgs: new[] { typeof(object), secondDerived },
                     recoverTypeArgSymbols: (_, _) => recovered));
 
-            AssertInternalDiagnostic(exception, nameof(ConstraintFixture.Mixed));
+            AssertInternalDiagnostic(exception, "Mixed");
         }
         finally
         {
@@ -203,28 +203,5 @@ public class Issue3834GenericMethodClosureDiagnosticsTests
         }
 
         protected override Assembly Load(AssemblyName assemblyName) => null;
-    }
-
-    public static class ConstraintFixture
-    {
-        public static void Dependent<TBase, TDerived>()
-            where TDerived : TBase
-        {
-        }
-
-        public static T Identity<T>(T value) => value;
-
-        public static void Mixed<TErased, TConcrete>()
-            where TConcrete : CrossContextBase
-        {
-        }
-    }
-
-    public class CrossContextBase
-    {
-    }
-
-    public sealed class CrossContextDerived : CrossContextBase
-    {
     }
 }

@@ -178,12 +178,12 @@ public class Issue1482NumericWideningLatticeTests
         // int64 is the better conversion target than double for a nint source.
         Assert.True(ClrOverloadResolution.CompareNumericTargets(typeof(long), typeof(double), typeof(nint)) < 0);
 
-        var int64Overload = typeof(NIntFixture).GetMethod(nameof(NIntFixture.TakeInt64), BindingFlags.Public | BindingFlags.Static);
-        var doubleOverload = typeof(NIntFixture).GetMethod(nameof(NIntFixture.TakeDouble), BindingFlags.Public | BindingFlags.Static);
+        var int64Overload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue1482NumericWideningLatticeTests+NIntFixture").GetMethod("TakeInt64", BindingFlags.Public | BindingFlags.Static);
+        var doubleOverload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue1482NumericWideningLatticeTests+NIntFixture").GetMethod("TakeDouble", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { int64Overload, doubleOverload }, new[] { typeof(nint) });
 
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(NIntFixture.TakeInt64), result.Best.Name);
+        Assert.Equal("TakeInt64", result.Best.Name);
     }
 
     [Fact]
@@ -194,26 +194,17 @@ public class Issue1482NumericWideningLatticeTests
         Assert.True(Conversion.Classify(TypeSymbol.NUInt, TypeSymbol.Float64).IsImplicit);
         Assert.True(ClrOverloadResolution.CompareNumericTargets(typeof(ulong), typeof(double), typeof(nuint)) < 0);
 
-        var uint64Overload = typeof(NIntFixture).GetMethod(nameof(NIntFixture.TakeUInt64), BindingFlags.Public | BindingFlags.Static);
-        var doubleOverload = typeof(NIntFixture).GetMethod(nameof(NIntFixture.TakeDouble), BindingFlags.Public | BindingFlags.Static);
+        var uint64Overload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue1482NumericWideningLatticeTests+NIntFixture").GetMethod("TakeUInt64", BindingFlags.Public | BindingFlags.Static);
+        var doubleOverload = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue1482NumericWideningLatticeTests+NIntFixture").GetMethod("TakeDouble", BindingFlags.Public | BindingFlags.Static);
         var result = ClrOverloadResolution.Resolve(new[] { uint64Overload, doubleOverload }, new[] { typeof(nuint) });
 
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(NIntFixture.TakeUInt64), result.Best.Name);
+        Assert.Equal("TakeUInt64", result.Best.Name);
     }
 
     private static (Type ClrType, TypeSymbol Symbol) Lookup(string clrName)
     {
         var entry = NumericPrimitives.First(p => p.ClrName == clrName);
         return (entry.ClrType, entry.Symbol);
-    }
-
-    public static class NIntFixture
-    {
-        public static void TakeInt64(long x) => _ = x;
-
-        public static void TakeUInt64(ulong x) => _ = x;
-
-        public static void TakeDouble(double x) => _ = x;
     }
 }

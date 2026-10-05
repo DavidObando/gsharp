@@ -490,6 +490,14 @@ substitution.
   test project migrates — the workaround PR #4288 introduced is reverted, and
   the fixture goes back to being ordinary migrated corpus rather than a
   Roslyn-compiled string constant.
+
+  **#4664 follow-up:** The restoration above records the ADR-0184 milestone.
+  Its CLR import contract now lives as embedded C# source data in
+  `test/Core.Tests/TestData/NativeMetadataContracts.cs.txt`, compiled by the
+  existing Roslyn `CSharpFixture` helper and passed to importer tests as an
+  explicit physical native assembly. This preserves the native metadata oracle
+  when the test harness migrates; the ADR's UnscopedRef and escape rules are
+  unchanged.
 - Struct members that legitimately need a writable `this` no longer hit
   spurious read-only-storage rejections.
 - The ADR-0084 §L5 violation is gone: recognition is by CLR type identity, and
