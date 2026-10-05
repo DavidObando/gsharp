@@ -26,9 +26,9 @@ public sealed class BoundStructLiteralExpression : BoundExpression
     public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers, BoundExpression? copySource)
         : base(syntax)
     {
-        if (copySource != null && (!structType.IsClass || !structType.IsData || !initializers.IsEmpty))
+        if (copySource != null && (!structType.IsData || !initializers.IsEmpty))
         {
-            throw new System.ArgumentException("A clone literal must be a data class without member initializers.", nameof(copySource));
+            throw new System.ArgumentException("A copy literal must be a data type without member initializers.", nameof(copySource));
         }
 
         StructType = structType;
@@ -40,7 +40,7 @@ public sealed class BoundStructLiteralExpression : BoundExpression
 
     public ImmutableArray<BoundFieldInitializer> Initializers { get; }
 
-    /// <summary>Gets the captured source for a data-class clone; null for ordinary construction.</summary>
+    /// <summary>Gets the captured source for a data-class clone or value copy; null for fresh construction.</summary>
     public BoundExpression? CopySource { get; }
 
     public override TypeSymbol Type => StructType;

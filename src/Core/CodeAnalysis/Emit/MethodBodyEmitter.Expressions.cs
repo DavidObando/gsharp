@@ -1183,8 +1183,12 @@ internal sealed partial class MethodBodyEmitter
         if (literal.CopySource != null)
         {
             this.EmitExpression(literal.CopySource);
-            this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.userTokens.ResolveDataClassCloneToken(literal.StructType));
+            if (literal.StructType.IsClass)
+            {
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(this.outer.userTokens.ResolveDataClassCloneToken(literal.StructType));
+            }
+
             return;
         }
 

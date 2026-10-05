@@ -139,7 +139,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
     protected override BoundExpression RewriteStructLiteralExpression(BoundStructLiteralExpression node)
     {
         var type = node.StructType;
-        if (!type.HasPrimaryConstructor || !type.NeedsSynthesizedValueStructDefaultCtor)
+        if (node.CopySource != null || !type.HasPrimaryConstructor || !type.NeedsSynthesizedValueStructDefaultCtor)
         {
             return base.RewriteStructLiteralExpression(node);
         }

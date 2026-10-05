@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Copies retain construction provenance** (issues #4755 and #4796). Data-struct `with` and `.copy(...)` copy existing storage without rerunning primary constructors or declaration initializers. Expression-tree source data-class copies use the exact virtual clone before ordered updates, retaining private/base state and invocation-time, once-only evaluation rather than constructing a fresh object.
+
 - **Data-class `with` and `.copy(...)` use the existing clone contract** (issue #4796). Generic classes with a primary/base constructor no longer invoke a nonexistent parameterless constructor. Copies retain their constructed runtime type, source-base and private/readonly state, without rerunning field or base initializers; updates execute once in written order.
 
 - **cs2gs transports retained build-generated compilation inputs across validation roots and configurations** (issue #4801, ADR-0196). Validation manifests carry the actual producing source text, hash and project ownership for non-inventoried build inputs, including net10 and netstandard2.0 SDK declarations. Authored sources still require the clean authoritative corpus, and source-declared test counts and budgets are unchanged. Old manifests lacking generated evidence fail closed rather than inventing historical contents.

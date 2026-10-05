@@ -85,6 +85,12 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         typeof(string),
         typeof(Type[]),
         typeof(System.Linq.Expressions.Expression[]));
+    private static readonly MethodInfo ExpressionCallInstanceMethodInfoMethod = GetRequiredMethod(
+        typeof(System.Linq.Expressions.Expression),
+        nameof(System.Linq.Expressions.Expression.Call),
+        typeof(System.Linq.Expressions.Expression),
+        typeof(MethodInfo),
+        typeof(System.Linq.Expressions.Expression[]));
     private static readonly MethodInfo ExpressionCallStaticMethod = GetRequiredMethod(
         typeof(System.Linq.Expressions.Expression),
         nameof(System.Linq.Expressions.Expression.Call),
@@ -717,6 +723,24 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         BoundStructLiteralExpression structLiteral,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
+        if (structLiteral.CopySource != null)
+        {
+            return structLiteral.StructType.IsClass
+                ? new BoundClrStaticCallExpression(
+                    structLiteral.Syntax,
+                    ExpressionCallInstanceMethodInfoMethod,
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MethodCallExpression), NullabilityFreeReason.TypeLiteral),
+                    ImmutableArray.Create<BoundExpression>(
+                        UpcastToExpression(this.TranslateExpression(structLiteral.CopySource, parameterMap)),
+                        BuildUserFunctionMethodInfoLookup(
+                            structLiteral.Syntax,
+                            structLiteral.StructType.DataClassCloneMethod,
+                            structLiteral.StructType,
+                            BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                        BuildExpressionArray(ImmutableArray<BoundExpression>.Empty)))
+                : this.TranslateExpression(structLiteral.CopySource, parameterMap);
+        }
+
         if (!structLiteral.StructType.HasPrimaryConstructor && structLiteral.StructType.NeedsSynthesizedValueStructDefaultCtor)
         {
             return this.BuildOwningStructLiteralExpression(structLiteral, parameterMap);
@@ -1245,6 +1269,11 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return true;
         }
 
+        if (translatedInitializer.Type != NewExpressionTypeSymbol)
+        {
+            return this.TryBuildCopiedValueInitializer(block, tempVariable, translatedInitializer, statements, parameterMap, out expression);
+        }
+
         var bindings = ImmutableArray.CreateBuilder<BoundExpression>(statements.Length);
         foreach (var statement in statements)
         {
@@ -1266,6 +1295,133 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                     ? translatedInitializer
                     : new BoundConversionExpression(null, NewExpressionTypeSymbol, translatedInitializer),
                 BuildMemberBindingArray(bindings)));
+        return true;
+    }
+
+    private bool TryBuildCopiedValueInitializer(
+        BoundBlockExpression block,
+        VariableSymbol receiver,
+        BoundExpression initializer,
+        ImmutableArray<BoundStatement> statements,
+        Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap,
+        [NotNullWhen(true)] out BoundExpression? expression)
+    {
+        expression = null;
+        var local = new LocalVariableSymbol($"<>exprParam{this.counter++}", isReadOnly: true, ParameterExpressionTypeSymbol);
+        var variable = new BoundVariableExpression(block.Syntax, local);
+        var parameter = new BoundClrStaticCallExpression(
+            block.Syntax,
+            ExpressionParameterMethod,
+            ParameterExpressionTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(CreateTypeOf(receiver.Type), new BoundLiteralExpression(null, receiver.Name, TypeSymbol.String)));
+        var scopedMap = new Dictionary<VariableSymbol, LocalVariableSymbol>(parameterMap) { [receiver] = local };
+        var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+        locals.Add(local);
+        var declarations = ImmutableArray.CreateBuilder<BoundStatement>();
+        declarations.Add(new BoundVariableDeclaration(block.Syntax, local, parameter));
+        var expressions = ImmutableArray.CreateBuilder<BoundExpression>(statements.Length + 2);
+        expressions.Add(new BoundClrStaticCallExpression(
+            block.Syntax,
+            ExpressionAssignMethod,
+            ExpressionTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(UpcastToExpression(variable), UpcastToExpression(initializer))));
+        foreach (var statement in statements)
+        {
+            if (statement is not BoundExpressionStatement update)
+            {
+                return false;
+            }
+
+            var assignment = update.Expression;
+            while (assignment is BoundBlockExpression spilled)
+            {
+                foreach (var statementInSpill in spilled.Statements)
+                {
+                    if (statementInSpill is not BoundVariableDeclaration { Initializer: { } capturedValue } capture
+                        || capture.Syntax is VariableDeclarationSyntax)
+                    {
+                        return false;
+                    }
+
+                    var capturedLocal = new LocalVariableSymbol($"<>exprParam{this.counter++}", isReadOnly: true, ParameterExpressionTypeSymbol);
+                    var capturedParameter = new BoundClrStaticCallExpression(
+                        capture.Syntax,
+                        ExpressionParameterMethod,
+                        ParameterExpressionTypeSymbol,
+                        ImmutableArray.Create<BoundExpression>(
+                            CreateTypeOf(capture.Variable.Type),
+                            new BoundLiteralExpression(null, capture.Variable.Name, TypeSymbol.String)));
+                    declarations.Add(new BoundVariableDeclaration(capture.Syntax, capturedLocal, capturedParameter));
+                    locals.Add(capturedLocal);
+                    expressions.Add(new BoundClrStaticCallExpression(
+                        capture.Syntax,
+                        ExpressionAssignMethod,
+                        ExpressionTypeSymbol,
+                        ImmutableArray.Create<BoundExpression>(
+                            UpcastToExpression(new BoundVariableExpression(capture.Syntax, capturedLocal)),
+                            UpcastToExpression(this.TranslateExpression(capturedValue, scopedMap)))));
+                    scopedMap[capture.Variable] = capturedLocal;
+                }
+
+                assignment = spilled.Expression;
+            }
+
+            var target = assignment switch
+            {
+                BoundFieldAssignmentExpression field when ReferencesReceiver(field, receiver) =>
+                    this.BuildFieldAccessExpression(
+                        new BoundFieldAccessExpression(
+                            field.Syntax,
+                            new BoundVariableExpression(field.Syntax, receiver),
+                            BoundNodeForm.DeclaringType(field),
+                            field.Field),
+                        scopedMap),
+                BoundPropertyAssignmentExpression property when ReferencesReceiver(property.Receiver, receiver) =>
+                    this.BuildPropertyAccessExpression(
+                        new BoundPropertyAccessExpression(
+                            property.Syntax,
+                            new BoundVariableExpression(property.Syntax, receiver),
+                            property.StructType,
+                            property.Property),
+                        scopedMap),
+                BoundClrPropertyAssignmentExpression clrProperty when ReferencesReceiver(clrProperty.Receiver, receiver) =>
+                    this.BuildClrPropertyAccessExpression(
+                        new BoundClrPropertyAccessExpression(
+                            clrProperty.Syntax,
+                            new BoundVariableExpression(clrProperty.Syntax, receiver),
+                            clrProperty.Member,
+                            clrProperty.Type),
+                        scopedMap),
+                _ => null,
+            };
+            var value = assignment switch
+            {
+                BoundFieldAssignmentExpression field => field.Value,
+                BoundPropertyAssignmentExpression property => property.Value,
+                BoundClrPropertyAssignmentExpression clrProperty => clrProperty.Value,
+                _ => null,
+            };
+            if (target == null || value == null)
+            {
+                return false;
+            }
+
+            expressions.Add(new BoundClrStaticCallExpression(
+                update.Syntax,
+                ExpressionAssignMethod,
+                ExpressionTypeSymbol,
+                ImmutableArray.Create<BoundExpression>(UpcastToExpression(target), UpcastToExpression(this.TranslateExpression(value, scopedMap)))));
+        }
+
+        expressions.Add(variable);
+        expression = new BoundBlockExpression(
+            block.Syntax,
+            declarations.ToImmutable(),
+            new BoundClrStaticCallExpression(
+                block.Syntax,
+                ExpressionBlockMethod,
+                ExpressionTypeSymbol,
+                ImmutableArray.Create<BoundExpression>(BuildParameterArray(locals), BuildExpressionArray(expressions))));
         return true;
     }
 
@@ -1411,7 +1567,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     private static BoundExpression BuildUserFunctionMethodInfoLookup(
         SyntaxNode? syntax,
         FunctionSymbol function,
-        StructSymbol? functionOwnerType)
+        StructSymbol? functionOwnerType,
+        BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
     {
         var ownerType = functionOwnerType ?? function.StaticOwnerType as StructSymbol
             ?? throw new NotSupportedException($"Function '{function.Name}' has no same-compilation declaring type.");
@@ -1429,7 +1586,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ReflectionMethodInfoTypeSymbol,
             ImmutableArray.Create<BoundExpression>(
                 new BoundLiteralExpression(null, function.Name, TypeSymbol.String),
-                BuildBindingFlagsConstant(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static),
+                BuildBindingFlagsConstant(flags),
                 new BoundLiteralExpression(null, null, TypeSymbol.Null),
                 BuildTypeArray(parameterTypes.MoveToImmutable()),
                 new BoundLiteralExpression(null, null, TypeSymbol.Null)));

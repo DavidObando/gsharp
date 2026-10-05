@@ -499,6 +499,11 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundStructLiteralExpression structLiteral:
+                if (structLiteral.CopySource != null)
+                {
+                    ValidateExpression(structLiteral.CopySource, diagnostics);
+                }
+
                 // User-declared struct/class composite literals (`Point{X:
                 // 1, Y: 2}`) are legal inside expression-tree lambdas, for
                 // the same reason object initializers are (see
@@ -573,9 +578,14 @@ internal static class ExpressionTreeRestrictionValidator
 
     private static bool TryValidateObjectInitializer(BoundBlockExpression block, DiagnosticBag diagnostics)
     {
-        if (!TryMatchObjectInitializer(block, out var receiver, out var initializer, out var statements))
+        if (!TryMatchObjectInitializer(block, out var receiver, out var initializer, out var statements, out var captures))
         {
             return false;
+        }
+
+        foreach (var capture in captures)
+        {
+            ValidateExpression(capture.Initializer, diagnostics);
         }
 
         ValidateExpression(initializer, diagnostics);
@@ -618,25 +628,47 @@ internal static class ExpressionTreeRestrictionValidator
         BoundBlockExpression block,
         out VariableSymbol? receiver,
         out BoundExpression? initializer,
-        out System.Collections.Immutable.ImmutableArray<BoundStatement> statements)
+        out System.Collections.Immutable.ImmutableArray<BoundStatement> statements,
+        out System.Collections.Immutable.ImmutableArray<BoundVariableDeclaration> captures)
     {
         receiver = null;
         initializer = null;
         statements = default;
+        captures = default;
 
-        if (block.Expression is not BoundVariableExpression result
-            || block.Statements.IsDefaultOrEmpty
-            || block.Statements[0] is not BoundVariableDeclaration declaration
-            || declaration.Syntax is VariableDeclarationSyntax
-            || !ReferenceEquals(declaration.Variable, result.Variable))
+        if (block.Expression is not BoundVariableExpression result)
         {
             return false;
         }
 
-        receiver = declaration.Variable;
-        initializer = declaration.Initializer;
-        statements = block.Statements.RemoveAt(0);
-        return true;
+        var leading = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundVariableDeclaration>();
+        for (var index = 0; index < block.Statements.Length; index++)
+        {
+            if (block.Statements[index] is not BoundVariableDeclaration { Initializer: not null } declaration
+                || declaration.Syntax is VariableDeclarationSyntax)
+            {
+                return false;
+            }
+
+            if (ReferenceEquals(declaration.Variable, result.Variable))
+            {
+                if (leading.Count != 0
+                    && declaration.Initializer is not BoundStructLiteralExpression { CopySource: not null })
+                {
+                    return false;
+                }
+
+                receiver = declaration.Variable;
+                initializer = declaration.Initializer;
+                statements = block.Statements.RemoveRange(0, index + 1);
+                captures = leading.ToImmutable();
+                return true;
+            }
+
+            leading.Add(declaration);
+        }
+
+        return false;
     }
 
     // Issue #3349: true when `unary`'s null-assertion strips a nullable VALUE

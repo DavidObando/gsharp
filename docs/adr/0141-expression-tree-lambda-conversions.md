@@ -82,6 +82,9 @@ Supported inside an expression-tree lambda:
 - reference / numeric conversions
 - `is` type tests and `as`
 - object construction, object-initializer member assignments, and array creation
+- data copies and their member updates, represented by invocation-time tree
+  locals: value types copy existing storage and source data classes call their
+  exact virtual clone slot before ordered updates, without fresh construction
 - nested lambdas as call arguments:
   - delegate-typed parameters capture a real runtime delegate via `Expression.Constant`
   - `Expression[TDelegate]`-typed parameters recursively lower to nested lambda trees
@@ -91,6 +94,9 @@ Explicitly rejected with GS0473:
 - statement-bodied lambdas
 - async / `await`
 - assignment expressions
+- imported data-class copy/update blocks (the existing GS0473 boundary is
+  retained; source data-class copies carry the bound clone provenance used by
+  the expression-tree lowerer)
 - tuple literals / tuple assignment shapes
 - switch expressions and unsupported pattern forms
 - throw expressions
@@ -120,6 +126,13 @@ capture analysis. A captured variable is represented by building the runtime
 capture access first, then embedding that value into the tree through
 `Expression.Constant(...)` and normal member-access factories. This matches the
 existing closure representation instead of inventing a second capture model.
+
+Compiler-generated copy/initializer captures use the existing
+`Expression.Parameter`, `Expression.Assign`, and `Expression.Block` factories.
+Their values are evaluated at invocation time in lexical order, including
+spilled inputs immediately preceding a member update. These generated blocks do
+not admit authored local declarations, statement-bodied lambdas, or standalone
+assignment expressions.
 
 Call-site conversions were also updated so a direct lambda argument can bind to
 an `Expression[TDelegate]` parameter the same way a direct delegate argument
