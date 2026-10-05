@@ -2168,6 +2168,48 @@ public sealed partial class CSharpToGSharpTranslator
         private bool IsPreservedOwnedExtension(IMethodSymbol method)
         {
             IMethodSymbol original = method?.ReducedFrom ?? method;
+            if (original?.IsExtensionMethod == true
+                && !SymbolEqualityComparer.Default.Equals(
+                    original.ContainingAssembly,
+                    this.context.Compilation.Assembly))
+            {
+                CSharpCompilation owner = this.KnownCompilations()
+                    .Concat(this.context.Compilation.References
+                        .OfType<CompilationReference>()
+                        .Select(reference => reference.Compilation)
+                        .OfType<CSharpCompilation>())
+                    .FirstOrDefault(compilation =>
+                        SameAssembly(compilation.Assembly, original.ContainingAssembly));
+                string id = original.OriginalDefinition.GetDocumentationCommentId();
+                if (owner != null && id != null
+                    && DocumentationCommentId.GetFirstSymbolForDeclarationId(id, owner)
+                        is IMethodSymbol declared
+                    && declared.DeclaringSyntaxReferences.FirstOrDefault()
+                        is SyntaxReference reference)
+                {
+                    // Ask the declaring project's registry and eligibility reader,
+                    // including its body-based suspension/nullability context.
+                    var ownerContext = new TranslationContext(
+                        owner,
+                        owner.GetSemanticModel(reference.SyntaxTree),
+                        reference.SyntaxTree.FilePath,
+                        this.context.SiblingCompilations,
+                        this.context.RepositoryCompilations);
+                    var ownerVisitor = new DeclarationVisitor(
+                        ownerContext,
+                        this.typeMapper,
+                        subclassedBases: null,
+                        staticUsingTargets: null,
+                        entryPoint: null,
+                        keptTopLevelProgram: null,
+                        partialTypeParts: null,
+                        GetOrCollectOwnedExtensions(owner),
+                        this.nameAllocator,
+                        widenObliviousReferenceFields: this.widenObliviousReferenceFields);
+                    return ownerVisitor.IsPreservedOwnedExtension(declared);
+                }
+            }
+
             return original != null
                 && original.DeclaringSyntaxReferences.Any(reference =>
                     reference.GetSyntax() is MethodDeclarationSyntax declaration
