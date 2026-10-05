@@ -1269,7 +1269,8 @@ internal sealed class ReflectionMetadataEmitter
             this.userTokens.ResolveFieldToken,
             this.userTokens.GetUserStructMethodRef,
             (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType),
-            this.typeDefEmitter.EmitValueStructDefaultConstructor);
+            this.typeDefEmitter.EmitValueStructDefaultConstructor,
+            this.memberRefs.GetCtorReference);
 
         // PR-E-9: ClosureEmitter wires up after TypeDefEmitter. It depends
         // on the same EmitContext/MetadataTokenCache/WellKnownReferences

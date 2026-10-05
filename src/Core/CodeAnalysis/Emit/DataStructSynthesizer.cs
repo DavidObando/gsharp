@@ -102,6 +102,7 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
     private readonly Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef;
     private readonly Func<StructSymbol, MethodDefinitionHandle> emitInitializerConstructor;
+    private readonly Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> resolveImportedConstructorRef;
 
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassEqualsTypedMethods = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
@@ -125,7 +126,8 @@ internal sealed class DataStructSynthesizer
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken,
         Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef,
         Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef,
-        Func<StructSymbol, MethodDefinitionHandle> emitInitializerConstructor)
+        Func<StructSymbol, MethodDefinitionHandle> emitInitializerConstructor,
+        Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> resolveImportedConstructorRef)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -140,6 +142,7 @@ internal sealed class DataStructSynthesizer
         this.resolveUserMethodRef = resolveUserMethodRef ?? throw new ArgumentNullException(nameof(resolveUserMethodRef));
         this.resolveImportedMethodRef = resolveImportedMethodRef ?? throw new ArgumentNullException(nameof(resolveImportedMethodRef));
         this.emitInitializerConstructor = emitInitializerConstructor ?? throw new ArgumentNullException(nameof(emitInitializerConstructor));
+        this.resolveImportedConstructorRef = resolveImportedConstructorRef ?? throw new ArgumentNullException(nameof(resolveImportedConstructorRef));
     }
 
     /// <summary>
@@ -632,12 +635,15 @@ internal sealed class DataStructSynthesizer
     /// <returns>The emitted copy-constructor MethodDef.</returns>
     public MethodDefinitionHandle EmitDataClassCopyConstructor(StructSymbol structSym)
     {
+        // Validate reference-only output too; only an actual object-root class
+        // may use Object::.ctor instead of copying its direct base subobject.
+        var hasBaseCopyConstructor = this.TryResolveBaseCopyConstructorToken(structSym, out var baseCopyConstructor);
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
-            if (this.TryResolveBaseCopyConstructorToken(structSym, out var baseCopyConstructor))
+            if (hasBaseCopyConstructor)
             {
                 il.LoadArgument(1);
                 il.OpCode(ILOpCode.Call);
@@ -816,6 +822,33 @@ internal sealed class DataStructSynthesizer
         var baseClass = structSym.BaseClass;
         if (baseClass == null)
         {
+            if (structSym.ImportedBaseType is { } importedBase)
+            {
+                var clrBase = importedBase.ClrType
+                    ?? throw new InvalidOperationException($"Class '{structSym.Name}' imported direct base has no CLR representation.");
+                if (ClrTypeUtilities.AreSame(clrBase, this.emitCtx.CoreObjectType))
+                {
+                    return false;
+                }
+
+                foreach (var constructor in ClrTypeUtilities.SafeGetConstructors(
+                             clrBase, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    var parameters = constructor.GetParameters();
+                    if (parameters.Length == 1
+                        && parameters[0].ParameterType == clrBase
+                        && ClrMemberVisibility.IsVisibleFromDerived(
+                            constructor, this.emitCtx.References.CanAccessInternalMembers(clrBase.Assembly)))
+                    {
+                        copyConstructorToken = this.resolveImportedConstructorRef(constructor, importedBase);
+                        return true;
+                    }
+                }
+
+                throw new InvalidOperationException(
+                    $"Class '{structSym.Name}' has no accessible copy constructor for imported direct base '{importedBase.Name}'.");
+            }
+
             return false;
         }
 
