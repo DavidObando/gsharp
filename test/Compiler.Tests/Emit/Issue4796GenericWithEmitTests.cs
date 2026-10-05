@@ -90,6 +90,57 @@ public sealed class Issue4796GenericWithEmitTests
     }
 
     [Theory]
+    [InlineData("Holder[int32]{Extra: 13}", "construction must initialize", "Holder[int32]{Extra: 13}")]
+    [InlineData("Holder[int32]{Extra: 13} with { }", "construction must initialize", "Holder[int32]{Extra: 13}")]
+    [InlineData("Holder[int32]{Location: scopedValue, Extra: 13} with { }", "cannot be stored", "scopedValue")]
+    [InlineData("original with { Location = scopedValue }", "cannot be stored", "scopedValue")]
+    [InlineData("original.copy(Location: scopedValue)", "cannot be stored", "scopedValue")]
+    [InlineData("original with { Location = Read(scopedValue) }", "requires a scoped parameter", "scopedValue")]
+    public void FreshConstructionCloneSourceAndUpdates_KeepManagedSafetyDiagnostics(
+        string expression, string reason, string diagnosticSource)
+    {
+        using var native = new CSharpFixture("public class NativeControl { }");
+        var source = $$"""
+            package WithRecords
+            public data class Holder[T any] {
+                public var Location managed[T]
+                public var Extra int32
+                public init(value managed[T]) {
+                    this.Location = value
+                    this.Extra = 7
+                }
+            }
+            public func Read(value managed[int32]) managed[int32] -> value
+            public func Bad(original Holder[int32], scoped scopedValue managed[int32]) Holder[int32] -> {{expression}}
+            """;
+        using var references = native.RuntimeReferences();
+        var compilation = new GsCompilation(references, GsSyntaxTree.Parse(SourceText.From(source)))
+        {
+            IsLibrary = true,
+        };
+        using var image = new MemoryStream();
+        var result = compilation.Emit(image, pdbStream: null, refStream: null, assemblyName: "UnsafeClone");
+        Assert.False(result.Success);
+        Assert.Equal(0, image.Length);
+        var diagnostic = Assert.Single(result.Diagnostics.Where(d =>
+            d.Id == "GS0604" && d.Message.Contains(reason, StringComparison.Ordinal)));
+        Assert.Equal(diagnosticSource, source.Substring(diagnostic.Location.Span.Start, diagnostic.Location.Span.Length));
+    }
+
+    [Fact]
+    public void CloneSource_RemainsVisitedByBoundTreeWalkers()
+    {
+        var type = new StructSymbol("Holder", ImmutableArray<FieldSymbol>.Empty,
+            GSharp.Core.CodeAnalysis.Symbols.Accessibility.Public, declaration: null,
+            packageName: "WithRecords", isData: true, isInline: false, isClass: true);
+        var source = new BoundDefaultExpression(null, type);
+        var clone = new BoundStructLiteralExpression(null, type, ImmutableArray<BoundFieldInitializer>.Empty, source);
+        var walker = new SourceVisitWalker(source);
+        walker.VisitExpression(clone);
+        Assert.Equal(1, walker.SourceVisits);
+    }
+
+    [Theory]
     [InlineData("int32", "int", "42", true)]
     [InlineData("string", "string", "\"payload\"", true)]
     [InlineData("int32", "int", "42", false)]
@@ -357,5 +408,24 @@ public sealed class Issue4796GenericWithEmitTests
 
         Assert.True(File.Exists(output), stdout + Environment.NewLine + stderr);
         return output;
+    }
+
+    private sealed class SourceVisitWalker : BoundTreeWalker
+    {
+        private readonly BoundExpression source;
+
+        public SourceVisitWalker(BoundExpression source) => this.source = source;
+
+        public int SourceVisits { get; private set; }
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (ReferenceEquals(node, this.source))
+            {
+                this.SourceVisits++;
+            }
+
+            base.VisitExpression(node);
+        }
     }
 }
