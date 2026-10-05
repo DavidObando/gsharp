@@ -20,7 +20,11 @@ The published **0.4.591** release is the version used by the website's installat
   - Explicit authored constructors also validate declaration defaults in their constructed generic owner, reporting GS0604 before emitting a null non-null managed-reference slot; constructor-body field assignments and legal scalar, reference and nullable defaults keep their existing policy.
   - Expression-tree lambdas retain supplied primary inputs as invocation-time tree locals, preserving lexical evaluation order and once-only capture before constructor-owned declaration initialization, including reordered inputs and later member writes.
 
+- **Generic inference accepts a comparer implementing multiple closed interfaces when other arguments determine the key type** (issue #4780). Symbolic and CLR inference no longer treat a non-unique interface projection as a contradictory bound or choose its first interface. Typed identity selectors now bind the self-migrated symbol-ordering tests without changing the comparer or generated assertions; unfixed type arguments, incompatible interfaces and violated constraints remain rejected.
+
 - **Compiler test IL verification accepts noncanonical assembly paths** (issue #4784). The strict success marker now uses the same absolute path normalization as the verifier process, including dot segments and paths relative to its repository working directory. Exact assembly identity and nonzero-exit rejection are unchanged; this repairs migration-proof infrastructure, not compiler output or inference.
+
+- **Inherited generic CLR calls preserve source-typed tuple arguments** (issue #4738). Argument conversion now projects through the inherited member's actual generic owner, including reordered base arguments, rather than constructing an erased `ValueTuple<object, …>` for a source-typed slot. Nested and long tuples retain their physical element types and evaluation order; genuine object slots still use their intended conversions.
 
 - **The nullable-classifier reflection test remains self-migratable** (issue #4779). Its intentional null input/out argument storage now declares nullable object elements, so the containing test class compiles as G# without widening fixed production contracts or changing the reflection assertions.
 
