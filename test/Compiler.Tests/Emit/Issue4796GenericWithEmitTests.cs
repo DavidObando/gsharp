@@ -32,6 +32,63 @@ public sealed class Issue4796GenericWithEmitTests
         }));
     }
 
+    [Fact]
+    public void ExplicitConstructorManagedField_ClonePreservesInitializedHandle()
+    {
+        using var native = new CSharpFixture("public class NativeControl { }");
+        var library = Compile(native.DirectoryPath, """
+            package WithRecords
+            import System
+            public data class Holder[T any] {
+                public var Location managed[T]
+                public var Extra int32
+                public init(value managed[T]) {
+                    this.Location = value
+                    this.Extra = 7
+                }
+                public func Copy() Holder[T] -> this with { Extra = 13 }
+                public func Sugar() Holder[T] -> this.copy(Extra: 13)
+                public func Empty() Holder[T] -> this with { }
+            }
+            public class Runner {
+                public func Check() int32 {
+                    var value = 42
+                    let original = Holder[int32](managed(value))
+                    let copy = original.Copy()
+                    let sugar = original.Sugar()
+                    let empty = original.Empty()
+                    if Object.ReferenceEquals(original, copy) || Object.ReferenceEquals(original, sugar)
+                        || Object.ReferenceEquals(original, empty) {
+                        throw Exception("distinct clone")
+                    }
+                    if copy.Extra != 13 || sugar.Extra != 13 || empty.Extra != 7 || original.Extra != 7
+                        || *copy.Location != 42 || *sugar.Location != 42 || *empty.Location != 42 {
+                        throw Exception("managed clone state")
+                    }
+                    let alias = copy.Location
+                    *alias = 61
+                    if *sugar.Location != 61 || *empty.Location != 61 {
+                        throw Exception("managed handle identity")
+                    }
+                    return *original.Location
+                }
+            }
+            """, native.AssemblyPath);
+        IlVerifier.Verify(native.AssemblyPath);
+        IlVerifier.Verify(library, new[] { native.AssemblyPath });
+        using var caller = new CSharpFixture("""
+            public static class Probe {
+                public static int Run() => new WithRecords.Runner().Check();
+            }
+            """, new[] { MetadataReference.CreateFromFile(library) });
+        IlVerifier.Verify(caller.AssemblyPath, new[] { library, native.AssemblyPath });
+        var assemblies = EmittedFixture.LoadTogether(native.DirectoryPath,
+            File.ReadAllBytes(native.AssemblyPath), File.ReadAllBytes(library), File.ReadAllBytes(caller.AssemblyPath));
+        var method = assemblies[2].GetType("Probe")?.GetMethod("Run")
+            ?? throw new InvalidOperationException("Missing native oracle");
+        Assert.Equal(61, method.Invoke(null, null));
+    }
+
     [Theory]
     [InlineData("int32", "int", "42", true)]
     [InlineData("string", "string", "\"payload\"", true)]
