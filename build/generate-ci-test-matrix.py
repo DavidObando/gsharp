@@ -78,6 +78,11 @@ SHARDED_PROJECTS = {
         # was ~590s of it (run 36846241799's trx: Issue41 225s, Issue44 164s,
         # Issue42 98s, Issue43 41s, Issue45 36s, Issue40 26s).
         "issue4": ["Cs2Gs.Tests.Issue4"],
+        # Issue #4810: the serial Issue4 shard now expands to 1486 cases.
+        # A complete instrumented replay took 22m20s before runner setup;
+        # Issue47 alone accounts for 607 cases / 10m53s. Isolate that work
+        # without changing the 30-minute job budget or the original coverage.
+        "issue47": ["Cs2Gs.Tests.Issue47"],
         "remainder": [],
     },
     "test/Core.Tests/Core.Tests.csproj": {

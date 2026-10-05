@@ -39,6 +39,10 @@ internal sealed class DocumentTranslationState
     public Dictionary<ISymbol, GExpression> PatternBindings { get; } =
         new Dictionary<ISymbol, GExpression>(SymbolEqualityComparer.Default);
 
+    // Distinguish a converted-result assertion from an operator-input assertion.
+    public Dictionary<GExpression, IMethodSymbol> MaterializedConversionResults { get; } =
+        new Dictionary<GExpression, IMethodSymbol>(ReferenceEqualityComparer.Instance);
+
     // ADR-0166 / issue #3409: memoized answer to "does this boolean condition
     // root translate its `is` designations as native G# pattern variables?",
     // keyed by the condition root syntax node. The statement/expression

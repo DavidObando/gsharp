@@ -836,6 +836,30 @@ public sealed partial class CSharpToGSharpTranslator
         {
             Location location = expression.GetLocation();
             GTypeReference target = this.typeMapper.Map(targetType, this.context, location);
+            IMethodSymbol conversionOperator = this.GetUserDefinedConversionInputOperator(
+                expression, targetType, out bool convertsValue);
+            if (conversionOperator != null
+                && convertsValue)
+            {
+                GTypeReference convertedType = this.MapDelegateLikeReturnType(
+                    conversionOperator, isAsync: false, location);
+
+                // Forgiveness may already have asserted the converted result.
+                bool convertedResultIsAsserted =
+                    this.state.MaterializedConversionResults.TryGetValue(
+                        UnwrapTranslatedValue(translated), out IMethodSymbol materializedOperator)
+                    && SymbolEqualityComparer.Default.Equals(materializedOperator, conversionOperator);
+                GExpression converted = convertedResultIsAsserted
+                    ? translated
+                    : new ConversionExpression(convertedType, translated);
+                return SymbolEqualityComparer.Default.Equals(conversionOperator.ReturnType, targetType)
+                    ? converted
+                    : new ConversionExpression(
+                        convertedType.IsNullable && !convertedResultIsAsserted ? MakeNullable(target) : target,
+                        converted,
+                        isCheckedReferenceCast: true);
+            }
+
             bool nullableValue =
                 translated is not NonNullAssertionExpression
                 && (this.context.GetTypeInfo(expression).Type?.NullableAnnotation == NullableAnnotation.Annotated
@@ -1552,6 +1576,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else if (typeInfo.ConvertedType is { } elementType)
             {
+                elementType = enclosingIterator == null
+                    ? elementType
+                    : this.GetIteratorStoreSlot(node.Expression, enclosingIterator) ?? elementType;
                 value = this.ForgiveNullableReferenceValue(
                     node.Expression,
                     value,

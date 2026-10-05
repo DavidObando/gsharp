@@ -2185,6 +2185,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && !isXunitNullAssertion
                 && targetRequiresNonNull
                 && !isFlowNarrowedLocal
+                && this.GetUserDefinedConversionInputOperator(argument.Expression, targetType, out _) == null
                 && this.ReceiverNeedsNullForgiveness(argument.Expression))
             {
                 GExpression unbridged = this.TranslateExpression(argument.Expression);
@@ -6840,41 +6841,25 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax value,
             ISymbol sink)
         {
-            SyntaxNode node = value;
-            while (node.Parent is ParenthesizedExpressionSyntax)
-            {
-                node = node.Parent;
-            }
-
             var tupleIndices = new List<int>();
-            while (node.Parent is ArgumentSyntax tupleArgument
-                && tupleArgument.Parent is TupleExpressionSyntax tuple)
-            {
-                int index = tuple.Arguments.IndexOf(tupleArgument);
-                if (index < 0)
-                {
-                    break;
-                }
+            SyntaxNode node = OutermostTransparentNode(value, tupleIndices);
 
-                tupleIndices.Add(index);
-                node = tuple;
-            }
-
-            ITypeSymbol sinkType = sink switch
-            {
-                IFieldSymbol field => field.Type,
-                ILocalSymbol local => local.Type,
-                IParameterSymbol parameter => parameter.Type,
-                IPropertySymbol property => property.Type,
-                IMethodSymbol method => method.ReturnType,
-                _ => null,
-            };
+            ITypeSymbol sinkType = ObliviousNullabilityAnalyzer.SymbolValueType(sink);
             sinkType ??= node is TupleExpressionSyntax containingTuple
                 ? this.context.GetTypeInfo(containingTuple).ConvertedType
                 : null;
+            var path = new List<int>();
+            if (node.Parent is YieldStatementSyntax
+                && sinkType is INamedTypeSymbol { TypeArguments.Length: 1 } envelope)
+            {
+                sinkType = envelope.TypeArguments[0];
+                path.Add(0);
+            }
+
             for (int i = tupleIndices.Count - 1; i >= 0; i--)
             {
                 if (sinkType is not INamedTypeSymbol { IsTupleType: true } tupleType
+                    || tupleIndices[i] < 0
                     || tupleIndices[i] >= tupleType.TupleElements.Length)
                 {
                     return null;
@@ -6883,11 +6868,15 @@ public sealed partial class CSharpToGSharpTranslator
                 IFieldSymbol tupleElement =
                     tupleType.TupleElements[tupleIndices[i]];
                 sinkType = tupleElement.Type;
+                path.Add(tupleIndices[i]);
             }
 
             if (tupleIndices.Count != 0)
             {
-                return sinkType;
+                return ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                        this.context.Compilation, sink, path, this.context.SiblingCompilations)
+                            ? sinkType.WithNullableAnnotation(NullableAnnotation.Annotated)
+                            : sinkType;
             }
 
             if (node.Parent is InitializerExpressionSyntax
