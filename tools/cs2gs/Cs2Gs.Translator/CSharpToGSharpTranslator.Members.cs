@@ -1282,12 +1282,14 @@ public sealed partial class CSharpToGSharpTranslator
             // touches the Gsharp.Concurrency runtime (or carries [Suspending])
             // is a G# `suspend func`; its return type is the awaited result,
             // exactly as B.23 unwraps `async Task<T>`.
-            bool isEmittedSuspend = symbol != null && this.IsSuspendingCandidate(symbol, signatureFactsNode);
+            bool isEmittedSuspend = !isOwnerScopedExtensionCompanion
+                && symbol != null && this.IsSuspendingCandidate(symbol, signatureFactsNode);
             GTypeReference returnType = this.MapReturnType(
                 symbol,
                 node,
                 unwrapValueTask: isEmittedSuspend,
-                iteratorBodySource: signatureFactsNode);
+                iteratorBodySource: signatureFactsNode,
+                preserveEnvelope: isOwnerScopedExtensionCompanion);
             List<TypeParameter> typeParameters = this.MapMethodTypeParameters(
                 symbol,
                 isDeclaringPart ? symbol.PartialDefinitionPart : null);
@@ -1431,10 +1433,9 @@ public sealed partial class CSharpToGSharpTranslator
             // A rewritten analyzer test harness (#3686) delegates to the
             // synchronous G# verifier: there is nothing left to await, and an
             // `async` func returning `Task` cannot `return` a value.
-            // An iterator companion returns the holder's lazy envelope; only
-            // the original body executes an iterator state machine.
-            bool isEmittedAsync = !isAnalyzerHarness && !isEmittedSuspend
-                && !(isOwnerScopedExtensionCompanion && IsIteratorBody(signatureFactsNode))
+            // A direct companion returns the holder's envelope; only the
+            // original body executes an async or iterator state machine.
+            bool isEmittedAsync = !isOwnerScopedExtensionCompanion && !isAnalyzerHarness && !isEmittedSuspend
                 && symbol != null && symbol.IsAsync;
 
             // Issue #4370: a `[LibraryImport]` definition's import arguments
@@ -1807,20 +1808,9 @@ public sealed partial class CSharpToGSharpTranslator
                     this.EmittedName(original, original.Name)),
                 arguments,
                 typeArguments);
-            INamedTypeSymbol asyncEnvelope = original.IsAsync
-                && original.ReturnType is INamedTypeSymbol taskLike
-                && taskLike.Name is "Task" or "ValueTask"
-                && taskLike.ContainingNamespace?.ToDisplayString()
-                    == "System.Threading.Tasks"
-                    ? taskLike
-                    : null;
-            GExpression forwarded = asyncEnvelope != null
-                ? new AwaitExpression(call)
-                : call;
             GStatement statement = returnType == null
-                || asyncEnvelope is { IsGenericType: false }
-                ? new ExpressionStatement(forwarded)
-                : new ReturnStatement(forwarded, isRef: original.ReturnsByRef || original.ReturnsByRefReadonly);
+                ? new ExpressionStatement(call)
+                : new ReturnStatement(call, isRef: original.ReturnsByRef || original.ReturnsByRefReadonly);
             return new BlockStatement(new[] { statement });
         }
 

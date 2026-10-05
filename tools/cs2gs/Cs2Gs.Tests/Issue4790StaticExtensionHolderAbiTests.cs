@@ -426,6 +426,218 @@ public class Issue4790StaticExtensionHolderAbiTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void TaskEnvelopeForwarding_PreservesOriginalContinuationContext(bool generic)
+    {
+        string envelope = generic ? "Task<int>" : "Task";
+        string returned = generic ? "return 23;" : string.Empty;
+        string source = $$"""
+            using System.Threading.Tasks;
+            namespace Issue4790.Contracts;
+            public sealed class Node {
+                public TaskCompletionSource<int> Gate = new TaskCompletionSource<int>();
+                public int Calls;
+            }
+            public static class Holder {
+                public static async {{envelope}} Value(this Node node) {
+                    node.Calls++;
+                    await node.Gate.Task.ConfigureAwait(false);
+                    {{returned}}
+                }
+                public static {{envelope}} Reduced(Node node) => node.Value();
+            }
+            """;
+        string consumerSource = """
+            using System;
+            using System.Threading;
+            using Issue4790.Contracts;
+            public static class NativeConsumer {
+                private sealed class CountingContext : SynchronizationContext {
+                    public int Posts;
+                    public override void Post(SendOrPostCallback callback, object state) {
+                        Interlocked.Increment(ref Posts);
+                        ThreadPool.QueueUserWorkItem(_ => callback(state));
+                    }
+                }
+                public static string Run() {
+                    var node = new Node();
+                    var context = new CountingContext();
+                    var previous = SynchronizationContext.Current;
+                    SynchronizationContext.SetSynchronizationContext(context);
+                    System.Threading.Tasks.Task task;
+                    try { task = Holder.Reduced(node); }
+                    finally { SynchronizationContext.SetSynchronizationContext(previous); }
+                    int before = node.Calls;
+                    node.Gate.SetResult(23);
+                    task.GetAwaiter().GetResult();
+                    return string.Join(",", new object[] { before, node.Calls, context.Posts });
+                }
+            }
+            """;
+        WithProducts((native, emitted, consumer) =>
+        {
+            Assert.Equal("1,1,0", RunConsumer(native, consumer));
+            Assert.Equal("1,1,0", RunConsumer(emitted, consumer));
+            Assembly actual = consumer.LoadTogether(File.ReadAllBytes(emitted))[0];
+            MethodInfo canonical = actual.GetType("Issue4790.Contracts.Node", throwOnError: true)
+                .GetMethod("Value", BindingFlags.Public | BindingFlags.Instance);
+            Assert.NotNull(canonical);
+            Assert.False(canonical.IsStatic);
+            Assert.Equal(generic ? typeof(System.Threading.Tasks.Task<int>) : typeof(System.Threading.Tasks.Task),
+                canonical.ReturnType);
+        }, source, consumerSource);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TaskLikeForwarding_ReturnsTheOriginalEnvelope(bool valueTask)
+    {
+        string envelope = valueTask ? "ValueTask<int>" : "Task<int>";
+        string returned = valueTask ? "new ValueTask<int>(node.Promise.Task)" : "node.Promise.Task";
+        string observed = valueTask ? "reduced.Equals(new ValueTask<int>(node.Promise.Task))"
+            : "object.ReferenceEquals(reduced, node.Promise.Task)";
+        string source = $$"""
+            using System.Threading.Tasks;
+            namespace Issue4790.Contracts;
+            public sealed class Node {
+                public TaskCompletionSource<int> Promise = new TaskCompletionSource<int>();
+                public int Calls;
+            }
+            public static class Holder {
+                public static {{envelope}} Value(this Node node) {
+                    node.Calls++;
+                    return {{returned}};
+                }
+                public static {{envelope}} Reduced(Node node) => node.Value();
+            }
+            """;
+        string consumerSource = $$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4790.Contracts;
+            public static class NativeConsumer {
+                public static string Run() {
+                    var node = new Node();
+                    var reduced = Holder.Reduced(node);
+                    bool same = {{observed}};
+                    int before = node.Calls;
+                    node.Promise.SetResult(23);
+                    return string.Join(",", new object[] { same ? 1 : 0, before,
+                        reduced.GetAwaiter().GetResult(), node.Calls });
+                }
+            }
+            """;
+        WithProducts((native, emitted, consumer) =>
+        {
+            Assert.Equal("1,1,23,1", RunConsumer(native, consumer));
+            Assert.Equal("1,1,23,1", RunConsumer(emitted, consumer));
+        }, source, consumerSource);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void IteratorForwarding_PreservesReplayAndDisposal(bool asyncIterator)
+    {
+        string envelope = asyncIterator ? "IAsyncEnumerable" : "IEnumerable";
+        string modifier = asyncIterator ? "async " : string.Empty;
+        string awaitFirst = asyncIterator
+            ? "await System.Threading.Tasks.Task.Delay(1).ConfigureAwait(false);" : string.Empty;
+        string getCursor = asyncIterator ? "GetAsyncEnumerator()" : "GetEnumerator()";
+        string advance = asyncIterator ? "MoveNextAsync().AsTask().GetAwaiter().GetResult()" : "MoveNext()";
+        string dispose = asyncIterator ? "DisposeAsync().AsTask().GetAwaiter().GetResult()" : "Dispose()";
+        string source = $$"""
+            using System.Collections.Generic;
+            namespace Issue4790.Contracts;
+            public sealed class Node { public int Value = 4; public int Starts; public int Disposals; }
+            public static class Holder {
+                public static {{modifier}}{{envelope}}<int> Values(this Node node) {
+                    {{awaitFirst}}
+                    node.Starts++;
+                    try {
+                        yield return node.Value;
+                        node.Value += 3;
+                        yield return node.Value;
+                    }
+                    finally { node.Disposals++; }
+                }
+                public static {{envelope}}<int> Reduced(Node node) => node.Values();
+            }
+            """;
+        string consumerSource = $$"""
+            using System;
+            using Issue4790.Contracts;
+            public static class NativeConsumer {
+                public static string Run() {
+                    var node = new Node();
+                    var values = Holder.Reduced(node);
+                    int before = node.Starts;
+                    var cursor = values.{{getCursor}};
+                    if (!cursor.{{advance}}) return "missing-first";
+                    int first = cursor.Current;
+                    cursor.{{dispose}};
+                    int early = node.Disposals;
+                    node.Value = 9;
+                    cursor = values.{{getCursor}};
+                    if (!cursor.{{advance}}) return "missing-replay";
+                    int replay = cursor.Current;
+                    node.Value = 20;
+                    if (!cursor.{{advance}}) return "missing-second";
+                    int second = cursor.Current;
+                    if (cursor.{{advance}}) return "extra";
+                    cursor.{{dispose}};
+                    return string.Join(",", new object[] {
+                        before, first, early, replay, second, node.Starts, node.Disposals });
+                }
+            }
+            """;
+        WithProducts((native, emitted, consumer) =>
+        {
+            Assert.Equal("0,4,1,9,23,2,2", RunConsumer(native, consumer));
+            Assert.Equal("0,4,1,9,23,2,2", RunConsumer(emitted, consumer));
+        }, source, consumerSource);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void IteratorForwarding_PreservesHostedElementPromotion(bool explicitNullable)
+    {
+        string nullable = explicitNullable ? "#nullable enable" : "#nullable disable";
+        string element = explicitNullable ? "string?" : "string";
+        string source = $$"""
+            {{nullable}}
+            using System.Collections.Generic;
+            namespace Issue4790.Contracts;
+            public sealed class Node { public {{element}} Text = null; }
+            public static class Holder {
+                public static IEnumerable<{{element}}> Values(this Node node) { yield return node.Text; }
+                public static bool Exercise(Node node) {
+                    foreach (var value in node.Values()) return value == null;
+                    return false;
+                }
+            }
+            """;
+        string consumerSource = """
+            using Issue4790.Contracts;
+            public static class NativeConsumer {
+                public static string Run() => Holder.Exercise(new Node()) ? "1" : "0";
+            }
+            """;
+        WithProducts((native, emitted, consumer) =>
+        {
+            Assert.Equal("1", RunConsumer(native, consumer));
+            Assert.Equal("1", RunConsumer(emitted, consumer));
+            string workspace = Path.GetDirectoryName(Path.GetDirectoryName(native));
+            string translated = File.ReadAllText(Path.Combine(workspace, "Producer.gs"));
+            Assert.Contains("func Values() IEnumerable[string?]", translated);
+            Assert.Contains("func (node Node) Values() sequence[string?]", translated);
+        }, source, consumerSource);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void WithProducts_DeletesWorkspaceAfterAssertions(bool failAssertion)
     {
         string workspace = null;
