@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Cross-assembly language-server navigation tests retain native C# provenance** (issue #4666). Both portable-PDB and G# Go-to-Definition tests now import a dedicated Roslyn-emitted assembly, require its portable sidecar PDB, and assert the exact `.cs` source path and span. Missing-PDB and same-named `.gs` fixtures must fail those same navigation oracles; migrated Core is no longer used as an assumed C# sibling.
+
 - **Compiler test IL verification accepts noncanonical assembly paths** (issue #4784). The strict success marker now uses the same absolute path normalization as the verifier process, including dot segments and paths relative to its repository working directory. Exact assembly identity and nonzero-exit rejection are unchanged; this repairs migration-proof infrastructure, not compiler output or inference.
 
 - **The nullable-classifier reflection test remains self-migratable** (issue #4779). Its intentional null input/out argument storage now declares nullable object elements, so the containing test class compiles as G# without widening fixed production contracts or changing the reflection assertions.
