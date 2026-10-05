@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Imported G# sealed hierarchies retain their declaring-assembly restriction** (issue #4807, PR #4808). Class semantics metadata now records inheritance mode, so foreign plain/data subclasses cannot treat a sealed hierarchy's intentionally non-sealed CLR image as open, including closed and symbolic generics and reference assemblies. Native non-sealed records and same-compilation sealed hierarchies remain legal. Legacy marked G# producers must be rebuilt to establish external inheritance permission.
+
 - **Data-class `with` and `.copy(...)` use the existing clone contract** (issue #4796). Generic classes with a primary/base constructor no longer invoke a nonexistent parameterless constructor. Copies retain their constructed runtime type, source-base and private/readonly state, without rerunning field or base initializers; updates execute once in written order.
 
 - **cs2gs transports retained build-generated compilation inputs across validation roots and configurations** (issue #4801, ADR-0196). Validation manifests carry the actual producing source text, hash and project ownership for non-inventoried build inputs, including net10 and netstandard2.0 SDK declarations. Authored sources still require the clean authoritative corpus, and source-declared test counts and budgets are unchanged. Old manifests lacking generated evidence fail closed rather than inventing historical contents.

@@ -12,6 +12,21 @@ using System.Runtime.CompilerServices;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
+internal enum ImportedInheritanceMode
+{
+    /// <summary>No external inheritance permission was recorded.</summary>
+    Unknown,
+
+    /// <summary>Subclasses may be declared in another assembly.</summary>
+    Open,
+
+    /// <summary>No subclasses may be declared.</summary>
+    Closed,
+
+    /// <summary>Subclasses must be in the declaring assembly.</summary>
+    SealedHierarchy,
+}
+
 /// <summary>
 /// Reads the small cross-assembly semantic markers gsc writes onto assemblies
 /// via <see cref="AssemblyMetadataAttribute"/> rows, plus standard
@@ -72,6 +87,14 @@ internal static class ImportedAssemblySemantics
             return false;
         }
     }
+
+    /// <summary>Checks CLR eligibility and the declaring G# assembly's inheritance policy.</summary>
+    /// <param name="type">The imported base class.</param>
+    /// <returns>Whether a different compilation may derive from the class.</returns>
+    public static bool IsInheritableClass(Type type)
+        => type.IsClass && !type.IsSealed
+            && (!TryGetTypeSemantics(type, out var semantics)
+                || semantics.InheritanceMode == ImportedInheritanceMode.Open);
 
     /// <summary>
     /// Issue #3329: looks up <paramref name="type"/>'s magic-collection-field
@@ -571,12 +594,20 @@ internal static class ImportedAssemblySemantics
             primaryParameterFieldTokens = tokensBuilder.ToImmutable();
         }
 
+        var inheritanceMode = parts.Length > 4 ? parts[4] switch
+        {
+            "open" => ImportedInheritanceMode.Open,
+            "closed" => ImportedInheritanceMode.Closed,
+            "sealed" => ImportedInheritanceMode.SealedHierarchy,
+            _ => ImportedInheritanceMode.Unknown,
+        } : ImportedInheritanceMode.Unknown;
         semantics = new ImportedTypeSemantics(
             MetadataToken: metadataToken,
             IsValueType: string.Equals(kind, "struct", StringComparison.Ordinal),
             IsData: isData,
             PrimaryConstructorParameterNames: primaryParameterNames,
-            PrimaryConstructorParameterFieldTokens: primaryParameterFieldTokens);
+            PrimaryConstructorParameterFieldTokens: primaryParameterFieldTokens,
+            InheritanceMode: inheritanceMode);
         return true;
     }
 
@@ -608,4 +639,5 @@ internal sealed record ImportedTypeSemantics(
     bool IsValueType,
     bool IsData,
     ImmutableArray<string> PrimaryConstructorParameterNames,
-    ImmutableArray<int> PrimaryConstructorParameterFieldTokens = default);
+    ImmutableArray<int> PrimaryConstructorParameterFieldTokens = default,
+    ImportedInheritanceMode InheritanceMode = ImportedInheritanceMode.Unknown);

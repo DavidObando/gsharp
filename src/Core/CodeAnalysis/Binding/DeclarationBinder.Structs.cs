@@ -816,6 +816,12 @@ internal sealed partial class DeclarationBinder
 
                         if (clrType.IsClass && !clrType.IsSealed)
                         {
+                            if (!ImportedAssemblySemantics.IsInheritableClass(clrType))
+                            {
+                                Diagnostics.ReportBaseClassNotOpen(baseLocation, baseName);
+                                continue;
+                            }
+
                             if (i != 0)
                             {
                                 Diagnostics.ReportUnableToFindType(baseLocation, baseName);
