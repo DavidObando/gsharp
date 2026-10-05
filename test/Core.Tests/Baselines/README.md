@@ -71,3 +71,10 @@ The ADR-0190 native-slice implementation adds `samples/NativeSlices.gs` with a
 non-null baseline. Its reviewed diff adds only that sample; every pre-existing
 hash remains unchanged. The emitted stereo witness also independently verifies
 caller-visible value-frame writes and zero allocations in its warmed-up loop.
+
+The reviewed #4776/#4796 update changes only `samples/WebsiteData.gs`: its
+`with` expression now calls the existing typed clone once before updating `X`,
+instead of reconstructing a parameterless instance and rewriting untouched
+members. `Issue4776WebsiteDataCopyEmitTests` pins the real gsc/native C# clone
+calls, strict IL verification, unchanged output and original/copy identity and
+values. No hashing or baseline-acceptance policy changes accompany that update.
