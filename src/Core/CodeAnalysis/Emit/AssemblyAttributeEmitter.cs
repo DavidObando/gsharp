@@ -280,15 +280,10 @@ internal sealed class AssemblyAttributeEmitter
                 continue;
             }
 
-            // Value types (`data struct`, or any struct with a primary
-            // constructor) always carry the marker. Issue #2263: a `data class`
-            // must ALSO carry it so a cross-assembly consumer can recover its
-            // data semantics and support `with`/copy — but a plain (non-data)
-            // reference class stays unmarked so it keeps importing as an
-            // ordinary CLR class rather than a semantic aggregate.
-            var isDataClass = type.IsClass && type.IsData;
-            if (!isDataClass
-                && (type.IsClass || (!type.IsData && !type.HasPrimaryConstructor)))
+            // Classes also carry their source inheritance mode: a sealed
+            // hierarchy is deliberately not CLR-sealed. Plain classes remain
+            // ordinary CLR imports, not data-semantic aggregates.
+            if (!type.IsClass && !type.IsData && !type.HasPrimaryConstructor)
             {
                 continue;
             }
@@ -319,7 +314,8 @@ internal sealed class AssemblyAttributeEmitter
                 MetadataTokens.GetToken(handle).ToString(CultureInfo.InvariantCulture),
                 type.IsClass ? "class" : "struct",
                 type.IsData ? "1" : "0",
-                string.Join(",", parameterEntries));
+                string.Join(",", parameterEntries),
+                type.IsSealedHierarchy ? "sealed" : type.IsOpen ? "open" : "closed");
             this.attrEncoder.EmitStringPairAttribute(
                 assemblyHandle,
                 "System.Reflection.AssemblyMetadataAttribute",
