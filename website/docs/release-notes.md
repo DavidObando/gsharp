@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **cs2gs retains native static extension-holder contracts for owned receivers** (issue #4790). Canonical receiver members forward to the original static method hosted through `ExtensionOwner`, rather than moving its body and deleting its declaring method. Explicit static calls and native method groups retain their original owner, signatures, defaults and constraints; private holder helpers remain private. Forwarders preserve `ref` and `ref readonly` returns and their live aliases. This scoped repair does not establish full Core ABI parity or self-hosting readiness.
+- **cs2gs retains native static extension-holder contracts for owned receivers** (issue #4790). Canonical receiver members forward to the original static method hosted through `ExtensionOwner`, rather than moving its body and deleting its declaring method. Explicit static calls and native method groups retain their original owner, signatures, defaults and constraints; private holder helpers remain private. Forwarders preserve `ref` and `ref readonly` returns and their live aliases. Iterator companions return the holder's lazy enumerable without synthesizing a second state machine. This scoped repair does not establish full Core ABI parity or self-hosting readiness.
 
 - **Compiler test IL verification accepts noncanonical assembly paths** (issue #4784). The strict success marker now uses the same absolute path normalization as the verifier process, including dot segments and paths relative to its repository working directory. Exact assembly identity and nonzero-exit rejection are unchanged; this repairs migration-proof infrastructure, not compiler output or inference.
 

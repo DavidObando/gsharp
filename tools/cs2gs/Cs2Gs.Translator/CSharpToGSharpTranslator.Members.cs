@@ -1275,6 +1275,9 @@ public sealed partial class CSharpToGSharpTranslator
                     parameterOffset: skipFirstParameter ? 1 : 0);
             }
 
+            bool isOwnerScopedExtensionCompanion = ownedExtensionSelf != null
+                || (forceExtensionReceiver && RequiresOwnerScopedExtension(symbol));
+
             // ADR-0174 D4: an `async ValueTask`/`ValueTask<T>` method that
             // touches the Gsharp.Concurrency runtime (or carries [Suspending])
             // is a G# `suspend func`; its return type is the awaited result,
@@ -1312,23 +1315,14 @@ public sealed partial class CSharpToGSharpTranslator
                     returnType = this.typeMapper.Map(symbol.ReturnType, this.context, node.GetLocation());
                 }
             }
-            else if (hasBody
-                && forceExtensionReceiver
-                && RequiresOwnerScopedExtension(symbol))
+            else if (hasBody && isOwnerScopedExtensionCompanion)
             {
+                Receiver companionReceiver = receiver ?? new Receiver(
+                    this.EmittedName(ownedExtensionSelf, ownedExtensionSelf.Name),
+                    this.typeMapper.Map(ownedExtensionSelf.Type, this.context, node.GetLocation()));
                 body = this.BuildOwnerScopedExtensionCompanionBody(
                     symbol,
-                    receiver,
-                    parameters,
-                    returnType);
-            }
-            else if (hasBody && ownedExtensionSelf != null)
-            {
-                body = this.BuildOwnerScopedExtensionCompanionBody(
-                    symbol,
-                    new Receiver(
-                        this.EmittedName(ownedExtensionSelf, ownedExtensionSelf.Name),
-                        this.typeMapper.Map(ownedExtensionSelf.Type, this.context, node.GetLocation())),
+                    companionReceiver,
                     parameters,
                     returnType);
             }
@@ -1437,7 +1431,11 @@ public sealed partial class CSharpToGSharpTranslator
             // A rewritten analyzer test harness (#3686) delegates to the
             // synchronous G# verifier: there is nothing left to await, and an
             // `async` func returning `Task` cannot `return` a value.
-            bool isEmittedAsync = !isAnalyzerHarness && !isEmittedSuspend && symbol != null && symbol.IsAsync;
+            // An iterator companion returns the holder's lazy envelope; only
+            // the original body executes an iterator state machine.
+            bool isEmittedAsync = !isAnalyzerHarness && !isEmittedSuspend
+                && !(isOwnerScopedExtensionCompanion && IsIteratorBody(signatureFactsNode))
+                && symbol != null && symbol.IsAsync;
 
             // Issue #4370: a `[LibraryImport]` definition's import arguments
             // are re-spelled from their constant values; issue #4301: so are

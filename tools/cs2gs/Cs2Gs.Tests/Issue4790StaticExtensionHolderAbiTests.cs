@@ -333,6 +333,99 @@ public class Issue4790StaticExtensionHolderAbiTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void IteratorOwnedExtensions_PreserveLazyHolderAndCanonicalEnumeration(bool asyncIterator)
+    {
+        string envelope = asyncIterator ? "IAsyncEnumerable" : "IEnumerable";
+        string modifier = asyncIterator ? "async " : string.Empty;
+        string awaitFirst = asyncIterator
+            ? "await System.Threading.Tasks.Task.Delay(1).ConfigureAwait(false);"
+            : string.Empty;
+        string getCursor = asyncIterator ? "GetAsyncEnumerator()" : "GetEnumerator()";
+        string advance = asyncIterator ? "MoveNextAsync().AsTask().GetAwaiter().GetResult()" : "MoveNext()";
+        string dispose = asyncIterator ? "DisposeAsync().AsTask().GetAwaiter().GetResult()" : "Dispose()";
+        string source = $$"""
+            using System.Collections.Generic;
+            namespace Issue4790.Contracts;
+            public sealed class Node { public int Value = 4; public int Moves; }
+            public static class Holder
+            {
+                public static {{modifier}}{{envelope}}<int> Values(this Node node)
+                {
+                    {{awaitFirst}}
+                    node.Moves++;
+                    yield return node.Value;
+                    node.Value += 3;
+                    node.Moves++;
+                    yield return node.Value;
+                }
+                public static int Exercise(Node node)
+                {
+                    var values = node.Values();
+                    int before = node.Moves;
+                    var cursor = values.{{getCursor}};
+                    if (!cursor.{{advance}}) return -1;
+                    int first = cursor.Current;
+                    node.Value = 20;
+                    if (!cursor.{{advance}}) return -2;
+                    int second = cursor.Current;
+                    if (cursor.{{advance}}) return -3;
+                    cursor.{{dispose}};
+                    return before * 100000 + first * 1000 + second * 10 + node.Moves;
+                }
+            }
+            """;
+        string consumerSource = $$"""
+            using System;
+            using System.Collections.Generic;
+            using Issue4790.Contracts;
+            public static class NativeConsumer
+            {
+                public static string Run()
+                {
+                    var node = new Node();
+                    Func<Node, {{envelope}}<int>> original = Holder.Values;
+                    var values = original(node);
+                    int before = node.Moves;
+                    var cursor = values.{{getCursor}};
+                    if (!cursor.{{advance}}) return "missing-first";
+                    int first = cursor.Current;
+                    node.Value = 20;
+                    if (!cursor.{{advance}}) return "missing-second";
+                    int second = cursor.Current;
+                    bool extra = cursor.{{advance}};
+                    cursor.{{dispose}};
+                    return string.Join(",", new object[] {
+                        before, first, second, node.Moves, extra ? 1 : 0,
+                        Holder.Exercise(new Node()),
+                        original.Method.IsStatic && original.Method.DeclaringType == typeof(Holder) ? 1 : 0 });
+                }
+            }
+            """;
+        WithProducts((native, emitted, consumer) =>
+        {
+            Assert.Equal("0,4,23,2,0,4232,1", RunConsumer(native, consumer));
+            Assert.Equal("0,4,23,2,0,4232,1", RunConsumer(emitted, consumer));
+            Assembly expected = consumer.LoadTogether(File.ReadAllBytes(native))[0];
+            Assembly actual = consumer.LoadTogether(File.ReadAllBytes(emitted))[0];
+            MethodInfo original = actual.GetType("Issue4790.Contracts.Holder", throwOnError: true)
+                .GetMethod("Values", BindingFlags.Public | BindingFlags.Static);
+            MethodInfo canonical = actual.GetType("Issue4790.Contracts.Node", throwOnError: true)
+                .GetMethod("Values", BindingFlags.Public | BindingFlags.Instance);
+            Assert.NotNull(original);
+            Assert.NotNull(canonical);
+            Assert.Equal(Contract(expected.GetType("Issue4790.Contracts.Holder", throwOnError: true)
+                .GetMethod("Values", BindingFlags.Public | BindingFlags.Static)), Contract(original));
+            Assert.Equal(asyncIterator
+                ? typeof(System.Collections.Generic.IAsyncEnumerable<int>)
+                : typeof(System.Collections.Generic.IEnumerable<int>), canonical.ReturnType);
+            Assert.False(canonical.IsStatic);
+            Assert.Empty(canonical.GetParameters());
+        }, source, consumerSource);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void WithProducts_DeletesWorkspaceAfterAssertions(bool failAssertion)
     {
         string workspace = null;
