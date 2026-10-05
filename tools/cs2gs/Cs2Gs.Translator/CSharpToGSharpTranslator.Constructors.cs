@@ -1149,6 +1149,17 @@ public sealed partial class CSharpToGSharpTranslator
 
             GExpression defaultValue = this.BuildOptionalParameterDefault(symbol, type, fallbackNode);
 
+            return new Parameter(
+                MapParameterName(symbol, fallbackNode),
+                type,
+                variadic,
+                refKind,
+                defaultValue,
+                this.MapParameterAttributes(symbol));
+        }
+
+        private List<AttributeUse> MapParameterAttributes(IParameterSymbol symbol)
+        {
             // Issue #1913: a parameter's own attributes (e.g. `[Note] int x`) live on
             // its `ParameterSyntax`, not on `fallbackNode` (which can be the whole
             // parameter LIST when `symbol` came from `MapParameters`). Resolve the
@@ -1196,7 +1207,7 @@ public sealed partial class CSharpToGSharpTranslator
                     }));
             }
 
-            return new Parameter(MapParameterName(symbol, fallbackNode), type, variadic, refKind, defaultValue, attributes);
+            return attributes;
         }
 
         private string MapParameterName(IParameterSymbol symbol, SyntaxNode fallbackNode)

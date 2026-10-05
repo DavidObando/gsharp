@@ -676,6 +676,96 @@ public class Issue4790StaticExtensionHolderAbiTests
         return Assert.IsType<string>(run.Invoke(null, null));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HostedReceiverAttributes_PreserveNativeParameterMetadata(bool privateExtension)
+    {
+        string source = """
+            #nullable enable
+            using System;
+            using System.Diagnostics.CodeAnalysis;
+            namespace Issue4790.Contracts;
+            [AttributeUsage(AttributeTargets.Parameter)]
+            public sealed class StampAttribute : Attribute
+            {
+                public StampAttribute(string label, int code, bool visible) { }
+            }
+            public sealed class Node { public int Value = 4; }
+            public static class Holder
+            {
+                ACCESS static bool Try(
+                    [NotNullWhen(true), Stamp("receiver", 17, true)] this Node node,
+                    [Stamp("ordinary", 23, false)] int delta = 3) => node.Value + delta == 7;
+                public static bool Reduced(Node node) => node.Try();
+            }
+            """.Replace("ACCESS", privateExtension ? "private" : "public", StringComparison.Ordinal);
+        const string consumerSource = """
+            using System;
+            using System.Linq;
+            using System.Reflection;
+            using Issue4790.Contracts;
+            public static class NativeConsumer
+            {
+                public static string Run()
+                {
+                    MethodInfo method = typeof(Holder).GetMethod("Try",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                    ParameterInfo receiver = method.GetParameters()[0];
+                    CustomAttributeData stamp = receiver.GetCustomAttributesData().Single(
+                        attribute => attribute.AttributeType.FullName == "Issue4790.Contracts.StampAttribute");
+                    CustomAttributeData postcondition = receiver.GetCustomAttributesData().Single(
+                        attribute => attribute.AttributeType.FullName ==
+                            "System.Diagnostics.CodeAnalysis.NotNullWhenAttribute");
+                    return string.Join(",", new object[] { Holder.Reduced(new Node()),
+                        method.IsPrivate ? 1 : 0, stamp.ConstructorArguments[0].Value,
+                        stamp.ConstructorArguments[1].Value, stamp.ConstructorArguments[2].Value,
+                        postcondition.ConstructorArguments[0].Value });
+                }
+            }
+            """;
+        WithProducts((native, emitted, consumer) =>
+        {
+            string expected = privateExtension ? "True,1,receiver,17,True,True" : "True,0,receiver,17,True,True";
+            Assert.Equal(expected, RunConsumer(native, consumer));
+            Assembly[] images = {
+                consumer.LoadTogether(File.ReadAllBytes(native))[0],
+                consumer.LoadTogether(File.ReadAllBytes(emitted))[0],
+            };
+            MethodInfo[] methods = images.Select(image =>
+                image.GetType("Issue4790.Contracts.Holder", throwOnError: true)
+                    .GetMethod("Try", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                .ToArray();
+            Assert.All(methods, method =>
+            {
+                Assert.NotNull(method);
+                Assert.True(method.IsStatic);
+                Assert.Equal(privateExtension, method.IsPrivate);
+                Assert.Equal(2, method.GetParameters().Length);
+            });
+            ParameterInfo[] nativeParameters = methods[0].GetParameters();
+            ParameterInfo[] emittedParameters = methods[1].GetParameters();
+            Assert.Equal(2, nativeParameters[0].GetCustomAttributesData().Count(attribute =>
+                attribute.AttributeType.FullName is
+                    "System.Diagnostics.CodeAnalysis.NotNullWhenAttribute" or "Issue4790.Contracts.StampAttribute"));
+            for (int index = 0; index < nativeParameters.Length; index++)
+            {
+                string[] Attributes(ParameterInfo parameter) => parameter.GetCustomAttributesData()
+                    .Where(attribute => attribute.AttributeType.FullName is
+                        "System.Diagnostics.CodeAnalysis.NotNullWhenAttribute" or "Issue4790.Contracts.StampAttribute")
+                    .Select(attribute => attribute.AttributeType.FullName + ":" +
+                        string.Join(",", attribute.ConstructorArguments.Select(argument => argument.Value)) + ":" +
+                        string.Join(",", attribute.NamedArguments.Select(argument =>
+                            argument.MemberName + "=" + argument.TypedValue.Value)))
+                    .OrderBy(value => value, StringComparer.Ordinal).ToArray();
+                Assert.Equal(Attributes(nativeParameters[index]), Attributes(emittedParameters[index]));
+                Assert.Equal(nativeParameters[index].Attributes, emittedParameters[index].Attributes);
+            }
+
+            Assert.Equal(expected, RunConsumer(emitted, consumer));
+        }, source, consumerSource);
+    }
+
     private static void WithProducts(
         Action<string, string, CSharpFixture> assertion,
         string source = Source,

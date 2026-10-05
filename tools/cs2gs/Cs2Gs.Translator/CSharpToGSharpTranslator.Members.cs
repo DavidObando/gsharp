@@ -410,10 +410,14 @@ public sealed partial class CSharpToGSharpTranslator
                 GTypeReference receiverType = receiverSymbol != null
                     ? this.typeMapper.Map(receiverSymbol.Type, this.context, receiverParameter.GetLocation())
                     : this.MapTypeSyntax(receiverParameter.Type);
+                List<AttributeUse> receiverAttributes = receiverSymbol != null
+                    ? this.MapParameterAttributes(receiverSymbol)
+                    : this.MapAttributes(receiverParameter.AttributeLists);
 
                 receiver = new Receiver(
                     this.EmittedName(receiverSymbol, receiverParameter.Identifier.ValueText),
-                    receiverType);
+                    receiverType,
+                    receiverAttributes);
             }
 
             foreach (MemberDeclarationSyntax member in node.Members)
@@ -1248,7 +1252,8 @@ public sealed partial class CSharpToGSharpTranslator
                     receiverType = this.PromoteIfUsedAsNullable(receiverType, self);
                     receiver = new Receiver(
                         this.EmittedName(self, self.Name),
-                        receiverType);
+                        receiverType,
+                        this.MapParameterAttributes(self));
                     skipFirstParameter = true;
                     isStatic = false;
                 }
@@ -2577,7 +2582,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (allParameters.Count > 0)
             {
                 Parameter first = allParameters[0];
-                receiver = new Receiver(first.Name, first.Type);
+                receiver = new Receiver(first.Name, first.Type, first.Attributes);
                 parameters = allParameters.Skip(1).ToList();
             }
             else
