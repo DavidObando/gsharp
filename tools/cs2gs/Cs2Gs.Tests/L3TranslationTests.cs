@@ -408,8 +408,7 @@ namespace Demo
     /// class` for the latter) maps to a zero-field <c>data class</c>; the C#
     /// <c>abstract</c> modifier is kept (ADR-0195: <c>abstract data class</c>,
     /// which implies <c>open</c>) and the synthesized
-    /// <c>IEquatable&lt;Self&gt;</c> interface is dropped (a class cannot name
-    /// itself in its own base list).
+    /// <c>IEquatable&lt;Self&gt;</c> interface is preserved as an actual CLR contract.
     /// </summary>
     [Fact]
     public void FieldlessRecord_MapsToOpenDataClass()
@@ -422,9 +421,9 @@ namespace Demo
 }");
 
         // ADR-0195 / issue #4674: abstractness is kept (`abstract` implies `open`).
-        Assert.Contains("abstract data class ShapeBase {", printed);
+        Assert.Contains("abstract data class ShapeBase : IEquatable[ShapeBase] {", printed);
         Assert.DoesNotContain("open data class ShapeBase", printed);
-        Assert.DoesNotContain("IEquatable", printed);
+        Assert.Contains("IEquatable[Dot]", printed);
         Assert.Contains("data class Dot(X float64) : ShapeBase", printed);
     }
 

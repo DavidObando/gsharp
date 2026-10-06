@@ -1650,6 +1650,23 @@ internal sealed class UserTokenResolver
     /// </summary>
     internal EntityHandle ResolveUserInstanceMethodToken(StructSymbol containingType, FunctionSymbol method)
     {
+        if (containingType.Definition is { } definition && !ReferenceEquals(definition, containingType)
+            && containingType.IsData)
+        {
+            if (ReferenceEquals(method, containingType.DataEqualsSelf))
+            {
+                method = definition.DataEqualsSelf;
+            }
+            else if (ReferenceEquals(method, containingType.DataEqualsObject))
+            {
+                method = definition.DataEqualsObject;
+            }
+            else if (ReferenceEquals(method, containingType.DataEqualsBase))
+            {
+                method = Invariant.Required(definition.DataEqualsBase, "a constructed typed-base slot has a definition");
+            }
+        }
+
         if (!this.cache.MethodHandles.TryGetValue(method, out var openDef)
             && containingType.ClrType != null)
         {
@@ -2483,28 +2500,9 @@ internal sealed class UserTokenResolver
     {
         var def = constructedBase.Definition ?? constructedBase;
 
-        if (this.cache.ClassPrimaryCtorHandles.TryGetValue(def, out var primaryDef))
+        if (this.cache.ClassPrimaryCtorHandles.ContainsKey(def))
         {
-            var defParams = def.PrimaryConstructorParameters;
-            var primarySig = new BlobBuilder();
-            new BlobEncoder(primarySig)
-                .MethodSignature(isInstanceMethod: true)
-                .Parameters(
-                    defParams.IsDefaultOrEmpty ? 0 : defParams.Length,
-                    r => r.Void(),
-                    ps =>
-                    {
-                        if (defParams.IsDefaultOrEmpty)
-                        {
-                            return;
-                        }
-
-                        foreach (var p in defParams)
-                        {
-                            this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
-                        }
-                    });
-            return this.GetUserStructMethodRef(constructedBase, primaryDef, ".ctor", primarySig);
+            return this.ResolveUserCtorTokenForPrimary(constructedBase);
         }
 
         if (this.cache.ClassCtorHandles.TryGetValue(def, out var defaultDef))

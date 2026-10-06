@@ -101,9 +101,10 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken;
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
     private readonly Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef;
+    private readonly Func<StructSymbol, FunctionSymbol, EntityHandle> resolveUserInstanceMethodToken;
+    private readonly Action<ParameterHandle, ImmutableArray<byte>> emitParameterNullability;
     private readonly Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> resolveImportedConstructorRef;
 
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassEqualsTypedMethods = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
 
     // Per-emit standalone signature cache for the >8-field GetHashCode fold
@@ -125,6 +126,8 @@ internal sealed class DataStructSynthesizer
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken,
         Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef,
         Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef,
+        Func<StructSymbol, FunctionSymbol, EntityHandle> resolveUserInstanceMethodToken,
+        Action<ParameterHandle, ImmutableArray<byte>> emitParameterNullability,
         Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> resolveImportedConstructorRef)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
@@ -139,6 +142,8 @@ internal sealed class DataStructSynthesizer
         this.resolveUserFieldToken = resolveUserFieldToken ?? throw new ArgumentNullException(nameof(resolveUserFieldToken));
         this.resolveUserMethodRef = resolveUserMethodRef ?? throw new ArgumentNullException(nameof(resolveUserMethodRef));
         this.resolveImportedMethodRef = resolveImportedMethodRef ?? throw new ArgumentNullException(nameof(resolveImportedMethodRef));
+        this.resolveUserInstanceMethodToken = resolveUserInstanceMethodToken ?? throw new ArgumentNullException(nameof(resolveUserInstanceMethodToken));
+        this.emitParameterNullability = emitParameterNullability ?? throw new ArgumentNullException(nameof(emitParameterNullability));
         this.resolveImportedConstructorRef = resolveImportedConstructorRef ?? throw new ArgumentNullException(nameof(resolveImportedConstructorRef));
     }
 
@@ -506,8 +511,13 @@ internal sealed class DataStructSynthesizer
         }
 
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
-        this.dataClassEqualsTypedMethods[structSym] = equalsTypedHandle;
+        this.cache.MethodHandles[structSym.DataEqualsSelf] = equalsTypedHandle;
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
+        if (structSym.DataEqualsBase is { } baseEquals)
+        {
+            this.EmitDataClassEqualsBase(structSym, baseEquals);
+        }
+
         this.EmitDataStructGetHashCode(structSym);
 
         // Issue #2361: skip the synthesized ToString body/row when the type
@@ -1016,13 +1026,14 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
 
-        this.emitCtx.Metadata.AddMethodDefinition(
+        var handle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: DataObjectOverrideAttributes(structSym),
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.nextParameterHandle());
+            parameterList: this.EmitEqualityParameter(structSym.DataEqualsObject.Parameters[0]));
+        this.cache.MethodHandles[structSym.DataEqualsObject] = handle;
     }
 
     /// <summary>
@@ -1058,13 +1069,12 @@ internal sealed class DataStructSynthesizer
                 il.OpCode(ILOpCode.Ceq);
                 il.Branch(ILOpCode.Brfalse, retFalse);
 
-                if (structSym.BaseClass?.IsData == true
-                    && this.dataClassEqualsTypedMethods.TryGetValue(structSym.BaseClass, out var baseEqualsTyped))
+                if (this.TryResolveDirectBaseEqualsToken(structSym, out var baseEqualsToken))
                 {
                     il.LoadArgument(0);
                     il.LoadArgument(1);
                     il.OpCode(ILOpCode.Call);
-                    il.Token(baseEqualsTyped);
+                    il.Token(baseEqualsToken);
                     il.Branch(ILOpCode.Brfalse, retFalse);
                 }
             }
@@ -1109,12 +1119,77 @@ internal sealed class DataStructSynthesizer
             .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
 
         return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.NewSlot
+                | (IsDataObjectOverrideFinal(structSym) ? MethodAttributes.Final : MethodAttributes.PrivateScope),
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.nextParameterHandle());
+            parameterList: this.EmitEqualityParameter(structSym.DataEqualsSelf.Parameters[0]));
+    }
+
+    private void EmitDataClassEqualsBase(StructSymbol structSym, FunctionSymbol method)
+    {
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.emitCtx.MetadataOnly)
+        {
+            // The base typed slot must dispatch to the most-derived object
+            // equality. Self equality's base-field call remains nonvirtual.
+            il.LoadArgument(0);
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Callvirt);
+            var objectEquals = Invariant.Required(
+                typeof(object).GetMethod("Equals", new[] { typeof(object) }),
+                "System.Object declares instance Equals");
+            il.Token(this.resolveImportedMethodRef(objectEquals, TypeSymbol.Object));
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), method.Parameters[0].Type));
+        var handle = this.emitCtx.Metadata.AddMethodDefinition(
+            MethodAttributes.Public | MethodAttributes.Final | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+            MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            this.emitCtx.Metadata.GetOrAddString("Equals"),
+            this.emitCtx.Metadata.GetOrAddBlob(signature),
+            this.FinishInlineBody(il),
+            this.EmitEqualityParameter(method.Parameters[0]));
+        this.cache.MethodHandles[method] = handle;
+        if (!this.TryResolveDirectBaseEqualsToken(structSym, out var baseEqualsToken))
+        {
+            throw new InvalidOperationException($"Data class '{structSym.Name}' has no direct typed-base equality slot.");
+        }
+
+        this.emitCtx.Metadata.AddMethodImplementation(
+            this.cache.StructTypeDefs[structSym],
+            handle,
+            baseEqualsToken);
+    }
+
+    private bool TryResolveDirectBaseEqualsToken(StructSymbol owner, out EntityHandle token)
+    {
+        var directBase = DataEqualityMemberModel.GetDirectBase(owner, out var importedMethod);
+        token = directBase switch
+        {
+            null => default,
+            _ when importedMethod is not null => this.resolveImportedMethodRef(importedMethod, directBase),
+            StructSymbol sourceBase => this.resolveUserInstanceMethodToken(sourceBase, sourceBase.DataEqualsSelf),
+            _ => throw new InvalidOperationException($"Data class '{owner.Name}' has an unsupported direct equality owner."),
+        };
+        return !token.IsNil;
+    }
+
+    private ParameterHandle EmitEqualityParameter(ParameterSymbol parameter)
+    {
+        var handle = ParameterMetadataEmitter.AddParameter(this.emitCtx, parameter, sequenceNumber: 1);
+        var flags = NullableFlagsBuilder.Build(parameter.Type);
+        if (!flags.IsDefaultOrEmpty)
+        {
+            this.emitParameterNullability(handle, flags);
+        }
+
+        return handle;
     }
 
     /// <summary>
@@ -1345,45 +1420,45 @@ internal sealed class DataStructSynthesizer
                 il.MarkLabel(leftNotNull);
                 il.LoadArgument(1);
                 il.Branch(ILOpCode.Brfalse, retFalse);
-            }
 
-            foreach (var field in GetSynthesisFields(structSym))
+                il.LoadArgument(0);
+                il.LoadArgument(1);
+                il.OpCode(ILOpCode.Callvirt);
+                il.Token(this.resolveUserInstanceMethodToken(structSym, structSym.DataEqualsSelf));
+                if (isInequality)
+                {
+                    il.LoadConstantI4(0);
+                    il.OpCode(ILOpCode.Ceq);
+                }
+
+                il.OpCode(ILOpCode.Ret);
+                il.MarkLabel(retFalse);
+                il.LoadConstantI4(isInequality ? 1 : 0);
+                il.OpCode(ILOpCode.Ret);
+            }
+            else
             {
-                var fieldHandle = this.resolveUserFieldToken(structSym, field);
-                if (structSym.IsClass)
+                foreach (var field in GetSynthesisFields(structSym))
                 {
-                    il.LoadArgument(0);
-                }
-                else
-                {
+                    var fieldHandle = this.resolveUserFieldToken(structSym, field);
                     il.LoadArgumentAddress(0);
-                }
-
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-
-                if (structSym.IsClass)
-                {
-                    il.LoadArgument(1);
-                }
-                else
-                {
+                    il.OpCode(ILOpCode.Ldfld);
+                    il.Token(fieldHandle);
+                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
                     il.LoadArgumentAddress(1);
+                    il.OpCode(ILOpCode.Ldfld);
+                    il.Token(fieldHandle);
+                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
+                    il.Call(this.wellKnown.GetObjectStaticEqualsReference());
+                    il.Branch(ILOpCode.Brfalse, retFalse);
                 }
 
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.Call(this.wellKnown.GetObjectStaticEqualsReference());
-                il.Branch(ILOpCode.Brfalse, retFalse);
+                il.LoadConstantI4(isInequality ? 0 : 1);
+                il.OpCode(ILOpCode.Ret);
+                il.MarkLabel(retFalse);
+                il.LoadConstantI4(isInequality ? 1 : 0);
+                il.OpCode(ILOpCode.Ret);
             }
-
-            il.LoadConstantI4(isInequality ? 0 : 1);
-            il.OpCode(ILOpCode.Ret);
-            il.MarkLabel(retFalse);
-            il.LoadConstantI4(isInequality ? 1 : 0);
-            il.OpCode(ILOpCode.Ret);
         }
 
         var sig = new BlobBuilder();
