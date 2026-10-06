@@ -282,7 +282,7 @@ class ParticipatingProjectTests(unittest.TestCase):
             tree, work = root / "tree", root / "gate"
             tree.mkdir()
             (tree / "Root.gsproj").write_text(
-                '<Project Sdk="Gsharp.NET.Sdk/1.0.0"/>', encoding="utf-8")
+                f'<Project Sdk="{stage2.packer.SDK_ID}/1.0.0"/>', encoding="utf-8")
             with patch.object(stage2, "evaluate_project") as evaluate, self.assertRaises(stage2.Stage2Error):
                 stage2.validate_participating_projects(tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1")
             evaluate.assert_not_called()
@@ -294,7 +294,8 @@ class ParticipatingProjectTests(unittest.TestCase):
             tree.mkdir()
             parent, child = tree / "Root.csproj", tree / "Child.gsproj"
             parent.write_text('<Project Sdk="Microsoft.NET.Sdk"/>', encoding="utf-8")
-            child.write_text('<Project Sdk="Gsharp.NET.Sdk/1.0.0"/>', encoding="utf-8")
+            child.write_text(
+                f'<Project Sdk="{stage2.packer.SDK_ID}/1.0.0"/>', encoding="utf-8")
             evaluation = {"Properties": {}, "Items": {"ProjectReference": [{"FullPath": str(child)}]}}
             with patch.object(stage2, "evaluate_project", return_value=evaluation), \
                     self.assertRaises(stage2.Stage2Error):
