@@ -149,7 +149,8 @@ public sealed partial class CSharpToGSharpTranslator
                         && SymbolEqualityComparer.Default.Equals(primaryParameter.ContainingSymbol.ContainingType, propertySymbol.ContainingType)
                         && property.AccessorList?.Accessors.All(accessor =>
                             accessor.Body == null
-                            && accessor.ExpressionBody == null) == true)
+                            && accessor.ExpressionBody == null
+                            && accessor.AttributeLists.Count == 0) == true)
                     {
                         break;
                     }
@@ -3046,7 +3047,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else if (fieldKeywordBackingName == null
                 && !isStatic
-                && node.Initializer != null
+                && (node.Initializer != null || isExplicitPositionalAutoProperty)
                 && (!IsGetOnlyAutoProperty(node)
                     || symbol?.ContainingType?.IsRecord == true
                     || symbol?.IsOverride == true)

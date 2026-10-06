@@ -520,6 +520,7 @@ internal sealed class DataStructSynthesizer
         }
 
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
+        this.cache.MethodHandles[structSym.DataEqualsSelf] = equalsTypedHandle;
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
         if (structSym.DataEqualsBase is { } baseEquals)
         {
@@ -550,11 +551,6 @@ internal sealed class DataStructSynthesizer
         if (!HasZeroDeconstructionMembers(structSym))
         {
             this.EmitDataStructDeconstruct(structSym);
-        }
-
-        if (GetDataEqualityBase(structSym) is { } equalityBase)
-        {
-            this.EmitDataClassBaseEquals(equalityBase);
         }
 
         // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
@@ -903,7 +899,8 @@ internal sealed class DataStructSynthesizer
     /// </summary>
     private MethodDefinitionHandle EmitDataStructPrimaryConstructor(StructSymbol structSym)
     {
-        if (structSym.NeedsSynthesizedValueStructDefaultCtor)
+        if (structSym.NeedsSynthesizedValueStructDefaultCtor
+            && !structSym.ValueStructDefaultCtorIsZeroInitialization)
         {
             return this.emitInitializerConstructor(structSym);
         }
@@ -1095,13 +1092,12 @@ internal sealed class DataStructSynthesizer
                 il.OpCode(ILOpCode.Ceq);
                 il.Branch(ILOpCode.Brfalse, retFalse);
 
-                if (structSym.GetDataCloneAncestor() is { } baseClass
-                    && this.cache.DataClassEqualsTypedHandles.TryGetValue(baseClass.Definition ?? baseClass, out var baseEqualsTyped))
+                if (this.TryResolveDirectBaseEqualsToken(structSym, out var baseEqualsToken))
                 {
                     il.LoadArgument(0);
                     il.LoadArgument(1);
                     il.OpCode(ILOpCode.Call);
-                    il.Token(this.ResolveEqualsTypedToken(baseClass, baseEqualsTyped));
+                    il.Token(baseEqualsToken);
                     il.Branch(ILOpCode.Brfalse, retFalse);
                 }
             }
@@ -1511,69 +1507,6 @@ internal sealed class DataStructSynthesizer
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
             parameterList: this.nextParameterHandle());
-    }
-
-    /// <summary>
-    /// Finds the record base whose typed equality slot needs forwarding.
-    /// </summary>
-    /// <param name="type">The record being synthesized.</param>
-    /// <returns>The nearest record base, or null when no bridge is needed.</returns>
-    internal static StructSymbol? GetDataEqualityBase(StructSymbol type)
-    {
-        if (!type.IsClass || !type.IsData)
-        {
-            return null;
-        }
-
-        foreach (var parent in type.GetHierarchy())
-        {
-            if (parent != type && parent.IsData)
-            {
-                foreach (var method in type.Methods)
-                {
-                    if (method.Name == "Equals" && method.IsOverride
-                        && method.Parameters.Length == 2 && method.Parameters[1].Type == parent)
-                    {
-                        return null;
-                    }
-                }
-
-                return parent;
-            }
-        }
-
-        return null;
-    }
-
-    private void EmitDataClassBaseEquals(StructSymbol baseType)
-    {
-        var objectSignature = new BlobBuilder();
-        new BlobEncoder(objectSignature).MethodSignature(isInstanceMethod: true)
-            .Parameters(1, result => result.Type().Boolean(), parameters => parameters.AddParameter().Type().Object());
-        var objectEquals = this.emitCtx.Metadata.AddMemberReference(
-            this.wellKnown.ObjectTypeRef,
-            this.emitCtx.Metadata.GetOrAddString("Equals"),
-            this.emitCtx.Metadata.GetOrAddBlob(objectSignature));
-        var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            il.LoadArgument(0);
-            il.LoadArgument(1);
-            il.OpCode(ILOpCode.Callvirt);
-            il.Token(objectEquals);
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var signature = new BlobBuilder();
-        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
-            .Parameters(1, result => result.Type().Boolean(), parameters => this.encodeTypeSymbol(parameters.AddParameter().Type(), baseType));
-        this.emitCtx.Metadata.AddMethodDefinition(
-            MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Final,
-            MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            this.emitCtx.Metadata.GetOrAddString("Equals"),
-            this.emitCtx.Metadata.GetOrAddBlob(signature),
-            this.FinishInlineBody(il),
-            this.nextParameterHandle());
     }
 
     private void EmitDataStructDeconstruct(StructSymbol structSym)

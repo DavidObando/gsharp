@@ -489,11 +489,10 @@ internal sealed class ConstructorBodyEmitter
         // Synthesize a `this` parameter for the field-initializer receiver.
         var thisParam = new ParameterSymbol("this", structSym);
 
-        // A data primary-constructor struct's initializers can read its parameters;
-        // they run in the primary constructor, not this parameterless one.
-        var statements = initializersRunInPrimaryConstructor
-            ? ImmutableArray<BoundStatement>.Empty
-            : BuildInstanceFieldInitializerStatements(structSym, thisParam);
+        // A data primary-constructor struct's ordinary initializers can read
+        // parameters and run only in the primary constructor. Its zero-value
+        // constructor still initializes collection fields, including private ones.
+        var statements = BuildInstanceFieldInitializerStatements(structSym, thisParam, zeroInitialize: initializersRunInPrimaryConstructor);
         var body = new BoundBlockStatement(null, statements);
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
@@ -603,7 +602,7 @@ internal sealed class ConstructorBodyEmitter
     /// field initializers in declaration order. Used by the default, primary,
     /// forwarding, and explicit constructor body emitters.
     /// </summary>
-    private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol? thisParam = null)
+    private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol? thisParam = null, bool zeroInitialize = false)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         foreach (var field in classSym.Fields)

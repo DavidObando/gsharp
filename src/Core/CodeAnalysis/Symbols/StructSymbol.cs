@@ -714,17 +714,38 @@ public sealed class StructSymbol : TypeSymbol
         }
     }
 
-    /// <summary>Gets a value indicating whether the compiler-owned value-struct default constructor initializes only sound zero values.</summary>
-    internal bool ValueStructDefaultCtorIsZeroInitialization => !IsClass && IsData && HasPrimaryConstructor;
+    /// <summary>
+    /// Gets a value indicating whether the class was declared with the
+    /// <c>abstract</c> modifier (ADR-0195 / issue #4674). Unlike the
+    /// member-derived <see cref="IsAbstract"/>, this is the author's explicit
+    /// statement, so a class with no abstract member can still be
+    /// uninstantiable (a migrated C# <c>abstract class</c> with only concrete
+    /// members). Such a class is inheritable: the binder gives it
+    /// <see cref="IsOpen"/>.
+    /// </summary>
+    internal bool IsDeclaredAbstract => IsClass && (Declaration?.IsAbstract ?? false);
 
     /// <summary>
-    /// Gets a value indicating whether non-public value-struct field initializers require an
-    /// in-type default constructor rather than call-site field stores.
-    /// Constructed types share their definition's initializer-constructor policy.
+    /// Gets a value indicating whether the class was declared with the
+    /// <c>shared</c> modifier (ADR-0195 / issue #4674): emitted CLR
+    /// <c>abstract sealed</c> with no instance constructor, every member shared,
+    /// the shape of a C# <c>static class</c>.
     /// </summary>
-    internal bool NeedsSynthesizedValueStructDefaultCtor =>
-        !ReferenceEquals(Definition, this) ? Definition.NeedsSynthesizedValueStructDefaultCtor :
-        !IsClass
+    internal bool IsSharedClass => IsClass && (Declaration?.IsShared ?? false);
+
+    /// <summary>
+    /// Gets a value indicating whether value-struct field initializers require an
+    /// in-type constructor for accessibility, generic ownership, or primary
+    /// parameter scope. A primary type uses its parameterized constructor.
+    /// Definition-bound expressions must execute in their owning generic
+    /// context, not in a literal site's unrelated VAR/MVAR scope (#4755).
+    /// Imported collection defaults retain their existing CLR literal path;
+    /// their owning constructor cannot be synthesized in this compilation.
+    /// </summary>
+    internal bool NeedsSynthesizedValueStructDefaultCtor => Definition != null && !ReferenceEquals(Definition, this)
+        ? Definition.NeedsSynthesizedValueStructDefaultCtor
+        : ClrType == null
+        && !IsClass
         && !IsInline
         && !InstanceFieldInitializers.IsEmpty
         && (IsGenericDefinition

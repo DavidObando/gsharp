@@ -691,12 +691,7 @@ internal sealed class MemberDefEmitter
         }
 
         return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: AccessibilityMap.ToMethodVisibility(accessibility)
-                | MethodAttributes.SpecialName
-                | MethodAttributes.HideBySig
-                | MethodAttributes.Virtual
-                | MethodAttributes.Abstract
-                | (prop.IsOverride ? 0 : MethodAttributes.NewSlot),
+            attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString($"{(isGetter ? "get" : "set")}_{prop.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),

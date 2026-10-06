@@ -365,7 +365,7 @@ internal static class MagicCollectionZeroValue
             return null;
         }
 
-        return new BoundStructLiteralExpression(null, nestedStruct, inits.ToImmutable());
+        return new BoundStructLiteralExpression(null, nestedStruct, inits.ToImmutable(), copySource: null, isZeroInitialization: true);
     }
 
     private static BoundExpression? TrySynthesizeEmptyInstanceCore(

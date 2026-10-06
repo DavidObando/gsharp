@@ -2560,7 +2560,9 @@ internal sealed partial class ExpressionBinder
 
             if (orderedInitializers != null)
             {
-                if (!structSymbol.IsClass && structSymbol.PrimaryConstructorParameters.Any(parameter => parameter.Name == fieldName))
+                if (!callsPrimary
+                    && !structSymbol.IsClass
+                    && structSymbol.PrimaryConstructorParameters.Any(parameter => parameter.Name == fieldName))
                 {
                     inits.Add(hasField
                         ? new BoundFieldInitializer(Invariant.Required(field, "a primary input targets its field"), BindExpression(initSyntax.Value, memberType))

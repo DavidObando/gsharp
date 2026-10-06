@@ -409,6 +409,15 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundImportedInstanceCallExpression importedInstanceCall:
+                if (importedInstanceCall.Method.Name == "<Clone>$"
+                    && importedInstanceCall.Syntax is WithExpressionSyntax)
+                {
+                    diagnostics.ReportExpressionTreeUnsupported(
+                        LocationOf(importedInstanceCall.Syntax),
+                        "an imported data copy");
+                    return;
+                }
+
                 ValidateReceiver(importedInstanceCall.Receiver, diagnostics);
                 ValidateClrArguments(importedInstanceCall.Arguments, importedInstanceCall.ArgumentRefKinds, importedInstanceCall.Method, diagnostics);
                 return;
@@ -501,8 +510,13 @@ internal static class ExpressionTreeRestrictionValidator
             case BoundStructLiteralExpression structLiteral:
                 if (structLiteral.CopySource != null)
                 {
-                    diagnostics.ReportExpressionTreeUnsupported(LocationOf(expression.Syntax), "a data copy");
-                    return;
+                    if (structLiteral.StructType.ClrType != null)
+                    {
+                        diagnostics.ReportExpressionTreeUnsupported(LocationOf(expression.Syntax), "an imported data copy");
+                        return;
+                    }
+
+                    ValidateExpression(structLiteral.CopySource, diagnostics);
                 }
 
                 // User-declared struct/class composite literals (`Point{X:

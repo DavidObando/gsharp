@@ -2700,20 +2700,15 @@ public static class SpillSequenceSpiller
             for (var i = 0; i < structLiteral.Initializers.Length; i++)
             {
                 var original = structLiteral.Initializers[i];
-                initializers.Add(original.Field != null
-                    ? new BoundFieldInitializer(original.Field, spilledValues[i + (structLiteral.CopySource == null ? 0 : 1)], original.FieldDeclaringType)
-                    : new BoundFieldInitializer(
-                        Invariant.Required(
-                            original.Property,
-                            "a field initializer targets either a field or a property, and Field was null"),
-                        spilledValues[i + (structLiteral.CopySource == null ? 0 : 1)]));
+                initializers.Add(original with { Value = spilledValues[i] });
             }
 
             var value = new BoundStructLiteralExpression(
                 null,
                 structLiteral.StructType,
                 initializers.ToImmutable(),
-                structLiteral.CopySource == null ? null : spilledValues[0]);
+                structLiteral.CopySource == null ? null : spilledValues[0],
+                structLiteral.IsZeroInitialization);
             return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
         }
 

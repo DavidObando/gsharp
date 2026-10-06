@@ -369,6 +369,15 @@ definition-owned field assignment. Property backing storage and a closed generic
 argument cannot invent a store absent from that constructor. Ordinary constructed
 structs retain their definition's validated initializer constructor, but its
 validation does not credit newly required slots introduced by a type argument.
+Synthesized nested ordinary-constructor values are checked recursively at their
+constructed member types. An existing initialized handle in an open aggregate
+does not prove that a newly required generic sibling is initialized.
+This check visits the actual definition-owned initializer expression under its
+constructed owner's existing member-type substitution. Array elements and
+explicit default expressions are retained, not replaced by hypothetical zero
+values. Failures are anchored at the construction that closes the type argument.
+An allocation with a bound constant zero dimension has no required elements;
+positive or unknown dimensions still require complete non-null initialization.
 Selecting an in-type helper removes only literal values whose actual storage
 that constructor writes. Closed-generic public field values remain bound and
 planned when the definition has no store, even with a private collection sibling;

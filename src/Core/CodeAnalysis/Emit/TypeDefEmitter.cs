@@ -1557,11 +1557,15 @@ internal sealed class TypeDefEmitter
     /// <returns>The emitted constructor's MethodDef handle.</returns>
     public MethodDefinitionHandle EmitValueStructDefaultConstructor(StructSymbol structSym)
     {
-        var parameters = structSym.PrimaryConstructorParameters;
+        var usesPrimarySignature = structSym.HasPrimaryConstructor
+            && !structSym.ValueStructDefaultCtorIsZeroInitialization;
+        var parameters = usesPrimarySignature
+            ? structSym.PrimaryConstructorParameters
+            : ImmutableArray<ParameterSymbol>.Empty;
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {
-            bodyOffset = structSym.HasPrimaryConstructor
+            bodyOffset = usesPrimarySignature
                 ? this.emitClassPrimaryConstructorBodyBytes(structSym, default)
                 : this.emitValueStructDefaultConstructorBodyBytes(structSym);
         }

@@ -2697,7 +2697,7 @@ internal sealed partial class ExpressionBinder
                 // BindAccessorCall(receiver: null, ...) call site in the
                 // codebase pairs it with a non-null classSymbol, so a real
                 // receiver is always present when classSymbol is null.
-                return LowerCopyOrWith(receiver!, overrides, ce.Identifier.Location);
+                return LowerCopyOrWith(receiver!, overrides, ce.Identifier.Location, ce);
             }
 
             Diagnostics.ReportNamedArgumentOnlyValidForCopy(ce.Location);

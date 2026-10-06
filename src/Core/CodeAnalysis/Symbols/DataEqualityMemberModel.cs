@@ -25,7 +25,8 @@ internal static class DataEqualityMemberModel
             return null;
         }
 
-        if (owner.BaseClass is { IsData: true, ClrType: null } sourceBase)
+        var hierarchy = owner.GetHierarchy();
+        for (var level = 0; level < hierarchy.Count; level++)
         {
             var ancestor = hierarchy[level];
             if (level > 0 && ancestor is { IsData: true, ClrType: null })
@@ -49,18 +50,19 @@ internal static class DataEqualityMemberModel
                 return null;
             }
 
-        foreach (var method in ClrTypeUtilities.SafeGetMethods(
-                     clrBase, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-        {
-            var parameters = method.GetParameters();
-            if (method.Name == "Equals"
-                && method.IsVirtual && !method.IsFinal && !method.IsGenericMethod
-                && ClrTypeUtilities.AreSame(method.ReturnType, typeof(bool))
-                && parameters.Length == 1
-                && ClrTypeUtilities.AreSame(parameters[0].ParameterType, clrBase))
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(
+                         clrBase, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             {
-                importedMethod = method;
-                return importedBase;
+                var parameters = method.GetParameters();
+                if (method.Name == "Equals"
+                    && method.IsVirtual && !method.IsFinal && !method.IsGenericMethod
+                    && ClrTypeUtilities.AreSame(method.ReturnType, typeof(bool))
+                    && parameters.Length == 1
+                    && ClrTypeUtilities.AreSame(parameters[0].ParameterType, clrBase))
+                {
+                    importedMethod = method;
+                    return importedBase;
+                }
             }
         }
 

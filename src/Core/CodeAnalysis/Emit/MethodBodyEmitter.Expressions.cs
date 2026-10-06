@@ -1211,8 +1211,7 @@ internal sealed partial class MethodBodyEmitter
         var typeDef = this.outer.userTokens.ResolveUserTypeToken(literal.StructType);
         bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(literal.StructType);
         var structDefinition = literal.StructType.Definition ?? literal.StructType;
-        var callsPrimary = literal.CopySource == null && literal.StructType.ClrType == null
-            && structDefinition.IsData && structDefinition.HasPrimaryConstructor;
+        var callsPrimary = literal.CallsPrimaryConstructor;
         var primaryValues = new HashSet<BoundFieldInitializer>();
 
         // Class literal: newobj <ctor>; (dup; <value>; stfld) per init.
@@ -1236,7 +1235,6 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            EntityHandle ctorHandle;
             if (literal.CopySource != null)
             {
                 this.EmitExpression(literal.CopySource);
@@ -1253,44 +1251,45 @@ internal sealed partial class MethodBodyEmitter
 
                 this.il.OpCode(ILOpCode.Callvirt);
                 this.il.Token(cloneToken);
-                goto ApplyClassInitializers;
-            }
-
-            if (callsPrimary)
-            {
-                this.EmitStructLiteralPrimaryArguments(literal, primaryValues);
-                ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType);
-            }
-            else if (isGeneric)
-            {
-                ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType);
-            }
-            else if (this.outer.cache.ClassCtorHandles.TryGetValue(literal.StructType, out var ctorDef))
-            {
-                ctorHandle = ctorDef;
-            }
-            else if (literal.StructType.ClrType != null)
-            {
-                // Issue #2263: an imported `data class` — construct via its real
-                // emitted parameterless `.ctor()` (a `data class` always emits
-                // both a parameterless and a primary constructor), then set each
-                // overridden/copied field below. Mirrors the imported field /
-                // setter resolution branches already gated on ClrType != null.
-                var clrCtor = literal.StructType.ClrType.GetConstructor(Type.EmptyTypes)
-                    ?? throw new InvalidOperationException(
-                        $"Imported data class '{literal.StructType.Name}' has no parameterless constructor.");
-                ctorHandle = this.outer.memberRefs.GetCtorReference(clrCtor);
             }
             else
             {
-                throw new InvalidOperationException(
-                    $"Class '{literal.StructType.Name}' has no emitted default ctor.");
+                EntityHandle ctorHandle;
+                if (callsPrimary)
+                {
+                    this.EmitStructLiteralPrimaryArguments(literal, primaryValues);
+                    ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType);
+                }
+                else if (isGeneric)
+                {
+                    ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType);
+                }
+                else if (this.outer.cache.ClassCtorHandles.TryGetValue(literal.StructType, out var ctorDef))
+                {
+                    ctorHandle = ctorDef;
+                }
+                else if (literal.StructType.ClrType != null)
+                {
+                    // Issue #2263: an imported `data class` — construct via its real
+                    // emitted parameterless `.ctor()` (a `data class` always emits
+                    // both a parameterless and a primary constructor), then set each
+                    // overridden/copied field below. Mirrors the imported field /
+                    // setter resolution branches already gated on ClrType != null.
+                    var clrCtor = literal.StructType.ClrType.GetConstructor(Type.EmptyTypes)
+                        ?? throw new InvalidOperationException(
+                            $"Imported data class '{literal.StructType.Name}' has no parameterless constructor.");
+                    ctorHandle = this.outer.memberRefs.GetCtorReference(clrCtor);
+                }
+                else
+                {
+                    throw new InvalidOperationException(
+                        $"Class '{literal.StructType.Name}' has no emitted default ctor.");
+                }
+
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(ctorHandle);
             }
 
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(ctorHandle);
-
-        ApplyClassInitializers:
             foreach (var init in literal.Initializers)
             {
                 if (primaryValues.Contains(init))
@@ -1355,9 +1354,11 @@ internal sealed partial class MethodBodyEmitter
         // ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor) that
         // zero-initializes and runs ALL declared initializers in-type;
         // construct through it and skip the literal's injected
-        // declared-initializer entries (identified below by reference to the
-        // symbol's InstanceFieldInitializers expressions — the binder injects
-        // exactly those instances), so initializer side effects run once.
+        // declaration-origin entries, whose provenance survives lowering,
+        // so initializer side effects run once while authored overrides remain.
+        var usesOwningInitializerConstructor = this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
+            && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition);
+
         if (literal.CopySource != null)
         {
             this.EmitExpression(literal.CopySource);
@@ -1375,30 +1376,19 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType));
         }
 
-        HashSet<BoundExpression>? declaredInitializerValues = null;
-        if (!callsPrimary && literal.CopySource == null && this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
-            && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition))
-        {
-            declaredInitializerValues = new HashSet<BoundExpression>(ReferenceEqualityComparer.Instance);
-            foreach (var declared in literal.StructType.InstanceFieldInitializers)
-            {
-                declaredInitializerValues.Add(declared.Value);
-            }
-
-            foreach (var declared in structDefinition.InstanceFieldInitializers)
-            {
-                declaredInitializerValues.Add(declared.Value);
-            }
-        }
-
         // ldloca slot; initobj typedef — zero-initializes the value type —
         // or, for a #3219 struct, ldloca slot; call .ctor() (which zeroes and
         // runs the declared initializers in-type).
         if (literal.CopySource == null && !callsPrimary)
         {
             this.il.LoadLocalAddress(slot);
-            if (declaredInitializerValues != null)
+            if (usesOwningInitializerConstructor)
             {
+                for (var marker = 0; marker < structDefinition.LiteralInitializerMarkerCount; marker++)
+                {
+                    this.il.LoadConstantI4(0);
+                }
+
                 this.il.OpCode(ILOpCode.Call);
                 this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType));
             }
@@ -1413,7 +1403,7 @@ internal sealed partial class MethodBodyEmitter
         foreach (var init in literal.Initializers)
         {
             if (literal.IsZeroInitialization && structDefinition.ValueStructDefaultCtorIsZeroInitialization
-                && declaredInitializerValues != null && init.Field is { } zeroField
+                && usesOwningInitializerConstructor && init.Field is { } zeroField
                 && MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(literal.Syntax, literal.StructType, zeroField) != null)
             {
                 // Skip only the definition-owned zero stores that actually ran.

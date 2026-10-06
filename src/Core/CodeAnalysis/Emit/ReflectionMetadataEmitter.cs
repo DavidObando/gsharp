@@ -1225,27 +1225,7 @@ internal sealed class ReflectionMetadataEmitter
         // not need a hard back-reference to this emitter.
         this.conversionEmitter = new ConversionEmitter(this.emitCtx, this.cache, this.wellKnown, this.memberRefs.GetElementTypeToken);
 
-        // PR-E-6: DataStructSynthesizer wires up after ConversionEmitter
-        // because it needs `conversionEmitter.EmitBoxIfNeeded` for every
-        // field load. Like ConversionEmitter and SlotPlanner, it consumes
-        // the remaining root-emitter helpers it depends on as delegates so
-        // it does not need a hard back-reference to this emitter.
-        this.dataStructSynth = new DataStructSynthesizer(
-            this.emitCtx,
-            this.cache,
-            this.wellKnown,
-            this.conversionEmitter,
-            this.ctorBodies.EmitDataStructPrimaryConstructorBodyBytes,
-            this.signatures.EncodeTypeSymbol,
-            this.memberRefs.GetElementTypeToken,
-            this.memberRefs.GetTypeReference,
-            this.customAttrEncoder.NextParameterHandle,
-            this.userTokens.ResolveUserTypeToken,
-            this.userTokens.ResolveFieldToken,
-            this.userTokens.GetUserStructMethodRef,
-            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType));
-
-        // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
+        // PR-E-7: MemberDefEmitter wires up after ConversionEmitter.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
         // trio and threads delegate callbacks for the five root-emitter
         // helpers it uses (EmitFunction, EncodeTypeSymbol, NextParameterHandle,
@@ -1314,6 +1294,7 @@ internal sealed class ReflectionMetadataEmitter
             this.cache,
             this.wellKnown,
             this.conversionEmitter,
+            this.ctorBodies.EmitDataStructPrimaryConstructorBodyBytes,
             this.signatures.EncodeTypeSymbol,
             this.memberRefs.GetElementTypeToken,
             this.memberRefs.GetTypeReference,
@@ -2242,12 +2223,19 @@ internal sealed class ReflectionMetadataEmitter
                 // this row; their clone is abstract and has no body.
                 this.cache.DataClassCopyConstructorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 1);
                 this.cache.DataClassCloneHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 2);
-                this.cache.DataClassEqualsTypedHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 3);
+                this.cache.MethodHandles[c.DataClassCloneMethod] = this.cache.DataClassCloneHandles[c];
+                this.cache.MethodHandles[c.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow + 3);
+                this.cache.MethodHandles[c.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 4);
+                if (c.DataEqualsBase is { } baseEquals)
+                {
+                    this.cache.MethodHandles[baseEquals] = MetadataTokens.MethodDefinitionHandle(methodRow + 5);
+                }
+
+                this.cache.MethodHandles[c.DataClassCloneMethod] = this.cache.DataClassCloneHandles[c];
                 methodRow += 10
                     + (c.DataEqualsBase != null ? 1 : 0)
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
-                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0)
-                    + (DataStructSynthesizer.GetDataEqualityBase(c) != null ? 1 : 0);
+                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
             }
 
             if (!c.Methods.IsDefaultOrEmpty)
@@ -2532,7 +2520,7 @@ internal sealed class ReflectionMetadataEmitter
                 && (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.NeedsValueStructZeroHelper))
             {
                 var initializerCtor = MetadataTokens.MethodDefinitionHandle(methodRow++);
-                if (s.HasPrimaryConstructor)
+                if (s.HasPrimaryConstructor && !s.ValueStructDefaultCtorIsZeroInitialization)
                 {
                     this.cache.ClassPrimaryCtorHandles[s] = initializerCtor;
                 }

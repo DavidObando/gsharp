@@ -9,6 +9,7 @@ using System.Reflection;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Text;

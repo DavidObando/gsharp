@@ -110,7 +110,7 @@ Since issue #948, the inline field initializers the translator emits here — `p
 
 `data class`/`data struct` synthesize equality and copy/update ergonomics (ADR-0029, ADR-0032). The `record` *keyword* is **not** emitted (removed by ADR-0078); the canonical spelling is `data class`/`data struct`. C# positional records map to the G# primary-constructor form (`data struct Point(X int32, Y int32)`), fields-only records to the body form. A C# `struct` with exactly one field that C# treats as a newtype is *not* auto-promoted to `inline struct` (ADR-0033) — that is a semantic judgment the tool will not make; it emits a plain `struct` and leaves `inline struct` adoption to the human.
 
-**T4 — fieldless record → zero-field `data` type.** Zero-field data types are supported (issue #2363), so a C# **fieldless record** — typically the `abstract record Shape;` base of a closed `record` hierarchy — maps to a `data class` (or `data struct`), marked `open` when any case derives from it (§B.6). G# has **no `abstract` class modifier** (the keyword is not recognized by the parser; `abstract class` → `GS0125`), so C# `abstract` is **dropped** (the `open class` is subclassable but not non-instantiable). The record-synthesized `IEquatable<Self>` is preserved in the base list for CLR ABI parity and is implemented by the data type's synthesized typed `Equals`. The loss of `abstract` is recorded as an Info diagnostic. The case records (`sealed record Circle(double Radius) : Shape`) keep the `data class Circle(Radius float64) : Shape` mapping.
+**T4 — fieldless record → zero-field `data` type.** Zero-field data types are supported (issue #2363), so a C# **fieldless record** with no positional parameter list — typically the `abstract record Shape;` base of a closed `record` hierarchy — maps to a `data class` (or `data struct`). An explicit-but-empty positional list remains a positional data declaration. C# `abstract` is kept as G#'s `abstract` class modifier (ADR-0195, issue #4674), so `abstract record Shape;` becomes `abstract data class Shape : IEquatable[Shape] { … }`; `abstract` implies `open` and preserves non-instantiability. The record-synthesized `IEquatable<Self>` is preserved in the base list for CLR ABI parity and is implemented by the data type's synthesized typed `Equals`. The case records (`sealed record Circle(double Radius) : Shape`) keep the `data class Circle(Radius float64) : Shape, IEquatable[Circle]` mapping and their self interfaces.
 
 **Record ABI (issue #4675).** The `IEquatable<Self>` contract also applies to
 generic records, using the self-instantiation rather than the open definition,
@@ -122,9 +122,13 @@ into an existing G# data type: its inheritance shape belongs to the user part.
 Get-only properties retain both their getter-only metadata and initializer
 values. A computed positional property may consume its constructor parameter
 through field initializers instead of a synthesized positional store; missing
-storage in any other primary-constructor shape is an internal error. Native
-positional data construction always invokes the primary constructor, independently
-of initializer-binding order. A redeclared positional property must retain its
+storage in any other primary-constructor shape is an internal error. Explicit
+native positional data construction always invokes the primary constructor,
+independently of initializer-binding order. Bare positional data-struct declarations remain
+zero initialization (ADR-0159): their synthesized collection zero values do not
+run the primary constructor or ordinary field initializers. This distinction
+is carried on the bound literal through rewriting and emission.
+A redeclared positional property must retain its
 parameter's type, and closed-hierarchy bases retain protected copy constructors.
 An explicitly redeclared auto-property is elided only when its initializer
 references the matching constructor parameter by semantic identity and its
@@ -422,9 +426,9 @@ Canonical output uses **width-bearing** primitive names (ADR-0049): C# `int`→`
 
 #### B.13 Data-type structural equality and `IEquatable<Self>` — ADR-0078, ADR-0025; amended by issue #4675
 
-A `data class`/`data struct` auto-synthesizes value (structural) equality, `GetHashCode`, and the `with` updater. A C# record keeps its compiler-synthesized `IEquatable<Self>` in the base clause so the translated CLR type preserves the C# public ABI; the data type's synthesized typed `Equals` implements the interface. Naming the enclosing type as a base-clause type *argument* is legal since issue #949. The structural `==`/`!=` and `with` come for free from the `data` modifier.
+A `data class`/`data struct` auto-synthesizes value (structural) equality, `GetHashCode`, and the `with` updater. A C# record keeps its compiler-synthesized `IEquatable<Self>` in the base clause so the translated CLR type preserves the C# public ABI; the compiler-owned typed equality member implements the interface. Naming the enclosing type as a base-clause type *argument* is legal since issue #949. For inherited data classes, a compiler-owned typed-base override preserves most-derived structural dispatch (#4777), including calls through inherited interfaces. The self comparison's nonvirtual base-field call remains separate from that virtual dispatch (ADR-0029's 2026-10-04 amendment). The structural `==`/`!=` and `with` come from the `data` modifier.
 
-A **non-`data` `struct`** that *explicitly* implements an interface (`struct Money : IEquatable<Money>` with a hand-written `Equals`) keeps its interface clause: gap #976 — the parser rejecting a `:` after a struct name — is **resolved** (issue #976), so the translator emits `struct Money(Cents int32) : IEquatable[Money]` and the struct's own `Equals`/`GetHashCode` satisfy the interface. A `struct` naming a **class or struct** base (rather than an interface) is now rejected with the dedicated diagnostic `GS0382` rather than the former generic `GS0005`, matching the value-type-has-no-base-class rule. Both record-synthesized and hand-implemented interfaces are preserved.
+A **non-`data` `struct`** that *explicitly* implements an interface (`struct Money : IEquatable<Money>` with a hand-written `Equals`) keeps its interface clause: gap #976 — the parser rejecting a `:` after a struct name — is **resolved** (issue #976), so the translator emits `struct Money(Cents int32) : IEquatable[Money]` and the struct's own `Equals`/`GetHashCode` satisfy the interface. A `struct` naming a **class or struct** base (rather than an interface) is now rejected with the dedicated diagnostic `GS0382` rather than the former generic `GS0005`, matching the value-type-has-no-base-class rule. Both data-synthesized and genuinely hand-implemented interfaces are preserved.
 
 #### B.14 Owned value-aggregate methods → lifted receiver-clause funcs — issue #938, ADR-0079
 

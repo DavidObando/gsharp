@@ -1465,7 +1465,7 @@ public abstract class BoundTreeRewriter
 
         return builder == null && copySource == node.CopySource
             ? node
-            : new BoundStructLiteralExpression(node.Syntax, node.StructType, builder?.ToImmutable() ?? node.Initializers, copySource);
+            : new BoundStructLiteralExpression(node.Syntax, node.StructType, builder?.ToImmutable() ?? node.Initializers, copySource, node.IsZeroInitialization);
     }
 
     /// <summary>Rewrites a block expression.</summary>

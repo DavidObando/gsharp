@@ -2090,9 +2090,7 @@ public sealed partial class CSharpToGSharpTranslator
                         && !isNullableValueType
                         && HasMutableToStringOverride(memberType))
                     ? new InvocationExpression(new MemberAccessExpression(memberValue, "ToString"), Array.Empty<GExpression>())
-                    : new ConversionExpression(
-                        this.typeMapper.Map(this.context.Compilation.GetSpecialType(SpecialType.System_Object), this.context, node.GetLocation()),
-                        memberValue);
+                    : new ConversionExpression(objectType, memberValue);
                 statements.Add(new ExpressionStatement(
                     new InvocationExpression(
                         new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
@@ -2144,6 +2142,11 @@ public sealed partial class CSharpToGSharpTranslator
                 && method.Parameters[0].RefKind == Microsoft.CodeAnalysis.RefKind.None
                 && SymbolEqualityComparer.Default.Equals(method.Parameters[0].Type, stringBuilderType));
         }
+
+        private static bool IsExtensionMethodDeclaration(MemberDeclarationSyntax member) =>
+            member is MethodDeclarationSyntax method
+            && method.ParameterList.Parameters.Count > 0
+            && method.ParameterList.Parameters[0].Modifiers.Any(SyntaxKind.ThisKeyword);
 
         private bool ShouldAttachOwnedExtensions(
             TypeDeclarationSyntax node,

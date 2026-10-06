@@ -7,8 +7,6 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
-using System.Collections.Immutable;
-using System.Linq;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -26,6 +24,11 @@ public sealed class BoundStructLiteralExpression : BoundExpression
     }
 
     public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers, BoundExpression? copySource)
+        : this(syntax, structType, initializers, copySource, isZeroInitialization: false)
+    {
+    }
+
+    public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers, BoundExpression? copySource, bool isZeroInitialization)
         : base(syntax)
     {
         if (copySource != null && (!structType.IsData || !initializers.IsEmpty))
@@ -53,6 +56,12 @@ public sealed class BoundStructLiteralExpression : BoundExpression
     /// materializes a native data copy rather than constructing a new value.
     /// </summary>
     public BoundExpression? CopySource { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this literal supplies only sound collection zero values
+    /// for an omitted initializer, rather than explicitly constructing a value.
+    /// </summary>
+    public bool IsZeroInitialization { get; }
 
     public override TypeSymbol Type => StructType;
 
@@ -128,11 +137,9 @@ public sealed class BoundStructLiteralExpression : BoundExpression
             return false;
         }
 
-        for (int i = 0; i < block.Statements.Length; i++)
+        foreach (var statement in block.Statements)
         {
-            if (block.Statements[i] is not BoundVariableDeclaration { Initializer: not null } declaration
-                || literal.Initializers[i].Value is not BoundVariableExpression value
-                || value.Variable != declaration.Variable)
+            if (statement is not BoundVariableDeclaration { Initializer: not null })
             {
                 return false;
             }

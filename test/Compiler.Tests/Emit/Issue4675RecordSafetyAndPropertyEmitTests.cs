@@ -921,6 +921,133 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
                 .Replace("Console.WriteLine(outer.Value)", construction == "var outer Envelope" ? string.Empty : "Console.WriteLine(outer.Value)", StringComparison.Ordinal)
                 .Replace("Console.WriteLine(outer.Mark())", construction == "var outer Envelope" ? string.Empty : "Console.WriteLine(outer.Mark())", StringComparison.Ordinal);
 
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public void OrdinaryGenericFixedArray_RejectsUnsuppliedConstructedElements(int length, bool nested)
+    {
+        var declaration = nested ? "var item Outer[readonly managed[int32]]" : "var item Holder[readonly managed[int32]]";
+        Reject(OrdinaryGenericArraySource(length, nested, declaration), declaration);
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public void OrdinaryGenericFixedArray_RejectsExplicitDefaultElements(int length, bool nested)
+    {
+        var declaration = nested ? "var item Outer[readonly managed[int32]]" : "var item Holder[readonly managed[int32]]";
+        var source = OrdinaryGenericArraySource(length, nested, declaration)
+            .Replace($"private var Handles [{length}]T", $"private var Handles [{length}]T = [{length}]T{{VALUES}}", StringComparison.Ordinal)
+            .Replace("VALUES", string.Join(", ", Enumerable.Repeat("default(T)", length)), StringComparison.Ordinal);
+        Reject(source, declaration);
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public void OrdinaryGenericFixedArray_RetainsValueElementZeros(int length, bool nested)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var declaration = nested ? "var item Outer[int32]" : "var item Holder[int32]";
+        var dll = fixture.Compile(OrdinaryGenericArraySource(length, nested, declaration), "OrdinaryGenericArray", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal($"0\n{length}\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public void OrdinaryGenericFixedArray_PreservesExplicitlySuppliedElements(int length, bool nested)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var source = OrdinaryGenericArraySource(length, nested, """
+            var value = 7
+            Provider[readonly managed[int32]].Value = readonly managed(value)
+            var item CONTAINER[readonly managed[int32]]
+            """.Replace("CONTAINER", nested ? "Outer" : "Holder", StringComparison.Ordinal)).Replace("struct Holder[T] {", """
+                class Provider[T] {
+                    shared {
+                        public var Value T
+                        public var Calls int32
+                        public func Next() T {
+                            Calls += 1
+                            return Value
+                        }
+                    }
+                }
+                struct Holder[T] {
+                """, StringComparison.Ordinal)
+                .Replace($"private var Handles [{length}]T", $"private var Handles [{length}]T = [{length}]T{{VALUES}}", StringComparison.Ordinal)
+                .Replace("VALUES", string.Join(", ", Enumerable.Repeat("Provider[T].Next()", length)), StringComparison.Ordinal)
+                .Replace("Console.WriteLine(item.Length())", """
+                    Console.WriteLine(item.Length())
+                    Console.WriteLine(Provider[readonly managed[int32]].Calls)
+                    """, StringComparison.Ordinal);
+        var dll = fixture.Compile(source, "OrdinaryGenericArray", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal($"7\n{length}\n{length}\n", fixture.Run(dll));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PrivateZeroLengthHandleArray_HasNoRequiredElements(bool generic)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package EmptyHandleArray
+            import System
+            data struct BoxGENERIC(Value int32) {
+                private var Handles [0]ELEMENT
+                public func Length() int32 -> Handles.Length
+            }
+            func Main() {
+                var box CONSTRUCTION
+                Console.WriteLine(box.Length())
+                var direct [0]readonly managed[int32]
+                Console.WriteLine(direct.Length)
+            }
+            """.Replace("GENERIC", generic ? "[T]" : string.Empty, StringComparison.Ordinal)
+                .Replace("ELEMENT", generic ? "T" : "readonly managed[int32]", StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", generic ? "Box[readonly managed[int32]]" : "Box", StringComparison.Ordinal),
+            "EmptyHandleArray", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("0\n0\n", fixture.Run(dll));
+    }
+
+    private static string OrdinaryGenericArraySource(int length, bool nested, string construction)
+        => """
+            package OrdinaryGenericArray
+            import System
+            struct Holder[T] {
+                private var Handles [LENGTH]T
+                public func Read() T -> Handles[0]
+                public func Length() int32 -> Handles.Length
+            }
+            data struct Outer[T](Value int32) {
+                private var Nested Holder[T]
+                private var Items []int32
+                public func Read() T -> Nested.Read()
+                public func Length() int32 -> Nested.Length()
+            }
+            func Main() {
+                CONSTRUCTION
+                Console.WriteLine(READ)
+                Console.WriteLine(item.Length())
+            }
+            """.Replace("LENGTH", length.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal)
+                .Replace("READ", construction.Contains("readonly managed", StringComparison.Ordinal) ? "*item.Read()" : "item.Read()", StringComparison.Ordinal)
+                .Replace("data struct Outer[T](Value int32)", nested ? "data struct Outer[T](Value int32)" : "data struct UnusedOuter[T](Value int32)", StringComparison.Ordinal);
+
     private static string PrivateFixedHandleArraySource(int length, string construction, bool nested)
         => """
             package PrivateFixedHandleArray

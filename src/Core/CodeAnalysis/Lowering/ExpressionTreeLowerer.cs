@@ -715,8 +715,25 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         BoundStructLiteralExpression structLiteral,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
-        if (structLiteral.StructType.ClrType == null && structLiteral.StructType.IsData
-            && structLiteral.StructType.HasPrimaryConstructor)
+        if (structLiteral.CopySource != null)
+        {
+            return structLiteral.StructType.IsClass
+                ? new BoundClrStaticCallExpression(
+                    structLiteral.Syntax,
+                    ExpressionCallInstanceMethodInfoMethod,
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MethodCallExpression), NullabilityFreeReason.TypeLiteral),
+                    ImmutableArray.Create<BoundExpression>(
+                        UpcastToExpression(this.TranslateExpression(structLiteral.CopySource, parameterMap)),
+                        BuildUserFunctionMethodInfoLookup(
+                            structLiteral.Syntax,
+                            structLiteral.StructType.DataClassCloneMethod,
+                            structLiteral.StructType,
+                            BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                        BuildExpressionArray(ImmutableArray<BoundExpression>.Empty)))
+                : this.TranslateExpression(structLiteral.CopySource, parameterMap);
+        }
+
+        if (structLiteral.CallsPrimaryConstructor)
         {
             var arguments = ImmutableArray.CreateBuilder<BoundExpression>();
             var consumed = new HashSet<BoundFieldInitializer>();
@@ -1015,17 +1032,10 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ReflectionConstructorInfoTypeSymbol,
             ImmutableArray.Create<BoundExpression>(BuildTypeArray(GetArgumentTypes(constructor.Arguments))));
 
-        // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
-        // synthesized type (Binding.AnonymousTypeCache) has no plain fields —
-        // only get-only auto-properties, one per primary-ctor parameter, in
-        // the same order as constructor.Arguments. Roslyn always emits the
-        // 3-arg `Expression.New(ctor, args, members)` overload for a real C#
-        // anonymous type so consumers like EF Core's model builder
-        // (`NewExpression.Members`) can recognize which member each ctor
-        // argument initializes; mirror that here. Ordinary class/data-struct
-        // constructor calls keep Fields non-empty and are unaffected — they
-        // keep using the 2-arg overload below.
-        if (constructor.StructType.Fields.IsDefaultOrEmpty && !constructor.StructType.Properties.IsDefaultOrEmpty)
+        // Only property-based anonymous objects carry the NewExpression.Members
+        // contract. Named positional data types can also have properties without
+        // fields, including properties that hide inherited members.
+        if (constructor.StructType.Definition.HasAnonymousConstructorMembers)
         {
             var membersArray = BuildMemberInfoArray(constructor.StructType, constructor.StructType.PrimaryConstructorParameters);
             return new BoundClrStaticCallExpression(
