@@ -2612,11 +2612,38 @@ internal sealed partial class ExpressionBinder
                     structSym,
                     new NameExpressionSyntax(ce.SyntaxTree, ce.Identifier),
                     out var nestedConstructorType,
-                    out _,
-                    ce.TypeArgumentList?.Arguments.Count ?? -1)
-                    && nestedConstructorType != null)
+                    out var nestedConversionType,
+                    ce.TypeArgumentList?.Arguments.Count ?? -1))
                 {
-                    return overloads.BindConstructorCallExpression(ce, nestedConstructorType);
+                    if (nestedConstructorType != null)
+                    {
+                        return overloads.BindConstructorCallExpression(ce, nestedConstructorType);
+                    }
+
+                    // Enums use the same explicit conversion as an unqualified
+                    // T(value), retaining the resolved owner rather than a homonym.
+                    if (nestedConversionType != null)
+                    {
+                        if (ce.TypeArgumentList != null)
+                        {
+                            Diagnostics.ReportWrongTypeArgumentCount(
+                                ce.TypeArgumentList.Location, nestedConversionType.Name, 0, ce.TypeArgumentList.Arguments.Count);
+                            return new BoundErrorExpression(ce);
+                        }
+
+                        if (ce.Arguments.Count != 1)
+                        {
+                            Diagnostics.ReportWrongArgumentCount(
+                                ce.Location, nestedConversionType.Name, 1, ce.Arguments.Count);
+                            return new BoundErrorExpression(ce);
+                        }
+
+                        TypeSymbol conversionTarget = ce.NullableQuestionToken != null
+                            ? NullableTypeSymbol.Get(nestedConversionType)
+                            : nestedConversionType;
+                        reportObsoleteUseIfApplicable(ce.Identifier.Location, conversionTarget, conversionTarget.Name);
+                        return conversions.BindConversion(ce.Arguments[0], conversionTarget, allowExplicit: true);
+                    }
                 }
 
                 return BindUserTypeStaticCall(structSym, ce);

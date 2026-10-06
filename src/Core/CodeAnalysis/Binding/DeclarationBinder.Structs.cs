@@ -747,7 +747,9 @@ internal sealed partial class DeclarationBinder
                         continue;
                     }
 
-                    if (resolved is StructSymbol baseStruct && baseStruct.IsClass)
+                    // Imported semantic aggregates still follow CLR inheritance
+                    // eligibility and constructor binding, not source `open` policy.
+                    if (resolved is StructSymbol baseStruct && baseStruct.IsClass && baseStruct.ClrType == null)
                     {
                         // Issue #949: reject genuine self-inheritance
                         // (`class A : A`, or the generic `class A[T] : A[T]`)
@@ -814,6 +816,12 @@ internal sealed partial class DeclarationBinder
 
                         if (clrType.IsClass && !clrType.IsSealed)
                         {
+                            if (!ImportedAssemblySemantics.IsInheritableClass(clrType))
+                            {
+                                Diagnostics.ReportBaseClassNotOpen(baseLocation, baseName);
+                                continue;
+                            }
+
                             if (i != 0)
                             {
                                 Diagnostics.ReportUnableToFindType(baseLocation, baseName);

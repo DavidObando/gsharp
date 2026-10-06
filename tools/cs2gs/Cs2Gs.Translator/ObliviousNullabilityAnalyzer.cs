@@ -46,11 +46,11 @@ namespace Cs2Gs.Translator;
 ///
 /// <para>
 /// The whole result is keyed on the declaration's <see cref="ISymbol"/> and is
-/// consulted ONLY at declaration sites (see
+/// consulted at declaration and corresponding value-sink sites (see
 /// <c>CSharpToGSharpTranslator.DeclarationVisitor.IsPromotedToNullableReference</c>
-/// and the method-return path), so name positions (typeof/construction/base
-/// list) and — because the analyzer never runs for a nullable-enabled
-/// compilation — enabled projects are provably untouched.
+/// and the method-return path). Tuple positions use their own declaration's
+/// annotation and writable contract, including oblivious islands in enabled
+/// projects; explicitly non-null leaves and frozen metadata stay unchanged.
 /// </para>
 /// </summary>
 internal static class ObliviousNullabilityAnalyzer
@@ -840,7 +840,8 @@ internal static class ObliviousNullabilityAnalyzer
     /// <summary>
     /// Whether one reference-typed leaf inside a tuple-valued declaration is
     /// null-tainted. Tuple leaves are tracked independently so evidence for
-    /// one element never widens its siblings.
+    /// one element never widens its siblings. Only writable, genuinely
+    /// oblivious source positions may be promoted.
     /// </summary>
     /// <param name="compilation">The compilation containing the query.</param>
     /// <param name="symbol">The tuple-valued declaration symbol.</param>
@@ -856,36 +857,12 @@ internal static class ObliviousNullabilityAnalyzer
         if (symbol == null
             || elementPath == null
             || elementPath.Count == 0
-            || compilation == null
-            || (compilation.Options.NullableContextOptions != NullableContextOptions.Disable
-                && symbol is not INamedTypeSymbol))
+            || compilation == null)
         {
             return false;
         }
 
         RegisterSourceAssemblies(compilation, siblingCompilations);
-        if (compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
-        {
-            foreach (CSharpCompilation sibling in siblingCompilations ?? Array.Empty<CSharpCompilation>())
-            {
-                if (sibling != null
-                    && sibling.Options.NullableContextOptions == NullableContextOptions.Disable
-                    && RemapToCompilation(sibling, symbol) is ISymbol remapped
-                    && IsTupleElementTaintedCore(
-                        sibling,
-                        remapped,
-                        EncodeTuplePath(elementPath),
-                        siblingCompilations,
-                        new HashSet<ScalarQuery>(ScalarQueryComparer.Instance),
-                        new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance)))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
         return IsTupleElementTaintedCore(
             compilation,
             symbol,
@@ -912,7 +889,6 @@ internal static class ObliviousNullabilityAnalyzer
         if (compilation == null
             || expression == null
             || model == null
-            || compilation.Options.NullableContextOptions != NullableContextOptions.Disable
             || !TryResolveTupleElementSource(expression, model, out TupleElementKey source))
         {
             return false;
@@ -921,8 +897,8 @@ internal static class ObliviousNullabilityAnalyzer
         RegisterSourceAssemblies(compilation, siblingCompilations);
         return IsTupleElementTaintedCore(
             compilation,
-            source.Symbol,
-            source.Path,
+            source.ContractSymbol,
+            source.ContractPath,
             siblingCompilations,
             new HashSet<ScalarQuery>(ScalarQueryComparer.Instance),
             new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance));
@@ -955,7 +931,6 @@ internal static class ObliviousNullabilityAnalyzer
         if (compilation == null
             || expression == null
             || model == null
-            || compilation.Options.NullableContextOptions != NullableContextOptions.Disable
             || !TryResolveForEachDeconstructionSource(expression, model, out TupleElementKey source))
         {
             return false;
@@ -964,8 +939,8 @@ internal static class ObliviousNullabilityAnalyzer
         RegisterSourceAssemblies(compilation, siblingCompilations);
         return IsTupleElementTaintedCore(
             compilation,
-            source.Symbol,
-            source.Path,
+            source.ContractSymbol,
+            source.ContractPath,
             siblingCompilations,
             new HashSet<ScalarQuery>(ScalarQueryComparer.Instance),
             new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance));
@@ -1046,6 +1021,73 @@ internal static class ObliviousNullabilityAnalyzer
 
     internal static bool HasNestedTupleSlots(ITypeSymbol type) => NestedTupleSlots(type).Count != 0;
 
+    internal static IConversionOperation GetResultConversion(ExpressionSyntax expression, SemanticModel model)
+    {
+        if (expression == null)
+        {
+            return null;
+        }
+
+        ExpressionSyntax value = expression;
+        while (value is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
+        {
+            value = value is ParenthesizedExpressionSyntax parenthesized
+                ? parenthesized.Expression : ((CheckedExpressionSyntax)value).Expression;
+        }
+
+        IOperation operation = model.GetOperation(value);
+        while (operation?.Parent is IConversionOperation parent
+            && (parent.Syntax == value || parent.Syntax == expression))
+        {
+            operation = parent;
+        }
+
+        return operation?.Syntax == value || operation?.Syntax == expression
+            ? operation as IConversionOperation : null;
+    }
+
+    internal static IMethodSymbol GetContextualOperator(
+        ExpressionSyntax expression,
+        SemanticModel model,
+        ITypeSymbol resultType)
+    {
+        ITypeSymbol operandType = expression == null ? null : model.GetTypeInfo(expression).Type;
+        if (operandType == null || resultType == null)
+        {
+            return null;
+        }
+
+        // Aggregate tuple conversions bind at the envelope, not each leaf.
+        Microsoft.CodeAnalysis.CSharp.Conversion conversion =
+            model.Compilation.ClassifyConversion(operandType, resultType);
+        return conversion.IsUserDefined ? conversion.MethodSymbol : null;
+    }
+
+    internal static bool IsDirectlyNullable(IOperation value, SemanticModel model, bool respectNullGuards)
+    {
+        if (value is IConversionOperation conversion)
+        {
+            // Read the converted result before the operand, including contextual
+            // implicit operators. Only genuinely lifted inputs can bypass them.
+            return conversion.IsTryCast
+                || (CanForwardCastOperandNullability(conversion)
+                    && IsDirectlyNullable(conversion.Operand, model, respectNullGuards))
+                || (conversion.OperatorMethod != null
+                    && !IsNonNullableValueType(conversion.Type)
+                    && IsDeclaredNullablePosition(conversion.OperatorMethod.ReturnType));
+        }
+
+        return value?.Syntax is ExpressionSyntax expression
+            && IsDirectlyNullable(expression, model, respectNullGuards, readConversion: false);
+    }
+
+    /// <summary>Reads the declared concrete-reference obliviousness used by imported contract readers.</summary>
+    /// <param name="type">The original signature position, before type-argument substitution.</param>
+    /// <returns>Whether the position is oblivious; open slots retain their type argument's contract.</returns>
+    internal static bool IsObliviousConcreteReferencePosition(ITypeSymbol type) =>
+        type is { IsReferenceType: true } and not ITypeParameterSymbol
+            && type.NullableAnnotation == NullableAnnotation.None;
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,
@@ -1089,8 +1131,8 @@ internal static class ObliviousNullabilityAnalyzer
                 if (SymbolEqualityComparer.Default.Equals(target, query.Symbol)
                     && IsTupleElementTaintedCore(
                         compilation,
-                        source.Symbol,
-                        source.Path,
+                        source.ContractSymbol,
+                        source.ContractPath,
                         siblingCompilations,
                         scalarVisited,
                         tupleVisited))
@@ -1152,6 +1194,12 @@ internal static class ObliviousNullabilityAnalyzer
         HashSet<ScalarQuery> scalarVisited,
         HashSet<TupleElementQuery> tupleVisited)
     {
+        symbol = OwningMember(symbol);
+        if (!CanPromoteTuplePosition(compilation, symbol, path))
+        {
+            return false;
+        }
+
         var key = new TupleElementKey(symbol, path);
         if (!tupleVisited.Add(new TupleElementQuery(compilation, key)))
         {
@@ -1159,6 +1207,19 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         TaintResult result = Cache.GetValue(compilation, Compute);
+        bool hasOtherSiblings = siblingCompilations != null
+            && siblingCompilations.Any(sibling => sibling != null && !ReferenceEquals(sibling, compilation));
+        if (result.FixedTupleContracts.Contains(key)
+            || (hasOtherSiblings && IsTupleContractFixedCore(
+                compilation,
+                symbol,
+                path,
+                siblingCompilations,
+                new HashSet<TupleElementQuery>(TupleElementQueryComparer.ContractInstance))))
+        {
+            return false;
+        }
+
         if (result.TupleTainted.Contains(key))
         {
             return true;
@@ -1183,8 +1244,8 @@ internal static class ObliviousNullabilityAnalyzer
             if (TupleElementKeyComparer.Instance.Equals(target, key)
                 && IsTupleElementTaintedCore(
                     compilation,
-                    source.Symbol,
-                    source.Path,
+                    source.ContractSymbol,
+                    source.ContractPath,
                     siblingCompilations,
                     scalarVisited,
                     tupleVisited))
@@ -1198,8 +1259,7 @@ internal static class ObliviousNullabilityAnalyzer
             foreach (CSharpCompilation sibling in siblingCompilations)
             {
                 if (sibling == null
-                    || ReferenceEquals(sibling, compilation)
-                    || sibling.Options.NullableContextOptions != NullableContextOptions.Disable)
+                    || ReferenceEquals(sibling, compilation))
                 {
                     continue;
                 }
@@ -1222,28 +1282,112 @@ internal static class ObliviousNullabilityAnalyzer
         return false;
     }
 
+    private static bool IsTupleContractFixedCore(
+        CSharpCompilation compilation,
+        ISymbol symbol,
+        string path,
+        IReadOnlyList<CSharpCompilation> siblingCompilations,
+        HashSet<TupleElementQuery> visited)
+    {
+        symbol = OwningMember(symbol);
+        var key = new TupleElementKey(symbol, path);
+        if (!visited.Add(new TupleElementQuery(compilation, key)))
+        {
+            return false;
+        }
+
+        TaintResult result = Cache.GetValue(compilation, Compute);
+        if (result.FixedTupleContracts.Contains(key))
+        {
+            return true;
+        }
+
+        foreach ((TupleElementKey target, TupleElementKey source) in result.TupleContractEdges)
+        {
+            if (TupleContractKeyComparer.Instance.Equals(target, key)
+                && IsTupleContractFixedCore(
+                    compilation, source.ContractSymbol, source.ContractPath, siblingCompilations, visited))
+            {
+                return true;
+            }
+        }
+
+        if (siblingCompilations != null)
+        {
+            foreach (CSharpCompilation sibling in siblingCompilations)
+            {
+                if (sibling == null || ReferenceEquals(sibling, compilation))
+                {
+                    continue;
+                }
+
+                ISymbol remapped = RemapToCompilation(sibling, symbol);
+                if (remapped != null
+                    && IsTupleContractFixedCore(sibling, remapped, path, siblingCompilations, visited))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Finds the symbol in <paramref name="targetCompilation"/>'s own symbol
     /// table that is the "same" declaration as <paramref name="symbol"/>,
     /// which may have been resolved through an entirely different
     /// <see cref="CSharpCompilation"/>. Matching is by stable metadata
-    /// identity (containing type's fully qualified metadata name plus member
-    /// name/kind/arity), never by <see cref="SymbolEqualityComparer"/> or CLR
-    /// object identity, since those do not hold across independently bound
+    /// identity (assembly, constructed containing type and original member
+    /// signature), never by <see cref="SymbolEqualityComparer"/> or CLR object
+    /// identity, since those do not hold across independently bound
     /// compilations (see the long comment on the calling overload). Returns
     /// <see langword="null"/> when no matching declaration exists in
     /// <paramref name="targetCompilation"/> (e.g. `symbol` is unrelated to it).
     /// </summary>
     private static ISymbol RemapToCompilation(Compilation targetCompilation, ISymbol symbol)
     {
-        if (symbol is INamedTypeSymbol)
+        if (symbol is ITypeSymbol type)
         {
+            if (type is IArrayTypeSymbol array)
+            {
+                ITypeSymbol element = RemapToCompilation(targetCompilation, array.ElementType) as ITypeSymbol;
+                return element == null ? null : targetCompilation.CreateArrayTypeSymbol(element, array.Rank, array.ElementNullableAnnotation)
+                    .WithNullableAnnotation(array.NullableAnnotation);
+            }
+
             string reference = DocumentationCommentId.CreateReferenceId(symbol);
-            return reference == null
+            ITypeSymbol remapped = reference == null
                 ? null
                 : DocumentationCommentId.GetSymbolsForReferenceId(reference, targetCompilation)
+                    .OfType<ITypeSymbol>()
                     .FirstOrDefault(candidate =>
                         Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity));
+            if (type is INamedTypeSymbol nested && nested.ContainingType is { IsDefinition: false } containing)
+            {
+                INamedTypeSymbol mappedOwner = RemapToCompilation(targetCompilation, containing) as INamedTypeSymbol;
+                remapped = mappedOwner?.GetTypeMembers(nested.Name, nested.Arity).FirstOrDefault();
+            }
+
+            if (type is INamedTypeSymbol named && !named.IsDefinition
+                && remapped is INamedTypeSymbol mappedNamed && named.Arity != 0)
+            {
+                var arguments = new ITypeSymbol[named.TypeArguments.Length];
+                for (int index = 0; index < arguments.Length; index++)
+                {
+                    ITypeSymbol mappedArgument = RemapToCompilation(targetCompilation, named.TypeArguments[index]) as ITypeSymbol;
+                    if (mappedArgument == null)
+                    {
+                        return null;
+                    }
+
+                    arguments[index] = mappedArgument;
+                }
+
+                remapped = mappedNamed.ConstructedFrom.Construct(arguments.ToImmutableArray(), named.TypeArgumentNullableAnnotations);
+            }
+
+            return remapped?.WithNullableAnnotation(type.NullableAnnotation);
         }
 
         if (symbol is IParameterSymbol parameter)
@@ -1277,8 +1421,8 @@ internal static class ObliviousNullabilityAnalyzer
     /// Remaps a field/property/method/local-owning member symbol (everything
     /// <see cref="RemapToCompilation"/> handles other than parameters
     /// themselves) into <paramref name="targetCompilation"/>'s own symbol
-    /// table by metadata name. Locals have no stable cross-compilation
-    /// identity (they only ever make sense within the one method body/one
+    /// table by original signature and constructed containing type. Locals have
+    /// no stable cross-compilation identity (they only ever make sense within the one method body/one
     /// compilation that declares them), so they intentionally fall through to
     /// <see langword="null"/> here.
     /// </summary>
@@ -1295,43 +1439,39 @@ internal static class ObliviousNullabilityAnalyzer
             return null;
         }
 
-        INamedTypeSymbol remappedType = targetCompilation.GetTypeByMetadataName(MetadataTypeName(containingType));
-        if (remappedType == null)
+        INamedTypeSymbol remappedType = RemapToCompilation(targetCompilation, containingType) as INamedTypeSymbol;
+        string declarationId = symbol.OriginalDefinition.GetDocumentationCommentId();
+        if (remappedType == null || declarationId == null)
         {
             return null;
         }
 
-        if (symbol is IMethodSymbol method)
+        ISymbol remapped = remappedType.GetMembers(symbol.Name).FirstOrDefault(candidate =>
+            candidate.Kind == symbol.Kind
+            && Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity)
+            && string.Equals(
+                candidate.OriginalDefinition.GetDocumentationCommentId(), declarationId, StringComparison.Ordinal));
+        if (remapped is IMethodSymbol remappedMethod
+            && symbol is IMethodSymbol method
+            && !SymbolEqualityComparer.Default.Equals(method, method.ConstructedFrom))
         {
-            return remappedType.GetMembers(method.Name)
-                .OfType<IMethodSymbol>()
-                .FirstOrDefault(candidate =>
-                    candidate.IsStatic == method.IsStatic &&
-                    candidate.Parameters.Length == method.Parameters.Length &&
-                    candidate.TypeParameters.Length == method.TypeParameters.Length);
+            var arguments = new ITypeSymbol[method.TypeArguments.Length];
+            for (int index = 0; index < arguments.Length; index++)
+            {
+                ITypeSymbol argument = method.TypeArguments[index];
+                ITypeSymbol mappedArgument = RemapToCompilation(targetCompilation, argument) as ITypeSymbol;
+                if (mappedArgument == null)
+                {
+                    return null;
+                }
+
+                arguments[index] = mappedArgument;
+            }
+
+            return remappedMethod.Construct(arguments);
         }
 
-        return remappedType.GetMembers(symbol.Name).FirstOrDefault(candidate => candidate.Kind == symbol.Kind);
-    }
-
-    /// <summary>
-    /// Builds the CLR metadata name (e.g. <c>Outer+Inner`1</c> within its
-    /// namespace) that <see cref="Compilation.GetTypeByMetadataName"/> expects,
-    /// walking outward through nested-type containment so nested types (which
-    /// <c>MetadataName</c> alone does not capture) are found too.
-    /// </summary>
-    private static string MetadataTypeName(INamedTypeSymbol type)
-    {
-        var parts = new List<string>();
-        for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
-        {
-            parts.Insert(0, current.MetadataName);
-        }
-
-        string nested = string.Join("+", parts);
-        return type.ContainingNamespace is { IsGlobalNamespace: false } ns
-            ? ns.ToDisplayString() + "." + nested
-            : nested;
+        return remapped;
     }
 
     // Every member of `compilation` that some source in it directly writes
@@ -1983,7 +2123,7 @@ internal static class ObliviousNullabilityAnalyzer
     private static TaintResult Compute(Compilation compilation)
     {
         var tainted = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-        var tupleTainted = new HashSet<TupleElementKey>(TupleElementKeyComparer.Instance);
+        var tupleTainted = new HashSet<TupleElementKey>(TupleContractKeyComparer.Instance);
 
         // Transitive edges: (target <- source). If `source` is tainted then
         // `target` becomes tainted. Both are canonicalized declaration symbols
@@ -1991,6 +2131,7 @@ internal static class ObliviousNullabilityAnalyzer
         // return target; field/property/parameter/local/method for a source).
         var edges = new List<(ISymbol Target, ISymbol Source)>();
         var tupleEdges = new List<(TupleElementKey Target, TupleElementKey Source)>();
+        var tupleContractEdges = new List<(TupleElementKey Target, TupleElementKey Source)>();
         var tupleScalarEdges = new List<(TupleElementKey Target, ISymbol Source)>();
         var scalarTupleEdges = new List<(ISymbol Target, TupleElementKey Source)>();
         var delegateReturnEdges = new List<(ISymbol Target, ISymbol Source)>();
@@ -2045,7 +2186,7 @@ internal static class ObliviousNullabilityAnalyzer
                 edges,
                 delegateReturnEdges,
                 tupleTainted,
-                tupleEdges);
+                tupleContractEdges);
         }
 
         // Issue #3060: EF entity properties are promoted by policy rather than
@@ -2060,8 +2201,39 @@ internal static class ObliviousNullabilityAnalyzer
         // satisfies) non-null `T` — see <see cref="CollectInterfaceImplementationEdges"/>.
         CollectInterfaceImplementationEdges(compilation, edges);
         CollectOverrideContractEdges(compilation, edges);
-        CollectTupleContractEdges(compilation, tupleTainted, tupleEdges);
-        CollectConstructedTupleContractEdges(compilation, constructedTypes, tupleTainted, tupleEdges);
+        CollectTupleContractEdges(compilation, tupleTainted, tupleContractEdges);
+        CollectConstructedTupleContractEdges(compilation, constructedTypes, tupleTainted, tupleContractEdges);
+
+        // A signature component shares one contract, even when only one
+        // implementation inherits a fixed non-null metadata position.
+        var fixedTupleContracts = new HashSet<TupleElementKey>(TupleContractKeyComparer.Instance);
+        foreach ((TupleElementKey target, TupleElementKey source) in tupleContractEdges)
+        {
+            FreezeNonNullableContract(target);
+            FreezeNonNullableContract(source);
+        }
+
+        bool contractsChanged;
+        do
+        {
+            contractsChanged = false;
+            foreach ((TupleElementKey target, TupleElementKey source) in tupleContractEdges)
+            {
+                if (fixedTupleContracts.Contains(source) && fixedTupleContracts.Add(target))
+                {
+                    contractsChanged = true;
+                }
+            }
+        }
+        while (contractsChanged);
+
+        tupleEdges.AddRange(tupleContractEdges);
+
+        // Filter each declaration's seeds before sharing projected type-argument evidence.
+        tupleTainted.RemoveWhere(key => !CanPromote(key));
+        tupleTainted = new HashSet<TupleElementKey>(tupleTainted, TupleElementKeyComparer.Instance);
+        tupleEdges.RemoveAll(edge => !CanPromote(edge.Target));
+        tupleScalarEdges.RemoveAll(edge => !CanPromote(edge.Target));
 
         // Fixpoint: propagate taint along the edge set until it stabilizes.
         bool changed = true;
@@ -2088,7 +2260,7 @@ internal static class ObliviousNullabilityAnalyzer
 
             foreach ((ISymbol target, TupleElementKey source) in scalarTupleEdges)
             {
-                if (!tainted.Contains(target) && tupleTainted.Contains(source))
+                if (!tainted.Contains(target) && CanPromote(source) && tupleTainted.Contains(source))
                 {
                     tainted.Add(target);
                     changed = true;
@@ -2097,7 +2269,7 @@ internal static class ObliviousNullabilityAnalyzer
 
             foreach ((TupleElementKey target, TupleElementKey source) in tupleEdges)
             {
-                if (!tupleTainted.Contains(target) && tupleTainted.Contains(source))
+                if (!tupleTainted.Contains(target) && CanPromote(source) && tupleTainted.Contains(source))
                 {
                     tupleTainted.Add(target);
                     changed = true;
@@ -2108,12 +2280,28 @@ internal static class ObliviousNullabilityAnalyzer
         return new TaintResult(
             tainted,
             tupleTainted,
+            fixedTupleContracts,
+            tupleContractEdges,
             tupleEdges,
             tupleScalarEdges,
             scalarTupleEdges,
             delegateReturnEdges,
             paramsElementTainted,
             paramsElementEdges);
+
+        bool CanPromote(TupleElementKey key) =>
+            !fixedTupleContracts.Contains(key)
+                && CanPromoteTuplePosition(compilation, key.ContractSymbol, key.ContractPath);
+
+        void FreezeNonNullableContract(TupleElementKey key)
+        {
+            if (TuplePositionType(key.ContractSymbol, key.ContractPath) is { IsReferenceType: true }
+                && !TupleContractPositionAcceptsNil(compilation, key.ContractSymbol, key.ContractPath)
+                && !CanPromoteTuplePosition(compilation, key.ContractSymbol, key.ContractPath))
+            {
+                fixedTupleContracts.Add(key);
+            }
+        }
     }
 
     private static void SeedEfEntityPropertyTaint(
@@ -3052,26 +3240,24 @@ internal static class ObliviousNullabilityAnalyzer
                     }
                     else if (IsEligibleTupleLeaf(targetType))
                     {
-                        // An iterator's guarded yield is evidence about each
-                        // leaf at this use, just as for its scalar element.
-                        if (respectNullGuards && IsNullGuardDominatedRead(elementValue, model))
-                        {
-                            continue;
-                        }
-
                         var targetKey = new TupleElementKey(target, path);
-                        if (IsDirectlyNullable(elementValue, model, respectNullGuards))
+                        IMethodSymbol contextualOperator = GetContextualOperator(elementValue, model, targetType);
+                        bool canForwardElement = contextualOperator == null
+                            || CanForwardConversionOperandNullability(
+                                targetType, model.GetTypeInfo(elementValue).Type, contextualOperator);
+                        if (IsDirectlyNullable(elementValue, model, respectNullGuards, resultType: targetType))
                         {
                             tupleTainted.Add(targetKey);
                         }
-                        else if (TryResolveTupleElementSource(elementValue, model, out TupleElementKey tupleSource))
+                        else if (canForwardElement
+                            && TryResolveTupleElementSource(elementValue, model, out TupleElementKey tupleSource))
                         {
                             tupleEdges.Add((targetKey, tupleSource));
                         }
                         else
                         {
                             foreach (ISymbol scalarSource in ResolveSources(
-                                elementValue, model, respectNullGuards: respectNullGuards))
+                                elementValue, model, respectNullGuards: respectNullGuards, resultType: targetType))
                             {
                                 // Issue #3615 (2026-08-28 nightly, Cs2Gs.Translator
                                 // wall): only SOURCE-declared symbols propagate
@@ -3487,7 +3673,7 @@ internal static class ObliviousNullabilityAnalyzer
         SemanticModel model,
         out TupleElementKey source)
     {
-        expression = UnwrapTupleValue(expression);
+        expression = UnwrapTupleValue(expression, model);
         if (expression is MemberAccessExpressionSyntax member
             && model.GetSymbolInfo(member).Symbol is IFieldSymbol field
             && model.GetTypeInfo(member.Expression).Type is INamedTypeSymbol receiverTuple
@@ -3498,7 +3684,7 @@ internal static class ObliviousNullabilityAnalyzer
             {
                 if (TryResolveTupleElementSource(member.Expression, model, out TupleElementKey parent))
                 {
-                    source = new TupleElementKey(parent.Symbol, AppendTuplePath(parent.Path, index));
+                    source = new TupleElementKey(parent.ContractSymbol, AppendTuplePath(parent.ContractPath, index));
                     return true;
                 }
 
@@ -3775,7 +3961,186 @@ internal static class ObliviousNullabilityAnalyzer
     private static bool IsEligibleTupleLeaf(ITypeSymbol type) =>
         type != null
             && type.IsReferenceType
-            && type.NullableAnnotation != NullableAnnotation.Annotated;
+            && type.NullableAnnotation == NullableAnnotation.None;
+
+    private static bool CanPromoteTuplePosition(Compilation compilation, ISymbol symbol, string path) =>
+        CanPromoteTuplePosition(
+            compilation, symbol, path, new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+
+    private static bool CanPromoteTuplePosition(
+        Compilation compilation,
+        ISymbol symbol,
+        string path,
+        HashSet<ISymbol> visited)
+    {
+        if (symbol is IParameterSymbol
+                { ContainingSymbol: IMethodSymbol { AssociatedSymbol: IPropertySymbol property } setter } parameter
+            && setter.MethodKind == MethodKind.PropertySet
+            && parameter.Ordinal == setter.Parameters.Length - 1)
+        {
+            symbol = property;
+        }
+
+        symbol = OwningMember(symbol);
+        ISymbol contractSymbol = symbol;
+        string contractPath = path;
+        ITypeSymbol declaredPosition = TuplePositionType(Canonical(symbol), path);
+        (symbol, path) = ProjectTupleContractPosition(symbol, path);
+        bool sourceOwnedContract = contractSymbol != null
+            && IsSourceAssembly(compilation, contractSymbol.ContainingAssembly);
+
+        // A caller owns nested tuple leaves, not a native reference slot itself.
+        ITypeSymbol position = TuplePositionType(
+            symbol, path, requireTuple: symbol is INamedTypeSymbol && !sourceOwnedContract);
+        if (!IsEligibleTupleLeaf(position)
+            || (declaredPosition != null && !IsEligibleTupleLeaf(declaredPosition)))
+        {
+            return false;
+        }
+
+        // Constructed type arguments belong to their source use, not to the
+        // imported generic definition. Member signatures retain their owner.
+        if (contractSymbol is INamedTypeSymbol
+            || (symbol is INamedTypeSymbol && !sourceOwnedContract))
+        {
+            return true;
+        }
+
+        if (!sourceOwnedContract)
+        {
+            return false;
+        }
+
+        if (!visited.Add(contractSymbol))
+        {
+            return true;
+        }
+
+        foreach (ISymbol contract in TupleContractDeclarations(compilation, contractSymbol))
+        {
+            if (TupleContractPositionAcceptsNil(compilation, contract, contractPath))
+            {
+                continue;
+            }
+
+            if (!CanPromoteTuplePosition(compilation, contract, contractPath, visited))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TupleContractPositionAcceptsNil(Compilation compilation, ISymbol symbol, string path) =>
+        IsDeclaredNullablePosition(TuplePositionType(symbol, path))
+            || (!IsSourceAssembly(compilation, symbol.ContainingAssembly)
+                && IsObliviousConcreteReferencePosition(TuplePositionType(symbol.OriginalDefinition, path)));
+
+    private static ITypeSymbol TuplePositionType(ISymbol symbol, string path, bool requireTuple = false)
+    {
+        ITypeSymbol type = SymbolValueType(symbol) ?? symbol as INamedTypeSymbol;
+        bool crossesTuple = false;
+        foreach (string component in path.Split('.'))
+        {
+            if (type is not INamedTypeSymbol named
+                || !int.TryParse(component, out int index)
+                || index < 0)
+            {
+                return null;
+            }
+
+            if (named.IsTupleType && index < named.TupleElements.Length)
+            {
+                crossesTuple = true;
+                type = named.TupleElements[index].Type;
+            }
+            else if (!named.IsTupleType && index < named.TypeArguments.Length)
+            {
+                type = named.TypeArguments[index];
+            }
+            else
+            {
+                return null;
+            }
+        }
+
+        return !requireTuple || crossesTuple ? type : null;
+    }
+
+    private static IEnumerable<ISymbol> TupleContractDeclarations(Compilation compilation, ISymbol symbol)
+    {
+        if (symbol is IParameterSymbol parameter)
+        {
+            foreach (ISymbol contract in TupleContractDeclarations(compilation, OwningMember(parameter.ContainingSymbol)))
+            {
+                IParameterSymbol inheritedParameter = contract switch
+                {
+                    IMethodSymbol method when parameter.Ordinal >= 0 && parameter.Ordinal < method.Parameters.Length =>
+                        method.Parameters[parameter.Ordinal],
+                    IPropertySymbol property when parameter.Ordinal >= 0 && parameter.Ordinal < property.Parameters.Length =>
+                        property.Parameters[parameter.Ordinal],
+                    _ => null,
+                };
+                if (inheritedParameter != null)
+                {
+                    yield return inheritedParameter;
+                }
+            }
+
+            yield break;
+        }
+
+        if (symbol is IMethodSymbol partial)
+        {
+            if (partial.MethodKind == MethodKind.AnonymousFunction)
+            {
+                foreach (SyntaxReference reference in partial.DeclaringSyntaxReferences)
+                {
+                    if (reference.GetSyntax() is AnonymousFunctionExpressionSyntax lambda
+                        && compilation.ContainsSyntaxTree(lambda.SyntaxTree)
+                        && compilation.GetSemanticModel(lambda.SyntaxTree).GetTypeInfo(lambda).ConvertedType
+                            is INamedTypeSymbol { DelegateInvokeMethod: { } invoke })
+                    {
+                        yield return invoke;
+                    }
+                }
+            }
+
+            if (partial.PartialDefinitionPart != null)
+            {
+                yield return partial.PartialDefinitionPart;
+            }
+
+            if (partial.PartialImplementationPart != null)
+            {
+                yield return partial.PartialImplementationPart;
+            }
+        }
+
+        if (symbol is IPropertySymbol partialProperty)
+        {
+            if (partialProperty.PartialDefinitionPart != null)
+            {
+                yield return partialProperty.PartialDefinitionPart;
+            }
+
+            if (partialProperty.PartialImplementationPart != null)
+            {
+                yield return partialProperty.PartialImplementationPart;
+            }
+        }
+
+        if (symbol is not (IMethodSymbol or IPropertySymbol))
+        {
+            yield break;
+        }
+
+        foreach (ISymbol inherited in InheritedDeclarations(symbol))
+        {
+            yield return inherited;
+        }
+    }
 
     private static bool IsEligibleScalarTarget(ISymbol symbol)
     {
@@ -3792,14 +4157,32 @@ internal static class ObliviousNullabilityAnalyzer
                 && literal.IsKind(SyntaxKind.DefaultLiteralExpression)
                 && model.GetTypeInfo(literal).ConvertedType is INamedTypeSymbol { IsTupleType: true });
 
-    private static ExpressionSyntax UnwrapTupleValue(ExpressionSyntax expression)
+    private static ExpressionSyntax UnwrapTupleValue(ExpressionSyntax expression, SemanticModel model = null)
     {
         while (true)
         {
+            if (model != null)
+            {
+                for (IConversionOperation conversion = GetResultConversion(expression, model);
+                    conversion != null;
+                    conversion = conversion.Operand as IConversionOperation)
+                {
+                    // Tuple envelopes preserve leaf flow, not scalar nulls.
+                    if (conversion.Type is not INamedTypeSymbol { IsTupleType: true }
+                        && !CanForwardCastOperandNullability(conversion))
+                    {
+                        return null;
+                    }
+                }
+            }
+
             switch (expression)
             {
                 case ParenthesizedExpressionSyntax parenthesized:
                     expression = parenthesized.Expression;
+                    continue;
+                case CheckedExpressionSyntax checkedExpression:
+                    expression = checkedExpression.Expression;
                     continue;
                 case CastExpressionSyntax cast:
                     expression = cast.Expression;
@@ -3964,7 +4347,9 @@ internal static class ObliviousNullabilityAnalyzer
             // guarded constructor argument above: gsc's own smart-cast
             // narrows the same guarded read at the yield seam, so standing
             // the promotion down reintroduces no `T? -> T`.
-            if (IsNullGuardDominatedRead(yielded, model))
+            // The guard proves the operand, not a nullable operator result.
+            if (IsNullGuardDominatedRead(yielded, model)
+                && !IsDirectlyNullable(yielded, model, respectNullGuards: true))
             {
                 continue;
             }
@@ -4344,6 +4729,17 @@ internal static class ObliviousNullabilityAnalyzer
                         tupleTainted,
                         tupleEdges);
                 }
+
+                if (method.PartialImplementationPart is IMethodSymbol implementation)
+                {
+                    AddTupleContractPair(
+                        method,
+                        SymbolValueType(method),
+                        implementation,
+                        SymbolValueType(implementation),
+                        tupleTainted,
+                        tupleEdges);
+                }
             }
 
             foreach (INamedTypeSymbol iface in type.AllInterfaces)
@@ -4378,6 +4774,17 @@ internal static class ObliviousNullabilityAnalyzer
                         SymbolValueType(property),
                         positionalParameter,
                         SymbolValueType(positionalParameter),
+                        tupleTainted,
+                        tupleEdges);
+                }
+
+                if (property.PartialImplementationPart is IPropertySymbol implementation)
+                {
+                    AddTupleContractPair(
+                        property,
+                        SymbolValueType(property),
+                        implementation,
+                        SymbolValueType(implementation),
                         tupleTainted,
                         tupleEdges);
                 }
@@ -4538,7 +4945,6 @@ internal static class ObliviousNullabilityAnalyzer
 
             if (model.GetTypeInfo(expression).ConvertedType is not INamedTypeSymbol delegateType
                 || delegateType.TypeKind != TypeKind.Delegate
-                || !IsSourceDelegateType(compilation, delegateType)
                 || delegateType.DelegateInvokeMethod is not IMethodSymbol invoke
                 || invoke.ReturnsVoid)
             {
@@ -4559,7 +4965,7 @@ internal static class ObliviousNullabilityAnalyzer
                 tupleTainted,
                 tupleEdges);
 
-            if (!IsEligibleScalarTarget(invoke))
+            if (!IsSourceDelegateType(compilation, delegateType) || !IsEligibleScalarTarget(invoke))
             {
                 continue;
             }
@@ -4579,13 +4985,21 @@ internal static class ObliviousNullabilityAnalyzer
     }
 
     private static bool IsSourceDelegateType(Compilation compilation, INamedTypeSymbol delegateType)
+        => IsSourceAssembly(compilation, delegateType.ContainingAssembly);
+
+    private static bool IsSourceAssembly(Compilation compilation, IAssemblySymbol assembly)
     {
+        if (assembly == null)
+        {
+            return false;
+        }
+
         SourceAssemblySet assemblies = SourceAssemblies.GetValue(
             compilation,
             static current => new SourceAssemblySet(current.Assembly.Identity.GetDisplayName()));
         lock (assemblies.Names)
         {
-            return assemblies.Names.Contains(delegateType.ContainingAssembly.Identity.GetDisplayName());
+            return assemblies.Names.Contains(assembly.Identity.GetDisplayName());
         }
     }
 
@@ -4813,7 +5227,8 @@ internal static class ObliviousNullabilityAnalyzer
         HashSet<ISymbol> tainted,
         List<(ISymbol Target, ISymbol Source)> edges,
         List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges,
-        SourceScope scope = SourceScope.AllSources)
+        SourceScope scope = SourceScope.AllSources,
+        bool readConversion = true)
     {
         if (!IsEligibleScalarTarget(target))
         {
@@ -4829,7 +5244,13 @@ internal static class ObliviousNullabilityAnalyzer
             return;
         }
 
-        if (IsDirectlyNullable(value, model))
+        if (readConversion && GetResultConversion(value, model) is IConversionOperation conversion)
+        {
+            CollectScalarValueFlow(target, conversion, model, tainted, edges, scalarTupleEdges, scope);
+            return;
+        }
+
+        if (IsDirectlyNullable(value, model, readConversion: false))
         {
             tainted.Add(target);
             return;
@@ -4839,6 +5260,10 @@ internal static class ObliviousNullabilityAnalyzer
         {
             case ParenthesizedExpressionSyntax parenthesized:
                 CollectScalarValueFlow(target, parenthesized.Expression, model, tainted, edges, scalarTupleEdges, scope);
+                return;
+
+            case CheckedExpressionSyntax checkedExpression:
+                CollectScalarValueFlow(target, checkedExpression.Expression, model, tainted, edges, scalarTupleEdges, scope);
                 return;
 
             case AwaitExpressionSyntax awaitExpression:
@@ -4865,10 +5290,6 @@ internal static class ObliviousNullabilityAnalyzer
                     CollectScalarValueFlow(target, arm.Expression, model, tainted, edges, scalarTupleEdges, scope);
                 }
 
-                return;
-
-            case CastExpressionSyntax cast:
-                CollectScalarValueFlow(target, cast.Expression, model, tainted, edges, scalarTupleEdges, scope);
                 return;
         }
 
@@ -4899,6 +5320,44 @@ internal static class ObliviousNullabilityAnalyzer
         AddEdges(target, value, model, edges, scope);
     }
 
+    private static void CollectScalarValueFlow(
+        ISymbol target,
+        IOperation value,
+        SemanticModel model,
+        HashSet<ISymbol> tainted,
+        List<(ISymbol Target, ISymbol Source)> edges,
+        List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges,
+        SourceScope scope)
+    {
+        if (value is IConversionOperation conversion)
+        {
+            if (IsDirectlyNullable(conversion, model, respectNullGuards: false))
+            {
+                tainted.Add(target);
+                return;
+            }
+
+            if (CanForwardCastOperandNullability(conversion))
+            {
+                CollectScalarValueFlow(target, conversion.Operand, model, tainted, edges, scalarTupleEdges, scope);
+            }
+
+            if (conversion.OperatorMethod != null && !IsNonNullableValueType(conversion.Type))
+            {
+                if (IsDeclaredNullablePosition(conversion.OperatorMethod.ReturnType))
+                {
+                    tainted.Add(target);
+                }
+
+                edges.Add((target, Canonical(conversion.OperatorMethod)));
+            }
+        }
+        else if (value?.Syntax is ExpressionSyntax expression)
+        {
+            CollectScalarValueFlow(target, expression, model, tainted, edges, scalarTupleEdges, scope, readConversion: false);
+        }
+    }
+
     private static bool IsCallableValueExpression(ExpressionSyntax expression, SemanticModel model)
     {
         while (expression is ParenthesizedExpressionSyntax parenthesized)
@@ -4914,8 +5373,39 @@ internal static class ObliviousNullabilityAnalyzer
         ExpressionSyntax expression,
         SemanticModel model,
         SourceScope scope = SourceScope.AllSources,
-        bool respectNullGuards = false)
+        bool respectNullGuards = false,
+        bool readConversion = true,
+        ITypeSymbol resultType = null)
     {
+        if (GetContextualOperator(expression, model, resultType) is IMethodSymbol contextualOperator)
+        {
+            if (CanForwardConversionOperandNullability(
+                resultType, model.GetTypeInfo(expression).Type, contextualOperator))
+            {
+                foreach (ISymbol source in ResolveSources(expression, model, scope, respectNullGuards, readConversion: false))
+                {
+                    yield return source;
+                }
+            }
+
+            if (!IsNonNullableValueType(resultType))
+            {
+                yield return Canonical(contextualOperator);
+            }
+
+            yield break;
+        }
+
+        if (readConversion && GetResultConversion(expression, model) is IConversionOperation conversion)
+        {
+            foreach (ISymbol source in ResolveSources(conversion, model, scope, respectNullGuards))
+            {
+                yield return source;
+            }
+
+            yield break;
+        }
+
         if (respectNullGuards && IsNullGuardDominatedRead(expression, model))
         {
             yield break;
@@ -4928,6 +5418,14 @@ internal static class ObliviousNullabilityAnalyzer
 
             case ParenthesizedExpressionSyntax paren:
                 foreach (ISymbol source in ResolveSources(paren.Expression, model, scope, respectNullGuards))
+                {
+                    yield return source;
+                }
+
+                break;
+
+            case CheckedExpressionSyntax checkedExpression:
+                foreach (ISymbol source in ResolveSources(checkedExpression.Expression, model, scope, respectNullGuards))
                 {
                     yield return source;
                 }
@@ -4984,14 +5482,6 @@ internal static class ObliviousNullabilityAnalyzer
 
                 break;
 
-            case CastExpressionSyntax cast:
-                foreach (ISymbol source in ResolveSources(cast.Expression, model, scope, respectNullGuards))
-                {
-                    yield return source;
-                }
-
-                break;
-
             case InvocationExpressionSyntax invocation:
                 if (model.GetSymbolInfo(invocation).Symbol is IMethodSymbol called
                     && !called.ReturnsVoid)
@@ -5029,6 +5519,36 @@ internal static class ObliviousNullabilityAnalyzer
                 }
 
                 break;
+        }
+    }
+
+    private static IEnumerable<ISymbol> ResolveSources(
+        IOperation value,
+        SemanticModel model,
+        SourceScope scope,
+        bool respectNullGuards)
+    {
+        if (value is IConversionOperation conversion)
+        {
+            if (CanForwardCastOperandNullability(conversion))
+            {
+                foreach (ISymbol source in ResolveSources(conversion.Operand, model, scope, respectNullGuards))
+                {
+                    yield return source;
+                }
+            }
+
+            if (conversion.OperatorMethod != null && !IsNonNullableValueType(conversion.Type))
+            {
+                yield return Canonical(conversion.OperatorMethod);
+            }
+        }
+        else if (value?.Syntax is ExpressionSyntax expression)
+        {
+            foreach (ISymbol source in ResolveSources(expression, model, scope, respectNullGuards, readConversion: false))
+            {
+                yield return source;
+            }
         }
     }
 
@@ -5333,15 +5853,31 @@ internal static class ObliviousNullabilityAnalyzer
         }
     }
 
-    // Whether a reference expression is directly (syntactically or by declared
-    // BCL annotation) nullable, independent of any other declaration's taint.
+    // Whether an expression is directly (syntactically or by its declared
+    // result contract) nullable, independent of any other declaration's taint.
     // Mirrors the translator's IsNullableInitializer, plus the `null`/`default`
     // literal forms used in initializer/return positions.
     private static bool IsDirectlyNullable(
         ExpressionSyntax expression,
         SemanticModel model,
-        bool respectNullGuards = false)
+        bool respectNullGuards = false,
+        bool readConversion = true,
+        ITypeSymbol resultType = null)
     {
+        if (GetContextualOperator(expression, model, resultType) is IMethodSymbol contextualOperator)
+        {
+            return (CanForwardConversionOperandNullability(
+                        resultType, model.GetTypeInfo(expression).Type, contextualOperator)
+                    && IsDirectlyNullable(expression, model, respectNullGuards, readConversion: false))
+                || (!IsNonNullableValueType(resultType)
+                    && IsDeclaredNullablePosition(contextualOperator.ReturnType));
+        }
+
+        if (readConversion && GetResultConversion(expression, model) is IConversionOperation conversion)
+        {
+            return IsDirectlyNullable(conversion, model, respectNullGuards);
+        }
+
         if (respectNullGuards && IsNullGuardDominatedRead(expression, model))
         {
             return false;
@@ -5354,6 +5890,9 @@ internal static class ObliviousNullabilityAnalyzer
 
             case ParenthesizedExpressionSyntax paren:
                 return IsDirectlyNullable(paren.Expression, model, respectNullGuards);
+
+            case CheckedExpressionSyntax checkedExpression:
+                return IsDirectlyNullable(checkedExpression.Expression, model, respectNullGuards);
 
             // `await expr`: an awaited `Task<T>`'s own nullability is that of
             // T, which is exactly what the UNWRAPPED awaited expression's own
@@ -5373,10 +5912,12 @@ internal static class ObliviousNullabilityAnalyzer
             case LiteralExpressionSyntax literal:
                 return literal.IsKind(SyntaxKind.NullLiteralExpression)
                     || (literal.IsKind(SyntaxKind.DefaultLiteralExpression)
-                        && IsReferenceLike(model.GetTypeInfo(literal).ConvertedType));
+                        && (IsReferenceLike(model.GetTypeInfo(literal).ConvertedType)
+                            || IsNullableValueType(model.GetTypeInfo(literal).ConvertedType)));
 
             case DefaultExpressionSyntax defaultExpression:
-                return IsReferenceLike(model.GetTypeInfo(defaultExpression).Type);
+                return IsReferenceLike(model.GetTypeInfo(defaultExpression).Type)
+                    || IsNullableValueType(model.GetTypeInfo(defaultExpression).Type);
 
             // `a?.b` / `a?[i]`.
             case ConditionalAccessExpressionSyntax:
@@ -5460,12 +6001,35 @@ internal static class ObliviousNullabilityAnalyzer
             _ => null,
         };
 
-        return symbolType is { IsReferenceType: true }
-            && symbolType.NullableAnnotation == NullableAnnotation.Annotated;
+        return IsDeclaredNullablePosition(symbolType ?? info.Type);
     }
+
+    private static bool IsDeclaredNullablePosition(ITypeSymbol type) =>
+        IsNullableValueType(type)
+            || (type is { IsReferenceType: true } && type.NullableAnnotation == NullableAnnotation.Annotated);
 
     private static bool IsReferenceLike(ITypeSymbol type) =>
         (type != null && type.IsReferenceType) || type is ITypeParameterSymbol;
+
+    private static bool IsNullableValueType(ITypeSymbol type) =>
+        type?.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+
+    private static bool IsNonNullableValueType(ITypeSymbol type) =>
+        type is { IsValueType: true } && !IsNullableValueType(type);
+
+    private static bool CanForwardCastOperandNullability(IConversionOperation conversion) =>
+        CanForwardConversionOperandNullability(conversion.Type, conversion.Operand.Type, conversion.OperatorMethod);
+
+    private static bool CanForwardConversionOperandNullability(
+        ITypeSymbol resultType,
+        ITypeSymbol operandType,
+        IMethodSymbol operatorMethod) =>
+        !IsNonNullableValueType(resultType)
+            && !IsNonNullableValueType(operandType)
+            && (operatorMethod == null
+                || (IsNullableValueType(operandType)
+                    && operatorMethod.Parameters.Length == 1
+                    && IsNonNullableValueType(operatorMethod.Parameters[0].Type)));
 
     // The declaration kinds whose emitted reference type this analysis governs.
     private static bool IsValueDeclarationSymbol(ISymbol symbol) =>
@@ -5582,15 +6146,18 @@ internal static class ObliviousNullabilityAnalyzer
         // Tuple labels are rendered at each use, not part of contract identity.
         named = named.TupleUnderlyingType ?? named;
         ITypeSymbol[] arguments = named.TypeArguments.Select(NormalizeContractTupleNames).ToArray();
-        return arguments.SequenceEqual(named.TypeArguments, SymbolEqualityComparer.Default)
+        return arguments.SequenceEqual(named.TypeArguments, SymbolEqualityComparer.IncludeNullability)
             ? named
-            : named.ConstructedFrom.Construct(arguments);
+            : named.ConstructedFrom.Construct(arguments.ToImmutableArray(), named.TypeArgumentNullableAnnotations)
+                .WithNullableAnnotation(named.NullableAnnotation);
     }
 
     private readonly struct TupleElementKey
     {
         public TupleElementKey(ISymbol symbol, string path)
         {
+            this.ContractSymbol = symbol;
+            this.ContractPath = path;
             (ISymbol owner, string projectedPath) = ProjectTupleContractPosition(symbol, path);
             this.Symbol = owner is INamedTypeSymbol named
                 ? NormalizeContractTupleNames(named)
@@ -5601,6 +6168,10 @@ internal static class ObliviousNullabilityAnalyzer
         public ISymbol Symbol { get; }
 
         public string Path { get; }
+
+        public ISymbol ContractSymbol { get; }
+
+        public string ContractPath { get; }
     }
 
     private readonly struct ScalarQuery
@@ -5646,6 +6217,28 @@ internal static class ObliviousNullabilityAnalyzer
         }
     }
 
+    private sealed class TupleContractKeyComparer : IEqualityComparer<TupleElementKey>
+    {
+        public static TupleContractKeyComparer Instance { get; } = new();
+
+        public bool Equals(TupleElementKey x, TupleElementKey y) =>
+            SymbolEqualityComparer.IncludeNullability.Equals(Owner(x), Owner(y))
+                && string.Equals(x.ContractPath, y.ContractPath, System.StringComparison.Ordinal);
+
+        public int GetHashCode(TupleElementKey obj)
+        {
+            ISymbol owner = Owner(obj);
+            return System.HashCode.Combine(
+                owner == null ? 0 : SymbolEqualityComparer.IncludeNullability.GetHashCode(owner),
+                obj.ContractPath);
+        }
+
+        private static ISymbol Owner(TupleElementKey key) =>
+            OwningMember(key.ContractSymbol) is INamedTypeSymbol named
+                ? NormalizeContractTupleNames(named)
+                : OwningMember(key.ContractSymbol);
+    }
+
     private sealed class ScalarQueryComparer : IEqualityComparer<ScalarQuery>
     {
         public static ScalarQueryComparer Instance { get; } = new();
@@ -5667,16 +6260,25 @@ internal static class ObliviousNullabilityAnalyzer
 
     private sealed class TupleElementQueryComparer : IEqualityComparer<TupleElementQuery>
     {
-        public static TupleElementQueryComparer Instance { get; } = new();
+        private readonly IEqualityComparer<TupleElementKey> keys;
+
+        private TupleElementQueryComparer(IEqualityComparer<TupleElementKey> keys)
+        {
+            this.keys = keys;
+        }
+
+        public static TupleElementQueryComparer Instance { get; } = new(TupleElementKeyComparer.Instance);
+
+        public static TupleElementQueryComparer ContractInstance { get; } = new(TupleContractKeyComparer.Instance);
 
         public bool Equals(TupleElementQuery x, TupleElementQuery y) =>
             ReferenceEquals(x.Compilation, y.Compilation)
-                && TupleElementKeyComparer.Instance.Equals(x.Key, y.Key);
+                && this.keys.Equals(x.Key, y.Key);
 
         public int GetHashCode(TupleElementQuery obj) =>
             System.HashCode.Combine(
                 System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj.Compilation),
-                TupleElementKeyComparer.Instance.GetHashCode(obj.Key));
+                this.keys.GetHashCode(obj.Key));
     }
 
     private sealed class TaintResult
@@ -5684,6 +6286,8 @@ internal static class ObliviousNullabilityAnalyzer
         public TaintResult(
             HashSet<ISymbol> tainted,
             HashSet<TupleElementKey> tupleTainted,
+            HashSet<TupleElementKey> fixedTupleContracts,
+            List<(TupleElementKey Target, TupleElementKey Source)> tupleContractEdges,
             List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
             List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges,
             List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges,
@@ -5693,6 +6297,8 @@ internal static class ObliviousNullabilityAnalyzer
         {
             this.Tainted = tainted;
             this.TupleTainted = tupleTainted;
+            this.FixedTupleContracts = fixedTupleContracts;
+            this.TupleContractEdges = tupleContractEdges;
             this.TupleEdges = tupleEdges;
             this.TupleScalarEdges = tupleScalarEdges;
             this.ScalarTupleEdges = scalarTupleEdges;
@@ -5704,6 +6310,10 @@ internal static class ObliviousNullabilityAnalyzer
         public HashSet<ISymbol> Tainted { get; }
 
         public HashSet<TupleElementKey> TupleTainted { get; }
+
+        public HashSet<TupleElementKey> FixedTupleContracts { get; }
+
+        public List<(TupleElementKey Target, TupleElementKey Source)> TupleContractEdges { get; }
 
         public List<(TupleElementKey Target, TupleElementKey Source)> TupleEdges { get; }
 

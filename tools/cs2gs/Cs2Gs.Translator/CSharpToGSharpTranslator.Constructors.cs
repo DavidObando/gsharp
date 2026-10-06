@@ -449,7 +449,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 var accessorSymbol = this.context.GetDeclaredSymbol(accessor) as IMethodSymbol;
                 Visibility visibility = accessor.Modifiers.Count > 0
-                    ? MapVisibility(accessorSymbol, this.context, accessor, preserveStaticClassPrivate: true)
+                    ? MapVisibility(accessorSymbol, this.context, accessor)
                     : Visibility.Default;
 
                 bool bodied = accessor.Body != null || accessor.ExpressionBody != null;
@@ -1124,6 +1124,17 @@ public sealed partial class CSharpToGSharpTranslator
 
             GExpression defaultValue = this.BuildOptionalParameterDefault(symbol, type, fallbackNode);
 
+            return new Parameter(
+                MapParameterName(symbol, fallbackNode),
+                type,
+                variadic,
+                refKind,
+                defaultValue,
+                this.MapParameterAttributes(symbol));
+        }
+
+        private List<AttributeUse> MapParameterAttributes(IParameterSymbol symbol)
+        {
             // Issue #1913: a parameter's own attributes (e.g. `[Note] int x`) live on
             // its `ParameterSyntax`, not on `fallbackNode` (which can be the whole
             // parameter LIST when `symbol` came from `MapParameters`). Resolve the
@@ -1171,7 +1182,7 @@ public sealed partial class CSharpToGSharpTranslator
                     }));
             }
 
-            return new Parameter(MapParameterName(symbol, fallbackNode), type, variadic, refKind, defaultValue, attributes);
+            return attributes;
         }
 
         private string MapParameterName(IParameterSymbol symbol, SyntaxNode fallbackNode)
@@ -1278,7 +1289,8 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol symbol,
             MethodDeclarationSyntax node,
             bool unwrapValueTask = false,
-            MethodDeclarationSyntax iteratorBodySource = null)
+            MethodDeclarationSyntax iteratorBodySource = null,
+            bool preserveEnvelope = false)
         {
             // ADR-0192: a partial method's declaring part spells its return
             // type at the definition (`node`) but takes the iterator fact from
@@ -1289,7 +1301,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (symbol.ReturnsVoid)
                 {
-                    return symbol.IsAsync ? new NamedTypeReference("void") : null;
+                    return symbol.IsAsync && !preserveEnvelope ? new NamedTypeReference("void") : null;
                 }
 
                 ITypeSymbol returnType = symbol.ReturnType;
@@ -1312,6 +1324,16 @@ public sealed partial class CSharpToGSharpTranslator
                     returnType is INamedTypeSymbol { IsGenericType: true } enumerable &&
                     enumerable.Name is "IEnumerable")
                 {
+                    if (preserveEnvelope)
+                    {
+                        // A direct companion keeps the CLR envelope and the
+                        // hosted iterator's existing element-position promotion.
+                        GTypeReference envelope = this.typeMapper.Map(
+                            returnType, this.context, node.ReturnType.GetLocation());
+                        return this.PromoteTaskEnvelopeReturnIfTainted(
+                            envelope, enumerable.TypeArguments[0], symbol);
+                    }
+
                     GTypeReference element = this.typeMapper.Map(
                         enumerable.TypeArguments[0], this.context, node.ReturnType.GetLocation());
 
@@ -1337,7 +1359,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // same way, so a suspending candidate's `ValueTask`/`ValueTask<T>`
                 // is unwrapped too (unwrapValueTask); any other ValueTask method
                 // keeps the explicit envelope.
-                if (symbol.IsAsync &&
+                if (!preserveEnvelope && symbol.IsAsync &&
                     returnType is INamedTypeSymbol { Name: "Task" or "ValueTask" } task &&
                     (task.Name == "Task" || unwrapValueTask) &&
                     task.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
@@ -1427,7 +1449,9 @@ public sealed partial class CSharpToGSharpTranslator
                 .Any() == true;
         }
 
-        private List<AttributeUse> MapAttributes(IEnumerable<AttributeListSyntax> attributeLists)
+        private List<AttributeUse> MapAttributes(
+            IEnumerable<AttributeListSyntax> attributeLists,
+            bool isSuspendingDeclaration = false)
         {
             var attributes = new List<AttributeUse>();
             foreach (AttributeListSyntax list in attributeLists)
@@ -1458,6 +1482,16 @@ public sealed partial class CSharpToGSharpTranslator
                         attribute,
                         out INamedTypeSymbol attributeType,
                         out IAliasSymbol sourceAlias);
+
+                    // gsc stamps this marker for `suspend func`; copying the
+                    // authored marker as well would duplicate native metadata.
+                    if (isSuspendingDeclaration
+                        && attributeType is { Name: "SuspendingAttribute" }
+                        && IsConcurrencyRuntimeNamespace(attributeType.ContainingNamespace))
+                    {
+                        continue;
+                    }
+
                     this.typeMapper.TrackAttributeType(attributeType, sourceAlias);
 
                     var arguments = new List<AttributeArgument>();
@@ -3445,15 +3479,12 @@ public sealed partial class CSharpToGSharpTranslator
         // omitted defaults are materialized at translated call sites.
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
         {
-            // `DescendantNodes()` excludes the node itself — local functions that
-            // ARE a top-level statement of the block must be included explicitly;
-            // local functions nested inside other local functions' bodies must be
-            // included too (mutual recursion crosses that nesting — issue #3399's
-            // ProjectRegionsForDefiniteReturn shape: a nested helper calling its
-            // outer siblings).
+            // Callable storage belongs to this declaring block's activation.
+            // Descendant helpers are registered by their own block, never folded
+            // into an enclosing cycle's shared slots (#4802). Dependency scans
+            // still inspect nested bodies for references to these siblings.
             var localFunctionStatements = statements
-                .SelectMany(statement => statement.DescendantNodes().Prepend(statement))
-                .Distinct()
+                .OfType<LocalFunctionStatementSyntax>()
                 .ToList();
             var functions = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
             var excluded = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
@@ -3673,9 +3704,7 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                // An outer block's registration (which walks descendant local
-                // functions) is always processed before the nested block's own, so
-                // a fully-registered group here is a re-discovery — keep the first.
+                // A registering caller may revisit this same statement sequence.
                 if (group.All(f => this.state.RecursiveLocalFunctionGroups.ContainsKey(f.Symbol)))
                 {
                     continue;

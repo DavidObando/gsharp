@@ -1,0 +1,4396 @@
+// <copyright file="Issue4719CastNullTupleLeafTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Text.RegularExpressions;
+using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.Pipeline;
+using Cs2Gs.Translator;
+using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Tests;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Xunit;
+
+namespace Cs2Gs.Tests;
+
+public sealed class Issue4719CastNullTupleLeafTests : IDisposable
+{
+    private readonly string fixtureDirectory = Path.Combine(
+        AppContext.BaseDirectory,
+        "issue4719-fixtures",
+        Guid.NewGuid().ToString("N"));
+
+    [Theory]
+    [InlineData("(string)null")]
+    [InlineData("((string)null)")]
+    [InlineData("(string)default")]
+    [InlineData("(string)default(string)")]
+    [InlineData("(string)(object)null")]
+    [InlineData("choose ? (string)null : \"x\"")]
+    [InlineData("choose switch { true => (string)null, false => \"x\" }")]
+    public void CastNullTupleLeaf_PromotesOnlyTheNullBearingLeaf(string value)
+    {
+        string printed = Translate($$"""
+            public static class Obj {
+                public static ((string Text, string Keep) Names, int Code) Rows(bool choose) {
+                    ((string Text, string Keep) Names, int Code) Missing() {
+                        return choose ? (({{value}}, "keep"), 1) : (("x", "keep"), 2);
+                    }
+                    return Missing();
+                }
+            }
+            """);
+
+        Assert.Contains("let Missing = func () (Names (Text string?, Keep string), Code int32)", printed);
+        Assert.Contains("func Rows(choose bool) (Names (Text string?, Keep string), Code int32)", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void CastNullTupleAndScalarReturns_PreserveRuntimeNull()
+    {
+        string printed = Translate("""
+            public static class Obj {
+                public static string Missing() => (string)null;
+                public static string Forward() => Missing();
+                public static (string Text, int Code) Row() => ((string)null, 1);
+                public static bool Run() {
+                    var row = Row();
+                    return row.Text is null && row.Code == 1 && Forward() is null;
+                }
+            }
+            """);
+
+        Assert.Contains("func Missing() string?", printed);
+        Assert.Contains("func Forward() string?", printed);
+        Assert.Contains("func Row() (Text string?, Code int32)", printed);
+        TranslationTestValidation.AssertBinds(printed);
+        EmittedOracleResult result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Obj.Run()");
+        Assert.False(result.Diagnostics.Any(diagnostic => diagnostic.IsError), string.Join(Environment.NewLine, result.Diagnostics));
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Theory]
+    [InlineData("(string)(object)\"keep\"")]
+    [InlineData("(string)null ?? \"keep\"")]
+    [InlineData("(int)(object)null")]
+    [InlineData("(Box)(string)null")]
+    public void CastWithoutNullResult_DoesNotPromoteItsTupleLeaf(string value)
+    {
+        string type = value.StartsWith("(int)", StringComparison.Ordinal) ? "int"
+            : value.StartsWith("(Box)", StringComparison.Ordinal) ? "Box" : "string";
+        string mappedType = type == "int" ? "int32" : type;
+        string printed = Translate($$"""
+            public sealed class Box {
+                public static explicit operator Box(string text) => new Box();
+            }
+            public static class Obj {
+                public static ({{type}} Value, int Code) Row() => ({{value}}, 1);
+            }
+            """);
+
+        Assert.Contains($"func Row() (Value {mappedType}, Code int32)", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData("struct", "default(T)")]
+    [InlineData("unmanaged", "default(T)")]
+    [InlineData("struct", "(T)default")]
+    [InlineData("unmanaged", "(T)default")]
+    public void NonNullableGenericBoxing_PreservesTheNonNullTupleLeaf(string constraint, string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}}
+                    => ((object){{value}}, 1);
+                public static int Run() {
+                    var row = Row<int>();
+                    return (int)row.Value + row.Code;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("int")]
+    [InlineData("bool")]
+    [InlineData("System.DateTime")]
+    public void NonNullableConcreteBoxing_PreservesTheNonNullTupleLeaf(string type)
+    {
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row() => ((object)default({{type}}), 1);
+            }
+            """);
+
+        Assert.Contains("func Row() (Value object, Code int32)", printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Theory]
+    [InlineData("struct", "(T)(object)null", typeof(NullReferenceException))]
+    [InlineData("unmanaged", "(T)(object)null", typeof(NullReferenceException))]
+    [InlineData("struct", "(T)(object)(string)null", typeof(NullReferenceException))]
+    [InlineData("unmanaged", "(T)(object)(string)null", typeof(NullReferenceException))]
+    [InlineData("struct", "(T)(object)default(T?)", typeof(NullReferenceException))]
+    [InlineData("unmanaged", "(T)(object)default(T?)", typeof(NullReferenceException))]
+    [InlineData("struct", "(object)(T)(object)null", typeof(NullReferenceException))]
+    [InlineData("unmanaged", "(object)(T)(object)null", typeof(NullReferenceException))]
+    public void NonNullableGenericCastResult_PreservesTheNonNullTupleLeafAndException(
+        string constraint,
+        string value,
+        Type exception)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}} => ({{value}}, 1);
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object, Code int32)", printed);
+        AssertBindsAndThrows(printed, fixture, exception, "Obj.Row[int32]()");
+    }
+
+    [Theory]
+    [InlineData("struct")]
+    [InlineData("unmanaged")]
+    public void NonNullableGenericNullableUnboxResult_PreservesTheNonNullTupleLeaf(string constraint)
+    {
+        // Generic nullable unwrap binding is independently tracked in #4735.
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}}
+                    => ((T)default(T?), 1);
+            }
+            """);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object, Code int32)", printed);
+    }
+
+    [Theory]
+    [InlineData("struct", false)]
+    [InlineData("unmanaged", false)]
+    [InlineData("struct", true)]
+    [InlineData("unmanaged", true)]
+    public void NonNullableCastResult_DoesNotForwardScalarOrTupleSourceTaint(string constraint, bool tupleSource)
+    {
+        string fixture = this.EmitFixture();
+        string setup = tupleSource ? "var source = Seed();" : "object source = null;";
+        string value = tupleSource ? "source.Value" : "source";
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Seed() => (null, 1);
+                public static (object Value, int Code) Row<T>() where T : {{constraint}} {
+                    {{setup}}
+                    return ((T){{value}}, 1);
+                }
+                public static object Scalar<T>() where T : {{constraint}} {
+                    {{setup}}
+                    return (T){{value}};
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object, Code int32)", printed);
+        Assert.Contains($"func Scalar[T {constraint}]() object", printed);
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Row[int32]()");
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Scalar[int32]()");
+    }
+
+    [Theory]
+    [InlineData("int")]
+    [InlineData("bool")]
+    [InlineData("System.DateTime")]
+    public void NonNullableConcreteCastResult_PreservesTheNonNullTupleLeafAndException(string type)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row() => (({{type}})(object)null, 1);
+            }
+            """, fixture);
+
+        Assert.Contains("func Row() (Value object, Code int32)", printed);
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Row()");
+    }
+
+    [Theory]
+    [InlineData("struct", "(T?)(object)null")]
+    [InlineData("unmanaged", "(T?)(object)null")]
+    [InlineData("struct", "(T?)default(T?)")]
+    [InlineData("unmanaged", "(T?)default(T?)")]
+    public void NullableGenericCastResult_PreservesTheNullableTupleLeaf(
+        string constraint,
+        string value)
+    {
+        // Generic implicit nullable boxing is independently tracked in #4735.
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}} => ({{value}}, 1);
+            }
+            """);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object?, Code int32)", printed);
+    }
+
+    [Theory]
+    [InlineData("struct", "(T?)(object)null")]
+    [InlineData("unmanaged", "(T?)(object)null")]
+    [InlineData("struct", "(T?)default(T?)")]
+    [InlineData("unmanaged", "(T?)default(T?)")]
+    public void ExplicitlyBoxedNullableGenericCastResult_PreservesRuntimeNull(string constraint, string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : {{constraint}} => ((object){{value}}, 1);
+                public static int Run() {
+                    var row = Row<int>();
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T {constraint}]() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("(int?)1")]
+    [InlineData("((int?)1)")]
+    public void ExplicitlyBoxedNullableLift_PreservesTheNonNullTupleLeaf(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row() => ((object){{value}}, 1);
+                public static int Run() {
+                    var row = Row();
+                    return (int)row.Value + row.Code;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row() (Value object, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 2);
+    }
+
+    [Fact]
+    public void UserDefinedCastResult_DoesNotForwardItsNullableInputsTaint()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (Box Value, int Code) Row() {
+                    string text = null;
+                    return ((Box)text, 1);
+                }
+                public static Box Scalar() {
+                    string text = null;
+                    return (Box)text;
+                }
+                public static int Run() {
+                    var row = Row();
+                    return row.Value != null && row.Code == 1 && Scalar() != null ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row() (Value Box, Code int32)", printed);
+        Assert.Contains("func Scalar() Box", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("checked((int?)1)", false)]
+    [InlineData("unchecked((int?)1)", false)]
+    [InlineData("checked(value ?? (int?)1)", false)]
+    [InlineData("unchecked(value ?? (int?)1)", false)]
+    [InlineData("checked(choose ? (int?)1 : (int?)2)", false)]
+    [InlineData("unchecked(choose switch { true => (int?)1, false => (int?)2 })", false)]
+    [InlineData("checked(value)", true)]
+    [InlineData("unchecked(value)", true)]
+    [InlineData("checked(choose ? value : (int?)1)", true)]
+    [InlineData("unchecked(choose switch { true => value, false => (int?)1 })", true)]
+    public void CheckedNullableOperands_PreserveCompositeTupleScalarAndSourceContracts(string operand, bool nullable)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row(bool choose, int? value) => ((object){{operand}}, 1);
+                public static object Scalar(bool choose, int? value) => (object){{operand}};
+                public static object Local(bool choose, int? value) {
+                    object result = (object){{operand}};
+                    return result;
+                }
+                public static (object Value, int Code) Forward(bool choose, int? value) => Row(choose, value);
+                public static int Run() {
+                    var missing = Forward(true, null);
+                    var present = Forward(false, 7);
+                    return {{(nullable ? "missing.Value == null && Scalar(true, null) == null && Local(true, null) == null" : "missing.Value != null && Scalar(true, null) != null && Local(true, null) != null")}}
+                        && present.Value != null && Scalar(false, 7) != null && Local(false, 7) != null
+                        && missing.Code == 1 && present.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+        string optional = nullable ? "?" : string.Empty;
+        Assert.Contains($"func Row(choose bool, value int32?) (Value object{optional}, Code int32)", printed);
+        Assert.Contains($"func Forward(choose bool, value int32?) (Value object{optional}, Code int32)", printed);
+        Assert.Contains($"func Scalar(choose bool, value int32?) object{optional}", printed);
+        Assert.Contains($"func Local(choose bool, value int32?) object{optional}", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("checked(value)")]
+    [InlineData("unchecked(value)")]
+    public void CheckedGuardedNullableOperand_PreservesIteratorPrecision(string operand)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(object Value, int Code)> Rows(int? value) {
+                    if (value != null) { yield return ((object){{operand}}, 1); }
+                }
+                public static int Run() {
+                    foreach (var row in Rows(null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows(7)) {
+                        if ((int)row.Value != 7 || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    return count;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Rows(value int32?) sequence[(Value object, Code int32)]", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("value")]
+    [InlineData("(value)")]
+    [InlineData("checked(value)")]
+    [InlineData("unchecked(value)")]
+    [InlineData("choose ? value : (int?)1")]
+    [InlineData("choose switch { true => value, false => (int?)1 }")]
+    [InlineData("Probe.Number(!choose)")]
+    public void ContextualOrdinaryNullableParameterOperator_DeclarationOnlyPreservesItsNonNullResult(string operand)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (Box Value, int Code) Row(bool choose, int? value) => ({{operand}}, 1);
+                public static Box Scalar(bool choose, int? value) => {{operand}};
+                public static Box Local(bool choose, int? value) {
+                    Box result = {{operand}};
+                    return result;
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    var missing = Row(true, null);
+                    var present = Row(false, 7);
+                    return missing.Value != null && present.Value != null
+                        && Scalar(true, null) != null && Scalar(false, 7) != null
+                        && Local(true, null) != null && Local(false, 7) != null
+                        && missing.Code == 1 && present.Code == 1 && Probe.Calls == {{(operand.StartsWith("Probe.", StringComparison.Ordinal) ? 12 : 6)}} ? 1 : -1;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Row(choose bool, value int32?) (Value Box, Code int32)", printed);
+        Assert.Contains("func Scalar(choose bool, value int32?) Box", printed);
+        Assert.Contains("func Local(choose bool, value int32?) Box", printed);
+        // #4737 also covers native nullable-value contextual operator binding.
+    }
+
+    [Theory]
+    [InlineData("Input(missing)")]
+    [InlineData("(Input(missing))")]
+    [InlineData("checked(Input(missing))")]
+    [InlineData("missing ? Input(true) : \"x\"")]
+    [InlineData("Pair(missing).Text")]
+    public void ContextualOrdinaryReferenceOperator_BlocksOperandSourceAndTupleEdges(string operand)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static string Input(bool missing) => missing ? null : "x";
+                public static (string Text, int Code) Pair(bool missing) => (Input(missing), 1);
+                public static (ReferenceBox Value, int Code) Row(bool missing) => ({{operand}}, 1);
+                public static ReferenceBox Scalar(bool missing) => {{operand}};
+                public static ReferenceBox Local(bool missing) {
+                    ReferenceBox result = {{operand}};
+                    return result;
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    return Row(true).Value != null && Row(false).Value != null
+                        && Scalar(true) != null && Scalar(false) != null
+                        && Local(true) != null && Local(false) != null
+                        && Probe.Calls == 6 ? 1 : -1;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Input(missing bool) string?", printed);
+        Assert.Contains("func Pair(missing bool) (Text string?, Code int32)", printed);
+        Assert.Contains("func Row(missing bool) (Value ReferenceBox, Code int32)", printed);
+        Assert.Contains("func Scalar(missing bool) ReferenceBox", printed);
+        Assert.Contains("func Local(missing bool) ReferenceBox", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void ContextualOrdinaryOperator_IteratorPreservesItsNonNullLeafAndTypedHoist()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static string Input(bool missing) => missing ? null : "x";
+                public static IEnumerable<(ReferenceBox Value, int Code)> Rows(bool missing) {
+                    yield return missing ? (Input(true), 1) : (Input(false), 2);
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    int count = 0;
+                    foreach (var row in Rows(true)) {
+                        if (row.Value == null || row.Code != 1) { return -1; }
+                        count++;
+                    }
+                    foreach (var row in Rows(false)) {
+                        if (row.Value == null || row.Code != 2) { return -2; }
+                        count++;
+                    }
+                    return count == 2 && Probe.Calls == 2 ? 1 : -3;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Rows(missing bool) sequence[(Value ReferenceBox, Code int32)]", printed);
+        AssertTypedHoists(printed, "(Value ReferenceBox, Code int32)", expectedCount: 1);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void ContextualNullableResultOperator_InputGuardDoesNotEraseTheOperatorsOwnNullResult()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<(MaybeBox Value, int Code)> Rows(string value) {
+                    if (value != null) { yield return (value, 1); }
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    foreach (var row in Rows(null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows("x")) {
+                        if (row.Value != null || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    return count == 1 && Probe.Calls == 1 ? 1 : -3;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Rows(value string?) sequence[(Value MaybeBox?, Code int32)]", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void ContextualOrdinaryOperator_DeclarationOnlyStaticInitializerPreservesNonNullStorage()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static Box Value = (int?)null;
+                public static Box Read() => Value;
+                public static int Run() => Read() != null ? 1 : -1;
+            }
+            """, fixture);
+        Assert.Contains("Value Box =", printed);
+        Assert.Contains("func Read() Box", printed);
+        // #4737: implicit int32? -> Box fails loudly before execution.
+    }
+
+    [Theory]
+    [InlineData("value", true)]
+    [InlineData("(object)(int?)value", true)]
+    [InlineData("choose ? value : (Token?)new Token()", true)]
+    [InlineData("choose switch { true => value, false => (Token?)new Token() }", true)]
+    [InlineData("value ?? (Token?)new Token()", false)]
+    [InlineData("(Token?)new Token()", false)]
+    public void LiftedUserDefinedCast_UsesItsEffectiveNullContractAndInvokesOnlyForPresentValues(
+        string operand,
+        bool nullable)
+    {
+        string fixture = this.EmitFixture();
+        string converted = operand.StartsWith("(object)", StringComparison.Ordinal) ? operand : $"(int?)({operand})";
+        string printed = Translate($$"""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (object Value, int Code) Row(bool choose) {
+                    Token? value = choose ? null : new Token();
+                    return ({{converted}}, 1);
+                }
+                public static object Scalar(bool choose) {
+                    Token? value = choose ? null : new Token();
+                    return {{converted}};
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    var missing = Row(true);
+                    var present = Row(false);
+                    var scalarMissing = Scalar(true);
+                    var scalarPresent = Scalar(false);
+                    return {{(nullable ? "missing.Value == null && scalarMissing == null" : "(int)missing.Value == 7 && (int)scalarMissing == 7")}}
+                        && (int)present.Value == 7 && (int)scalarPresent == 7
+                        && missing.Code == 1 && present.Code == 1
+                        && Probe.Calls == {{(nullable ? 2 : 4)}} ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        string optional = nullable ? "?" : string.Empty;
+        Assert.Contains($"func Row(choose bool) (Value object{optional}, Code int32)", printed);
+        Assert.Contains($"func Scalar(choose bool) object{optional}", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("OpaqueToken", "int?", true, 0)]
+    [InlineData("NullAwareToken", "int", false, 9)]
+    public void OrdinaryNullableValueUserDefinedCast_DeclarationOnlyPreservesItsOwnResultContract(
+        string token,
+        string resultType,
+        bool nullable,
+        int expectedValue)
+    {
+        string fixture = this.EmitFixture();
+        string input = token == "NullAwareToken" ? "choose ? null : new NullAwareToken()" : "new OpaqueToken()";
+        string printed = Translate($$"""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (object Value, int Code) Row(bool choose) {
+                    {{token}}{{(token == "NullAwareToken" ? "?" : "")}} value = {{input}};
+                    return (({{resultType}})value, 1);
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    var first = Row(true);
+                    var second = Row(false);
+                    return {{(nullable ? "first.Value == null && second.Value == null" : $"(int)first.Value == {expectedValue} && (int)second.Value == {expectedValue}")}}
+                        && first.Code == 1 && second.Code == 1 && Probe.Calls == 2 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row(choose bool) (Value object{(nullable ? "?" : "")}, Code int32)", printed);
+        // #4737 tracks these two ordinary nullable-signature operator binding gaps.
+    }
+
+    [Fact]
+    public void GuardedLiftedUserDefinedCast_PreservesItsNonNullIteratorLeaf()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<(object Value, int Code)> Rows(Token? value) {
+                    if (value != null) {
+                        yield return ((int?)value, 1);
+                    }
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    foreach (var row in Rows(null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows(new Token())) {
+                        if ((int)row.Value != 7 || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    return count == 1 && Probe.Calls == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Rows(value Token?) sequence[(Value object, Code int32)]", printed);
+        Assert.DoesNotContain("value!!", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void LiftedUserDefinedReferenceResult_DeclarationOnlyPreservesTheEffectiveNullContract()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (object Value, int Code) Row(bool missing) {
+                    ReferenceToken? value = missing ? null : new ReferenceToken();
+                    return ((Box)value, 1);
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    var missing = Row(true);
+                    var present = Row(false);
+                    return missing.Value == null && present.Value != null
+                        && missing.Code == 1 && present.Code == 1 && Probe.Calls == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row(missing bool) (Value object?, Code int32)", printed);
+        // #4741 tracks the independent Core null-short-circuit runtime divergence.
+    }
+
+    [Theory]
+    [InlineData("value ?? (int?)1", 0)]
+    [InlineData("Probe.Choose(choose) ? (int?)1 : (int?)2", 8)]
+    [InlineData("Probe.Choose(choose) switch { true => (int?)1, false => (int?)2 }", 8)]
+    [InlineData("(Probe.Choose(choose) ? value : (int?)null) ?? (int?)1", 8)]
+    public void BoxedNonNullNullableComposite_PreservesTupleAndScalarPrecisionAndSingleEvaluation(
+        string operand,
+        int calls)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (object Value, int Code) Row(bool choose, int? value) => ((object)({{operand}}), 1);
+                public static object Scalar(bool choose, int? value) => (object)({{operand}});
+                public static int Run() {
+                    Probe.Reset();
+                    var a = Row(true, null);
+                    var b = Row(false, null);
+                    var c = Row(true, 7);
+                    var d = Row(false, 7);
+                    return a.Value != null && b.Value != null && c.Value != null && d.Value != null
+                        && Scalar(true, null) != null && Scalar(false, null) != null
+                        && Scalar(true, 7) != null && Scalar(false, 7) != null
+                        && a.Code + b.Code + c.Code + d.Code == 4 && Probe.Calls == {{calls}} ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row(choose bool, value int32?) (Value object, Code int32)", printed);
+        Assert.Contains("func Scalar(choose bool, value int32?) object", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("Probe.Choose(choose) ? value : (int?)1")]
+    [InlineData("Probe.Choose(choose) switch { true => value, false => (int?)1 }")]
+    public void BoxedGuardedNullableComposite_PreservesIteratorLeafAndGuard(string operand)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<(object Value, int Code)> Rows(bool choose, int? value) {
+                    if (value != null) {
+                        yield return ((object)({{operand}}), 1);
+                    }
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    foreach (var row in Rows(true, null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows(true, 7)) {
+                        if ((int)row.Value != 7 || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    foreach (var row in Rows(false, 7)) {
+                        if ((int)row.Value != 1 || row.Code != 1) { return -3; }
+                        count++;
+                    }
+                    return count == 2 && Probe.Calls == 2 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Rows(choose bool, value int32?) sequence[(Value object, Code int32)]", printed);
+        Assert.DoesNotContain("value!!", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("Probe.Choose(choose) ? value : (int?)1")]
+    [InlineData("Probe.Choose(choose) switch { true => value, false => (int?)1 }")]
+    [InlineData("value ?? (int?)null")]
+    [InlineData("Probe.Number(!choose)")]
+    public void BoxedNullableCompositeOrOpaqueRead_PreservesNullAndPresentValues(string operand)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (object Value, int Code) Row(bool choose, int? value) => ((object)({{operand}}), 1);
+                public static int Run() {
+                    Probe.Reset();
+                    var missing = Row(true, null);
+                    var present = Row(false, 7);
+                    return missing.Value == null && present.Value != null
+                        && missing.Code == 1 && present.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row(choose bool, value int32?) (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void LiftedAndCompositeCastProgram_CompilesWithRealDriverVerifiesAndPreservesMetadata()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (object Value, int Code) Lift(bool missing) {
+                    Token? value = missing ? null : new Token();
+                    return ((int?)value, 1);
+                }
+                public static (object Value, int Code) Known(bool choose, int? value)
+                    => ((object)checked(Probe.Choose(choose) ? (value ?? (int?)1) : (int?)2), 1);
+                public static (ReferenceBox Value, int Code) Ordinary(bool missing) {
+                    string value = missing ? null : "x";
+                    return (value, 1);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    var missing = Lift(true);
+                    var present = Lift(false);
+                    var first = Known(true, null);
+                    var second = Known(false, null);
+                    var ordinaryMissing = Ordinary(true);
+                    var ordinaryPresent = Ordinary(false);
+                    Console.WriteLine(missing.Value == null && (int)present.Value == 7
+                        && (int)first.Value == 1 && (int)second.Value == 2
+                        && missing.Code + present.Code + first.Code + second.Code == 4
+                        && ordinaryMissing.Value != null && ordinaryPresent.Value != null
+                        && ordinaryMissing.Code + ordinaryPresent.Code == 2
+                        && Probe.Calls == 5 ? 15 : -1);
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Lift(missing bool) (Value object?, Code int32)", printed);
+        Assert.Contains("func Known(choose bool, value int32?) (Value object, Code int32)", printed);
+        Assert.Contains("func Ordinary(missing bool) (Value ReferenceBox, Code int32)", printed);
+        string source = Path.Combine(this.fixtureDirectory, "Program.gs");
+        string assemblyPath = Path.Combine(this.fixtureDirectory, "Program.dll");
+        string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
+        Assert.True(File.Exists(compiler), "The graph build must build the real gsc driver.");
+        File.WriteAllText(source, printed);
+        var compiled = RunDotnet(compiler, "/target:exe", "/targetframework:net10.0", $"/reference:{fixture}", $"/out:{assemblyPath}", source);
+        Assert.True(compiled.Exit == 0, compiled.Output);
+        Assert.DoesNotContain("GS0523", compiled.Output);
+        Assert.True(IlVerifyRunner.IsEnabled, "This witness requires real IL verification, not its bypass.");
+        IlVerifyResult verified = new IlVerifyRunner().Verify(assemblyPath, new[] { fixture });
+        Assert.Equal(IlVerifyStatus.Passed, verified.Status);
+        Assert.Empty(verified.Errors);
+        File.WriteAllText(
+            Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"),
+            "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\""
+                + Environment.Version.Major + ".0.0\"}}}");
+        var executed = RunDotnet(assemblyPath);
+        Assert.Equal(0, executed.Exit);
+        Assert.Equal("15" + Environment.NewLine, executed.Output);
+
+        var loadContext = new AssemblyLoadContext("issue4719-metadata", isCollectible: true);
+        try
+        {
+            loadContext.LoadFromAssemblyPath(fixture);
+            Type owner = Assert.Single(loadContext.LoadFromAssemblyPath(assemblyPath).GetTypes(), type => type.Name == "Obj");
+            var nullability = new NullabilityInfoContext();
+            MethodInfo lift = Assert.IsAssignableFrom<MethodInfo>(owner.GetMethod("Lift"));
+            MethodInfo known = Assert.IsAssignableFrom<MethodInfo>(owner.GetMethod("Known"));
+            MethodInfo ordinary = Assert.IsAssignableFrom<MethodInfo>(owner.GetMethod("Ordinary"));
+            Assert.Equal(NullabilityState.Nullable, nullability.Create(lift.ReturnParameter).GenericTypeArguments[0].ReadState);
+            Assert.Equal(NullabilityState.NotNull, nullability.Create(known.ReturnParameter).GenericTypeArguments[0].ReadState);
+            Assert.Equal(NullabilityState.NotNull, nullability.Create(ordinary.ReturnParameter).GenericTypeArguments[0].ReadState);
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Theory]
+    [InlineData("(int?)(object)null")]
+    [InlineData("(int?)default(int?)")]
+    public void NullableConcreteCastResult_PreservesTheNullableTupleLeafAndRuntimeNull(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row() => ({{value}}, 1);
+                public static int Run() {
+                    var row = Row();
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("where T : class", " class")]
+    public void ReferenceOrUnconstrainedCastResult_PreservesTheNullableTupleLeafAndRuntimeNull(
+        string constraint,
+        string mappedConstraint)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() {{constraint}} => ((T)(object)null, 1);
+                public static int Run() {
+                    var row = Row<string>();
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T{mappedConstraint}]() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+        if (constraint.Length == 0)
+        {
+            AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Row[int32]()");
+        }
+    }
+
+    [Theory]
+    [InlineData("default(int?)", true)]
+    [InlineData("(int?)default", true)]
+    [InlineData("(int?)null", true)]
+    [InlineData("choose ? (int?)null : 1", false)]
+    [InlineData("choose switch { true => default(int?), false => 1 }", false)]
+    public void NullableValueBoxing_PreservesNullAndThePromotedTupleLeaf(string value, bool alwaysNull)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row(bool choose) => ((object)({{value}}), 1);
+                public static int Run() {
+                    var missing = Row(true);
+                    var present = Row(false);
+                    return missing.Value == null && missing.Code == 1
+                        && {{(alwaysNull ? "present.Value == null" : "(int)present.Value == 1")}}
+                        && present.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row(choose bool) (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("where T : class", " class")]
+    public void ReferenceOrUnconstrainedDefaultCast_PreservesTheNullableTupleLeaf(
+        string constraint,
+        string mappedConstraint)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() {{constraint}} => ((object)default(T), 1);
+                public static int Run() {
+                    var row = Row<string>();
+                    {{(constraint.Length == 0 ? "if ((int)Row<int>().Value != 0) { return -2; }" : "")}}
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Row[T{mappedConstraint}]() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void NullableGenericValueBoxing_PreservesNullAndThePromotedTupleLeaf()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            public static class Obj {
+                public static (object Value, int Code) Row<T>() where T : struct => ((object)default(T?), 1);
+                public static int Run() {
+                    var row = Row<int>();
+                    return row.Value == null && row.Code == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Row[T struct]() (Value object?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void GuardedReferenceTypeParameterCast_PreservesTheNonNullIteratorLeaf()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(object Value, int Code)> Rows<T>(T? value) where T : class {
+                    if (value != null) {
+                        yield return ((object)value, 1);
+                    }
+                }
+                public static int Run() {
+                    foreach (var row in Rows<string>(null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows<string>("keep")) {
+                        if ((string)row.Value != "keep" || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    return count;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Rows[T class](value T?) sequence[(Value object, Code int32)]", printed);
+        Assert.DoesNotContain("value!!", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void GuardedNullableValueBoxing_PreservesTheNonNullIteratorLeaf()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            public static class Obj {
+                public static IEnumerable<(object Value, int Code)> Rows(int? value) {
+                    if (value != null) {
+                        yield return ((object)value, 1);
+                    }
+                }
+                public static int Run() {
+                    foreach (var row in Rows(null)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows(7)) {
+                        if ((int)row.Value != 7 || row.Code != 1) { return -2; }
+                        count++;
+                    }
+                    return count;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Rows(value int32?) sequence[(Value object, Code int32)]", printed);
+        Assert.DoesNotContain("value!!", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void OriginalNestedIteratorAndCastYield_PreserveContractsAndDeferredEvaluation()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    IEnumerable<(string Text, int Code)> Missing() {
+                        yield return choose ? ((string)null, 1) : ("x", 2);
+                    }
+                    if (choose) { yield break; }
+                    yield return ("keep", 2);
+                }
+
+                public static IEnumerable<(string Text, int Code)> MissingRows(bool choose) {
+                    IEnumerable<(string Text, int Code)> Missing() {
+                        yield return Probe.Choose(choose) ? ((string)null, 1) : ("x", 2);
+                    }
+                    return Missing();
+                }
+
+                public static IEnumerable<(string Text, int Code)> CastRows(bool choose) {
+                    yield return ((string Text, int Code))
+                        (Probe.Choose(choose) ? ((string)(null), 1) : ("x", 2));
+                    yield return (Probe.Text(choose), 3);
+                }
+
+                public static int Run() {
+                    int total = 0;
+                    foreach (var row in Rows(true)) { return -1; }
+                    foreach (var row in Rows(false)) {
+                        if (row.Text != "keep" || row.Code != 2) { return -2; }
+                        total += row.Code;
+                    }
+                    Probe.Reset();
+                    var missing = MissingRows(true);
+                    if (Probe.Calls != 0) { return -3; }
+                    foreach (var row in missing) {
+                        if (row.Text != null || row.Code != 1 || Probe.Calls != 1) { return -4; }
+                        total += row.Code;
+                    }
+                    foreach (var row in MissingRows(false)) {
+                        if (row.Text != "x" || row.Code != 2 || Probe.Calls != 2) { return -5; }
+                        total += row.Code;
+                    }
+                    Probe.Reset();
+                    var deferred = CastRows(true);
+                    if (Probe.Calls != 0) { return -6; }
+                    foreach (var row in deferred) {
+                        if (row.Text != null || row.Code != 1 || Probe.Calls != 1) { return -7; }
+                        total += row.Code;
+                        break;
+                    }
+                    if (Probe.Calls != 1) { return -8; }
+                    Probe.Reset();
+                    foreach (var row in CastRows(true)) {
+                        if (row.Text != null || Probe.Calls != (row.Code == 1 ? 1 : 2)) { return -9; }
+                        total += row.Code;
+                    }
+                    if (Probe.Calls != 2) { return -10; }
+                    Probe.Reset();
+                    foreach (var row in CastRows(false)) {
+                        if (row.Text != "x" || Probe.Calls != (row.Code == 2 ? 1 : 2)) { return -11; }
+                        total += row.Code;
+                    }
+                    if (Probe.Calls != 2) { return -12; }
+                    return total;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Rows(choose bool) sequence[(Text string, Code int32)]", printed);
+        Assert.Equal(2, printed.Split("let Missing = func () IEnumerable[(Text string?, Code int32)]").Length - 1);
+        Assert.Contains("func CastRows(choose bool) sequence[(Text string?, Code int32)]", printed);
+        AssertTypedHoists(printed, "(Text string?, Code int32)", expectedCount: 3);
+        AssertBindsAndRuns(printed, fixture, expected: 15);
+    }
+
+    [Theory]
+    [InlineData("IEnumerable", "", "sequence")]
+    [InlineData("IEnumerator", "", "IEnumerator")]
+    [InlineData("IAsyncEnumerable", "async ", "IAsyncEnumerable")]
+    [InlineData("IAsyncEnumerator", "async ", "IAsyncEnumerator")]
+    public void CastTupleYield_UsesPromotedElementTypeForItsMaterializedLocal(
+        string envelope,
+        string modifier,
+        string mappedEnvelope)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static {{modifier}}{{envelope}}<(string Text, int Code)> Rows(bool choose) {
+                    yield return ((string Text, int Code))
+                        (Probe.Choose(choose) ? ((string)null, 1) : ("x", 2));
+                }
+            }
+            """, fixture);
+
+        Assert.Contains($"func Rows(choose bool) {mappedEnvelope}[(Text string?, Code int32)]", printed);
+        AssertTypedHoists(printed, "(Text string?, Code int32)", expectedCount: 1);
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixture });
+        TranslationTestValidation.AssertBinds(resolver, printed);
+    }
+
+    [Theory]
+    [InlineData("choose ? ((string)text, 1) : (\"x\", 2)", true)]
+    [InlineData("choose switch { true => ((string)text, 1), false => (\"x\", 2) }", true)]
+    [InlineData("(choose ? (string)text : \"x\", 1)", false)]
+    [InlineData("(choose switch { true => (string)text, false => \"x\" }, 1)", false)]
+    public void GuardedCastTupleLeaf_PreservesTheNonNullContractAndRuntimeGuard(string yielded, bool materialized)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<(string Text, int Code)> Rows(bool choose) {
+                    string? text = choose ? null : "x";
+                    if (text != null) {
+                        Probe.Choose(choose);
+                        yield return {{yielded}};
+                    }
+                }
+                public static int Run() {
+                    Probe.Reset();
+                    foreach (var row in Rows(true)) { return -1; }
+                    if (Probe.Calls != 0) { return -2; }
+                    var present = Rows(false);
+                    if (Probe.Calls != 0) { return -3; }
+                    int count = 0;
+                    foreach (var row in present) {
+                        if (row.Text != "x" || Probe.Calls != 1) { return -4; }
+                        count++;
+                    }
+                    return count;
+                }
+            }
+            """, fixture);
+
+        Assert.Contains("func Rows(choose bool) sequence[(Text string, Code int32)]", printed);
+        Assert.DoesNotContain("text!!", printed);
+        if (materialized)
+        {
+            AssertTypedHoists(printed, "(Text string, Code int32)", expectedCount: 1);
+        }
+
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void GuardedNestedCastTupleLeaf_StillPromotesTheNullSibling()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<((string Text, string Missing) Names, int Code)> Rows(bool choose) {
+                    string? text = choose ? null : "x";
+                    if (text != null) {
+                        yield return choose
+                            ? (((string)text, (string)null), 1)
+                            : (((string)text, (string)(null)), 2);
+                    }
+                }
+                public static int Run() {
+                    foreach (var row in Rows(true)) { return -1; }
+                    int count = 0;
+                    foreach (var row in Rows(false)) {
+                        if (row.Names.Text != "x" || row.Names.Missing != null || row.Code != 2) { return -2; }
+                        count++;
+                    }
+                    return count;
+                }
+            }
+            """, fixture);
+
+        const string tuple = "(Names (Text string, Missing string?), Code int32)";
+        Assert.Contains("func Rows(choose bool) sequence[" + tuple + "]", printed);
+        AssertTypedHoists(printed, tuple, expectedCount: 1);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("(string)(object)\"keep\"", "string", "\"keep\"", "string")]
+    [InlineData("(string)null ?? \"keep\"", "string", "\"keep\"", "string")]
+    [InlineData("(int)(object)null", "int", "1", "int32")]
+    [InlineData("(Box)(string)null", "Box", "new Box()", "Box")]
+    public void IteratorCastWithoutNullResult_PreservesElementAndHoistPrecision(
+        string value,
+        string type,
+        string fallback,
+        string mappedType)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<({{type}} Value, int Code)> Rows(bool choose) {
+                    yield return choose ? ({{value}}, 1) : ({{fallback}}, 2);
+                }
+            }
+            """, fixture);
+
+        string tuple = $"(Value {mappedType}, Code int32)";
+        Assert.Contains("func Rows(choose bool) sequence[" + tuple + "]", printed);
+        AssertTypedHoists(printed, tuple, expectedCount: 1);
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixture });
+        TranslationTestValidation.AssertBinds(resolver, printed);
+    }
+
+    [Theory]
+    [InlineData("new object() as string")]
+    [InlineData("(new object() as string)")]
+    [InlineData("checked(new object() as string)")]
+    [InlineData("unchecked(new object() as string)")]
+    [InlineData("choose ? new object() as string : \"keep\"")]
+    [InlineData("choose switch { true => new object() as string, false => \"keep\" }")]
+    public void TryCastResult_PromotesTupleScalarAndLaterAssignment(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            public static class Obj {
+                public static (string Value, string Keep, int Code) Row(bool choose) => ({{value}}, "keep", 1);
+                public static (string Value, string Keep, int Code) Forward(bool choose) => Row(choose);
+                public static string Scalar(bool choose) => {{value}};
+                public static string Later(bool choose) {
+                    string text = "keep";
+                    text = {{value}};
+                    return text;
+                }
+                public static int Run() {
+                    var row = Forward(true);
+                    return row.Value == null && row.Keep == "keep" && row.Code == 1
+                        && Scalar(true) == null && Later(true) == null ? 1 : -1;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Row(choose bool) (Value string?, Keep string, Code int32)", printed);
+        Assert.Contains("func Forward(choose bool) (Value string?, Keep string, Code int32)", printed);
+        Assert.Contains("func Scalar(choose bool) string?", printed);
+        Assert.Contains("func Later(choose bool) string?", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Fact]
+    public void TryCastInsideNonNullableUnboxing_PreservesValueResultAndException()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            public static class Obj {
+                public static (object Value, int Code) Row() => ((int)(new object() as System.IConvertible), 1);
+                public static object Scalar() => (int)(new object() as System.IConvertible);
+            }
+            """, fixture);
+        Assert.Contains("func Row() (Value object, Code int32)", printed);
+        Assert.Contains("func Scalar() object", printed);
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Row()");
+    }
+
+    [Theory]
+    [InlineData("(MaybeBox?)\"x\"", false)]
+    [InlineData("((MaybeBox?)\"x\")", false)]
+    [InlineData("checked((MaybeBox?)\"x\")", false)]
+    [InlineData("\"x\"", false)]
+    [InlineData("(MaybeBox?)\"x\"", true)]
+    [InlineData("((MaybeBox?)\"x\")", true)]
+    [InlineData("checked((MaybeBox?)\"x\")", true)]
+    [InlineData("\"x\"", true)]
+    public void NullableOperatorConvertedResult_RetainsNonNullSinkAssertion(string value, bool initialize)
+    {
+        string make = initialize ? $"{{ MaybeBox result = {value}; return result; }}" : $"=> {value};";
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            #nullable enable
+            using Issue4719Fixture;
+            public static class Obj {
+                public static MaybeBox Make() {{make}}
+            }
+            """, fixture);
+        AssertBindsAndThrows(printed, fixture, typeof(NullReferenceException), "Obj.Make()");
+        Assert.Contains("func Make() MaybeBox", printed);
+        Assert.Contains("!!", printed);
+    }
+
+    [Theory]
+    [InlineData("value")]
+    [InlineData("(MaybeBox?)value")]
+    public void NullableOperatorConvertedResult_PromotedTupleSinkStillAcceptsNull(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using Issue4719Fixture;
+            public static class Obj {
+                public static (MaybeBox Value, int Code) Row(string value) => ({{value}}, 1);
+                public static int Run() {
+                    Probe.Reset();
+                    var row = Row("x");
+                    return row.Value == null && row.Code == 1 && Probe.Calls == 1 ? 1 : -1;
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Row(value string) (Value MaybeBox?, Code int32)", printed);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+    }
+
+    [Theory]
+    [InlineData("Task", "value")]
+    [InlineData("Task", "(MaybeBox?)value")]
+    [InlineData("ValueTask", "value")]
+    [InlineData("ValueTask", "(MaybeBox?)value")]
+    public void AsyncNullableOperatorConvertedResult_PromotedTupleSinkExecutesWithoutAssertion(
+        string envelope,
+        string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static async {{envelope}}<(MaybeBox Value, int Code)> Row(string value) {
+                    await Task.Delay(1);
+                    return ({{value}}, 1);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    var row = Row("x").GetAwaiter().GetResult();
+                    Console.WriteLine(row.Value == null && row.Code == 1 && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        string tuple = "(Value MaybeBox?, Code int32)";
+        Assert.Contains("async func Row(value string) " + (envelope == "ValueTask" ? $"ValueTask[{tuple}]" : tuple), printed);
+        Assert.DoesNotContain("MaybeBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void AsyncTupleOperatorContracts_PreserveNilInputsStrictSinksAndPropertyCounts(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable enable
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static async {{envelope}}<MaybeBox> StrictResult(string value) {
+                    await Task.Delay(1);
+                    return value;
+                }
+                #nullable disable
+                public static async {{envelope}}<(MaybeBox Value, int Code)> Guarded() {
+                    await Task.Delay(1);
+                    if (Text != null) { return (Text, 2); }
+                    return ((MaybeBox)null, 2);
+                }
+                public static async {{envelope}}<(NullAcceptingBox Value, int Code)> Accepting() {
+                    await Task.Delay(1);
+                    return (Text, 1);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Text = null;
+                    Reads = 0;
+                    var accepting = Accepting().GetAwaiter().GetResult();
+                    bool accepts = accepting.Value == null && accepting.Code == 1
+                        && Probe.Calls == 1 && Reads == 1;
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    var guarded = Guarded().GetAwaiter().GetResult();
+                    bool guards = guarded.Value == null && guarded.Code == 2
+                        && Probe.Calls == 1 && Reads == 2;
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { StrictResult("x").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(accepts && guards && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Text!!", printed);
+        Assert.Contains("MaybeBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void AsyncTupleOperatorResult_FrozenParameterContractRetainsAssertion(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static async {{envelope}}<int> Read(string value) {
+                    await Task.Delay(1);
+                    return FrozenTupleContract.Accept((value, 1));
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { Read("x").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("MaybeBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Text")]
+    [InlineData("(MaybeBox?)Text")]
+    [InlineData("checked((MaybeBox?)Text)")]
+    [InlineData("choose ? Text : Text")]
+    public void ScalarYieldNullableOperatorResult_UsesTheEmittedElementContract(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable enable
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                #nullable disable
+                public static IEnumerable<MaybeBox> Rows(bool choose) {
+                    if (Text != null) { yield return {{value}}; }
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    int missing = 0;
+                    foreach (var item in Rows(true)) {
+                        if (item == null) { missing++; }
+                    }
+                    Console.WriteLine(missing == 1 && Probe.Calls == 1 && Reads == 2 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Rows(choose bool) sequence[MaybeBox?]", printed);
+        if (value == "Text" || value == "choose ? Text : Text")
+        {
+            Assert.Contains("Text!!", printed);
+        }
+
+        Assert.DoesNotContain("MaybeBox?(Text!!)!!", printed);
+    }
+
+    [Fact]
+    public void ScalarYieldNullableOperatorInput_RemainsBareAndExecutesOnce()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable enable
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return null; }
+                    set { }
+                }
+                #nullable disable
+                public static IEnumerable<NullAcceptingBox> Rows() {
+                    yield return Text;
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Reads = 0;
+                    int missing = 0;
+                    foreach (var item in Rows()) {
+                        if (item == null) { missing++; }
+                    }
+                    Console.WriteLine(missing == 1 && Probe.Calls == 1 && Reads == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Rows() sequence[NullAcceptingBox?]", printed);
+        Assert.DoesNotContain("Text!!", printed);
+    }
+
+    [Theory]
+    [InlineData("value")]
+    [InlineData("(MaybeBox?)value")]
+    public void ScalarYieldNullableOperatorResult_AnnotatedElementRetainsAssertion(string value)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            #nullable enable
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<MaybeBox> Rows(string value) {
+                    yield return {{value}};
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    try {
+                        foreach (var item in Rows("x")) { }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Rows(value string) sequence[MaybeBox]", printed);
+        Assert.Contains("MaybeBox?(value)!!", printed);
+    }
+
+    [Fact]
+    public void ScalarYieldNullableOperatorResult_FrozenParameterContractRetainsAssertion()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static IEnumerable<MaybeBox> Rows() {
+                    yield return "x";
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    try {
+                        foreach (var item in Rows()) {
+                            FrozenTupleContract.Accept((item, 1));
+                        }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Rows() sequence[MaybeBox?]", printed);
+        Assert.Contains("FrozenTupleContract.Accept((item!!, 1))", printed);
+    }
+
+    [Theory]
+    [InlineData(true, "return")]
+    [InlineData(true, "array")]
+    [InlineData(true, "list")]
+    [InlineData(false, "return")]
+    [InlineData(false, "array")]
+    [InlineData(false, "list")]
+    public void OperatorInputStoreBridge_ReportsTheActualParameterOnceAndExecutesOnce(bool genericParameter, string store)
+    {
+        string box = genericParameter ? "StrictInputBox<string>" : "StrictReferenceBox";
+        string body = store switch
+        {
+            "array" => $"var rows = new {box}[] {{ Text }}; return rows[0];",
+            "list" => $"var rows = new System.Collections.Generic.List<{box}>(); rows.Add(Text); return rows[0];",
+            _ => "return Text;",
+        };
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static {{box}} Read() {
+                    if (Text != null) { {{body}} }
+                    return new {{box}}();
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    var result = Read();
+                    Console.WriteLine(result != null && Probe.Calls == 1 && Reads == 2 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Single(Regex.Matches(printed, @"Text!!").Cast<Match>());
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToArray();
+        if (genericParameter)
+        {
+            TranslationDiagnostic site = Assert.Single(sites);
+            Assert.Equal(TranslationSeverity.Warning, site.Severity);
+            Assert.StartsWith("kind=constructed-generic-member | target=StrictInputBox<string>.implicit operator", site.Message);
+            Assert.Contains("parameter 'value' | slot-type=string (NotAnnotated) | result-depends-on-slot=yes | value=Text", site.Message);
+            Assert.Equal("Text", site.Location.SourceTree.GetText().ToString(site.Location.SourceSpan));
+        }
+        else
+        {
+            Assert.Empty(sites);
+        }
+    }
+
+    [Theory]
+    [InlineData("return")]
+    [InlineData("list")]
+    public void NullableOperatorInputStoreBridge_RemainsBareAndUnreported(string store)
+    {
+        string body = store == "list"
+            ? "var rows = new System.Collections.Generic.List<NullAcceptingInputBox<string>>(); rows.Add(Text); return rows[0];"
+            : "return Text;";
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return null; }
+                    set { }
+                }
+                public static NullAcceptingInputBox<string> Read() { {{body}} }
+                public static void Main() {
+                    Probe.Reset();
+                    Reads = 0;
+                    var result = Read();
+                    Console.WriteLine(result != null && Probe.Calls == 1 && Reads == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.DoesNotContain("Text!!", printed);
+        Assert.DoesNotContain(context.Diagnostics, diagnostic =>
+            diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+    }
+
+    [Theory]
+    [InlineData("array")]
+    [InlineData("list")]
+    public void OperatorInputAndResultStoreBridges_ReportDistinctSlotsWithoutRepeatingEvaluation(string store)
+    {
+        string body = store == "array"
+            ? "var rows = new MaybeStrictInputBox<string>[] { Text }; return rows[0];"
+            : "var rows = new System.Collections.Generic.List<MaybeStrictInputBox<string>>(); rows.Add(Text); return rows[0];";
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static MaybeStrictInputBox<string> Read() {
+                    if (Text != null) { {{body}} }
+                    return new MaybeStrictInputBox<string>();
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    var result = Read();
+                    Console.WriteLine(result != null && Probe.Calls == 1 && Reads == 2 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Single(Regex.Matches(printed, @"Text!!").Cast<Match>());
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToArray();
+        Assert.Equal(2, sites.Length);
+        Assert.Contains(sites, site => site.Message.Contains("target=MaybeStrictInputBox<string>.implicit operator", StringComparison.Ordinal)
+            && site.Message.Contains("parameter 'value' | slot-type=string (NotAnnotated)", StringComparison.Ordinal));
+        Assert.Contains(sites, site => store == "array"
+            ? site.Message.StartsWith("kind=array-element | target=MaybeStrictInputBox<string>[]", StringComparison.Ordinal)
+            : site.Message.StartsWith("kind=constructed-generic-member | target=List<MaybeStrictInputBox<string>>.Add", StringComparison.Ordinal));
+        Assert.All(sites, site => Assert.Equal("Text", site.Location.SourceTree.GetText().ToString(site.Location.SourceSpan)));
+    }
+
+    [Theory]
+    [InlineData(false, "return Text;")]
+    [InlineData(false, "StrictBox result = Text; return result;")]
+    [InlineData(false, "StrictBox result = new StrictBox(); result = Text; return result;")]
+    [InlineData(true, "return Text;")]
+    [InlineData(true, "StrictBox result = Text; return result;")]
+    [InlineData(true, "StrictBox result = new StrictBox(); result = Text; return result;")]
+    public void GuardedSettablePropertyOperatorInput_UsesTheActualParameterContract(bool acceptsNull, string body)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            #nullable enable
+            using Issue4719Fixture;
+            public sealed class StrictBox {
+                public static implicit operator StrictBox(string{{(acceptsNull ? "?" : "")}} value) {
+                    Probe.Calls++;
+                    return new StrictBox();
+                }
+            }
+            public static class Obj {
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static StrictBox Read() {
+                    if (Text != null) { {{body}} }
+                    return new StrictBox();
+                }
+                {{(acceptsNull ? "public static StrictBox Bare() => Text;" : string.Empty)}}
+                public static int Run() {
+                    Text = "keep";
+                    Probe.Reset();
+                    Reads = 0;
+                    var result = Read();
+                    if (result == null || Probe.Calls != 1 || Reads != 2) { return -1; }
+                    {{(acceptsNull ? "Text = null; return Bare() != null && Probe.Calls == 2 && Reads == 3 ? 1 : -2;" : "return 1;")}}
+                }
+            }
+            """, fixture);
+        AssertBindsAndRuns(printed, fixture, expected: 1);
+        if (acceptsNull)
+        {
+            Assert.DoesNotContain("Text!!", printed);
+        }
+        else
+        {
+            Assert.Contains("Text!!", printed);
+        }
+    }
+
+    [Theory]
+    [InlineData("(NullableResultBox?)\"keep\"")]
+    [InlineData("\"keep\"")]
+    public void TryCastAndOperatorAssertionBoundaries_RealDriverVerifiesAndExecutesOnce(string result)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            #nullable enable
+            public sealed class StrictBox {
+                public static implicit operator StrictBox(string value) {
+                    Probe.Calls++;
+                    return new StrictBox();
+                }
+            }
+            public static class Obj {
+                private static string? text;
+                public static int Reads;
+                public static string? Text {
+                    get { Reads++; return text; }
+                    set { text = value; }
+                }
+                public static StrictBox Read() {
+                    if (Text != null) { return Text; }
+                    return new StrictBox();
+                }
+                public static NullableResultBox Make() => {{result}};
+                #nullable disable
+                public static (string Value, int Code) Row() => (new object() as string, 1);
+                public static string Later() {
+                    string value = "keep";
+                    value = new object() as string;
+                    return value;
+                }
+                #nullable enable
+                public static void Main() {
+                    Probe.Reset();
+                    Text = "keep";
+                    Reads = 0;
+                    Console.WriteLine(Make() != null && Read() != null && Reads == 2
+                        && Probe.Calls == 2 && Row().Value == null && Later() == null ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains("func Row() (Value string?, Code int32)", printed);
+        Assert.Contains("func Later() string?", printed);
+        Assert.Contains("Text!!", printed);
+        Assert.Contains("func Make() NullableResultBox", printed);
+        Assert.Contains("NullableResultBox?(\"keep\")!!", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("Task", false)]
+    [InlineData("ValueTask", false)]
+    [InlineData("Task", true)]
+    [InlineData("ValueTask", true)]
+    public void TupleContractEligibility_AnnotatedSourceRetainsPerLeafAssertions(string envelope, bool nested)
+    {
+        string fixture = this.EmitFixture();
+        string tuple = nested
+            ? "((NullableResultBox Required, NullAcceptingBox? Optional) Pair, int Code, int? Maybe)"
+            : "(NullableResultBox Required, NullAcceptingBox? Optional, int Code, int? Maybe)";
+        string result = nested ? "((value, (string?)null), 1, null)" : "(value, (string?)null, 1, null)";
+        string required = nested ? "row.Pair.Required" : "row.Required";
+        string optional = nested ? "row.Pair.Optional" : "row.Optional";
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable enable
+                public static async {{envelope}}<{{tuple}}> Read(string value) {
+                    await Task.Delay(1);
+                    return {{result}};
+                }
+                #nullable disable
+                public static void Main() {
+                    Probe.Reset();
+                    var row = Read("keep").GetAwaiter().GetResult();
+                    bool valid = {{required}} != null && {{optional}} == null
+                        && row.Code == 1 && row.Maybe == null && Probe.Calls == 2;
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { Read("miss").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Required NullableResultBox,", printed);
+        Assert.Contains("Optional NullAcceptingBox?", printed);
+        Assert.Contains("NullableResultBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Task", false)]
+    [InlineData("ValueTask", false)]
+    [InlineData("Task", true)]
+    [InlineData("ValueTask", true)]
+    public void TupleContractEligibility_ObliviousSourceContractsPromoteTogether(string envelope, bool enabledDefault)
+    {
+        string fixture = this.EmitFixture();
+        string source = $$"""
+            #nullable disable
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public interface ISourceRows {
+                {{envelope}}<((NullAcceptingBox Missing, ReferenceBox Keep) Pair, int Code, int? Maybe)> Read(string value);
+            }
+            public sealed class Rows : ISourceRows {
+                public async {{envelope}}<((NullAcceptingBox Missing, ReferenceBox Keep) Pair, int Code, int? Maybe)> Read(string value) {
+                    await Task.Delay(1);
+                    return (((string)null, value), 1, null);
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    ISourceRows rows = new Rows();
+                    var row = rows.Read("keep").GetAwaiter().GetResult();
+                    Console.WriteLine(row.Pair.Missing == null && row.Pair.Keep != null
+                        && row.Code == 1 && row.Maybe == null && Probe.Calls == 2 ? 15 : -1);
+                }
+            }
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) },
+            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(fixture)).ToArray());
+        var compilation = project.Compilation.WithOptions(project.Compilation.Options.WithNullableContextOptions(
+            enabledDefault ? NullableContextOptions.Enable : NullableContextOptions.Disable));
+        Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var model = compilation.GetSemanticModel(document.SyntaxTree);
+        var context = new TranslationContext(compilation, model, document.FilePath);
+        string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(
+            new LoadedDocument(document.FilePath, document.SyntaxTree, model), context));
+        Assert.Contains("Missing NullAcceptingBox?", printed);
+        Assert.Contains("Keep ReferenceBox", printed);
+        Assert.DoesNotContain("Keep ReferenceBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void TupleContractEligibility_NativeLockPropagatesAcrossSourceContractComponent(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string suffix = envelope == "Task" ? "Task" : "ValueTask";
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public interface ISourceRows {
+                {{envelope}}<(NullableResultBox Required, int Code)> Read(string value);
+            }
+            public sealed class Locked : RowsBase{{suffix}}, ISourceRows {
+                public override async {{envelope}}<(NullableResultBox Required, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+            }
+            public sealed class Other : ISourceRows {
+                public async {{envelope}}<(NullableResultBox Required, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    ISourceRows locked = new Locked();
+                    ISourceRows other = new Other();
+                    bool valid = locked.Read("keep").GetAwaiter().GetResult().Required != null
+                        && other.Read("keep").GetAwaiter().GetResult().Required != null && Probe.Calls == 2;
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { other.Read("miss").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.DoesNotContain("Required NullableResultBox?", printed);
+        Assert.Contains("NullableResultBox?(value)!!", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("Task", "interface")]
+    [InlineData("ValueTask", "interface")]
+    [InlineData("Task", "explicit")]
+    [InlineData("ValueTask", "explicit")]
+    [InlineData("Task", "base")]
+    [InlineData("ValueTask", "base")]
+    [InlineData("Task", "generic-interface")]
+    [InlineData("ValueTask", "generic-interface")]
+    [InlineData("Task", "generic-base")]
+    [InlineData("ValueTask", "generic-base")]
+    public void TupleContractEligibility_NativeInheritedReturnContractIsImmutable(string envelope, string contract)
+    {
+        string fixture = this.EmitFixture();
+        string suffix = envelope == "Task" ? "Task" : "ValueTask";
+        string inherited = contract switch
+        {
+            "base" => "RowsBase" + suffix,
+            "generic-base" => $"GenericRowsBase{suffix}<NullableResultBox>",
+            "generic-interface" => $"IGenericRows{suffix}<NullableResultBox>",
+            _ => "IRows" + suffix,
+        };
+        string method = contract == "explicit" ? $"{inherited}.Read" : "Read";
+        bool isBase = contract.Contains("base", StringComparison.Ordinal);
+        string modifiers = isBase ? "public override async"
+            : contract == "explicit" ? "async" : "public async";
+        string tuple = isBase ? "(NullableResultBox Required, int Code)"
+            : "(NullableResultBox Required, NullAcceptingBox Optional, int Code)";
+        string result = isBase ? "(value, 1)" : "(value, (string?)null, 1)";
+        string optional = isBase ? string.Empty : "&& row.Optional == null";
+        int calls = isBase ? 1 : 2;
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public sealed class Rows : {{inherited}} {
+                {{modifiers}} {{envelope}}<{{tuple}}> {{method}}(string value) {
+                    await Task.Delay(1);
+                    return {{result}};
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    var row = NativeRows.Read(({{inherited}})new Rows(), "keep").GetAwaiter().GetResult();
+                    bool valid = row.Required != null {{optional}}
+                        && row.Code == 1 && Probe.Calls == {{calls}};
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { NativeRows.Read(({{inherited}})new Rows(), "miss").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Required NullableResultBox,", printed);
+        if (!isBase)
+        {
+            Assert.Contains("Optional NullAcceptingBox?", printed);
+        }
+        Assert.Contains("NullableResultBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void TupleContractEligibility_ExactNativeNonNullContractRejectsNilOnce(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public sealed class Rows : IAlwaysRows{{envelope}} {
+                public async {{envelope}}<(MaybeBox Value, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    IAlwaysRows{{envelope}} rows = new Rows();
+                    try { NativeRows.Read(rows, "x").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains("Value MaybeBox,", printed);
+        Assert.Contains("MaybeBox?(value)!!", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("Task", false)]
+    [InlineData("ValueTask", false)]
+    [InlineData("Task", true)]
+    [InlineData("ValueTask", true)]
+    public void TupleContractEligibility_PartialDefinitionControlsOnlyItsOwnLeaves(string envelope, bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static partial class Obj {
+                #nullable {{(strict ? "enable" : "disable")}}
+                public static partial {{envelope}}<(MaybeBox Value, int Code)> Read(string value);
+                #nullable disable
+                public static async partial {{envelope}}<(MaybeBox Value, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try { nil = Read("x").GetAwaiter().GetResult().Value == null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(strict ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains(strict ? "MaybeBox?(value)!!" : "Value MaybeBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("enable")]
+    [InlineData("disable")]
+    public void TupleContractEligibility_LocalMethodUsesItsDeclarationContext(string directive)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static void Main() {
+                    #nullable {{directive}}
+                    (MaybeBox Value, int Code) Read(string value) => (value, 1);
+                    #nullable disable
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try { nil = Read("x").Value == null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(directive == "enable" ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains(directive == "enable" ? "MaybeBox?(value)!!" : "Value MaybeBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData("field")]
+    [InlineData("property")]
+    [InlineData("argument")]
+    [InlineData("delegate")]
+    public void TupleContractEligibility_FrozenNativeStoresRetainTheirResultBridge(string store)
+    {
+        string fixture = this.EmitFixture();
+        string body = store switch
+        {
+            "field" => "NativeTupleSlots.Field = (value, 1); return NativeTupleSlots.Field.Code;",
+            "property" => "NativeTupleSlots.Property = (value, 1); return NativeTupleSlots.Property.Code;",
+            "argument" => "return NativeTupleSlots.Accept((value, 1));",
+            _ => "NativeTupleSlots.Factory factory = Make; return factory(value).Code;",
+        };
+        string maker = store == "delegate"
+            ? "public static (NullableResultBox Required, int Code) Make(string value) => (value, 1);"
+            : string.Empty;
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                {{maker}}
+                public static int Store(string value) { {{body}} }
+                public static void Main() {
+                    Probe.Reset();
+                    bool valid = Store("keep") == 1 && Probe.Calls == 1;
+                    Probe.Reset();
+                    bool asserted = false;
+                    try { Store("miss"); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains("NullableResultBox?(value)!!", printed);
+        Assert.DoesNotContain("Required NullableResultBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractConversion_AssertedOperatorInputDoesNotSkipOuterOperator(bool switchArm)
+    {
+        string fixture = this.EmitFixture();
+        string branch = switchArm
+            ? "choose switch { true => (CastInputBox?)Text, false => new CastOutputBox() }"
+            : "choose ? (CastInputBox?)Text : new CastOutputBox()";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                #nullable enable
+                public static string? Text { get { Reads++; return Missing ? null : "keep"; } }
+                #nullable disable
+                public static (CastOutputBox Value, int Code) Row(bool choose) => ({{branch}}, 1);
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = 0;
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Row(choose).Value != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    return asserted == (choose && missing) && (asserted || present)
+                        && Reads == (choose ? 1 : 0)
+                        && Probe.Calls == (choose ? (missing ? 1 : 2) : 0);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value CastOutputBox?", printed);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void ScalarYieldNullableOperator_GuardedReadPreservesTheConvertedResult(bool local, bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string declaration = local ? "string text = value;" : string.Empty;
+        string read = local ? "text" : "value";
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable {{(strict ? "enable" : "disable")}}
+                public static IEnumerable<MaybeBox> Rows(string value) {
+                    {{declaration}}
+                    if ({{read}} != null) { yield return {{read}}; }
+                }
+                #nullable disable
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        foreach (var row in Rows("x")) { nil = row == null; }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(strict ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "sequence[MaybeBox]" : "sequence[MaybeBox?]", printed);
+    }
+
+    [Theory]
+    [InlineData("Iterator", false, false)]
+    [InlineData("Iterator", true, false)]
+    [InlineData("Iterator", false, true)]
+    [InlineData("Iterator", true, true)]
+    [InlineData("Task", true, false)]
+    [InlineData("ValueTask", true, false)]
+    public void TupleContractProjection_ParenthesizedDestinationPreservesTheLeaf(
+        string envelope,
+        bool nested,
+        bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string tuple = nested ? "((MaybeBox Value, string Keep) Pair, int Code)" : "(MaybeBox Value, int Code)";
+        string value = nested ? "((((value, \"keep\")), 1))" : "((value, 1))";
+        string check = nested ? "row.Pair.Value == null && row.Pair.Keep == \"keep\"" : "row.Value == null";
+        string method = envelope == "Iterator"
+            ? $"public static IEnumerable<{tuple}> Rows(string value) {{ yield return {value}; }}"
+            : $"public static async {envelope}<{tuple}> Rows(string value) {{ await Task.Delay(1); return {value}; }}";
+        string consume = envelope == "Iterator"
+            ? $"foreach (var row in Rows(\"x\")) {{ nil = {check} && row.Code == 1; }}"
+            : $"var row = Rows(\"x\").GetAwaiter().GetResult(); nil = {check} && row.Code == 1;";
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                #nullable {{(strict ? "enable" : "disable")}}
+                {{method}}
+                #nullable disable
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try { {{consume}} }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(strict ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value MaybeBox," : "Value MaybeBox?", printed);
+    }
+
+    [Theory]
+    [InlineData("interface", false)]
+    [InlineData("interface", true)]
+    [InlineData("base", false)]
+    [InlineData("base", true)]
+    public void TupleContractProjection_WholeNativeTypeArgumentRemainsCallerOwned(string contract, bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string inherited = contract == "interface" ? "IWholeRows" : "WholeRowsBase";
+        string modifiers = contract == "base" ? "public override" : "public";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            #nullable {{(strict ? "enable" : "disable")}}
+            public sealed class Rows : {{inherited}}<(MaybeBox Value, int Code)> {
+                {{modifiers}} (MaybeBox Value, int Code) Read(string value) => (value, 1);
+            }
+            #nullable disable
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    {{inherited}}<(MaybeBox Value, int Code)> rows = new Rows();
+                    try {
+                        var row = NativeRows.Read(rows, "x");
+                        nil = row.Value == null && row.Code == 1;
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = {{(strict ? "asserted" : "!asserted && nil")}};
+                    Console.WriteLine(valid && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value MaybeBox," : "Value MaybeBox?", printed);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void TupleContractProjection_UnrelatedTupleArgumentDoesNotUnlockNativeReferenceSlot(string envelope)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public sealed class Rows : IMixedRows{{envelope}}<MaybeBox, (string Text, int Code)> {
+                public async {{envelope}}<(MaybeBox Value, int Code)> Read(string value) {
+                    await Task.Delay(1);
+                    return (value, 1);
+                }
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    IMixedRows{{envelope}}<MaybeBox, (string Text, int Code)> rows = new Rows();
+                    try { rows.Read("x").GetAwaiter().GetResult(); }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value MaybeBox,", printed);
+        Assert.Contains("MaybeBox?(value)!!", printed);
+    }
+
+    [Theory]
+    [InlineData("Sync", false, false)]
+    [InlineData("Sync", true, false)]
+    [InlineData("Sync", false, true)]
+    [InlineData("Sync", true, true)]
+    [InlineData("Iterator", false, false)]
+    [InlineData("Iterator", true, false)]
+    [InlineData("Iterator", false, true)]
+    [InlineData("Iterator", true, true)]
+    [InlineData("Task", false, false)]
+    [InlineData("Task", true, false)]
+    [InlineData("Task", false, true)]
+    [InlineData("Task", true, true)]
+    [InlineData("ValueTask", false, false)]
+    [InlineData("ValueTask", true, false)]
+    [InlineData("ValueTask", false, true)]
+    [InlineData("ValueTask", true, true)]
+    public void TupleContractContext_MixedBranchArmsUseTheEmittedDestination(
+        string envelope,
+        bool switchArm,
+        bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string value = switchArm
+            ? "Choose(choose) switch { true => \"x\", false => new MaybeBox() }"
+            : "Choose(choose) ? \"x\" : new MaybeBox()";
+        string tuple = "(MaybeBox Value, int Code)";
+        string method = envelope switch
+        {
+            "Sync" => $"public static {tuple} Rows(bool choose) => ({value}, 1);",
+            "Iterator" => $"public static IEnumerable<{tuple}> Rows(bool choose) {{ yield return ({value}, 1); }}",
+            _ => $"public static async {envelope}<{tuple}> Rows(bool choose) {{ await Task.Delay(1); return ({value}, 1); }}",
+        };
+        string consume = envelope switch
+        {
+            "Sync" => "var row = Rows(choose); nil = row.Value == null && row.Code == 1;",
+            "Iterator" => "foreach (var row in Rows(choose)) { nil = row.Value == null && row.Code == 1; }",
+            _ => "var row = Rows(choose).GetAwaiter().GetResult(); nil = row.Value == null && row.Code == 1;",
+        };
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Decisions;
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                #nullable {{(strict ? "enable" : "disable")}}
+                {{method}}
+                #nullable disable
+                public static bool Check(bool choose) {
+                    bool nil = false;
+                    bool asserted = false;
+                    try { {{consume}} }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = choose ? {{(strict ? "asserted" : "!asserted && nil")}} : !asserted && !nil;
+                    return valid && Decisions == 1 && Probe.Calls == (choose ? 1 : 0);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Decisions = 0;
+                    bool missing = Check(true);
+                    Probe.Reset();
+                    Decisions = 0;
+                    bool present = Check(false);
+                    Console.WriteLine(missing && present ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value MaybeBox," : "Value MaybeBox?", printed);
+    }
+
+    [Theory]
+    [InlineData("Sync", "own", false)]
+    [InlineData("Sync", "own", true)]
+    [InlineData("Task", "own", false)]
+    [InlineData("Task", "own", true)]
+    [InlineData("ValueTask", "own", false)]
+    [InlineData("ValueTask", "own", true)]
+    [InlineData("Sync", "source", false)]
+    [InlineData("Sync", "source", true)]
+    public void TupleContractContext_SourceContainingGenericRetainsItsActualContract(
+        string envelope,
+        string contract,
+        bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string method = envelope == "Sync"
+            ? "public (T Value, int Code) Read(bool missing) => (missing ? null : (T)(object)\"keep\", 1);"
+            : $"public async {envelope}<(T Value, int Code)> Read(bool missing) {{ await Task.Delay(1); return (missing ? null : (T)(object)\"keep\", 1); }}";
+        string interfaceDeclaration = contract == "source"
+            ? $"#nullable {(strict ? "enable" : "disable")}\npublic interface IRows<T> where T : class {{ (T Value, int Code) Read(bool missing); }}"
+            : string.Empty;
+        string inherited = contract switch
+        {
+            "source" => " : IRows<T>",
+            _ => string.Empty,
+        };
+        string receiver = contract switch
+        {
+            "source" => "IRows<string>",
+            _ => "Rows<string>",
+        };
+        string read = envelope == "Sync"
+            ? "rows.Read(missing)"
+            : "rows.Read(missing).GetAwaiter().GetResult()";
+        string printed = Translate($$"""
+            using System;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            {{interfaceDeclaration}}
+            #nullable {{(strict && contract == "own" ? "enable" : "disable")}}
+            public sealed class Rows<T>{{inherited}} where T : class {
+                {{method}}
+            }
+            #nullable disable
+            public static class Obj {
+                public static bool Check(bool missing) {
+                    {{receiver}} rows = new Rows<string>();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        var row = {{read}};
+                        nil = row.Value == null && row.Code == 1;
+                        if (!missing && (row.Value != "keep" || row.Code != 1)) { return false; }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    return missing ? {{(strict ? "asserted" : "!asserted && nil")}} : !asserted && !nil;
+                }
+                public static void Main() { Console.WriteLine(Check(true) && Check(false) ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value T," : "Value T?", printed);
+    }
+
+    [Fact]
+    public void TupleContractContext_SourceGenericLiteralUsesNullableLeaf()
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate("""
+            using System;
+            using Issue4719Fixture;
+            public sealed class Rows<T> where T : class {
+                public (T Value, int Code) Read() => (null, 1);
+            }
+            public static class Obj {
+                public static void Main() {
+                    var row = new Rows<string>().Read();
+                    Console.WriteLine(row.Value == null && row.Code == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Read() (Value T?, Code int32)", printed);
+    }
+
+    [Theory]
+    [InlineData("Sync", false, false)]
+    [InlineData("Sync", true, false)]
+    [InlineData("Sync", false, true)]
+    [InlineData("Sync", true, true)]
+    [InlineData("Iterator", false, false)]
+    [InlineData("Iterator", true, false)]
+    [InlineData("Iterator", false, true)]
+    [InlineData("Iterator", true, true)]
+    [InlineData("Task", false, false)]
+    [InlineData("Task", true, false)]
+    [InlineData("Task", false, true)]
+    [InlineData("Task", true, true)]
+    [InlineData("ValueTask", false, false)]
+    [InlineData("ValueTask", true, false)]
+    [InlineData("ValueTask", false, true)]
+    [InlineData("ValueTask", true, true)]
+    public void TupleContractBoundary_CoalescingConvertedArmsObserveNilBeforeTheStrictSink(
+        string envelope,
+        bool switchArm,
+        bool explicitConversion)
+    {
+        string fixture = this.EmitFixture();
+        string converted = explicitConversion ? "(MaybeBox)Value" : "Value";
+        string branch = switchArm
+            ? $"Choose(choose) switch {{ true => {converted}, false => new MaybeBox() }}"
+            : $"Choose(choose) ? {converted} : new MaybeBox()";
+        string value = $"({branch}) ?? Fallback()";
+        string tuple = "(MaybeBox Value, int Code)";
+        string method = envelope switch
+        {
+            "Sync" => $"public static {tuple} Rows(bool choose) => ({value}, 1);",
+            "Iterator" => $"public static IEnumerable<{tuple}> Rows(bool choose) {{ yield return ({value}, 1); }}",
+            _ => $"public static async {envelope}<{tuple}> Rows(bool choose) {{ await Task.Delay(1); return ({value}, 1); }}",
+        };
+        string consume = envelope switch
+        {
+            "Sync" => "valid = FrozenTupleContract.Accept(Rows(choose)) == 1;",
+            "Iterator" => "foreach (var row in Rows(choose)) { valid = FrozenTupleContract.Accept(row) == 1; }",
+            _ => "valid = FrozenTupleContract.Accept(Rows(choose).GetAwaiter().GetResult()) == 1;",
+        };
+        string printed = Translate($$"""
+            using System;
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Decisions;
+                public static int Reads;
+                public static int Fallbacks;
+                public static string Value { get { Reads++; return "x"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static MaybeBox Fallback() { Fallbacks++; return new MaybeBox(); }
+                {{method}}
+                public static bool Check(bool choose) {
+                    bool valid = false;
+                    {{consume}}
+                    return valid && Decisions == 1 && Reads == (choose ? 1 : 0)
+                        && Fallbacks == (choose ? 1 : 0) && Probe.Calls == (choose ? 1 : 0);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Decisions = Reads = Fallbacks = 0;
+                    bool missing = Check(true);
+                    Probe.Reset();
+                    Decisions = Reads = Fallbacks = 0;
+                    bool present = Check(false);
+                    Console.WriteLine(missing && present ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value MaybeBox,", printed);
+        Assert.DoesNotContain("Value MaybeBox?", printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractBoundary_ConvertedCoalescingArmRetainsItsWiderReferenceTarget(bool missing)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Decisions;
+                public static int Fallbacks;
+                public static ReferenceInput Value { get { Reads++; return new ReferenceInput({{(missing ? "true" : "false")}}); } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static ReferenceBase Fallback() { Fallbacks++; return new ReferenceBase(); }
+                public static (ReferenceBase Value, int Code) Row(bool choose) =>
+                    ((Choose(choose) ? Value : new ReferenceBase()) ?? Fallback(), 1);
+                public static bool Check(bool choose) {
+                    var row = Row(choose);
+                    return row.Value != null && row.Code == 1 && Decisions == 1
+                        && Reads == (choose ? 1 : 0) && Probe.Calls == (choose ? 1 : 0)
+                        && Fallbacks == (choose && {{(missing ? "true" : "false")}} ? 1 : 0);
+                }
+                public static void Main() {
+                    Probe.Reset();
+                    Reads = Decisions = Fallbacks = 0;
+                    bool converted = Check(true);
+                    Probe.Reset();
+                    Reads = Decisions = Fallbacks = 0;
+                    Console.WriteLine(converted && Check(false) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value ReferenceBase,", printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractBoundary_CoalescingResultsKeepTheirOwnOperatorInputContract(bool strictInput)
+    {
+        string fixture = this.EmitFixture();
+        string box = strictInput ? "MaybeStrictInputBox<string>" : "NullAcceptingBox";
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Fallbacks;
+                public static string? Value { get { Reads++; return null; } }
+                public static {{box}} Fallback() { Fallbacks++; return new {{box}}(); }
+                public static ({{box}} Value, int Code) Row(bool choose) =>
+                    ((choose ? Value : new {{box}}()) ?? Fallback(), 1);
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Row(true).Value != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(Reads == 1 && {{(strictInput
+                        ? "asserted && Probe.Calls == 0 && Fallbacks == 0"
+                        : "!asserted && present && Probe.Calls == 1 && Fallbacks == 1")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToArray();
+        if (strictInput)
+        {
+            TranslationDiagnostic site = Assert.Single(sites);
+            Assert.Contains("target=MaybeStrictInputBox<string>.implicit operator", site.Message);
+            Assert.Contains("parameter 'value'", site.Message);
+            Assert.Contains("slot-type=string (NotAnnotated)", site.Message);
+        }
+        else
+        {
+            Assert.Empty(sites);
+            Assert.DoesNotContain("Value!!", printed);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public void TupleContractBoundary_GettersQueryTheirPropertyContract(bool indexer, bool arrow, bool strict)
+    {
+        string fixture = this.EmitFixture();
+        string declaration = indexer
+            ? "public (NullableResultBox Value, int Code) this[int code]"
+            : "public (NullableResultBox Value, int Code) Row";
+        string value = indexer ? "(Value, code)" : "(Value, 1)";
+        string body = arrow ? $" => {value};" : $" {{ get {{ return {value}; }} }}";
+        string consume = indexer ? "rows[NextIndex()]" : "rows.Row";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public sealed class Rows {
+                public static int Reads;
+                public static string Input = "keep";
+                public string Value { get { Reads++; return Input; } }
+                #nullable {{(strict ? "enable" : "disable")}}
+                {{declaration}}{{body}}
+            }
+            #nullable disable
+            public static class Obj {
+                public static int Indices;
+                public static int NextIndex() { Indices++; return 1; }
+                public static bool Check(bool missing) {
+                    Probe.Reset();
+                    Rows.Reads = Indices = 0;
+                    Rows.Input = missing ? "miss" : "keep";
+                    var rows = new Rows();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        var row = {{consume}};
+                        nil = row.Value == null && row.Code == 1;
+                        if (row.Code != 1) { return false; }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool valid = missing ? {{(strict ? "asserted" : "!asserted && nil")}} : !asserted && !nil;
+                    return valid && Probe.Calls == 1 && Rows.Reads == 1 && Indices == {{(indexer ? 1 : 0)}};
+                }
+                public static void Main() { Console.WriteLine(Check(true) && Check(false) ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value NullableResultBox," : "Value NullableResultBox?", printed);
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    public void TupleContractBoundary_PartialPropertyPreservesBothDeclarationContracts(
+        bool strictDefinition,
+        bool strictImplementation,
+        bool forwarded)
+    {
+        bool strict = strictDefinition || strictImplementation;
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static partial class Obj {
+                public static int Reads;
+                public static string Value { get { Reads++; return "x"; } }
+                #nullable {{(strictDefinition ? "enable" : "disable")}}
+                public static partial (MaybeBox Value, NullAcceptingBox? Optional, int Code) Row { get; }
+                #nullable {{(strictImplementation ? "enable" : "disable")}}
+                public static partial (MaybeBox Value, NullAcceptingBox? Optional, int Code) Row {
+                    get { return (Value, (string)null, 1); }
+                }
+                #nullable disable
+                {{(forwarded ? "public static (MaybeBox Value, NullAcceptingBox? Optional, int Code) Forward() => Row;" : string.Empty)}}
+                public static void Main() {
+                    Probe.Reset();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        var row = {{(forwarded ? "Forward()" : "Row")}};
+                        nil = row.Value == null && row.Optional == null && row.Code == 1;
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(Reads == 1 && {{(strict
+                        ? "asserted && Probe.Calls == 1"
+                        : "!asserted && nil && Probe.Calls == 2")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value MaybeBox," : "Value MaybeBox?", printed);
+        Assert.Contains("Optional NullAcceptingBox?", printed);
+        if (forwarded)
+        {
+            Assert.Contains(strict ? "func Forward() (Value MaybeBox," : "func Forward() (Value MaybeBox?,", printed);
+        }
+    }
+
+    [Theory]
+    [InlineData("Task", false, false)]
+    [InlineData("Task", true, false)]
+    [InlineData("ValueTask", false, false)]
+    [InlineData("ValueTask", true, false)]
+    [InlineData("Task", false, true)]
+    [InlineData("Task", true, true)]
+    [InlineData("ValueTask", false, true)]
+    [InlineData("ValueTask", true, true)]
+    public void TupleContractBoundary_SiblingSourceComponentsShareNativeLocks(
+        string envelope,
+        bool nativeLock,
+        bool reverseOrder)
+    {
+        string fixture = this.EmitFixture();
+        string inherited = nativeLock ? $"RowsBase{envelope}, ISourceRows" : "ISourceRows";
+        string modifiers = nativeLock ? "public override async" : "public async";
+        // Issue #4772 tracks tuple-label metadata separately from the CLR leaf contract.
+        string[] sources =
+        {
+            $$"""
+                using System.Threading.Tasks;
+                using Issue4719Fixture;
+                public interface ISourceRows {
+                    {{envelope}}<(NullableResultBox Required, int Code)> Read(string value);
+                }
+                """,
+            $$"""
+                using System.Threading.Tasks;
+                using Issue4719Fixture;
+                public sealed class Locked : {{inherited}} {
+                    {{modifiers}} {{envelope}}<(NullableResultBox Required, int Code)> Read(string value) {
+                        await Task.Delay(1);
+                        return (value, 1);
+                    }
+                }
+                """,
+            $$"""
+                using System;
+                using System.Threading.Tasks;
+                using Issue4719Fixture;
+                public sealed class Other : ISourceRows {
+                    public async {{envelope}}<(NullableResultBox Required, int Code)> Read(string value) {
+                        await Task.Delay(1);
+                        return (value, 1);
+                    }
+                }
+                public static class Obj {
+                    public static void Main() {
+                        Probe.Reset();
+                        ISourceRows locked = new Locked();
+                        ISourceRows other = new Other();
+                        bool valid = locked.Read("keep").GetAwaiter().GetResult().Item1 != null
+                            && other.Read("keep").GetAwaiter().GetResult().Item1 != null && Probe.Calls == 2;
+                        Probe.Reset();
+                        bool nil = false;
+                        bool asserted = false;
+                        try { nil = other.Read("miss").GetAwaiter().GetResult().Item1 == null; }
+                        catch (NullReferenceException) { asserted = true; }
+                        Console.WriteLine(valid && {{(nativeLock ? "asserted" : "!asserted && nil")}}
+                            && Probe.Calls == 1 ? 15 : -1);
+                    }
+                }
+                """,
+        };
+        string[] printedProjects = this.AssertSplitProjectsVerifyAndRun(sources, fixture, reverseOrder);
+        Assert.All(printedProjects, printed =>
+            Assert.Contains(nativeLock ? "Required NullableResultBox," : "Required NullableResultBox?", printed));
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void TupleContractSink_CheckedWholeTuplePreservesDestination(
+        bool uncheckedWrapper,
+        bool fixedDestination,
+        bool nullableInput)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                public static int Decisions;
+                #nullable enable
+                public static string{{(nullableInput ? "?" : string.Empty)}} Value {
+                    get {
+                        Reads++;
+                        return Missing ? {{(nullableInput ? "null" : "\"miss\"")}} : "keep";
+                    }
+                }
+                #nullable disable
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                {{(fixedDestination ? "#nullable enable" : string.Empty)}}
+                public static (NullableResultBox Value, int Code) Row(bool choose) =>
+                    {{(uncheckedWrapper ? "unchecked" : "checked")}}(
+                        ((Choose(choose) ? Value : new NullableResultBox(), 1)));
+                #nullable disable
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = Decisions = 0;
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool absent = false;
+                    int code = 0;
+                    try { var row = Row(choose); absent = row.Value == null; code = row.Code; }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool expectedAssertion = choose && missing
+                        && {{(fixedDestination || nullableInput ? "true" : "false")}};
+                    return asserted == expectedAssertion
+                        && (asserted || (absent == (choose && missing) && code == 1))
+                        && Reads == (choose ? 1 : 0) && Decisions == 1
+                        && Probe.Calls == (choose && !(missing
+                            && {{(nullableInput ? "true" : "false")}}) ? 1 : 0);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains(fixedDestination ? "Value NullableResultBox," : "Value NullableResultBox?", printed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(true, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(false, false, false, true)]
+    [InlineData(true, false, false, true)]
+    public void TupleContractConsumer_IntermediateResultUsesImmediateOperatorInput(
+        bool switchArm,
+        bool strictInput,
+        bool generic,
+        bool nested)
+    {
+        string fixture = this.EmitFixture();
+        string envelope = (strictInput ? "StrictConsumerEnvelope" : "ConsumerEnvelope")
+            + (generic ? "<string>" : string.Empty);
+        string branch = switchArm
+            ? "Choose(choose) switch { true => Value, false => new NullableResultBox() }"
+            : "Choose(choose) ? Value : new NullableResultBox()";
+        if (generic)
+        {
+            branch = $"{(switchArm ? "checked" : "unchecked")}(({branch}))";
+        }
+
+        if (nested)
+        {
+            branch = $"Nested ? ({branch}) : ({envelope})new NullableResultBox()";
+        }
+
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static bool Nested = true;
+                public static int Reads;
+                public static int Decisions;
+                public static string Value { get { Reads++; return Missing ? "miss" : "keep"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static {{envelope}} Make(bool choose) => {{branch}};
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = Decisions = 0;
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool observed = false;
+                    try { observed = Make(choose).Missing; }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool expectedAssertion = {{(strictInput ? "choose && missing" : "false")}};
+                    return asserted == expectedAssertion
+                        && (asserted || observed == (choose && missing))
+                        && Reads == (choose ? 1 : 0) && Decisions == 1
+                        && Probe.Calls == (asserted ? 1 : choose ? 2 : 1);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractConsumer_FinalResultRetainsItsOwnFixedContract(bool switchArm)
+    {
+        string fixture = this.EmitFixture();
+        string branch = switchArm
+            ? "Choose(choose) switch { true => Value, false => new NullableResultBox() }"
+            : "Choose(choose) ? Value : new NullableResultBox()";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                public static int Decisions;
+                public static string Value { get { Reads++; return Missing ? "miss" : "keep"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                #nullable enable
+                public static NullableConsumerEnvelope Make(bool choose) => {{branch}};
+                #nullable disable
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = Decisions = 0;
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Make(choose) != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    return asserted == (choose && missing) && (asserted || present)
+                        && Reads == (choose ? 1 : 0) && Decisions == 1
+                        && Probe.Calls == (choose ? 2 : 1);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TupleContractConsumer_UnrelatedGenericMembersDoNotShareFixedLocks(
+        bool overload,
+        bool fixedSeed)
+    {
+        (string printed, string fixture) =
+            this.TranslateUnrelatedGenericMemberContracts(nativeContract: false, overload, fixedSeed);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TupleContractConsumer_NativeGenericDeclarationsKeepSeparateLockIdentity(
+        bool overload,
+        bool fixedSeed)
+    {
+        // Native open-generic tuple implementation matching is independently tracked in #4626.
+        this.TranslateUnrelatedGenericMemberContracts(nativeContract: true, overload, fixedSeed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractConsumer_SiblingGenericMembersKeepSeparateLockIdentity(bool overload)
+    {
+        string fixture = this.EmitFixture();
+        string optional = overload ? "Required" : "Optional";
+        string[] sources =
+        {
+            $$"""
+                #nullable enable
+                public interface IStrictRows<T> where T : class {
+                    (T Value, int Code) Required(T value);
+                }
+                #nullable disable
+                public sealed class Rows<T> : IStrictRows<T> where T : class {
+                    public (T Value, int Code) Required(T value) => (value, 1);
+                    public (T Value, int Code) {{optional}}(T value, bool missing) =>
+                        (missing ? null : value, 2);
+                }
+                """,
+            $$"""
+                using System;
+                public static class Obj {
+                    public static void Main() {
+                        var rows = new Rows<string>();
+                        IStrictRows<string> strict = rows;
+                        Console.WriteLine(rows.{{optional}}("keep", false).Item1 == "keep"
+                            && rows.{{optional}}("keep", true).Item1 == null
+                            && strict.Required("keep").Item1 == "keep" ? 15 : -1);
+                    }
+                }
+                """,
+        };
+        string[] printed = this.AssertSplitProjectsVerifyAndRun(sources, fixture, reverseOrder: false);
+        Assert.Contains($"{optional}(value T, missing bool) (Value T?, Code int32)", printed[0]);
+        Assert.Contains("Required(value T) (Value T, Code int32)", printed[0]);
+    }
+
+    private (string Printed, string Fixture) TranslateUnrelatedGenericMemberContracts(
+        bool nativeContract,
+        bool overload,
+        bool fixedSeed)
+    {
+        string fixture = this.EmitFixture();
+        string contract = nativeContract ? "IStrictGenericRows<T>" : "IStrictRows<T>";
+        string declaration = nativeContract ? string.Empty : """
+            #nullable enable
+            public interface IStrictRows<T> where T : class {
+                (T Value, int Code) Required(T value);
+            }
+            #nullable disable
+            """;
+        string optional = overload ? "Required" : "Optional";
+        string requiredValue = fixedSeed ? "TupleContractSources.Missing(value)" : "value";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            {{declaration}}
+            public sealed class Rows<T> : {{contract}} where T : class {
+                public (T Value, int Code) Required(T value) => ({{requiredValue}}, 1);
+                public (T Value, int Code) {{optional}}(T value, bool missing) =>
+                    (missing ? null : value, 2);
+            }
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    var rows = new Rows<string>();
+                    bool optional = rows.{{optional}}("keep", false).Value == "keep"
+                        && rows.{{optional}}("keep", true).Value == null;
+                    bool asserted = false;
+                    bool required = false;
+                    try { required = (({{contract.Replace("<T>", "<string>", StringComparison.Ordinal)}})rows).Required("keep").Value == "keep"; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(optional && asserted == {{(fixedSeed ? "true" : "false")}}
+                        && (asserted || required) && Probe.Calls == {{(fixedSeed ? "1" : "0")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        Assert.Contains($"{optional}(value T, missing bool) (Value T?, Code int32)", printed);
+        Assert.Contains("Required(value T) (Value T, Code int32)", printed);
+        return (printed, fixture);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractConversion_NullableDestinationPreservesImplicitOperator(bool switchArm)
+    {
+        string fixture = this.EmitFixture();
+        string branch = switchArm
+            ? "Choose(choose) switch { true => Text, false => new NullAcceptingBox() }"
+            : "Choose(choose) ? Text : new NullAcceptingBox()";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                public static int Decisions;
+                #nullable enable
+                public static string? Text { get { Reads++; return Missing ? null : "keep"; } }
+                #nullable disable
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static (NullAcceptingBox Value, int Code) Row(bool choose) => ({{branch}}, 1);
+                public static bool Check(bool choose, bool missing) {
+                    Missing = missing;
+                    Reads = Decisions = 0;
+                    Probe.Reset();
+                    var row = Row(choose);
+                    return (row.Value == null) == (choose && missing) && row.Code == 1
+                        && Reads == (choose ? 1 : 0) && Decisions == 1
+                        && Probe.Calls == (choose ? 1 : 0);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(true, false) && Check(true, true)
+                        && Check(false, false) && Check(false, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value NullAcceptingBox?", printed);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void TupleContractConversion_IndexerParametersPreserveInheritedContracts(bool baseClass, bool enabledCompilation)
+    {
+        string fixture = this.EmitFixture();
+        string inherited = baseClass ? "TupleIndexerBase" : "ITupleIndexer";
+        string modifier = baseClass ? "override " : string.Empty;
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            {{(enabledCompilation ? "#nullable enable\npublic sealed class AnnotationAnchor { public string Value = \"keep\"; }\n#nullable disable" : string.Empty)}}
+            public sealed class Rows : {{inherited}} {
+                public {{modifier}}int this[(string Required, int Code) row] => row.Code;
+            }
+            public static class Obj {
+                public static bool Missing;
+                public static int Reads;
+                #nullable enable
+                public static string? Text { get { Reads++; return Missing ? null : "keep"; } }
+                #nullable disable
+                public static bool Check(bool missing, bool dispatch) {
+                    Missing = missing;
+                    Reads = 0;
+                    bool asserted = false;
+                    int code = 0;
+                    var rows = new Rows();
+                    try {
+                        code = dispatch ? (({{inherited}})rows)[(Text, 1)]
+                            : rows[(Text, 1)];
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    return Reads == 1 && asserted == missing && (missing || code == 1);
+                }
+                public static void Main() {
+                    Console.WriteLine(Check(false, false) && Check(true, false)
+                        && Check(false, true) && Check(true, true) ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("row (Required string, Code int32)", printed);
+        Assert.DoesNotContain("row (Required string?", printed);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void TupleContractConversion_PartialIndexerParametersPreserveBothDeclarations(bool strictDefinition, bool strictImplementation)
+    {
+        bool strict = strictDefinition || strictImplementation;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Rows.cs", $$"""
+            public sealed partial class Rows {
+                #nullable {{(strictDefinition ? "enable" : "disable")}}
+                public partial int this[(string Required, string? Optional, int Code) row] { get; }
+                #nullable {{(strictImplementation ? "enable" : "disable")}}
+                public partial int this[(string Required, string? Optional, int Code) row] {
+                    get { return row.Code; }
+                }
+            }
+            """) }, CSharpProjectLoader.RuntimeReferences());
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        Type analyzer = Assert.IsAssignableFrom<Type>(
+            typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer"));
+        MethodInfo method = analyzer.GetMethod(
+            "CanPromoteTuplePosition",
+            BindingFlags.NonPublic | BindingFlags.Static,
+            null,
+            new[] { typeof(Compilation), typeof(ISymbol), typeof(string) },
+            null);
+        Assert.NotNull(method);
+        var eligible = method.CreateDelegate<Func<Compilation, ISymbol, string, bool>>();
+        LoadedDocument document = Assert.Single(project.Documents);
+        IPropertySymbol[] indexers = document.SyntaxTree.GetRoot().DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IndexerDeclarationSyntax>()
+            .Select(node => Assert.IsAssignableFrom<IPropertySymbol>(document.SemanticModel.GetDeclaredSymbol(node)))
+            .ToArray();
+        Assert.Equal(2, indexers.Length);
+        Assert.NotNull(indexers[0].PartialImplementationPart);
+        Assert.NotNull(indexers[1].PartialDefinitionPart);
+        Assert.All(indexers, indexer => Assert.Equal(!strict, eligible(project.Compilation, Assert.Single(indexer.Parameters), "0")));
+    }
+
+    [Theory]
+    [InlineData("checked", false, false)]
+    [InlineData("checked", true, false)]
+    [InlineData("unchecked", false, false)]
+    [InlineData("unchecked", true, false)]
+    [InlineData("checked", false, true)]
+    [InlineData("checked", true, true)]
+    [InlineData("unchecked", false, true)]
+    [InlineData("unchecked", true, true)]
+    public void TupleContractRemapping_CheckedBranchesPreserveConvertedNil(
+        string wrapper,
+        bool switchArm,
+        bool explicitConversion)
+    {
+        string fixture = this.EmitFixture();
+        string converted = explicitConversion ? "(MaybeBox)Value" : "Value";
+        string branch = switchArm
+            ? $"Choose(choose) switch {{ true => {converted}, false => new MaybeBox() }}"
+            : $"Choose(choose) ? {converted} : new MaybeBox()";
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Decisions;
+                public static int Fallbacks;
+                public static string Value { get { Reads++; return "x"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static MaybeBox Fallback() { Fallbacks++; return new MaybeBox(); }
+                public static (MaybeBox Value, int Code) Row(bool choose) =>
+                    ({{wrapper}}({{branch}}) ?? Fallback(), 1);
+                public static bool Check(bool choose) {
+                    Probe.Reset();
+                    Reads = Decisions = Fallbacks = 0;
+                    var row = Row(choose);
+                    return row.Value != null && row.Code == 1 && Decisions == 1
+                        && Reads == (choose ? 1 : 0) && Probe.Calls == (choose ? 1 : 0)
+                        && Fallbacks == (choose ? 1 : 0);
+                }
+                public static void Main() { Console.WriteLine(Check(true) && Check(false) ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Value MaybeBox,", printed);
+    }
+
+    [Theory]
+    [InlineData("checked", false)]
+    [InlineData("checked", true)]
+    [InlineData("unchecked", false)]
+    [InlineData("unchecked", true)]
+    public void TupleContractRemapping_CheckedResultsKeepStrictOperatorInputs(string wrapper, bool strictInput)
+    {
+        string fixture = this.EmitFixture();
+        string box = strictInput ? "MaybeStrictInputBox<string>" : "NullAcceptingBox";
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Fallbacks;
+                public static string? Value { get { Reads++; return null; } }
+                public static {{box}} Fallback() { Fallbacks++; return new {{box}}(); }
+                public static ({{box}} Value, int Code) Row(bool choose) =>
+                    ({{wrapper}}(choose ? Value : new {{box}}()) ?? Fallback(), 1);
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Row(true).Value != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(Reads == 1 && {{(strictInput
+                        ? "asserted && Probe.Calls == 0 && Fallbacks == 0"
+                        : "!asserted && present && Probe.Calls == 1 && Fallbacks == 1")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToArray();
+        if (strictInput)
+        {
+            Assert.Contains("parameter 'value'", Assert.Single(sites).Message);
+        }
+        else
+        {
+            Assert.Empty(sites);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void TupleContractRemapping_SiblingOverloadsKeepTheirOwnContract(bool genericOwner, bool reverseOrder)
+    {
+        string fixture = this.EmitFixture();
+        string owner = genericOwner ? "Rows<T>" : "Rows";
+        string constraint = genericOwner ? "where T : class" : string.Empty;
+        string constructed = genericOwner ? "Rows<string>" : "Rows";
+        string[] printed = this.AssertSplitProjectsVerifyAndRun(new[]
+        {
+            $$"""
+                using Issue4719Fixture;
+                public sealed class {{owner}} : IOverloadedRows {{constraint}} {
+                    public (NullableResultBox Required, int Code) Read(int value) =>
+                        (value == 0 ? "miss" : "keep", value);
+                    public (NullableResultBox Required, int Code) Read(string value) => (value, 1);
+                }
+                """,
+            $$"""
+                using System;
+                using Issue4719Fixture;
+                public static class Obj {
+                    public static void Main() {
+                        var rows = new {{constructed}}();
+                        Probe.Reset();
+                        bool valid = rows.Read("keep").Item1 != null && Probe.Calls == 1;
+                        Probe.Reset();
+                        valid = valid && rows.Read("miss").Item1 == null && Probe.Calls == 1;
+                        Probe.Reset();
+                        IOverloadedRows native = rows;
+                        valid = valid && native.Read(1).Required != null && Probe.Calls == 1;
+                        Probe.Reset();
+                        bool asserted = false;
+                        try { native.Read(0); }
+                        catch (NullReferenceException) { asserted = true; }
+                        Console.WriteLine(valid && asserted && Probe.Calls == 1 ? 15 : -1);
+                    }
+                }
+                """,
+        }, fixture, reverseOrder);
+        Assert.Contains("func Read(value int32) (Required NullableResultBox,", printed[0]);
+        Assert.Contains("func Read(value string) (Required NullableResultBox?,", printed[0]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_UnrelatedAssemblyNamesDoNotShareLocks(bool reverseOrder)
+    {
+        string fixture = this.EmitFixture();
+        LoadedCSharpProject unrelated = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", """
+                using Issue4719Fixture;
+                public sealed class Rows : IOverloadedRows, IStringRows {
+                    public (NullableResultBox Required, int Code) Read(int value) => ("keep", value);
+                    public (NullableResultBox Required, int Code) Read(string value) => ("keep", 1);
+                }
+                """) },
+            CSharpProjectLoader.RuntimeReferences().Concat(new[] { MetadataReference.CreateFromFile(fixture) }).ToArray(),
+            "Unrelated" + Guid.NewGuid().ToString("N"));
+        LoadedCSharpProject current = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", """
+                using System;
+                using Issue4719Fixture;
+                public sealed class Rows {
+                    public (NullableResultBox Required, int Code) Read(string value) => (value, 1);
+                }
+                public static class Obj {
+                    public static void Main() {
+                        Probe.Reset();
+                        var row = new Rows().Read("miss");
+                        Console.WriteLine(row.Required == null && row.Code == 1 && Probe.Calls == 1 ? 15 : -1);
+                    }
+                }
+                """) },
+            CSharpProjectLoader.RuntimeReferences().Concat(new[] { MetadataReference.CreateFromFile(fixture) }).ToArray(),
+            "Current" + Guid.NewGuid().ToString("N"));
+        Assert.True(unrelated.BoundWithoutErrors, string.Join(Environment.NewLine, unrelated.ErrorDiagnostics));
+        Assert.True(current.BoundWithoutErrors, string.Join(Environment.NewLine, current.ErrorDiagnostics));
+        var siblings = new[] { current.Compilation, unrelated.Compilation };
+        if (reverseOrder)
+        {
+            Array.Reverse(siblings);
+        }
+
+        LoadedDocument document = Assert.Single(current.Documents);
+        var context = new TranslationContext(current.Compilation, document.SemanticModel, document.FilePath, siblings);
+        string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("Required NullableResultBox?", printed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_LocalClosureQueriesStayBounded(bool registerCurrent)
+    {
+        const int count = 1600;
+        string implementations = string.Join(Environment.NewLine, Enumerable.Range(0, count).Select(index =>
+            $"public sealed class Rows{index} : IRows {{ public (string Value,int Code) Read() => (null,1); }}"));
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", "public interface IRows { (string Value,int Code) Read(); }\n" + implementations) },
+            CSharpProjectLoader.RuntimeReferences(),
+            "Local" + Guid.NewGuid().ToString("N"));
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        Type analyzer = Assert.IsAssignableFrom<Type>(
+            typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer"));
+        var method = analyzer.GetMethod("IsTupleElementTainted", new[]
+        {
+            typeof(CSharpCompilation), typeof(ISymbol), typeof(IReadOnlyList<int>),
+            typeof(IReadOnlyList<CSharpCompilation>),
+        });
+        Assert.NotNull(method);
+        var query = method.CreateDelegate<Func<CSharpCompilation, ISymbol, IReadOnlyList<int>, IReadOnlyList<CSharpCompilation>, bool>>();
+        IReadOnlyList<CSharpCompilation> siblings = registerCurrent ? new[] { project.Compilation } : null;
+        int[] path = { 0 };
+        ISymbol contract = Assert.Single(project.Compilation.GetTypeByMetadataName("IRows").GetMembers("Read"));
+        Assert.True(query(project.Compilation, contract, path, siblings));
+        ISymbol[] symbols = Enumerable.Range(0, count).Select(index =>
+            Assert.Single(project.Compilation.GetTypeByMetadataName("Rows" + index).GetMembers("Read"))).ToArray();
+        var elapsed = Stopwatch.StartNew();
+        foreach (ISymbol symbol in symbols)
+        {
+            Assert.True(query(project.Compilation, symbol, path, siblings));
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(10), $"Cached local queries took {elapsed.Elapsed}.");
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void TupleContractRemapping_ConstructedSignaturesRetainActualArguments(bool genericMethod, bool targetSource)
+    {
+        LoadedCSharpProject source = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", """
+                public sealed class Rows<T> {
+                    public (T Value,int Code) Read(int value) => (default,1);
+                    public (T Value,int Code) Read(string value) => (default,1);
+                    public (U Value,int Code) Read<U>(U value) => (value,1);
+                }
+                """) },
+            CSharpProjectLoader.RuntimeReferences(),
+            "Owner" + Guid.NewGuid().ToString("N"));
+        Assert.True(source.BoundWithoutErrors, string.Join(Environment.NewLine, source.ErrorDiagnostics));
+        Directory.CreateDirectory(this.fixtureDirectory);
+        string assembly = Path.Combine(this.fixtureDirectory, source.Compilation.AssemblyName + ".dll");
+        var emitted = source.Compilation.Emit(assembly);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        LoadedCSharpProject consumer = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Consumer.cs", "public sealed class Consumer { }") },
+            CSharpProjectLoader.RuntimeReferences().Concat(new[] { MetadataReference.CreateFromFile(assembly) }).ToArray(),
+            "Consumer" + Guid.NewGuid().ToString("N"));
+        Assert.True(consumer.BoundWithoutErrors, string.Join(Environment.NewLine, consumer.ErrorDiagnostics));
+        ITypeSymbol text = source.Compilation.GetSpecialType(SpecialType.System_String);
+        INamedTypeSymbol owner = source.Compilation.GetTypeByMetadataName("Rows`1").Construct(text);
+        IMethodSymbol input = owner.GetMembers("Read").OfType<IMethodSymbol>().Single(method =>
+            genericMethod ? method.Arity == 1 : method.Arity == 0 && method.Parameters[0].Type.SpecialType == SpecialType.System_Int32);
+        if (genericMethod)
+        {
+            input = input.Construct(text);
+        }
+
+        Type analyzer = Assert.IsAssignableFrom<Type>(
+            typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer"));
+        var remapper = analyzer.GetMethod(
+            "RemapToCompilation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(remapper);
+        IMethodSymbol output = Assert.IsAssignableFrom<IMethodSymbol>(
+            remapper.Invoke(null, new object[] { targetSource ? source.Compilation : consumer.Compilation, input }));
+        Assert.Equal(source.Compilation.Assembly.Identity, output.ContainingAssembly.Identity);
+        Assert.Equal(SpecialType.System_String, Assert.Single(output.ContainingType.TypeArguments).SpecialType);
+        Assert.Equal(genericMethod ? SpecialType.System_String : SpecialType.System_Int32, output.Parameters[0].Type.SpecialType);
+        Assert.Equal(SpecialType.System_String, Assert.IsAssignableFrom<INamedTypeSymbol>(output.ReturnType).TupleElements[0].Type.SpecialType);
+        if (genericMethod)
+        {
+            Assert.Equal(SpecialType.System_String, Assert.Single(output.TypeArguments).SpecialType);
+        }
+    }
+
+    [Theory]
+    [InlineData("(object)(Choose(choose) ? Value : new MaybeBox())")]
+    [InlineData("(object)(MaybeBox)(Choose(choose) ? Value : new MaybeBox())")]
+    [InlineData("(object)checked((MaybeBox)(Choose(choose) ? Value : new MaybeBox()))")]
+    [InlineData("(object)(Choose(choose) switch { true => Value, false => new MaybeBox() })")]
+    public void TupleContractRemapping_ReferenceCastsPreserveCoalescingNil(string converted)
+    {
+        string fixture = this.EmitFixture();
+        string printed = Translate($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Decisions;
+                public static int Fallbacks;
+                public static string Value { get { Reads++; return "x"; } }
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                public static object Fallback() { Fallbacks++; return new object(); }
+                public static (object Value, int Code) Row(bool choose) =>
+                    ({{converted}} ?? Fallback(), 1);
+                public static bool Check(bool choose) {
+                    Probe.Reset();
+                    Reads = Decisions = Fallbacks = 0;
+                    var row = Row(choose);
+                    return row.Value != null && row.Code == 1 && Decisions == 1
+                        && Reads == (choose ? 1 : 0) && Probe.Calls == (choose ? 1 : 0)
+                        && Fallbacks == (choose ? 1 : 0);
+                }
+                public static void Main() { Console.WriteLine(Check(true) && Check(false) ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_ReferenceCastsKeepStrictOperatorInputs(bool strictInput)
+    {
+        string fixture = this.EmitFixture();
+        string box = strictInput ? "MaybeStrictInputBox<string>" : "NullAcceptingBox";
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            #nullable enable
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static int Reads;
+                public static int Fallbacks;
+                public static string? Value { get { Reads++; return null; } }
+                public static object Fallback() { Fallbacks++; return new object(); }
+                public static (object Value, int Code) Row(bool choose) =>
+                    ((object)(choose ? Value : new {{box}}()) ?? Fallback(), 1);
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool present = false;
+                    try { present = Row(true).Value != null; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(Reads == 1 && {{(strictInput
+                        ? "asserted && Probe.Calls == 0 && Fallbacks == 0"
+                        : "!asserted && present && Probe.Calls == 1 && Fallbacks == 1")}} ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        TranslationDiagnostic[] sites = context.Diagnostics
+            .Where(site => site.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId).ToArray();
+        if (strictInput)
+        {
+            TranslationDiagnostic input = Assert.Single(sites);
+            Assert.Contains("parameter 'value'", input.Message);
+            Assert.Equal("Value", input.Location.SourceTree.GetText().ToString(input.Location.SourceSpan));
+        }
+        else
+        {
+            Assert.Empty(sites);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_ReferenceCastsStopAtConversionConsumers(bool unboxing)
+    {
+        string fixture = this.EmitFixture();
+        string result = unboxing
+            ? "(int)(object)(choose ? \"miss\" : new NullableResultBox())"
+            : "((StrictConsumerEnvelope)(choose ? \"miss\" : new NullableResultBox())) ?? (StrictConsumerEnvelope)new NullableResultBox()";
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            using System;
+            using Issue4719Fixture;
+            public static class Obj {
+                public static void Main() {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool choose = true;
+                    try { var converted = {{result}}; }
+                    catch (NullReferenceException) { asserted = true; }
+                    Console.WriteLine(asserted && Probe.Calls == 1 ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("NullableResultBox?(\"miss\")!!", printed);
+        Assert.DoesNotContain(context.Diagnostics, site => site.Severity == TranslationSeverity.Unsupported);
+        if (!unboxing)
+        {
+            Assert.DoesNotContain(context.Diagnostics, site =>
+                site.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+        }
+        else
+        {
+            TranslationDiagnostic resultSite = Assert.Single(context.Diagnostics, site =>
+                site.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+            Assert.Equal("\"miss\"", resultSite.Location.SourceTree.GetText().ToString(resultSite.Location.SourceSpan));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_MixedConstructedAnnotationsKeepSeparateLocks(bool matchingContract)
+    {
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            using System;
+            using Issue4719Fixture;
+            #nullable enable
+            public sealed class FixedRows : IWholeRows<(MaybeBox Value, int Code)> {
+                #nullable disable
+                public (MaybeBox Value, int Code) Read(string value) => (value, 1);
+            }
+            #nullable {{(matchingContract ? "enable" : "disable")}}
+            public sealed class OtherRows : IWholeRows<(MaybeBox Value, int Code)> {
+                #nullable disable
+                public (MaybeBox Value, int Code) Read(string value) => (value, 1);
+            }
+            public static class Obj {
+                public static bool Check(string value) {
+                    Probe.Reset();
+                    bool asserted = false;
+                    bool nil = false;
+                    try { var row = new OtherRows().Read(value); nil = row.Value == null && row.Code == 1; }
+                    catch (NullReferenceException) { asserted = true; }
+                    return Probe.Calls == 1 && {{(matchingContract ? "asserted && !nil" : "!asserted && nil")}};
+                }
+                public static void Main() { Console.WriteLine(Check("miss") && Check("keep") ? 15 : -1); }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        ISymbol other = Assert.Single(context.Compilation.GetTypeByMetadataName("OtherRows").GetMembers("Read"));
+        Assert.Equal(!matchingContract, ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+            context.Compilation, other, new[] { 0 }, context.SiblingCompilations));
+    }
+
+    [Theory]
+    [InlineData("string")]
+    [InlineData("string?")]
+    [InlineData("(string Value, int Code)")]
+    [InlineData("(string? Value, int Code)")]
+    [InlineData("System.Collections.Generic.List<string?>")]
+    [InlineData("string?[]")]
+    public void TupleContractRemapping_ConstructedTypeArgumentsRetainNestedAnnotations(string argument)
+    {
+        LoadedCSharpProject source = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", $$"""
+                #nullable enable
+                public sealed class Rows<T> { public T Read() => default!; }
+                public sealed class Consumer { public Rows<{{argument}}> Value; }
+                """) }, CSharpProjectLoader.RuntimeReferences(), "Annotations" + Guid.NewGuid().ToString("N"));
+        Assert.True(source.BoundWithoutErrors, string.Join(Environment.NewLine, source.ErrorDiagnostics));
+        Directory.CreateDirectory(this.fixtureDirectory);
+        string assembly = Path.Combine(this.fixtureDirectory, source.Compilation.AssemblyName + ".dll");
+        var emitted = source.Compilation.Emit(assembly);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        LoadedCSharpProject target = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Other.cs", "public sealed class Other { }") },
+            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(assembly)).ToArray());
+        IFieldSymbol field = Assert.Single(source.Compilation.GetTypeByMetadataName("Consumer").GetMembers("Value").OfType<IFieldSymbol>());
+        INamedTypeSymbol input = Assert.IsAssignableFrom<INamedTypeSymbol>(field.Type);
+        Type analyzer = typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer");
+        MethodInfo remapper = analyzer.GetMethod("RemapToCompilation", BindingFlags.NonPublic | BindingFlags.Static);
+        INamedTypeSymbol output = Assert.IsAssignableFrom<INamedTypeSymbol>(
+            remapper.Invoke(null, new object[] { target.Compilation, input }));
+        AssertAnnotations(input, output);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void TupleContractRemapping_SiblingConstructedAnnotationsKeepSeparateLocks(
+        bool matchingContract, bool reverseOrder)
+    {
+        string fixture = this.EmitFixture();
+        this.AssertSplitProjectsVerifyAndRun(new[]
+        {
+            """
+                using Issue4719Fixture;
+                #nullable enable
+                public sealed class FixedRows : IWholeRows<(MaybeBox Value, int Code)> {
+                    #nullable disable
+                    public (MaybeBox Value, int Code) Read(string value) => (value, 1);
+                }
+                """,
+            $$"""
+                using System;
+                using Issue4719Fixture;
+                #nullable {{(matchingContract ? "enable" : "disable")}}
+                public sealed class OtherRows : IWholeRows<(MaybeBox Value, int Code)> {
+                    #nullable disable
+                    public (MaybeBox Value, int Code) Read(string value) => (value, 1);
+                }
+                public static class Obj {
+                    public static bool Check(string value) {
+                        Probe.Reset();
+                        bool asserted = false;
+                        bool nil = false;
+                        try { var row = new OtherRows().Read(value); nil = row.Value == null && row.Code == 1; }
+                        catch (NullReferenceException) { asserted = true; }
+                        return Probe.Calls == 1 && {{(matchingContract ? "asserted && !nil" : "!asserted && nil")}};
+                    }
+                    public static void Main() { Console.WriteLine(Check("miss") && Check("keep") ? 15 : -1); }
+                }
+                """,
+        }, fixture, reverseOrder);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TupleContractRemapping_NestedOwnersAndMethodArgumentsRetainAnnotations(bool genericMethod)
+    {
+        LoadedCSharpProject source = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Rows.cs", """
+                #nullable enable
+                public sealed class Outer<T> {
+                    public sealed class Rows<U> {
+                        public U Read() => default!;
+                        public V Read<V>(V value) => value;
+                    }
+                }
+                public sealed class Consumer { public Outer<string?>.Rows<object?> Value; }
+                """) }, CSharpProjectLoader.RuntimeReferences(), "Nested" + Guid.NewGuid().ToString("N"));
+        Assert.True(source.BoundWithoutErrors, string.Join(Environment.NewLine, source.ErrorDiagnostics));
+        Directory.CreateDirectory(this.fixtureDirectory);
+        string assembly = Path.Combine(this.fixtureDirectory, source.Compilation.AssemblyName + ".dll");
+        Assert.True(source.Compilation.Emit(assembly).Success);
+        LoadedCSharpProject target = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Other.cs", "public sealed class Other { }") },
+            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(assembly)).ToArray());
+        var field = Assert.Single(source.Compilation.GetTypeByMetadataName("Consumer").GetMembers("Value").OfType<IFieldSymbol>());
+        INamedTypeSymbol owner = Assert.IsAssignableFrom<INamedTypeSymbol>(field.Type);
+        IMethodSymbol input = owner.GetMembers("Read").OfType<IMethodSymbol>().Single(method => method.Arity == (genericMethod ? 1 : 0));
+        if (genericMethod)
+        {
+            input = input.Construct(source.Compilation.GetSpecialType(SpecialType.System_String).WithNullableAnnotation(NullableAnnotation.Annotated));
+        }
+
+        Type analyzer = typeof(CSharpTypeMapper).Assembly.GetType("Cs2Gs.Translator.ObliviousNullabilityAnalyzer");
+        MethodInfo remapper = analyzer.GetMethod("RemapToCompilation", BindingFlags.NonPublic | BindingFlags.Static);
+        IMethodSymbol output = Assert.IsAssignableFrom<IMethodSymbol>(
+            remapper.Invoke(null, new object[] { target.Compilation, input }));
+        AssertAnnotations(input.ContainingType, output.ContainingType);
+        AssertAnnotations(input.ReturnType, output.ReturnType);
+        if (genericMethod)
+        {
+            AssertAnnotations(Assert.Single(input.TypeArguments), Assert.Single(output.TypeArguments));
+        }
+    }
+
+    private static void AssertAnnotations(ITypeSymbol input, ITypeSymbol output)
+    {
+        Assert.Equal(input.NullableAnnotation, output.NullableAnnotation);
+        Assert.Equal(input.SpecialType, output.SpecialType);
+        if (input is IArrayTypeSymbol array)
+        {
+            IArrayTypeSymbol mapped = Assert.IsAssignableFrom<IArrayTypeSymbol>(output);
+            Assert.Equal(array.Rank, mapped.Rank);
+            AssertAnnotations(array.ElementType, mapped.ElementType);
+        }
+        else if (input is INamedTypeSymbol named)
+        {
+            INamedTypeSymbol mapped = Assert.IsAssignableFrom<INamedTypeSymbol>(output);
+            Assert.Equal(named.TypeArgumentNullableAnnotations.ToArray(), mapped.TypeArgumentNullableAnnotations.ToArray());
+            Assert.Equal(named.TypeArguments.Length, mapped.TypeArguments.Length);
+            for (int index = 0; index < named.TypeArguments.Length; index++)
+            {
+                AssertAnnotations(named.TypeArguments[index], mapped.TypeArguments[index]);
+            }
+
+            if (named.ContainingType != null)
+            {
+                AssertAnnotations(named.ContainingType, mapped.ContainingType);
+            }
+        }
+    }
+
+    private string[] AssertSplitProjectsVerifyAndRun(string[] sources, string fixture, bool reverseOrder)
+    {
+        Directory.CreateDirectory(Path.Combine(this.fixtureDirectory, "csharp"));
+        var projects = new LoadedCSharpProject[sources.Length];
+        var sourceReferences = new[] { MetadataReference.CreateFromFile(fixture) }.Cast<MetadataReference>().ToList();
+        for (int i = 0; i < sources.Length; i++)
+        {
+            string name = "Sibling" + i + Guid.NewGuid().ToString("N");
+            projects[i] = CSharpProjectLoader.LoadInMemory(
+                new[] { (name + ".cs", sources[i]) },
+                CSharpProjectLoader.RuntimeReferences().Concat(sourceReferences).ToArray(),
+                name);
+            Assert.True(projects[i].BoundWithoutErrors, string.Join(Environment.NewLine, projects[i].ErrorDiagnostics));
+            string assembly = Path.Combine(this.fixtureDirectory, "csharp", name + ".dll");
+            var emitted = projects[i].Compilation.Emit(assembly);
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+            sourceReferences.Add(MetadataReference.CreateFromFile(assembly));
+        }
+
+        var siblings = projects.Select(project => project.Compilation).ToArray();
+        if (reverseOrder)
+        {
+            Array.Reverse(siblings);
+        }
+
+        string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
+        var translatedReferences = new[] { fixture }.ToList();
+        var printedProjects = new string[projects.Length];
+        for (int i = 0; i < projects.Length; i++)
+        {
+            LoadedDocument document = Assert.Single(projects[i].Documents);
+            var context = new TranslationContext(
+                projects[i].Compilation, document.SemanticModel, document.FilePath, siblings);
+            string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+            printedProjects[i] = printed;
+            string assembly = Path.Combine(this.fixtureDirectory, projects[i].Compilation.AssemblyName + ".dll");
+            string source = Path.ChangeExtension(assembly, ".gs");
+            File.WriteAllText(source, printed);
+            var arguments = new[]
+            {
+                compiler, i == projects.Length - 1 ? "/target:exe" : "/target:library",
+                "/targetframework:net10.0", $"/assemblyname:{projects[i].Compilation.AssemblyName}",
+                $"/out:{assembly}", source,
+            }.Concat(translatedReferences.Select(reference => "/reference:" + reference)).ToArray();
+            var compiled = RunDotnet(arguments);
+            Assert.True(compiled.Exit == 0, printed + Environment.NewLine + compiled.Output);
+            Assert.True(IlVerifyRunner.IsEnabled);
+            IlVerifyResult verified = new IlVerifyRunner().Verify(assembly, translatedReferences);
+            Assert.True(verified.Status == IlVerifyStatus.Passed, verified.Output);
+            Assert.Empty(verified.Errors);
+            translatedReferences.Add(assembly);
+        }
+
+        string program = translatedReferences.Last();
+        File.WriteAllText(
+            Path.ChangeExtension(program, ".runtimeconfig.json"),
+            "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}");
+        var executed = RunDotnet(program);
+        Assert.True(executed.Exit == 0, executed.Output);
+        Assert.True(
+            executed.Output == "15" + Environment.NewLine,
+            string.Join(Environment.NewLine, printedProjects) + Environment.NewLine + executed.Output);
+        return printedProjects;
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(this.fixtureDirectory))
+            {
+                Directory.Delete(this.fixtureDirectory, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+            // A collectible oracle assembly can still hold the fixture on Windows.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Best-effort cleanup, as above.
+        }
+    }
+
+    private void AssertRealDriverVerifiesAndRuns(string printed, string fixture, string expected)
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixture });
+        TranslationTestValidation.AssertBinds(resolver, printed);
+        string source = Path.Combine(this.fixtureDirectory, "Boundaries.gs");
+        string assembly = Path.Combine(this.fixtureDirectory, "Boundaries.dll");
+        string compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
+        File.WriteAllText(source, printed);
+        var compiled = RunDotnet(compiler, "/target:exe", "/targetframework:net10.0", $"/reference:{fixture}", $"/out:{assembly}", source);
+        Assert.True(compiled.Exit == 0, printed + Environment.NewLine + compiled.Output);
+        Assert.True(IlVerifyRunner.IsEnabled);
+        IlVerifyResult verified = new IlVerifyRunner().Verify(assembly, new[] { fixture });
+        Assert.Equal(IlVerifyStatus.Passed, verified.Status);
+        Assert.Empty(verified.Errors);
+        File.WriteAllText(
+            Path.ChangeExtension(assembly, ".runtimeconfig.json"),
+            "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}");
+        var executed = RunDotnet(assembly);
+        Assert.True(executed.Exit == 0, printed + Environment.NewLine + executed.Output);
+        Assert.True(executed.Output == expected + Environment.NewLine, printed + Environment.NewLine + executed.Output);
+    }
+
+    [Theory]
+    [InlineData("interface", false, false)]
+    [InlineData("interface", true, false)]
+    [InlineData("base", true, false)]
+    [InlineData("shared", false, false)]
+    [InlineData("shared", true, false)]
+    [InlineData("interface", false, true)]
+    [InlineData("interface", true, true)]
+    [InlineData("base", true, true)]
+    [InlineData("shared", false, true)]
+    [InlineData("shared", true, true)]
+    public void TupleContractImport_PlatformEndpointsDoNotFreezeSourceComponents(
+        string contract,
+        bool strict,
+        bool strictInput)
+    {
+        string fixture = this.EmitFixture();
+        string native = strict ? "IStrictRows" : "IObliviousRows";
+        string inherited = contract == "base"
+            ? (strict ? "StrictRowsBase" : "ObliviousRowsBase")
+            : contract == "shared" ? "ISourceRows" : native;
+        string sourceContract = contract == "shared" ? $$"""
+            public interface ISourceRows {
+                (NullableResultBox Value, int Code) Read(bool choose);
+            }
+            public sealed class NativeAnchor : {{native}}, ISourceRows {
+                public (NullableResultBox Value, int Code) Read(bool choose) =>
+                    (new NullableResultBox(), 1);
+            }
+            """ : string.Empty;
+        (string printed, TranslationContext context) = TranslateWithContext($$"""
+            using System;
+            using Issue4719Fixture;
+            {{sourceContract}}
+            public sealed class Rows : {{inherited}} {
+                public static int Reads;
+                public static int Decisions;
+                public static bool Missing;
+                public static bool NullInput;
+                public static bool Choose(bool choose) { Decisions++; return choose; }
+                #nullable {{(strictInput ? "enable" : "disable")}}
+                public static string{{(strictInput ? "?" : string.Empty)}} Input {
+                    get { Reads++; return {{(strictInput ? "NullInput ? null :" : string.Empty)}} Missing ? "miss" : "keep"; }
+                }
+                #nullable disable
+                public {{(contract == "base" ? "override " : string.Empty)}}(NullableResultBox Value, int Code) Read(bool choose) =>
+                    (Choose(choose) ? Input : new NullableResultBox(), 1);
+            }
+            public static class Obj {
+                public static bool Check(bool choose, bool missing, bool nullInput) {
+                    Probe.Reset();
+                    Rows.Reads = Rows.Decisions = 0;
+                    Rows.Missing = missing;
+                    Rows.NullInput = nullInput;
+                    {{inherited}} rows = new Rows();
+                    bool nil = false;
+                    bool asserted = false;
+                    try {
+                        var row = rows.Read(choose);
+                        nil = row.Value == null;
+                        if (row.Code != 1) { return false; }
+                    }
+                    catch (NullReferenceException) { asserted = true; }
+                    bool rejectedInput = choose && nullInput && {{(strictInput ? "true" : "false")}};
+                    bool expectedAssertion = rejectedInput || choose && missing && {{(strict ? "true" : "false")}};
+                    return asserted == expectedAssertion && (asserted || nil == (choose && missing))
+                        && Rows.Decisions == 1 && Rows.Reads == (choose ? 1 : 0)
+                        && Probe.Calls == (choose && !rejectedInput ? 1 : 0);
+                }
+                public static void Main() {
+                    bool valid = Check(false, false, false) && Check(true, false, false)
+                        && Check(false, true, false) && Check(true, true, false)
+                        && Check(false, true, true) && Check(true, true, true);
+                    Console.WriteLine(valid ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains(strict ? "Value NullableResultBox," : "Value NullableResultBox?", printed);
+        INamedTypeSymbol nativeType = Assert.IsAssignableFrom<INamedTypeSymbol>(
+            context.Compilation.GetTypeByMetadataName("Issue4719Fixture." + native));
+        IMethodSymbol method = Assert.Single(nativeType.GetMembers("Read").OfType<IMethodSymbol>());
+        INamedTypeSymbol tuple = Assert.IsAssignableFrom<INamedTypeSymbol>(method.ReturnType);
+        Assert.Equal(
+            strict ? NullableAnnotation.NotAnnotated : NullableAnnotation.None,
+            tuple.TupleElements[0].Type.NullableAnnotation);
+        Assert.False(ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+            context.Compilation, method, new[] { 0 }, context.SiblingCompilations));
+    }
+
+    [Fact]
+    public void TupleContractImport_OpenSlotsKeepReferenceValueAndUnconstrainedContracts()
+    {
+        string fixture = this.EmitFixture();
+        (string printed, TranslationContext context) = TranslateWithContext("""
+            using System;
+            using Issue4719Fixture;
+            public static class Scope<T> {
+                public static T Read() => NativeNullableSlots.Row<T>(default(T)).Item1;
+            }
+            public static class Obj {
+                public static void Main() {
+                    var reference = NativeNullableSlots.Row<NullableResultBox>(new NullableResultBox());
+                    var value = NativeNullableSlots.Row<int>(7);
+                    object scopedReference = Scope<NullableResultBox>.Read();
+                    Console.WriteLine(reference.Item1 == null && reference.Item2 == 1
+                        && value.Item1 == 0 && value.Item2 == 1 && Scope<int>.Read() == 0
+                        && scopedReference == null ? 15 : -1);
+                }
+            }
+            """, fixture);
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15");
+        Assert.Contains("func Read() T", printed);
+        Assert.DoesNotContain("func Read() T?", printed);
+        INamedTypeSymbol nativeType = Assert.IsAssignableFrom<INamedTypeSymbol>(
+            context.Compilation.GetTypeByMetadataName("Issue4719Fixture.NativeNullableSlots"));
+        IMethodSymbol method = Assert.Single(nativeType.GetMembers("Row").OfType<IMethodSymbol>());
+        INamedTypeSymbol tuple = Assert.IsAssignableFrom<INamedTypeSymbol>(method.ReturnType);
+        ITypeParameterSymbol slot = Assert.IsAssignableFrom<ITypeParameterSymbol>(tuple.TupleElements[0].Type);
+        Assert.Equal(NullableAnnotation.Annotated, slot.NullableAnnotation);
+        Assert.False(slot.IsReferenceType);
+    }
+
+    private string EmitFixture()
+    {
+        Directory.CreateDirectory(this.fixtureDirectory);
+        string assemblyName = "Issue4719Fixture" + Guid.NewGuid().ToString("N");
+        string path = Path.Combine(this.fixtureDirectory, assemblyName + ".dll");
+        LoadedCSharpProject fixture = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Fixture.cs", """
+                namespace Issue4719Fixture {
+                    public sealed class Box {
+                        public static explicit operator Box(string text) => new Box();
+                        public static implicit operator Box(int? value) { Probe.Calls++; return new Box(); }
+                    }
+                    public sealed class ReferenceBox {
+                        public static implicit operator ReferenceBox(string value) { Probe.Calls++; return new ReferenceBox(); }
+                    }
+                #nullable enable
+                    public sealed class MaybeBox {
+                        public static implicit operator MaybeBox?(string value) { Probe.Calls++; return null; }
+                    }
+                    public class ReferenceBase { }
+                    public sealed class DerivedReference : ReferenceBase { }
+                    public sealed class ReferenceInput {
+                        public ReferenceInput(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator DerivedReference?(ReferenceInput value) {
+                            Probe.Calls++;
+                            return value.Missing ? null : new DerivedReference();
+                        }
+                    }
+                    public sealed class NullableResultBox {
+                        public static implicit operator NullableResultBox?(string value) {
+                            Probe.Calls++;
+                            return value == "keep" ? new NullableResultBox() : null;
+                        }
+                    }
+                    public sealed class NullAcceptingBox {
+                        public static implicit operator NullAcceptingBox?(string? value) {
+                            Probe.Calls++;
+                            return value == null ? null : new NullAcceptingBox();
+                        }
+                    }
+                    public sealed class CastInputBox {
+                        public static explicit operator CastInputBox?(string? value) {
+                            Probe.Calls++;
+                            return value == null ? null : new CastInputBox();
+                        }
+                    }
+                    public sealed class CastOutputBox {
+                        public static implicit operator CastOutputBox?(CastInputBox value) {
+                            Probe.Calls++;
+                            return new CastOutputBox();
+                        }
+                    }
+                    public sealed class ConsumerEnvelope {
+                        private ConsumerEnvelope(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator ConsumerEnvelope(NullableResultBox? value) {
+                            Probe.Calls++;
+                            return new ConsumerEnvelope(value == null);
+                        }
+                    }
+                    public sealed class ConsumerEnvelope<T> {
+                        private ConsumerEnvelope(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator ConsumerEnvelope<T>(NullableResultBox? value) {
+                            Probe.Calls++;
+                            return new ConsumerEnvelope<T>(value == null);
+                        }
+                    }
+                    public sealed class StrictConsumerEnvelope {
+                        private StrictConsumerEnvelope(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator StrictConsumerEnvelope(NullableResultBox value) {
+                            Probe.Calls++;
+                            return new StrictConsumerEnvelope(value == null);
+                        }
+                    }
+                    public sealed class StrictConsumerEnvelope<T> {
+                        private StrictConsumerEnvelope(bool missing) { this.Missing = missing; }
+                        public bool Missing { get; }
+                        public static implicit operator StrictConsumerEnvelope<T>(NullableResultBox value) {
+                            Probe.Calls++;
+                            return new StrictConsumerEnvelope<T>(value == null);
+                        }
+                    }
+                    public sealed class NullableConsumerEnvelope {
+                        public static implicit operator NullableConsumerEnvelope?(NullableResultBox? value) {
+                            Probe.Calls++;
+                            return value == null ? null : new NullableConsumerEnvelope();
+                        }
+                    }
+                    public interface IStrictGenericRows<T> where T : class {
+                        (T Value, int Code) Required(T value);
+                    }
+                    public interface IStrictRows {
+                        (NullableResultBox Value, int Code) Read(bool choose);
+                    }
+                    public abstract class StrictRowsBase {
+                        public abstract (NullableResultBox Value, int Code) Read(bool choose);
+                    }
+                    public static class NativeNullableSlots {
+                        public static (T? Value, int Code) Row<T>(T value) => (default(T), 1);
+                    }
+                    public static class TupleContractSources {
+                        public static T? Missing<T>(T value) where T : class {
+                            Probe.Calls++;
+                            return null;
+                        }
+                    }
+                    public sealed class StrictInputBox<T> where T : class {
+                        public static implicit operator StrictInputBox<T>(T value) {
+                            Probe.Calls++;
+                            return new StrictInputBox<T>();
+                        }
+                    }
+                    public sealed class StrictReferenceBox {
+                        public static implicit operator StrictReferenceBox(string value) {
+                            Probe.Calls++;
+                            return new StrictReferenceBox();
+                        }
+                    }
+                    public sealed class MaybeStrictInputBox<T> where T : class {
+                        public static implicit operator MaybeStrictInputBox<T>?(T value) {
+                            Probe.Calls++;
+                            return new MaybeStrictInputBox<T>();
+                        }
+                    }
+                    public sealed class NullAcceptingInputBox<T> where T : class {
+                        public static implicit operator NullAcceptingInputBox<T>(T? value) {
+                            Probe.Calls++;
+                            return new NullAcceptingInputBox<T>();
+                        }
+                    }
+                    public static class FrozenTupleContract {
+                        public static int Accept((MaybeBox Value, int Code) row) => row.Code;
+                    }
+                    public static class NativeTupleSlots {
+                        public static (NullableResultBox Required, int Code) Field;
+                        public static (NullableResultBox Required, int Code) Property { get; set; }
+                        public static int Accept((NullableResultBox Required, int Code) row) => row.Code;
+                        public delegate (NullableResultBox Required, int Code) Factory(string value);
+                    }
+                    public interface IAlwaysRowsTask {
+                        System.Threading.Tasks.Task<(MaybeBox Value, int Code)> Read(string value);
+                    }
+                    public interface IWholeRows<T> {
+                        T Read(string value);
+                    }
+                    public interface IOverloadedRows {
+                        (NullableResultBox Required, int Code) Read(int value);
+                    }
+                    public interface IStringRows {
+                        (NullableResultBox Required, int Code) Read(string value);
+                    }
+                    public interface ITupleIndexer {
+                        int this[(string Required, int Code) row] { get; }
+                    }
+                    public abstract class TupleIndexerBase {
+                        public abstract int this[(string Required, int Code) row] { get; }
+                    }
+                    public abstract class WholeRowsBase<T> {
+                        public abstract T Read(string value);
+                    }
+                    public interface IMixedRowsTask<T, TUnrelated> where T : class {
+                        System.Threading.Tasks.Task<(T Value, int Code)> Read(string value);
+                    }
+                    public interface IMixedRowsValueTask<T, TUnrelated> where T : class {
+                        System.Threading.Tasks.ValueTask<(T Value, int Code)> Read(string value);
+                    }
+                    public interface IAlwaysRowsValueTask {
+                        System.Threading.Tasks.ValueTask<(MaybeBox Value, int Code)> Read(string value);
+                    }
+                    public interface IRowsTask {
+                        System.Threading.Tasks.Task<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(string value);
+                    }
+                    public interface IRowsValueTask {
+                        System.Threading.Tasks.ValueTask<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(string value);
+                    }
+                    public abstract class RowsBaseTask {
+                        public abstract System.Threading.Tasks.Task<(NullableResultBox Required, int Code)> Read(string value);
+                    }
+                    public abstract class RowsBaseValueTask {
+                        public abstract System.Threading.Tasks.ValueTask<(NullableResultBox Required, int Code)> Read(string value);
+                    }
+                    public interface IGenericRowsTask<T> where T : class {
+                        System.Threading.Tasks.Task<(T Required, NullAcceptingBox? Optional, int Code)> Read(string value);
+                    }
+                    public interface IGenericRowsValueTask<T> where T : class {
+                        System.Threading.Tasks.ValueTask<(T Required, NullAcceptingBox? Optional, int Code)> Read(string value);
+                    }
+                    public abstract class GenericRowsBaseTask<T> where T : class {
+                        public abstract System.Threading.Tasks.Task<(T Required, int Code)> Read(string value);
+                    }
+                    public abstract class GenericRowsBaseValueTask<T> where T : class {
+                        public abstract System.Threading.Tasks.ValueTask<(T Required, int Code)> Read(string value);
+                    }
+                    public static class NativeRows {
+                        public static T Read<T>(IWholeRows<T> rows, string value) => rows.Read(value);
+                        public static T Read<T>(WholeRowsBase<T> rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.Task<(MaybeBox Value, int Code)> Read(IAlwaysRowsTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(MaybeBox Value, int Code)> Read(IAlwaysRowsValueTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.Task<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(IRowsTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(IRowsValueTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.Task<(NullableResultBox Required, int Code)> Read(RowsBaseTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(NullableResultBox Required, int Code)> Read(RowsBaseValueTask rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.Task<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(IGenericRowsTask<NullableResultBox> rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(NullableResultBox Required, NullAcceptingBox? Optional, int Code)> Read(IGenericRowsValueTask<NullableResultBox> rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.Task<(NullableResultBox Required, int Code)> Read(GenericRowsBaseTask<NullableResultBox> rows, string value) => rows.Read(value);
+                        public static System.Threading.Tasks.ValueTask<(NullableResultBox Required, int Code)> Read(GenericRowsBaseValueTask<NullableResultBox> rows, string value) => rows.Read(value);
+                    }
+                #nullable disable
+                    public interface IObliviousRows {
+                        (NullableResultBox Value, int Code) Read(bool choose);
+                    }
+                    public abstract class ObliviousRowsBase {
+                        public abstract (NullableResultBox Value, int Code) Read(bool choose);
+                    }
+                    public sealed class NativeObliviousRows : IObliviousRows {
+                        public (NullableResultBox Value, int Code) Read(bool choose) =>
+                            (choose ? "miss" : "keep", 1);
+                    }
+                    public struct Token {
+                        public static explicit operator int(Token value) { Probe.Calls++; return 7; }
+                    }
+                    public struct ReferenceToken {
+                        public static explicit operator Box(ReferenceToken value) { Probe.Calls++; return new Box(); }
+                    }
+                    public struct OpaqueToken {
+                        public static explicit operator int?(OpaqueToken value) { Probe.Calls++; return null; }
+                    }
+                    public struct NullAwareToken {
+                        public static explicit operator int(NullAwareToken? value) { Probe.Calls++; return 9; }
+                    }
+                    public static class Probe {
+                        public static int Calls;
+                        public static void Reset() { Calls = 0; }
+                        public static bool Choose(bool choose) { Calls++; return choose; }
+                        public static string Text(bool missing) { Calls++; return missing ? null : "x"; }
+                        public static int? Number(bool present) { Calls++; return present ? 7 : null; }
+                    }
+                }
+                """),
+        });
+        Assert.True(fixture.BoundWithoutErrors, string.Join(Environment.NewLine, fixture.ErrorDiagnostics));
+        var emitted = fixture.Compilation.WithAssemblyName(assemblyName).Emit(path);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        return path;
+    }
+
+    private static void AssertTypedHoists(string printed, string tuple, int expectedCount)
+    {
+        MatchCollection locals = Regex.Matches(printed, @"let (?<name>__yielded\d+) " + Regex.Escape(tuple) + " =");
+        Assert.NotEmpty(locals);
+        Assert.Equal(expectedCount, locals.Count);
+        Assert.All(
+            locals.Cast<Match>(),
+            local => Assert.Matches(@"\byield " + Regex.Escape(local.Groups["name"].Value) + @"\b", printed));
+    }
+
+    private static void AssertBindsAndRuns(string printed, string fixture, int expected)
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixture });
+        TranslationTestValidation.AssertBinds(resolver, printed);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "Obj.Run()",
+            new[] { fixture });
+        Assert.False(result.Diagnostics.Any(diagnostic => diagnostic.IsError), printed + Environment.NewLine + string.Join(Environment.NewLine, result.Diagnostics));
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(expected, result.Value);
+    }
+
+    private static void AssertBindsAndThrows(string printed, string fixture, Type exception, string invocation)
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixture });
+        TranslationTestValidation.AssertBinds(resolver, printed);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + invocation,
+            new[] { fixture });
+        Assert.IsType(exception, result.UnhandledException);
+        Assert.Equal("GS9999", Assert.Single(result.Diagnostics.Where(diagnostic => diagnostic.IsError)).Id);
+    }
+
+    private static (int Exit, string Output) RunDotnet(params string[] arguments)
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (string argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using Process process = Process.Start(start);
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        return (process.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult());
+    }
+
+    private static string Translate(string source, string fixture = null) =>
+        TranslateWithContext(source, fixture).Printed;
+
+    private static (string Printed, TranslationContext Context) TranslateWithContext(string source, string fixture)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) },
+            fixture is null
+                ? null
+                : CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(fixture)).ToArray());
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        Assert.Equal(NullableContextOptions.Disable, project.Compilation.Options.NullableContextOptions);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.DoesNotContain(context.Diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        return (GSharpPrinter.Print(unit), context);
+    }
+}
