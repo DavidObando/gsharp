@@ -83,7 +83,11 @@ internal static class MagicCollectionZeroValue
     /// <param name="type">The declared slot type.</param>
     /// <returns>The synthesized empty-instance expression, or null.</returns>
     public static BoundExpression? TrySynthesizeEmptyInstance(SyntaxNode? syntax, TypeSymbol type)
-        => TrySynthesizeEmptyInstanceCore(syntax, type, visiting: null);
+        => TrySynthesizeEmptyInstanceCore(
+            syntax,
+            type,
+            visiting: null,
+            new Dictionary<TypeSymbol, bool>());
 
     /// <summary>
     /// Issue #3319: a cheap, NON-recursive shape check for whether a
@@ -364,7 +368,22 @@ internal static class MagicCollectionZeroValue
         return new BoundStructLiteralExpression(null, nestedStruct, inits.ToImmutable());
     }
 
-    private static BoundExpression? TrySynthesizeEmptyInstanceCore(SyntaxNode? syntax, TypeSymbol type, HashSet<StructSymbol>? visiting)
+    private static BoundExpression? TrySynthesizeEmptyInstanceCore(
+        SyntaxNode? syntax,
+        TypeSymbol type,
+        HashSet<StructSymbol>? visiting,
+        Dictionary<TypeSymbol, bool> needsZeroCache)
+    {
+        var result = TrySynthesizeEmptyInstanceCoreUncached(syntax, type, visiting, needsZeroCache);
+        needsZeroCache[type] = result != null;
+        return result;
+    }
+
+    private static BoundExpression? TrySynthesizeEmptyInstanceCoreUncached(
+        SyntaxNode? syntax,
+        TypeSymbol type,
+        HashSet<StructSymbol>? visiting,
+        Dictionary<TypeSymbol, bool> needsZeroCache)
     {
         switch (type)
         {
@@ -416,7 +435,7 @@ internal static class MagicCollectionZeroValue
             // themselves need sound zero values. Class-typed slots (reference
             // types) and inline structs (fixed layout, #3219) are excluded.
             case StructSymbol structType when !structType.IsClass && !structType.IsInline:
-                return TrySynthesizeStructFieldDefaults(syntax, structType, visiting);
+                return TrySynthesizeStructFieldDefaults(syntax, structType, visiting, needsZeroCache);
 
             default:
                 return null;
@@ -434,7 +453,11 @@ internal static class MagicCollectionZeroValue
     /// recursion for a self-referential struct shape (nothing else in the
     /// compiler currently rejects that as a layout cycle).
     /// </summary>
-    private static BoundExpression? TrySynthesizeStructFieldDefaults(SyntaxNode? syntax, StructSymbol structType, HashSet<StructSymbol>? visiting)
+    private static BoundExpression? TrySynthesizeStructFieldDefaults(
+        SyntaxNode? syntax,
+        StructSymbol structType,
+        HashSet<StructSymbol>? visiting,
+        Dictionary<TypeSymbol, bool> needsZeroCache)
     {
         // Key the cycle guard by the generic DEFINITION so a self-referential
         // shape is caught regardless of which closed instantiation is being
@@ -453,7 +476,7 @@ internal static class MagicCollectionZeroValue
             var hasNonPublicZeroValueField = false;
             foreach (var field in structType.Fields)
             {
-                var fieldZeroValue = TrySynthesizeEmptyInstanceCore(syntax, field.Type, visiting);
+                var fieldZeroValue = TrySynthesizeEmptyInstanceCore(syntax, field.Type, visiting, needsZeroCache);
                 if (fieldZeroValue == null)
                 {
                     continue;
@@ -501,7 +524,13 @@ internal static class MagicCollectionZeroValue
                     var initializedInType = visitKey.ValueStructDefaultCtorIsZeroInitialization
                         ? structType.GetDefinitionField(field) is { } definitionField
                             && (ReferenceEquals(definitionField.Type, field.Type)
-                                || TrySynthesizeEmptyInstanceCore(syntax, definitionField.Type, visiting) != null)
+                                || (needsZeroCache.TryGetValue(definitionField.Type, out var needsZero)
+                                    ? needsZero
+                                    : TrySynthesizeEmptyInstanceCore(
+                                        syntax,
+                                        definitionField.Type,
+                                        visiting,
+                                        needsZeroCache) != null))
                         : structType.GetDefinitionField(field) is { } declaredField
                             && visitKey.InstanceFieldInitializers.ContainsKey(declaredField);
                     if (!initializedInType)

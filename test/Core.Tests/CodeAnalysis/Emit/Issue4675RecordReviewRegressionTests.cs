@@ -125,17 +125,17 @@ public class Issue4675RecordReviewRegressionTests
     }
 
     [Fact]
-    public void NestedStructZeroSynthesis_RemainsLinearEnoughForDeepChains()
+    public void ConstructedGenericZeroSynthesis_RemainsLinearEnoughForDeepChains()
     {
         const int depth = 24;
         var source = new StringBuilder("import System.Collections.Generic\n");
-        source.AppendLine("struct Node0 {\nprivate var Values List[int32]\n}");
+        source.AppendLine("struct Node0[T] {\nprivate var Values List[int32]\n}");
         for (var index = 1; index <= depth; index++)
         {
-            source.AppendLine($"struct Node{index} {{\npublic var Child Node{index - 1}\nprivate var Values List[int32]\n}}");
+            source.AppendLine($"struct Node{index}[T] {{\npublic var Child Node{index - 1}[T]\nprivate var Values List[int32]\n}}");
         }
 
-        source.AppendLine($"var value Node{depth}");
+        source.AppendLine($"var value Node{depth}[int32]");
         var result = EmittedOracle.Evaluate(source.ToString());
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
