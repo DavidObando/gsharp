@@ -31,6 +31,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -147,9 +148,24 @@ def evaluate_project(path: Path, tree: Path, env: dict, config: str,
         raise Stage2Error(f"cannot evaluate participating project {path.relative_to(tree)}:\n"
                           + result.stdout + result.stderr)
     try:
-        return json.loads(result.stdout)
+        evaluation = json.loads(result.stdout)
     except json.JSONDecodeError as error:
         raise Stage2Error(f"invalid MSBuild evaluation for {path.relative_to(tree)}: {error}") from error
+    preprocessed = subprocess.run(
+        ["dotnet", "msbuild", str(path.relative_to(tree)), "-nologo", "-preprocess",
+         f"-p:Configuration={config}", *property_args, "-nodeReuse:false"],
+        cwd=tree, env=env, capture_output=True, text=True)
+    if preprocessed.returncode != 0:
+        raise Stage2Error(f"cannot preprocess participating project {path.relative_to(tree)}:\n"
+                          + preprocessed.stdout + preprocessed.stderr)
+    evaluation["_EvaluatedImports"] = [
+        item.strip()
+        for item in re.findall(
+            r"(?:^|\r?\n)[ \t]*([^\r\n]+)\r?\n[ \t]*={20,}(?:\r?\n|$)",
+            preprocessed.stdout)
+        if Path(item.strip()).is_absolute() and Path(item.strip()).is_file()
+    ]
+    return evaluation
 
 
 def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
@@ -224,9 +240,13 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
             raise Stage2Error(
                 f"{path.relative_to(tree)} is multi-targeted; stage-2 preflight requires "
                 "a single effective project context")
-        imports = [Path(item).resolve()
-                   for item in properties.get("MSBuildAllProjects", "").split(";") if item]
-        protected_inputs.update(imports)
+        import_items = evaluation.get("_EvaluatedImports")
+        if import_items is None:  # Unit fixtures predating authoritative preprocessing.
+            import_items = [
+                item for item in properties.get("MSBuildAllProjects", "").split(";") if item
+            ]
+        imports = [Path(item).resolve() for item in import_items]
+        protected_inputs.update(item for item in imports if not item.is_relative_to(cache))
         sdk_imports = [item for item in imports
                        if packer.SDK_ID.lower() in item.as_posix().lower().split("/")]
         declares_gsharp = any(name.lower() == packer.SDK_ID.lower() for name, _ in specs)
@@ -398,6 +418,20 @@ def install_sdk_task_guard(expected_sdk: Path,
     for target in root.iter():
         if target.tag.rsplit("}", 1)[-1] != "Target" or target.attrib.get("Name") != "CoreCompile":
             continue
+        receipt_properties = ET.Element(tag("PropertyGroup"))
+        for project_path, (evidence_path, nonce) in sorted((evidence or {}).items()):
+            condition = (
+                "'$([MSBuild]::Escape($(MSBuildProjectFullPath)))' == "
+                f"'{msbuild_escape(str(project_path.resolve()))}'")
+            ET.SubElement(
+                receipt_properties, tag("_Stage2EvidencePath"),
+                {"Condition": condition}).text = str(evidence_path)
+            ET.SubElement(
+                receipt_properties, tag("_Stage2EvidenceNonce"),
+                {"Condition": condition}).text = nonce
+        root.insert(list(root).index(target), receipt_properties)
+        target.attrib["Outputs"] = (
+            target.attrib.get("Outputs", "") + ";$(_Stage2EvidencePath)")
         children = list(target)
         for index, child in enumerate(children):
             if child.tag.rsplit("}", 1)[-1] != "BuildTask":
@@ -430,30 +464,24 @@ def install_sdk_task_guard(expected_sdk: Path,
             for offset, validation in enumerate(list(holder)):
                 target.insert(index + offset, validation)
             target.insert(index + len(holder), child)
-            receipt_elements = []
-            for receipt_index, (project_path, (evidence_path, nonce)) in enumerate(
-                    sorted((evidence or {}).items())):
-                condition = (
-                    "'$([MSBuild]::Escape($(MSBuildProjectFullPath)))' == "
-                    f"'{msbuild_escape(str(project_path.resolve()))}'")
-                item_name = f"_Stage2CompiledAssembly{receipt_index}"
-                get_output_hash = ET.Element(
-                    tag("GetFileHash"),
-                    {"Files": "@(IntermediateAssembly)", "Algorithm": "SHA256",
-                     "Condition": condition})
-                ET.SubElement(
-                    get_output_hash, tag("Output"),
-                    {"TaskParameter": "Items", "ItemName": item_name})
-                receipt_elements.extend((
-                    get_output_hash,
-                    ET.Element(
+            get_output_hash = ET.Element(
+                tag("GetFileHash"),
+                {"Files": "@(IntermediateAssembly)", "Algorithm": "SHA256",
+                 "Condition": "'$(_Stage2EvidencePath)' != ''"})
+            ET.SubElement(
+                get_output_hash, tag("Output"),
+                {"TaskParameter": "Items", "ItemName": "_Stage2CompiledAssembly"})
+            receipt_elements = (
+                get_output_hash,
+                ET.Element(
                     tag("WriteLinesToFile"),
                     {
-                        "Condition": condition,
-                        "File": str(evidence_path),
-                        "Lines": f"@({item_name}->'{nonce}|%(FullPath)|%(FileHash)')",
+                        "Condition": "'$(_Stage2EvidencePath)' != ''",
+                        "File": "$(_Stage2EvidencePath)",
+                        "Lines": "@(_Stage2CompiledAssembly->"
+                                 "'$(_Stage2EvidenceNonce)|%(FullPath)|%(FileHash)')",
                         "Overwrite": "true",
-                    })))
+                    }))
             for offset, receipt_element in enumerate(receipt_elements):
                 target.insert(index + len(holder) + 1 + offset, receipt_element)
             replace_xml(document, path)
@@ -472,8 +500,9 @@ def reject_feed_aliases(tree: Path, packages: set[Path]) -> None:
                 f"SDK feed destination aliases a supplied package: {destination}")
 
 
-def reject_cleanup_overlap(tree: Path, assemblies: list[str], protected_inputs: set[Path]) -> None:
-    cleanup_root = (tree / "out").resolve()
+def reject_cleanup_overlap(tree: Path, assemblies: list[str], protected_inputs: set[Path],
+                           cleanup_roots: list[Path] | None = None) -> None:
+    roots = [(tree / "out").resolve(), *(cleanup_roots or [])]
     cleanup_files = {
         path
         for assembly in assemblies
@@ -481,7 +510,7 @@ def reject_cleanup_overlap(tree: Path, assemblies: list[str], protected_inputs: 
     }
     endangered = sorted(
         path for path in protected_inputs
-        if path.is_relative_to(cleanup_root) or path in cleanup_files)
+        if any(path.is_relative_to(root) for root in roots) or path in cleanup_files)
     if endangered:
         raise Stage2Error(
             "participating build inputs overlap cleaned outputs:\n  "
@@ -515,7 +544,8 @@ def verify_compiler_evidence(projects: set[Path],
 
 
 def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemblies: list[str],
-                work: Path, config: str, validation_projects: list[str] | None = None) -> dict:
+                work: Path, config: str, validation_projects: list[str] | None = None,
+                cleanup_roots: list[Path] | None = None) -> dict:
     version = pin(tree, nupkg)
     env = stage_env(work, stage)
     cache = Path(env["NUGET_PACKAGES"])
@@ -537,7 +567,7 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         tree, validation_projects, env, config, version, global_properties,
         gsharp_projects, protected_inputs, target_paths) if validation_projects is not None else [])
     if validation_projects is not None:
-        reject_cleanup_overlap(tree, assemblies, protected_inputs)
+        reject_cleanup_overlap(tree, assemblies, protected_inputs, cleanup_roots)
     validation_closures: dict[str, set[Path]] = {}
     for project in validation_projects or []:
         closure: set[Path] = set()
@@ -557,7 +587,9 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         }
         payload_hashes = {
             path: hashlib.sha256(path.read_bytes()).hexdigest().upper()
-            for path in (compiler, task)
+            for directory in (compiler.parent, task.parent)
+            for path in directory.rglob("*")
+            if path.is_file()
         }
         install_sdk_task_guard(expected_sdk, evidence, payload_hashes)
         guard = toolchain_guard(work, stage, expected_sdk, gsharp_projects)
@@ -567,6 +599,7 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
     log = work / f"{stage}.build.log"
     replace_text(log, "")
     seconds = 0.0
+    built_gsharp_projects: set[Path] = set()
     for project in projects:
         closure = validation_closures.get(project, set())
         for evidence_project in closure:
@@ -580,6 +613,8 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         if code != 0:
             raise Stage2Error(f"{stage}: dotnet build {project} failed (exit {code}); see {log}")
         verify_compiler_evidence(closure, evidence, target_paths)
+        built_gsharp_projects.update(closure)
+    verify_compiler_evidence(built_gsharp_projects, evidence, target_paths)
     target = work / stage
     if target.exists():
         shutil.rmtree(target)
@@ -792,10 +827,10 @@ def main(argv: list[str]) -> int:
         test_projects = [spec.partition("::")[0] for spec in args.test]
         report["stage1Build"] = build_stage(
             tree, "stage1", bootstrap, projects, assemblies, work, args.config,
-            [*projects, *test_projects])
+            [*projects, *test_projects], cleanup_roots)
         report["stage2Build"] = build_stage(
             tree, "stage2", stage1, projects, assemblies, work, args.config,
-            [*projects, *test_projects])
+            [*projects, *test_projects], cleanup_roots)
         report["comparison"] = compare(report["stage1Build"], report["stage2Build"], work)
         report["tests"] = run_tests(
             tree, args.test, work, args.config, report["stage2Build"]["sdkVersion"],
