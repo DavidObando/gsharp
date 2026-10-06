@@ -1344,9 +1344,7 @@ internal static class ObliviousNullabilityAnalyzer
     /// containing type and original member signature). Cross-compilation
     /// matching never uses <see cref="SymbolEqualityComparer"/> or CLR object
     /// identity, since those do not hold across independently bound
-    /// compilations; the source path uses the comparer only after both symbols
-    /// belong to <paramref name="targetCompilation"/> (see the long comment on
-    /// the calling overload). Returns
+    /// compilations (see the long comment on the calling overload). Returns
     /// <see langword="null"/> when no matching declaration exists in
     /// <paramref name="targetCompilation"/> (e.g. `symbol` is unrelated to it).
     /// </summary>
@@ -1497,12 +1495,11 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         ISymbol remapped = remappedType.GetMembers(symbol.Name).FirstOrDefault(candidate =>
-            sourceDeclaration != null
-                ? SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, sourceDeclaration)
-                : candidate.Kind == symbol.Kind
-                    && Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity)
-                    && string.Equals(
-                        candidate.OriginalDefinition.GetDocumentationCommentId(), declarationId, StringComparison.Ordinal));
+            candidate.Kind == symbol.Kind
+            && (sourceDeclaration != null
+                || Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity))
+            && string.Equals(
+                candidate.OriginalDefinition.GetDocumentationCommentId(), declarationId, StringComparison.Ordinal));
         if (remapped is IMethodSymbol remappedMethod
             && symbol is IMethodSymbol method
             && !SymbolEqualityComparer.Default.Equals(method, method.ConstructedFrom))

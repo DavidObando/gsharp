@@ -209,9 +209,13 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             }
 
             INamedTypeSymbol outer = native.Compilation.GetTypeByMetadataName("Outer`1");
-            IParameterSymbol primary = Assert.Single(
-                Assert.Single(outer.InstanceConstructors,
-                    constructor => constructor.Parameters.Any(parameter => parameter.Name == "primary")).Parameters);
+            IMethodSymbol primaryConstructor = Assert.Single(
+                outer.InstanceConstructors,
+                constructor => constructor.Parameters.Any(parameter => parameter.Name == "primary"));
+            IMethodSymbol remappedPrimaryConstructor = Assert.IsAssignableFrom<IMethodSymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, primaryConstructor }));
+            Assert.Equal(MethodKind.Constructor, remappedPrimaryConstructor.MethodKind);
+            IParameterSymbol primary = Assert.Single(primaryConstructor.Parameters);
             IParameterSymbol remappedPrimary = Assert.IsAssignableFrom<IParameterSymbol>(
                 method.Invoke(null, new object[] { remappingTarget.Compilation, primary }));
             Assert.Equal(primary.Name, remappedPrimary.Name);
@@ -223,6 +227,11 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             IParameterSymbol remappedPositional = Assert.IsAssignableFrom<IParameterSymbol>(
                 method.Invoke(null, new object[] { remappingTarget.Compilation, positional }));
             Assert.Equal(positional.Name, remappedPositional.Name);
+            IPropertySymbol positionalProperty = Assert.Single(
+                snapshot.GetMembers("Value").OfType<IPropertySymbol>());
+            IPropertySymbol remappedPositionalProperty = Assert.IsAssignableFrom<IPropertySymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, positionalProperty }));
+            Assert.Equal(positionalProperty.Name, remappedPositionalProperty.Name);
         }
 
         LoadedDocument contractDocument = Assert.Single(
