@@ -415,13 +415,7 @@ internal sealed class MemberDefEmitter
         if (prop.IsOverride)
         {
             methodAttrs |= MethodAttributes.Virtual;
-            if (prop.OverriddenProperty is { } baseProperty
-                && DeclarationBinder.IsCovariantPropertyOverride(
-                    baseProperty,
-                    prop.Type,
-                    prop.HasGetter,
-                    prop.HasSetter,
-                    prop.ReturnRefKind))
+            if (MethodInfoHelpers.IsCovariantPropertyGetter(prop))
             {
                 methodAttrs |= MethodAttributes.NewSlot;
             }
@@ -649,6 +643,16 @@ internal sealed class MemberDefEmitter
                 sequenceNumber: prop.Parameters.Length + 1);
         }
 
+        var methodAttrs = AccessibilityMap.ToMethodVisibility(accessibility)
+            | MethodAttributes.SpecialName
+            | MethodAttributes.HideBySig
+            | MethodAttributes.Virtual
+            | MethodAttributes.Abstract;
+        if (!prop.IsOverride || (isGetter && MethodInfoHelpers.IsCovariantPropertyGetter(prop)))
+        {
+            methodAttrs |= MethodAttributes.NewSlot;
+        }
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: AccessibilityMap.ToMethodVisibility(accessibility)
                 | MethodAttributes.SpecialName
@@ -661,41 +665,6 @@ internal sealed class MemberDefEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: -1,
             parameterList: firstParameter);
-    }
-
-    private static bool PropertyOverrideStartsNewSlot(PropertySymbol prop, bool isGetter)
-    {
-        if (!prop.IsOverride || !isGetter)
-        {
-            return false;
-        }
-
-        if (prop.OverriddenProperty is { } baseProperty)
-        {
-            return DeclarationBinder.IsCovariantPropertyOverride(
-                baseProperty,
-                prop.Type,
-                prop.HasGetter,
-                prop.HasSetter,
-                prop.ReturnRefKind);
-        }
-
-        if (prop.ExternalOverriddenGetter is not { } externalGetter
-            || prop.ExternalOverrideContainingType is not { } externalOwner)
-        {
-            return false;
-        }
-
-        var baseType = MemberLookup.GetClrMethodReturnTypeSymbol(externalOwner, externalGetter);
-        return DeclarationBinder.IsCovariantPropertyOverride(
-            baseType,
-            baseHasGetter: true,
-            baseHasSetter: prop.ExternalOverriddenSetter != null,
-            baseReturnRefKind: externalGetter.ReturnType.IsByRef ? RefKind.Ref : RefKind.None,
-            prop.Type,
-            prop.HasGetter,
-            prop.HasSetter,
-            prop.ReturnRefKind);
     }
 
     /// <summary>

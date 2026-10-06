@@ -148,16 +148,45 @@ internal static class MethodInfoHelpers
         return (methods, propertyAccessors);
     }
 
-    public static bool IsCovariantSourcePropertyGetter(FunctionSymbol function)
+    public static bool IsCovariantPropertyGetter(FunctionSymbol function)
         => function.AssociatedSymbol is PropertySymbol property
             && ReferenceEquals(property.GetterSymbol, function)
-            && property.OverriddenProperty is { } baseProperty
-            && DeclarationBinder.IsCovariantPropertyOverride(
+            && IsCovariantPropertyGetter(property);
+
+    public static bool IsCovariantPropertyGetter(PropertySymbol property)
+    {
+        if (!property.IsOverride || !property.HasGetter)
+        {
+            return false;
+        }
+
+        if (property.OverriddenProperty is { } baseProperty)
+        {
+            return DeclarationBinder.IsCovariantPropertyOverride(
                 baseProperty,
                 property.Type,
                 property.HasGetter,
                 property.HasSetter,
                 property.ReturnRefKind);
+        }
+
+        if (property.ExternalOverriddenGetter is not { } externalGetter
+            || property.ExternalOverrideContainingType is not { } externalOwner)
+        {
+            return false;
+        }
+
+        var baseType = MemberLookup.GetClrMethodReturnTypeSymbol(externalOwner, externalGetter);
+        return DeclarationBinder.IsCovariantPropertyOverride(
+            baseType,
+            baseHasGetter: true,
+            baseHasSetter: property.ExternalOverriddenSetter != null,
+            baseReturnRefKind: externalGetter.ReturnType.IsByRef ? RefKind.Ref : RefKind.None,
+            property.Type,
+            property.HasGetter,
+            property.HasSetter,
+            property.ReturnRefKind);
+    }
 
     /// <summary>
     /// Issue #409: determines whether a value-type instance method must keep

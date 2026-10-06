@@ -212,8 +212,10 @@ public sealed class Issue4765AbstractPropertyEmitTests
         }
     }
 
-    [Fact]
-    public void ImportedCovariantReabstractGetter_MatchesReferencedRoslynContract()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedCovariantGetter_MatchesReferencedRoslynContract(bool reabstract)
     {
         using var contract = new CSharpFixture("""
             namespace ImportedCovariant {
@@ -226,13 +228,21 @@ public sealed class Issue4765AbstractPropertyEmitTests
             .Append(MetadataReference.CreateFromFile(contract.AssemblyPath));
         var compilation = CSharpCompilation.Create(
             "ImportedCovariantRoslyn",
-            new[] { CSharpSyntaxTree.ParseText("""
-                namespace ImportedCovariant {
-                    public abstract class Middle : Base {
-                        public abstract override string Item { get; }
+            new[] { CSharpSyntaxTree.ParseText(reabstract
+                ? """
+                    namespace ImportedCovariant {
+                        public abstract class Middle : Base {
+                            public abstract override string Item { get; }
+                        }
                     }
-                }
-                """) },
+                    """
+                : """
+                    namespace ImportedCovariant {
+                        public class Middle : Base {
+                            public override string Item => "x";
+                        }
+                    }
+                    """) },
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var expected = Path.Combine(fixture.Directory, "ImportedCovariantRoslyn.dll");
@@ -242,23 +252,43 @@ public sealed class Issue4765AbstractPropertyEmitTests
             Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics));
         }
 
+        var expectedReference = Path.Combine(fixture.Directory, "ImportedCovariantRoslyn.ref.dll");
+        using (var stream = File.Create(expectedReference))
+        {
+            var emitted = compilation.Emit(
+                stream,
+                options: new Microsoft.CodeAnalysis.Emit.EmitOptions(metadataOnly: true));
+            Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics));
+        }
+
         var reference = Path.Combine(fixture.Directory, "ImportedCovariant.ref.dll");
-        var dll = fixture.Compile("""
-            package ImportedCovariant
-            public abstract class Middle : Base {
-                public abstract override prop Item string { get; }
-            }
-            """, "ImportedCovariant", false, "/r:" + contract.AssemblyPath, "/refout:" + reference);
+        var dll = fixture.Compile(reabstract
+            ? """
+                package ImportedCovariant
+                public abstract class Middle : Base {
+                    public abstract override prop Item string { get; }
+                }
+                """
+            : """
+                package ImportedCovariant
+                public class Middle : Base {
+                    public override prop Item string -> "x"
+                }
+                """, "ImportedCovariant", false, "/r:" + contract.AssemblyPath, "/refout:" + reference);
 
         Verify(expected, contract.AssemblyPath);
         Verify(dll, contract.AssemblyPath);
         var expectedShape = ReadCovariantAbstractGetterShape(expected);
+        var expectedReferenceShape = ReadCovariantAbstractGetterShape(expectedReference);
         Assert.True((expectedShape.Attributes & MethodAttributes.NewSlot) != 0);
-        foreach (var path in new[] { dll, reference })
-        {
-            this.LogProduct(path);
-            Assert.Equal(expectedShape, ReadCovariantAbstractGetterShape(path));
-        }
+        this.LogProduct(dll);
+        this.LogProduct(reference);
+        var actualShape = ReadCovariantAbstractGetterShape(dll);
+        var actualReferenceShape = ReadCovariantAbstractGetterShape(reference);
+        AssertCovariantSlotShape(expectedShape, actualShape);
+        AssertCovariantSlotShape(expectedReferenceShape, actualReferenceShape);
+        Assert.Equal(!reabstract, actualShape.HasBody);
+        Assert.False(actualReferenceShape.HasBody);
     }
 
     [Fact]
@@ -682,6 +712,38 @@ public sealed class Issue4765AbstractPropertyEmitTests
         Assert.True(accessor.IsSpecialName);
         Assert.Equal(newSlot, (accessor.Attributes & MethodAttributes.NewSlot) != 0);
         Assert.Null(accessor.GetMethodBody());
+    }
+
+    private static (MethodAttributes Attributes, bool HasBody, int MethodImplCount, string DeclarationName)
+        ReadCovariantAbstractGetterShape(string path)
+    {
+        using var pe = new PEReader(File.OpenRead(path));
+        var metadata = pe.GetMetadataReader();
+        var ownerHandle = Assert.Single(metadata.TypeDefinitions,
+            handle => metadata.GetString(metadata.GetTypeDefinition(handle).Name) == "Middle");
+        var owner = metadata.GetTypeDefinition(ownerHandle);
+        var getterHandle = Assert.Single(owner.GetMethods(),
+            handle => metadata.GetString(metadata.GetMethodDefinition(handle).Name) == "get_Item");
+        var getter = metadata.GetMethodDefinition(getterHandle);
+        var implementation = Assert.Single(owner.GetMethodImplementations(),
+            handle => metadata.GetMethodImplementation(handle).MethodBody == getterHandle);
+        var declaration = metadata.GetMethodImplementation(implementation).MethodDeclaration;
+        var declarationName = declaration.Kind switch
+        {
+            HandleKind.MethodDefinition => metadata.GetString(metadata.GetMethodDefinition((MethodDefinitionHandle)declaration).Name),
+            HandleKind.MemberReference => metadata.GetString(metadata.GetMemberReference((MemberReferenceHandle)declaration).Name),
+            _ => throw new InvalidOperationException("Unexpected covariant property declaration handle " + declaration.Kind),
+        };
+        return (getter.Attributes, getter.RelativeVirtualAddress != 0, 1, declarationName);
+    }
+
+    private static void AssertCovariantSlotShape(
+        (MethodAttributes Attributes, bool HasBody, int MethodImplCount, string DeclarationName) expected,
+        (MethodAttributes Attributes, bool HasBody, int MethodImplCount, string DeclarationName) actual)
+    {
+        Assert.Equal(expected.Attributes, actual.Attributes);
+        Assert.Equal(expected.MethodImplCount, actual.MethodImplCount);
+        Assert.Equal(expected.DeclarationName, actual.DeclarationName);
     }
 
     private static void Verify(string dll, params string[] references)
