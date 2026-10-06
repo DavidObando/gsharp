@@ -147,6 +147,32 @@ public class Issue4675RecordReviewRegressionTests
         Assert.NotNull(result.Value);
     }
 
+    [Fact]
+    public void EqualityBlockerPredicate_RequiresNonGenericByValueReturn()
+    {
+        var method = new FunctionSymbol(
+            "Equals",
+            ImmutableArray.Create(new ParameterSymbol("other", TypeSymbol.String)),
+            TypeSymbol.Bool,
+            declaration: null,
+            package: null,
+            Accessibility.Public,
+            receiverType: null,
+            isOpen: false,
+            isOverride: true);
+
+        method.TypeParameters = ImmutableArray.Create(
+            new TypeParameterSymbol("T", 0, TypeParameterConstraint.Any, TypeParameterVariance.None));
+        Assert.False(DataEqualityMemberModel.IsSealedIntermediaryEqualityOverride(method, TypeSymbol.String));
+
+        method.TypeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
+        method.ReturnRefKind = RefKind.Ref;
+        Assert.False(DataEqualityMemberModel.IsSealedIntermediaryEqualityOverride(method, TypeSymbol.String));
+
+        method.ReturnRefKind = RefKind.None;
+        Assert.True(DataEqualityMemberModel.IsSealedIntermediaryEqualityOverride(method, TypeSymbol.String));
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
