@@ -91,6 +91,29 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
     }
 
     [Fact]
+    public void ComputedPositionalProperty_AuthoredConstructorUsesPropertyForInitializers()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package ComputedPrimaryAuthored
+            import System
+            data class Item(Value int32) {
+                private let Saved int32 = Value + 1
+                public prop Value int32 -> 41
+                init(flag bool) { }
+                public func Read() int32 -> Saved
+            }
+            func Main() {
+                let item = Item(false)
+                Console.WriteLine(item.Value)
+                Console.WriteLine(item.Read())
+            }
+            """, "ComputedPrimaryAuthored", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("41\n42\n", fixture.Run(dll));
+    }
+
+    [Fact]
     public void EmptyDataClassPrimaryLiterals_ResolveTheDefaultConstructor()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
