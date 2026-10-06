@@ -1999,7 +1999,12 @@ public sealed partial class CSharpToGSharpTranslator
                 case ILocalSymbol local:
                     SyntaxNode declaration = local
                         .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-                    return declaration?.Ancestors().LastOrDefault(a => a is BlockSyntax);
+
+                    // Issue #4826: a local inside a lambda belongs to that
+                    // lambda's block, not the outer method block. Crossing the
+                    // lambda boundary hides its nullable consumers from scans
+                    // that deliberately skip nested functions.
+                    return declaration?.Ancestors().FirstOrDefault(a => a is BlockSyntax);
 
                 default:
                     return null;

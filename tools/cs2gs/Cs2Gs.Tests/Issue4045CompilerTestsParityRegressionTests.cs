@@ -25,16 +25,28 @@ public sealed class Issue4045CompilerTestsParityRegressionTests
 {
     private const string XunitReflectionSource = """
         #nullable disable
+        using System;
+        using System.Collections.Generic;
+        using System.Linq;
         using System.Reflection;
         using Xunit;
 
         public static class ReflectionProbe
         {
-            public static void Run(MethodInfo method, object instance)
+            private static object Invoke(Assembly assembly, string typeName, string methodName = "Run") =>
+                assembly.GetType(typeName, throwOnError: true).GetMethod(methodName).Invoke(null, null);
+
+            private static void InScope(Action action) => action();
+
+            public static void Run(IEnumerable<Assembly> assemblies)
             {
-                var ex = Record.Exception(() => method.Invoke(instance, null));
-                Assert.Null(ex);
-                Assert.Null(Record.Exception(() => method.Invoke(instance, null)));
+                InScope(() =>
+                {
+                    object actual = string.Empty;
+                    var ex = Record.Exception(() => actual = Invoke(assemblies.Last(), "Probe.Api"));
+                    Assert.Null(ex);
+                });
+                Assert.Null(Record.Exception(() => assemblies.Last().GetType("Probe.Api")));
             }
         }
         """;
@@ -142,9 +154,11 @@ public sealed class Issue4045CompilerTestsParityRegressionTests
             .ToArray();
 
         Assert.Equal(2, lines.Length);
+        Assert.Contains(lines, line =>
+            line.Contains("let ex = Record.Exception", StringComparison.Ordinal)
+            && line.Contains("actual = Invoke(", StringComparison.Ordinal));
         Assert.All(lines, line =>
         {
-            Assert.Contains("method.Invoke(", line, StringComparison.Ordinal);
             Assert.DoesNotContain(")!!", line, StringComparison.Ordinal);
         });
     }
