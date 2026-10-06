@@ -290,8 +290,35 @@ class MainTests(unittest.TestCase):
             self.assertTrue(bootstrap.is_file())
             self.assertTrue(stage1.is_file())
 
+    def test_packages_under_workspace_cleanup_roots_survive_rejection(self) -> None:
+        for relative, extra in (
+            ("stage1", []),
+            ("nuget-stage2", []),
+            ("test-0", ["--test", "Tests.gsproj"]),
+        ):
+            with self.subTest(relative=relative), work_directory() as directory:
+                root = Path(directory)
+                tree, work = root / "tree", root / "gate"
+                tree.mkdir()
+                packages = work / relative
+                packages.mkdir(parents=True)
+                bootstrap = self.package(packages, "1.0.0", "cs")
+                stage1 = self.package(packages, "1.0.0-stage1", "gs")
+                with patch.object(stage2, "build_stage") as build:
+                    code = stage2.main(
+                        ["--tree", str(tree), "--work", str(work),
+                         "--bootstrap", str(bootstrap), "--stage1", str(stage1), *extra])
+                self.assertEqual(2, code)
+                build.assert_not_called()
+                self.assertTrue(bootstrap.is_file())
+                self.assertTrue(stage1.is_file())
+
 
 class ParticipatingProjectTests(unittest.TestCase):
+    @staticmethod
+    def env(work: Path, stage: str = "preflight") -> dict:
+        return stage2.stage_env(work, stage)
+
     def test_versioned_participating_root_is_rejected(self) -> None:
         with work_directory() as directory:
             root = Path(directory)
@@ -300,7 +327,8 @@ class ParticipatingProjectTests(unittest.TestCase):
             (tree / "Root.gsproj").write_text(
                 f'<Project Sdk="{stage2.packer.SDK_ID}/1.0.0"/>', encoding="utf-8")
             with patch.object(stage2, "evaluate_project") as evaluate, self.assertRaises(stage2.Stage2Error):
-                stage2.validate_participating_projects(tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1")
+                stage2.validate_participating_projects(
+                    tree, ["Root.gsproj"], self.env(work), "Release", "1.0.0-stage1")
             evaluate.assert_not_called()
 
     def test_versioned_project_reference_is_rejected(self) -> None:
@@ -315,7 +343,7 @@ class ParticipatingProjectTests(unittest.TestCase):
             evaluation = {"Properties": {}, "Items": {"ProjectReference": [{"FullPath": str(child)}]}}
             with patch.object(stage2, "evaluate_project", return_value=evaluation), \
                     self.assertRaises(stage2.Stage2Error):
-                stage2.validate_participating_projects(tree, ["Root.csproj"], work,
+                stage2.validate_participating_projects(tree, ["Root.csproj"], self.env(work),
                                                        "Release", "1.0.0-stage1")
 
     def test_bare_sdk_must_resolve_the_pinned_package(self) -> None:
@@ -338,13 +366,13 @@ class ParticipatingProjectTests(unittest.TestCase):
                 self.assertEqual(
                     ["Root.gsproj"],
                     stage2.validate_participating_projects(
-                        tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1"))
+                        tree, ["Root.gsproj"], self.env(work), "Release", "1.0.0-stage1"))
             evaluation["Properties"]["MSBuildAllProjects"] = str(
                 work / "nuget-preflight" / "gsharp.net.sdk" / "1.0.0" / "Sdk" / "Sdk.props")
             with patch.object(stage2, "evaluate_project", return_value=evaluation), \
                     self.assertRaises(stage2.Stage2Error):
                 stage2.validate_participating_projects(
-                    tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1")
+                    tree, ["Root.gsproj"], self.env(work), "Release", "1.0.0-stage1")
 
     def test_indirect_sdk_and_tool_overrides_are_rejected(self) -> None:
         with work_directory() as directory:
@@ -372,7 +400,7 @@ class ParticipatingProjectTests(unittest.TestCase):
                                                    "Items": {"ProjectReference": []}}), \
                         self.assertRaises(stage2.Stage2Error):
                     stage2.validate_participating_projects(
-                        tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1")
+                        tree, ["Root.gsproj"], self.env(work), "Release", "1.0.0-stage1")
 
     def test_multi_targeted_project_is_rejected(self) -> None:
         with work_directory() as directory:
@@ -386,7 +414,51 @@ class ParticipatingProjectTests(unittest.TestCase):
             with patch.object(stage2, "evaluate_project", return_value=evaluation), \
                     self.assertRaises(stage2.Stage2Error):
                 stage2.validate_participating_projects(
-                    tree, ["Root.csproj"], work, "Release", "1.0.0-stage1")
+                    tree, ["Root.csproj"], self.env(work), "Release", "1.0.0-stage1")
+
+    def test_project_reference_context_changes_are_rejected(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree, work = root / "tree", root / "gate"
+            tree.mkdir()
+            parent, child = tree / "Root.csproj", tree / "Child.csproj"
+            parent.write_text('<Project Sdk="Microsoft.NET.Sdk"/>', encoding="utf-8")
+            child.write_text('<Project Sdk="Microsoft.NET.Sdk"/>', encoding="utf-8")
+            for metadata in (
+                {"AdditionalProperties": "GsharpCompilerFullPath=/bootstrap/gsc.dll"},
+                {"SetConfiguration": "Configuration=Bootstrap"},
+            ):
+                reference = {"FullPath": str(child), **metadata}
+                evaluation = {"Properties": {"TargetFrameworks": ""},
+                              "Items": {"ProjectReference": [reference]}}
+                with self.subTest(metadata=metadata), \
+                        patch.object(stage2, "evaluate_project", return_value=evaluation), \
+                        self.assertRaises(stage2.Stage2Error):
+                    stage2.validate_participating_projects(
+                        tree, ["Root.csproj"], self.env(work), "Release", "1.0.0-stage1")
+
+    def test_target_time_compiler_override_fails_actual_build(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            project, work = root / "TargetOverride.csproj", root / "gate"
+            expected = root / "expected"
+            project.write_text(
+                '<Project Sdk="Microsoft.NET.Sdk">'
+                '<PropertyGroup><TargetFramework>net10.0</TargetFramework>'
+                f'<GsharpCompilerFullPath>{expected / "tools/compiler/gsc.dll"}</GsharpCompilerFullPath>'
+                f'<GsharpToolFullPath>{expected / "tools/task/Gsharp.NET.Sdk.dll"}</GsharpToolFullPath>'
+                '</PropertyGroup>'
+                '<Target Name="OverrideCompiler" BeforeTargets="CoreCompile">'
+                '<PropertyGroup><GsharpCompilerFullPath>/bootstrap/gsc.dll</GsharpCompilerFullPath>'
+                '</PropertyGroup></Target></Project>', encoding="utf-8")
+            guard = stage2.toolchain_guard(work, "stage2", expected)
+            result = subprocess.run(
+                ["dotnet", "build", str(project), "-nodeReuse:false",
+                 "-p:ImportDirectoryBuildProps=false", "-p:ImportDirectoryBuildTargets=false",
+                 f"-p:CustomAfterMicrosoftCommonTargets={guard}"],
+                capture_output=True, text=True)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("CoreCompile used unexpected GsharpCompilerFullPath", result.stdout)
 
 
 class CleanOutputsTests(unittest.TestCase):
@@ -404,7 +476,8 @@ class CleanOutputsTests(unittest.TestCase):
 
             def rebuild(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
                 self.assertEqual(["dotnet", "build", "src/Core.gsproj", "-c", "Release",
-                                  "-t:Rebuild", "-nodeReuse:false"], command)
+                                  "-t:Rebuild", "-nodeReuse:false"], command[:7])
+                self.assertTrue(command[7].startswith("-p:CustomAfterMicrosoftCommonTargets="))
                 self.assertFalse(assembly.exists())
                 self.assertFalse(assembly.with_suffix(".pdb").exists())
                 self.assertFalse((tree / "out").exists())
@@ -442,6 +515,35 @@ class CleanOutputsTests(unittest.TestCase):
                         patch.object(stage2, "run", side_effect=rebuild):
                     stage2.build_stage(tree, current, Path("unused.nupkg"), ["a.gsproj"],
                                        ["a.dll"], work, "Release")
+
+    def test_validation_and_build_share_the_cleared_stage_cache(self) -> None:
+        with work_directory() as directory:
+            tree = Path(directory)
+            work = tree / "work"
+            work.mkdir()
+            stale = work / "nuget-stage2" / "gsharp.net.sdk" / "old" / "gsc.dll"
+            stale.parent.mkdir(parents=True)
+            stale.write_bytes(b"bootstrap")
+            seen_env = None
+
+            def validate(_tree: Path, _roots: list[str], env: dict,
+                         _config: str, _version: str) -> list[str]:
+                nonlocal seen_env
+                seen_env = env
+                self.assertFalse(stale.exists())
+                return ["a.gsproj"]
+
+            def rebuild(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
+                self.assertIs(seen_env, env)
+                self.assertEqual(str(work / "nuget-stage2"), env["NUGET_PACKAGES"])
+                (tree / "a.dll").write_bytes(b"rebuilt")
+                return 0, 0.0
+
+            with patch.object(stage2, "pin", return_value="1.0-stage1"), \
+                    patch.object(stage2, "validate_participating_projects", side_effect=validate), \
+                    patch.object(stage2, "run", side_effect=rebuild):
+                stage2.build_stage(tree, "stage2", Path("unused.nupkg"), ["a.gsproj"],
+                                   ["a.dll"], work, "Release", ["a.gsproj"])
 
     def test_snapshot_directory_alias_is_rejected(self) -> None:
         with work_directory() as directory:

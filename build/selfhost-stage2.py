@@ -125,12 +125,9 @@ def evaluate_project(path: Path, tree: Path, env: dict, config: str) -> dict:
         raise Stage2Error(f"invalid MSBuild evaluation for {path.relative_to(tree)}: {error}") from error
 
 
-def validate_participating_projects(tree: Path, roots: list[str], work: Path,
+def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                                     config: str, sdk_version: str) -> list[str]:
-    env = stage_env(work, "preflight")
     cache = Path(env["NUGET_PACKAGES"])
-    if cache.exists():
-        shutil.rmtree(cache)
     expected_sdk = (cache / packer.SDK_ID.lower() / sdk_version.lower()).resolve()
     pending = [tree / root for root in roots]
     seen = set()
@@ -177,26 +174,66 @@ def validate_participating_projects(tree: Path, roots: list[str], work: Path,
             full_path = reference.get("FullPath")
             if not full_path:
                 raise Stage2Error(f"{path.relative_to(tree)} has a ProjectReference without FullPath")
+            context = {
+                name: reference.get(name)
+                for name in ("AdditionalProperties", "Properties", "SetConfiguration", "SetPlatform",
+                             "SetTargetFramework", "GlobalPropertiesToRemove", "Targets")
+                if reference.get(name)
+            }
+            if context:
+                details = ", ".join(f"{name}={value}" for name, value in context.items())
+                raise Stage2Error(
+                    f"{path.relative_to(tree)} changes ProjectReference build context for "
+                    f"{full_path}: {details}")
             pending.append(Path(full_path))
     return sorted(path.relative_to(tree).as_posix() for path in seen)
+
+
+def toolchain_guard(work: Path, stage: str, expected_sdk: Path) -> Path:
+    work.mkdir(parents=True, exist_ok=True)
+    path = work / f"{stage}.toolchain-guard.targets"
+    compiler = expected_sdk / "tools/compiler/gsc.dll"
+    task = expected_sdk / "tools/task/Gsharp.NET.Sdk.dll"
+    path.write_text(
+        "<Project>\n"
+        f'  <Target Name="_Stage2ValidateToolchain" AfterTargets="CoreCompile" '
+        f"Condition=\"'$(GsharpCompilerFullPath)' != ''\">\n"
+        "    <PropertyGroup>\n"
+        "      <_Stage2ActualCompiler>$([System.IO.Path]::GetFullPath("
+        "'$(GsharpCompilerFullPath)'))</_Stage2ActualCompiler>\n"
+        "      <_Stage2ActualTool>$([System.IO.Path]::GetFullPath("
+        "'$(GsharpToolFullPath)'))</_Stage2ActualTool>\n"
+        "    </PropertyGroup>\n"
+        f'    <Error Condition="\'$(_Stage2ActualCompiler)\' != \'{compiler}\'" '
+        f'Text="stage-2 gate: CoreCompile used unexpected '
+        f'GsharpCompilerFullPath=$(GsharpCompilerFullPath); expected {compiler}" />\n'
+        f'    <Error Condition="\'$(_Stage2ActualTool)\' != \'{task}\'" '
+        f'Text="stage-2 gate: CoreCompile used unexpected '
+        f'GsharpToolFullPath=$(GsharpToolFullPath); expected {task}" />\n'
+        "  </Target>\n"
+        "</Project>\n",
+        encoding="utf-8")
+    return path
 
 
 def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemblies: list[str],
                 work: Path, config: str, validation_projects: list[str] | None = None) -> dict:
     version = pin(tree, nupkg)
-    participating = (validate_participating_projects(
-        tree, validation_projects, work, config, version) if validation_projects is not None else [])
-    clean_outputs(tree, assemblies)
     env = stage_env(work, stage)
     cache = Path(env["NUGET_PACKAGES"])
     if cache.exists():
         shutil.rmtree(cache)
+    participating = (validate_participating_projects(
+        tree, validation_projects, env, config, version) if validation_projects is not None else [])
+    guard = toolchain_guard(work, stage, cache / packer.SDK_ID.lower() / version.lower())
+    clean_outputs(tree, assemblies)
     log = work / f"{stage}.build.log"
     log.write_text("", encoding="utf-8")
     seconds = 0.0
     for project in projects:
         code, elapsed = run(
-            ["dotnet", "build", project, "-c", config, "-t:Rebuild", "-nodeReuse:false"], tree, env, log)
+            ["dotnet", "build", project, "-c", config, "-t:Rebuild", "-nodeReuse:false",
+             f"-p:CustomAfterMicrosoftCommonTargets={guard}"], tree, env, log)
         seconds += elapsed
         if code != 0:
             raise Stage2Error(f"{stage}: dotnet build {project} failed (exit {code}); see {log}")
@@ -340,16 +377,21 @@ def main(argv: list[str]) -> int:
         if packer.package_version(stage1) == packer.package_version(bootstrap):
             raise Stage2Error("stage-1 and bootstrap SDK versions must differ")
         report["stage1PackageVerification"] = packer.verify(stage1, bootstrap)
-        cleanup_root = (tree / "out").resolve()
+        cleanup_roots = [(tree / "out").resolve()]
+        cleanup_roots.extend((work / name).resolve()
+                             for name in ("stage1", "stage2", "nuget-stage1", "nuget-stage2"))
+        cleanup_roots.extend((work / f"test-{index}").resolve()
+                             for index in range(len(args.test)))
         supplied_packages = {
             path.resolve()
             for package in (bootstrap, stage1)
             for path in packer.sibling_nupkgs(package, packer.package_version(package))
         }
-        endangered = sorted(path for path in supplied_packages if path.is_relative_to(cleanup_root))
+        endangered = sorted(path for path in supplied_packages
+                            if any(path.is_relative_to(root) for root in cleanup_roots))
         if endangered:
             raise Stage2Error(
-                "SDK package inputs must be outside the tree's cleaned out directory:\n  "
+                "SDK package inputs overlap a cleaned stage-2 path:\n  "
                 + "\n  ".join(str(path) for path in endangered))
         test_projects = [spec.partition("::")[0] for spec in args.test]
         report["stage1Build"] = build_stage(
