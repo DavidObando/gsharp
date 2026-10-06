@@ -8,9 +8,9 @@ stage-1 (G#-source, stage-0-built) SDK package, this script:
   1. builds the requested projects with stage 0  -> the stage-1 assemblies
   2. builds the same projects, in the SAME tree path, with stage 1
                                                 -> the stage-2 assemblies
-  3. compares each assembly pair: full-file SHA-256, and the IL+metadata
-     hash with the MVID zeroed (build/selfhost/PeContentHash.cs, including
-     complete method bodies and CLR execution flags/entry point)
+  3. compares each assembly pair: full-file SHA-256, and the complete PE
+     image with only the referenced Module.Mvid GUID slot zeroed
+     (build/selfhost/PeContentHash.cs)
   4. optionally runs test projects while pinned to stage 1, so every
      assembly they compile against is a stage-2 assembly.
 
@@ -91,9 +91,82 @@ def pin(tree: Path, nupkg: Path) -> str:
     return version
 
 
+def project_sdk_specs(path: Path) -> list[tuple[str, str | None]]:
+    try:
+        root = ET.parse(path).getroot()
+    except (ET.ParseError, OSError) as error:
+        raise Stage2Error(f"cannot inspect {path}: {error}") from error
+    specs = []
+    for element in root.iter():
+        for sdk in element.attrib.get("Sdk", "").split(";"):
+            name, separator, version = sdk.strip().partition("/")
+            if name:
+                specs.append((name, version if separator else None))
+        if element.tag.rsplit("}", 1)[-1] == "Sdk":
+            name = element.attrib.get("Name", "")
+            if name:
+                specs.append((name, element.attrib.get("Version")))
+    return specs
+
+
+def evaluate_project(path: Path, tree: Path, env: dict, config: str) -> dict:
+    result = subprocess.run(
+        ["dotnet", "msbuild", str(path.relative_to(tree)), "-nologo",
+         "-getProperty:MSBuildAllProjects", "-getItem:ProjectReference",
+         f"-p:Configuration={config}", "-nodeReuse:false"],
+        cwd=tree, env=env, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise Stage2Error(f"cannot evaluate participating project {path.relative_to(tree)}:\n"
+                          + result.stdout + result.stderr)
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise Stage2Error(f"invalid MSBuild evaluation for {path.relative_to(tree)}: {error}") from error
+
+
+def validate_participating_projects(tree: Path, roots: list[str], work: Path,
+                                    config: str, sdk_version: str) -> list[str]:
+    env = stage_env(work, "preflight")
+    cache = Path(env["NUGET_PACKAGES"])
+    if cache.exists():
+        shutil.rmtree(cache)
+    expected_sdk = (cache / packer.SDK_ID.lower() / sdk_version.lower()).resolve()
+    pending = [tree / root for root in roots]
+    seen = set()
+    while pending:
+        path = pending.pop().resolve()
+        if path in seen:
+            continue
+        if not path.is_relative_to(tree) or not path.is_file():
+            raise Stage2Error(f"participating project must be an existing file under --tree: {path}")
+        seen.add(path)
+        specs = project_sdk_specs(path)
+        for name, version in specs:
+            if name.lower() == packer.SDK_ID.lower() and version:
+                raise Stage2Error(
+                    f"{path.relative_to(tree)} explicitly selects {name}/{version}; "
+                    "participating projects must use the global.json SDK pin")
+        evaluation = evaluate_project(path, tree, env, config)
+        if any(name.lower() == packer.SDK_ID.lower() for name, _ in specs):
+            imports = evaluation.get("Properties", {}).get("MSBuildAllProjects", "").split(";")
+            if not any(Path(item).resolve().is_relative_to(expected_sdk)
+                       for item in imports if item):
+                raise Stage2Error(
+                    f"{path.relative_to(tree)} did not resolve {packer.SDK_ID}/{sdk_version} "
+                    f"from {expected_sdk}")
+        for reference in evaluation.get("Items", {}).get("ProjectReference", []):
+            full_path = reference.get("FullPath")
+            if not full_path:
+                raise Stage2Error(f"{path.relative_to(tree)} has a ProjectReference without FullPath")
+            pending.append(Path(full_path))
+    return sorted(path.relative_to(tree).as_posix() for path in seen)
+
+
 def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemblies: list[str],
-                work: Path, config: str) -> dict:
+                work: Path, config: str, validation_projects: list[str] | None = None) -> dict:
     version = pin(tree, nupkg)
+    participating = (validate_participating_projects(
+        tree, validation_projects, work, config, version) if validation_projects is not None else [])
     clean_outputs(tree, assemblies)
     env = stage_env(work, stage)
     cache = Path(env["NUGET_PACKAGES"])
@@ -123,7 +196,8 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         if pdb.is_file():
             shutil.copy2(pdb, destination.with_suffix(".pdb"))
         copied[assembly] = str(destination)
-    return {"sdkVersion": version, "buildSeconds": round(seconds, 1), "assemblies": copied}
+    return {"sdkVersion": version, "participatingProjects": participating,
+            "buildSeconds": round(seconds, 1), "assemblies": copied}
 
 
 def content_hashes(paths: list[str], work: Path) -> dict[str, tuple[str, int]]:
@@ -212,7 +286,7 @@ def test_evidence(results_dir: Path) -> tuple[int, str | None]:
 
 
 def decide(report: dict) -> tuple[bool, bool]:
-    """Equivalent only if every compared assembly's IL+metadata matches and
+    """Equivalent only if every compared assembly's normalized image matches and
     at least one assembly was compared; requested tests need positive evidence."""
     rows = report["comparison"]
     equivalent = bool(rows) and all(row["contentEqual"] for row in rows)
@@ -235,19 +309,24 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     tree, work = args.tree.resolve(), args.work.resolve()
-    work.mkdir(parents=True, exist_ok=True)
     projects = args.project or DEFAULT_PROJECTS
     assemblies = args.assembly or [f"out/bin/{args.config}/Core/GSharp.Core.dll"]
     report: dict = {"tree": str(tree), "projects": projects}
+    if tree == work or tree.is_relative_to(work) or work.is_relative_to(tree):
+        print("selfhost-stage2: --tree and --work must be disjoint directories", file=sys.stderr)
+        return 2
+    work.mkdir(parents=True, exist_ok=True)
     try:
-        if work.is_relative_to((tree / "out").resolve()):
-            raise Stage2Error("--work must be outside the migrated tree's out directory")
         bootstrap, stage1 = args.bootstrap.resolve(), args.stage1.resolve()
         if packer.package_version(stage1) == packer.package_version(bootstrap):
             raise Stage2Error("stage-1 and bootstrap SDK versions must differ")
         report["stage1PackageVerification"] = packer.verify(stage1, bootstrap)
-        report["stage1Build"] = build_stage(tree, "stage1", bootstrap, projects, assemblies, work, args.config)
-        report["stage2Build"] = build_stage(tree, "stage2", stage1, projects, assemblies, work, args.config)
+        test_projects = [spec.partition("::")[0] for spec in args.test]
+        report["stage1Build"] = build_stage(
+            tree, "stage1", bootstrap, projects, assemblies, work, args.config, projects)
+        report["stage2Build"] = build_stage(
+            tree, "stage2", stage1, projects, assemblies, work, args.config,
+            [*projects, *test_projects])
         report["comparison"] = compare(report["stage1Build"], report["stage2Build"], work)
         report["tests"] = run_tests(tree, args.test, work, args.config)
     except (Stage2Error, packer.SelfHostError, OSError) as error:

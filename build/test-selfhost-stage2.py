@@ -78,6 +78,32 @@ def stage(assembly: Path) -> dict:
     return {"assemblies": {"a.dll": str(assembly)}}
 
 
+def semantic_fixture(work: Path) -> Path:
+    source = work / "semantic-fixture"
+    source.mkdir()
+    (source / "SemanticFixture.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework>'
+        '</PropertyGroup><ItemGroup><EmbeddedResource Include="proof.txt" LogicalName="proof.txt"/>'
+        '</ItemGroup></Project>', encoding="utf-8")
+    zeros = ", ".join("0" for _ in range(16))
+    (source / "Payload.cs").write_text(
+        "using System;\n"
+        "[AttributeUsage(AttributeTargets.Class)] public sealed class PayloadAttribute(byte[] value) "
+        ": Attribute { public byte[] Value { get; } = value; }\n"
+        f"[Payload(new byte[] {{ {zeros} }})] public sealed class Marked {{ }}\n",
+        encoding="utf-8")
+    (source / "proof.txt").write_text("resource-proof-4693", encoding="utf-8")
+    output = source / "bin"
+    result = subprocess.run(["dotnet", "build", str(source / "SemanticFixture.csproj"), "-c", "Release",
+                             "-o", str(output), "-nodeReuse:false",
+                             "-p:ImportDirectoryBuildProps=false",
+                             "-p:ImportDirectoryBuildTargets=false"],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        raise AssertionError(result.stdout + result.stderr)
+    return output / "SemanticFixture.dll"
+
+
 class DecideTests(unittest.TestCase):
     def test_no_comparison_is_not_equivalence(self) -> None:
         self.assertEqual((False, True), stage2.decide({"comparison": [], "tests": []}))
@@ -170,13 +196,16 @@ class MainTests(unittest.TestCase):
         return package
 
     def invoke(self, work: Path, bootstrap: Path, stage1: Path, extra: list[str]):
+        tree = work / "tree"
+        tree.mkdir(exist_ok=True)
         row = {"assembly": "a.dll", "stage1": {"content": "A"}, "stage2": {"content": "A"},
                "contentEqual": True, "bytesEqual": True}
         with patch.object(stage2, "build_stage", return_value=stage(work / "a.dll")) as build, \
                 patch.object(stage2, "compare", return_value=[row]), \
                 patch.object(stage2, "run_tests", return_value=[]), \
+                patch.object(stage2, "validate_participating_projects", return_value=["src/Core/Core.gsproj"]), \
                 patch.object(stage2.packer, "verify", wraps=stage2.packer.verify) as verify:
-            code = stage2.main(["--tree", str(work), "--work", str(work / "gate"),
+            code = stage2.main(["--tree", str(tree), "--work", str(work / "gate"),
                                 "--bootstrap", str(bootstrap), "--stage1", str(stage1), *extra])
         return code, build, verify
 
@@ -221,13 +250,78 @@ class MainTests(unittest.TestCase):
             work = Path(directory)
             bootstrap = self.package(work, "1.0.0", "cs")
             stage1 = self.package(work, "1.0.0-stage1", "gs")
-            evidence = work / "out" / "obj" / "stage2-check" / "existing.log"
+            evidence = work / "tree" / "out" / "obj" / "stage2-check" / "existing.log"
             evidence.parent.mkdir(parents=True)
             evidence.write_text("retain this evidence", encoding="utf-8")
             code, build, _ = self.invoke(work, bootstrap, stage1, ["--work", str(evidence.parent)])
             self.assertEqual(2, code)
             build.assert_not_called()
             self.assertEqual("retain this evidence", evidence.read_text(encoding="utf-8"))
+
+    def test_work_containing_tree_is_rejected_without_deleting_source(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree = root / "gate" / "stage1"
+            tree.mkdir(parents=True)
+            source = tree / "Core.gs"
+            source.write_text("retain source", encoding="utf-8")
+            bootstrap = self.package(root, "1.0.0", "cs")
+            stage1 = self.package(root, "1.0.0-stage1", "gs")
+            with patch.object(stage2, "build_stage") as build:
+                code = stage2.main(["--tree", str(tree), "--work", str(root / "gate"),
+                                    "--bootstrap", str(bootstrap), "--stage1", str(stage1)])
+            self.assertEqual(2, code)
+            build.assert_not_called()
+            self.assertEqual("retain source", source.read_text(encoding="utf-8"))
+
+
+class ParticipatingProjectTests(unittest.TestCase):
+    def test_versioned_participating_root_is_rejected(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree, work = root / "tree", root / "gate"
+            tree.mkdir()
+            (tree / "Root.gsproj").write_text(
+                '<Project Sdk="Gsharp.NET.Sdk/1.0.0"/>', encoding="utf-8")
+            with patch.object(stage2, "evaluate_project") as evaluate, self.assertRaises(stage2.Stage2Error):
+                stage2.validate_participating_projects(tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1")
+            evaluate.assert_not_called()
+
+    def test_versioned_project_reference_is_rejected(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree, work = root / "tree", root / "gate"
+            tree.mkdir()
+            parent, child = tree / "Root.csproj", tree / "Child.gsproj"
+            parent.write_text('<Project Sdk="Microsoft.NET.Sdk"/>', encoding="utf-8")
+            child.write_text('<Project Sdk="Gsharp.NET.Sdk/1.0.0"/>', encoding="utf-8")
+            evaluation = {"Properties": {}, "Items": {"ProjectReference": [{"FullPath": str(child)}]}}
+            with patch.object(stage2, "evaluate_project", return_value=evaluation), \
+                    self.assertRaises(stage2.Stage2Error):
+                stage2.validate_participating_projects(tree, ["Root.csproj"], work,
+                                                       "Release", "1.0.0-stage1")
+
+    def test_bare_sdk_must_resolve_the_pinned_package(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree, work = root / "tree", root / "gate"
+            tree.mkdir()
+            project = tree / "Root.gsproj"
+            project.write_text('<Project Sdk="Gsharp.NET.Sdk"/>', encoding="utf-8")
+            expected = work / "nuget-preflight" / "gsharp.net.sdk" / "1.0.0-stage1" / "Sdk" / "Sdk.props"
+            evaluation = {"Properties": {"MSBuildAllProjects": str(expected)},
+                          "Items": {"ProjectReference": []}}
+            with patch.object(stage2, "evaluate_project", return_value=evaluation):
+                self.assertEqual(
+                    ["Root.gsproj"],
+                    stage2.validate_participating_projects(
+                        tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1"))
+            evaluation["Properties"]["MSBuildAllProjects"] = str(
+                work / "nuget-preflight" / "gsharp.net.sdk" / "1.0.0" / "Sdk" / "Sdk.props")
+            with patch.object(stage2, "evaluate_project", return_value=evaluation), \
+                    self.assertRaises(stage2.Stage2Error):
+                stage2.validate_participating_projects(
+                    tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1")
 
 
 class CleanOutputsTests(unittest.TestCase):
@@ -352,6 +446,41 @@ class CompareTests(unittest.TestCase):
         row = stage2.compare(stage(CORE), stage(patched), self.work)[0]
         self.assertFalse(row["bytesEqual"])
         self.assertTrue(row["contentEqual"], "the MVID must be zeroed before hashing")
+
+    def test_mvid_bytes_in_a_custom_attribute_blob_are_not_cleared(self) -> None:
+        fixture = semantic_fixture(self.work)
+        image = bytearray(fixture.read_bytes())
+        actual_mvid = bytes(image[mvid_offset(bytes(image)):mvid_offset(bytes(image)) + 16])
+        marker = b"\x01\x00\x10\x00\x00\x00" + bytes(16) + b"\x00\x00"
+        marker_at = bytes(image).find(marker)
+        self.assertGreaterEqual(marker_at, 0)
+        image[marker_at + 6:marker_at + 22] = actual_mvid
+        patched = self.work / "attribute-mvid.dll"
+        patched.write_bytes(image)
+        row = stage2.compare(stage(fixture), stage(patched), self.work)[0]
+        self.assertFalse(row["contentEqual"], "only the Module.Mvid GUID slot may be normalized")
+
+    def test_coff_machine_change_is_not_equivalent(self) -> None:
+        image = bytearray(COMPILER.read_bytes())
+        pe_header = struct.unpack_from("<I", image, 0x3C)[0]
+        machine = pe_header + 4
+        image[machine:machine + 2] = struct.pack("<H", 0x01C4)
+        patched = self.work / "machine.dll"
+        patched.write_bytes(image)
+        row = stage2.compare(stage(COMPILER), stage(patched), self.work)[0]
+        self.assertFalse(row["contentEqual"], "COFF Machine must be part of the normalized image")
+
+    def test_managed_resource_change_is_not_equivalent(self) -> None:
+        fixture = semantic_fixture(self.work)
+        image = bytearray(fixture.read_bytes())
+        resource = b"resource-proof-4693"
+        at = bytes(image).find(resource)
+        self.assertGreaterEqual(at, 0)
+        image[at] ^= 0x01
+        patched = self.work / "resource.dll"
+        patched.write_bytes(image)
+        row = stage2.compare(stage(fixture), stage(patched), self.work)[0]
+        self.assertFalse(row["contentEqual"], "managed-resource payloads must be retained")
 
     def test_method_header_only_change_is_not_equivalent(self) -> None:
         self.check_body_mutant("header-only.dll")

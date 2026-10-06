@@ -1,15 +1,15 @@
-// Issue #4631 (C3): hashes the parts of an assembly that the self-host
-// equivalence gate compares: metadata with the MVID zeroed, CLR execution
-// flags and entry point, then each complete method body in MethodDef order
-// (header, IL and exception regions). This is stronger than RefactoringBaselineTests'
-// IL-only body hash; those existing baseline hashes are intentionally unchanged.
-// Non-runtime PE wrapper data (debug directory, checksum, timestamp) is excluded.
+// Issue #4631 (C3): hashes the complete PE image with only the precise #GUID
+// heap slot referenced by Module.Mvid zeroed. This fail-closed contract retains
+// headers, metadata, method bodies, resources and debug-wrapper data. It is
+// intentionally separate from RefactoringBaselineTests' IL-only body hash.
 //
 // usage: dotnet run build/selfhost/PeContentHash.cs -- <assembly.dll>...
 // prints: <hex sha256>  <methods-with-body>  <path>
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
+using System.Text;
 
 if (args.Length == 0)
 {
@@ -57,41 +57,72 @@ foreach (string path in args)
     byte[] bytes = File.ReadAllBytes(path);
     using var pe = new PEReader(new MemoryStream(bytes, writable: false));
     MetadataReader reader = pe.GetMetadataReader();
-    using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-
-    int start = pe.PEHeaders.MetadataStartOffset;
-    byte[] metadata = bytes.AsSpan(start, pe.PEHeaders.MetadataSize).ToArray();
-    Guid mvid = reader.GetGuid(reader.GetModuleDefinition().Mvid);
-    if (mvid != Guid.Empty)
+    GuidHandle mvidHandle = reader.GetModuleDefinition().Mvid;
+    int mvidOffset = FindGuidHeapOffset(bytes, pe, MetadataTokens.GetHeapOffset(mvidHandle));
+    byte[] mvid = reader.GetGuid(mvidHandle).ToByteArray();
+    if (!bytes.AsSpan(mvidOffset, mvid.Length).SequenceEqual(mvid))
     {
-        byte[] needle = mvid.ToByteArray();
-        for (int at = metadata.AsSpan().IndexOf(needle); at >= 0;)
-        {
-            metadata.AsSpan(at, needle.Length).Clear();
-            int next = metadata.AsSpan(at + needle.Length).IndexOf(needle);
-            at = next < 0 ? -1 : at + needle.Length + next;
-        }
+        throw new BadImageFormatException("Module.Mvid does not match its referenced #GUID slot");
     }
-
-    sha.AppendData(metadata);
-    // The CLR flags and entry-point token/RVA occupy these eight header bytes;
-    // neither is determined by metadata or method bodies alone.
-    sha.AppendData(bytes.AsSpan(pe.PEHeaders.CorHeaderStartOffset + 16, 8));
+    bytes.AsSpan(mvidOffset, mvid.Length).Clear();
+    using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+    sha.AppendData(bytes);
     int methods = 0;
     foreach (MethodDefinitionHandle handle in reader.MethodDefinitions)
     {
-        int rva = reader.GetMethodDefinition(handle).RelativeVirtualAddress;
-        if (rva == 0)
-        {
-            continue;
-        }
-
-        MethodBodyBlock body = pe.GetMethodBody(rva);
-        sha.AppendData(pe.GetSectionData(rva).GetContent(0, body.Size).AsSpan());
-        methods++;
+        methods += reader.GetMethodDefinition(handle).RelativeVirtualAddress == 0 ? 0 : 1;
     }
 
     Console.WriteLine($"{Convert.ToHexString(sha.GetHashAndReset())}  {methods}  {path}");
 }
 
 return 0;
+
+static int FindGuidHeapOffset(byte[] image, PEReader pe, int guidIndex)
+{
+    int metadataStart = pe.PEHeaders.MetadataStartOffset;
+    ReadOnlySpan<byte> metadata = image.AsSpan(metadataStart, pe.PEHeaders.MetadataSize);
+    if (metadata.Length < 20 || metadata[0] != (byte)'B' || metadata[1] != (byte)'S'
+        || metadata[2] != (byte)'J' || metadata[3] != (byte)'B')
+    {
+        throw new BadImageFormatException("invalid metadata root");
+    }
+
+    int versionLength = checked((int)BitConverter.ToUInt32(metadata.Slice(12, 4)));
+    int cursor = checked(16 + versionLength);
+    if (cursor + 4 > metadata.Length)
+    {
+        throw new BadImageFormatException("invalid metadata version length");
+    }
+    int streams = BitConverter.ToUInt16(metadata.Slice(cursor + 2, 2));
+    cursor += 4;
+    for (int index = 0; index < streams; index++)
+    {
+        if (cursor + 8 > metadata.Length)
+        {
+            throw new BadImageFormatException("truncated metadata stream header");
+        }
+        int offset = checked((int)BitConverter.ToUInt32(metadata.Slice(cursor, 4)));
+        int size = checked((int)BitConverter.ToUInt32(metadata.Slice(cursor + 4, 4)));
+        cursor += 8;
+        int nameEnd = metadata.Slice(cursor).IndexOf((byte)0);
+        if (nameEnd < 0)
+        {
+            throw new BadImageFormatException("unterminated metadata stream name");
+        }
+        string name = Encoding.ASCII.GetString(metadata.Slice(cursor, nameEnd));
+        cursor = checked(cursor + ((nameEnd + 1 + 3) & ~3));
+        if (name != "#GUID")
+        {
+            continue;
+        }
+        int guidOffset = checked((guidIndex - 1) * 16);
+        if (guidIndex <= 0 || guidOffset + 16 > size || offset < 0 || offset + size > metadata.Length)
+        {
+            throw new BadImageFormatException(
+                $"Module.Mvid index {guidIndex} is outside the #GUID stream ({size} bytes)");
+        }
+        return checked(metadataStart + offset + guidOffset);
+    }
+    throw new BadImageFormatException("metadata has no #GUID stream");
+}
