@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **Copies retain construction provenance** (issues #4755 and #4796). Data-struct `with` and `.copy(...)` copy existing storage without rerunning primary constructors or declaration initializers. Expression-tree source data-class copies use the exact virtual clone before ordered updates, retaining private/base state and invocation-time, once-only evaluation rather than constructing a fresh object.
+- **Copies retain construction provenance** (issues #4776 and #4796). Data-struct `with` and `.copy(...)` copy existing storage without rerunning primary constructors or declaration initializers. Expression-tree source data-class copies use the exact virtual clone before ordered updates, retaining private/base state and invocation-time, once-only evaluation rather than constructing a fresh object.
   - The emitted-PE baseline now records the intentional storage-copy IL in `DataStructErgonomics` and `WebsiteSwift`; real gsc/native C# oracles pin fresh-construction counts, strict IL, output and original/copy state. The other 158 sample entries and hash policy are unchanged.
 
 - **Hierarchy-policy metadata has reviewed emitted-PE baselines** (PR #4808). The 48 affected sample hashes now include the intentional inheritance-mode transport; all other sample hashes and existing compile exceptions are preserved. Method bodies, fields, and CLR slots are unchanged. Generated-source replay checks producer configuration by its unique metadata key, without excluding hierarchy records.
