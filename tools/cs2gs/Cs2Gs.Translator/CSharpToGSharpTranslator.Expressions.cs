@@ -6196,6 +6196,15 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                if (current.Parent is ArgumentSyntax materializerArgument
+                    && materializerArgument.Expression == current
+                    && materializerArgument.Parent?.Parent is InvocationExpressionSyntax staticMaterializer
+                    && this.IsEnumerableToArray(staticMaterializer))
+                {
+                    current = staticMaterializer;
+                    continue;
+                }
+
                 break;
             }
 
@@ -6297,7 +6306,10 @@ public sealed partial class CSharpToGSharpTranslator
                     if (current.Parent is not ArgumentSyntax argument
                         || argument.Expression != current
                         || !this.IsGenericSelectorResultArgument(argument, lambda)
-                        || !SelectorInvocationFlowsDirectlyToArrayReturn(argument, returned)
+                        || !this.TryGetDirectArrayMaterializerElementType(
+                            argument,
+                            returned,
+                            out ITypeSymbol materializedElement)
                         || !GetLambdaResultExpressions(lambda)
                             .Any(this.NullableSelectorResultMayBeNull))
                     {
@@ -6311,7 +6323,13 @@ public sealed partial class CSharpToGSharpTranslator
                         this.context.Compilation.ClassifyConversion(
                             resultType,
                             element.WithNullableAnnotation(NullableAnnotation.None));
-                    if (conversion.IsImplicit
+                    Microsoft.CodeAnalysis.CSharp.Conversion materializedConversion =
+                        this.context.Compilation.ClassifyConversion(
+                            resultType,
+                            materializedElement.WithNullableAnnotation(NullableAnnotation.None));
+                    if (materializedConversion.IsImplicit
+                        && (materializedConversion.IsReference || materializedConversion.IsIdentity)
+                        && conversion.IsImplicit
                         && (conversion.IsReference || conversion.IsIdentity))
                     {
                         return true;
@@ -6339,20 +6357,42 @@ public sealed partial class CSharpToGSharpTranslator
                     respectDeclaredAnnotations: true),
             };
 
-        private bool SelectorInvocationFlowsDirectlyToArrayReturn(
+        private bool TryGetDirectArrayMaterializerElementType(
             ArgumentSyntax selectorArgument,
-            ExpressionSyntax returned)
+            ExpressionSyntax returned,
+            out ITypeSymbol elementType)
         {
+            elementType = null;
             SyntaxNode current = selectorArgument.Parent?.Parent;
             while (current?.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
             {
                 current = current.Parent;
             }
 
-            if (current?.Parent is not MemberAccessExpressionSyntax member
-                || member.Expression != current
-                || member.Parent is not InvocationExpressionSyntax materializer
+            InvocationExpressionSyntax materializer = current?.Parent switch
+            {
+                MemberAccessExpressionSyntax member
+                    when member.Expression == current
+                        && member.Parent is InvocationExpressionSyntax invocation =>
+                    invocation,
+                ArgumentSyntax argument
+                    when argument.Expression == current
+                        && argument.Parent?.Parent is InvocationExpressionSyntax invocation =>
+                    invocation,
+                _ => null,
+            };
+            if (materializer == null
                 || !this.IsEnumerableToArray(materializer))
+            {
+                return false;
+            }
+
+            elementType =
+                (this.context.GetSymbolInfo(materializer).Symbol as IMethodSymbol)?.ReturnType
+                    is IArrayTypeSymbol array
+                        ? array.ElementType
+                        : null;
+            if (elementType == null)
             {
                 return false;
             }

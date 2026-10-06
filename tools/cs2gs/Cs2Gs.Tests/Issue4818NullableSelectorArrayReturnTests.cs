@@ -83,6 +83,17 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
                             : (object)argument.Value)
                         .ToArray();
                 }
+
+                public static object[] StaticValues()
+                {
+                    var arguments = new[]
+                    {
+                        new CustomAttributeTypedArgument(typeof(string), null),
+                    };
+                    return Enumerable.ToArray(
+                        arguments.Select(argument => argument.Value));
+                }
+
             }
             """;
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
@@ -113,11 +124,54 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
         Assert.DoesNotContain("func Ignored() []object?", printed, StringComparison.Ordinal);
         Assert.Contains("func CastSelectorValues() []object?", printed, StringComparison.Ordinal);
         Assert.Contains("func CastBranchValues() []object?", printed, StringComparison.Ordinal);
+        Assert.Contains("func StaticValues() []object?", printed, StringComparison.Ordinal);
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             """
-            Console.WriteLine("${Probe.Values()[0] == nil}|${Probe.Names()[0]}|${Probe.CastSelectorValues()[0] == nil}|${Probe.CastBranchValues()[0] == nil}")
+            Console.WriteLine("${Probe.Values()[0] == nil}|${Probe.Names()[0]}|${Probe.CastSelectorValues()[0] == nil}|${Probe.CastBranchValues()[0] == nil}|${Probe.StaticValues()[0] == nil}")
             """,
-            "True|String|True|True");
+            "True|String|True|True|True");
+    }
+
+    [Fact]
+    public void WrappedGenericSelectorResult_DoesNotWidenReturnedArray()
+    {
+        const string source = """
+            #nullable disable
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public static class Extensions
+            {
+                public static IEnumerable<TResult[]> Wrap<T, TResult>(
+                    this IEnumerable<T> values,
+                    Func<T, TResult> selector) =>
+                    values.Select(value => new[] { selector(value) });
+            }
+
+            public static class Probe
+            {
+                public static object[] Wrapped() =>
+                    new[] { typeof(string) }
+                        .Wrap(type => type.FullName)
+                        .ToArray();
+            }
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Probe.cs", source) });
+        Assert.True(
+            project.BoundWithoutErrors,
+            string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("func Wrapped() []object", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("func Wrapped() []object?", printed, StringComparison.Ordinal);
     }
 }
