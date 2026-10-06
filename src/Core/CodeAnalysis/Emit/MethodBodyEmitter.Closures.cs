@@ -470,30 +470,6 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
-    /// Issue #4393: the type a method group's function token is parented at:
-    /// the function's declaring class as <paramref name="receiver"/>'s
-    /// hierarchy instantiates it (<c>Base[string]</c> for a receiver
-    /// <c>DC : Base[string]</c>, <c>Base[T]</c> for <c>Derived[T] : Base[T]</c>),
-    /// or the receiver itself when it declares the function.
-    /// </summary>
-    private static StructSymbol ResolveMethodGroupOwner(StructSymbol receiver, FunctionSymbol function)
-    {
-        if (function.ReceiverType is not StructSymbol declaring)
-        {
-            return receiver;
-        }
-
-        var declaringDefinition = declaring.Definition ?? declaring;
-        if (ReferenceEquals(receiver.Definition ?? receiver, declaringDefinition))
-        {
-            return receiver;
-        }
-
-        return receiver.FindConstructedGenericBase(
-            definition => ReferenceEquals(definition, declaringDefinition)) ?? declaring;
-    }
-
-    /// <summary>
     /// Emits the shared prologue of a user method-group-to-delegate
     /// conversion: it resolves the function pointer token and leaves the
     /// delegate-constructor operands on the stack — <c>ldnull; ldftn ftn</c>
@@ -512,8 +488,19 @@ internal sealed partial class MethodBodyEmitter
             methodGroup.Function,
             "a method group whose candidate set is empty is an unresolved-overload error node, which the binder reports rather than handing to emit");
 
-        if (!this.outer.cache.FunctionHandles.TryGetValue(function, out var staticHandle)
-            && !this.outer.cache.MethodHandles.TryGetValue(function, out staticHandle))
+        EntityHandle ftnToken;
+        if (methodGroup.Receiver?.Type is StructSymbol receiverStruct
+            && function.ReceiverType is StructSymbol)
+        {
+            var owner = ResolveUserInstanceMethodOwner(receiverStruct, function);
+            ftnToken = this.outer.userTokens.ResolveUserInstanceMethodToken(owner, function);
+        }
+        else if (this.outer.cache.FunctionHandles.TryGetValue(function, out var staticHandle)
+            || this.outer.cache.MethodHandles.TryGetValue(function, out staticHandle))
+        {
+            ftnToken = staticHandle;
+        }
+        else
         {
             throw new InvalidOperationException(
                 $"Method group '{function.Name}' has no emitted MethodDef.");
@@ -525,31 +512,11 @@ internal sealed partial class MethodBodyEmitter
         // MethodDef of a method on a generic type is not a valid delegate-ctor
         // function token (ilverify `DelegateCtor`). Re-resolve through the
         // receiver's type.
-        EntityHandle ftnToken = staticHandle;
         if (methodGroup.Receiver == null
             && methodGroup.StaticOwnerType != null
             && ReflectionMetadataEmitter.IsUserGenericTypeReference(methodGroup.StaticOwnerType))
         {
             ftnToken = this.outer.userTokens.ResolveUserStaticMethodToken(methodGroup.StaticOwnerType, function);
-        }
-
-        // Issue #4393: the token's parent is the method's DECLARING type as
-        // the receiver's hierarchy instantiates it, not the receiver type
-        // itself. A MemberRef parented at the receiver (`Derived`1<!T>::Name`)
-        // resolves by name at run time and, when the derived class overrides
-        // the method, lands on the override: `base.Name` as a delegate then
-        // dispatched to the derived implementation. A non-generic receiver
-        // with a constructed generic base (`DC : Base[string]`) needs the same
-        // resolution, or the bare MethodDef on `Base`1` is an invalid
-        // delegate-ctor function (ILVerify DelegateCtor).
-        if (methodGroup.Receiver?.Type is StructSymbol receiverStruct
-            && this.outer.cache.MethodHandles.ContainsKey(function))
-        {
-            var owner = ResolveMethodGroupOwner(receiverStruct, function);
-            if (ReflectionMetadataEmitter.IsUserGenericTypeReference(owner))
-            {
-                ftnToken = this.outer.userTokens.ResolveUserInstanceMethodToken(owner, function);
-            }
         }
 
         if (function.IsGeneric)

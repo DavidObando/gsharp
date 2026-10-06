@@ -450,7 +450,7 @@ internal sealed class ConstructorBodyEmitter
     /// call-site lowering (initobj + raw <c>stfld</c> per initializer) —
     /// the private-field store executes outside the type and the runtime
     /// rejects it with <see cref="FieldAccessException"/>. Such a struct
-    /// gets a synthesized public <c>.ctor</c> that runs ALL
+    /// gets a synthesized owning <c>.ctor</c> that runs ALL
     /// declared instance field initializers in-type (mirroring the class
     /// default-ctor path), and struct-literal sites construct through it.
     /// Generic structs also require in-type initialization: their definition-bound

@@ -41,7 +41,7 @@ namespace Demo
     public abstract record Issue2363NoParens;
 }");
 
-        Assert.Contains("abstract data class Issue2363NoParens {", printed);
+        Assert.Contains("abstract data class Issue2363NoParens : IEquatable[Issue2363NoParens] {", printed);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ namespace Oahu.Cli.App.Auth
     }
 }");
 
-        Assert.Contains("abstract data class CallbackChallenge {", printed);
+        Assert.Contains("abstract data class CallbackChallenge : IEquatable[CallbackChallenge] {", printed);
 
         // The three zero-field derived records are the #2363 scenario —
         // must be preserved as `data class`, not downgraded.

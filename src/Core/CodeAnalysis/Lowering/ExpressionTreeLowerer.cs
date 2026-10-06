@@ -986,7 +986,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             methodInfo = BuildUserFunctionMethodInfoLookup(
                 conversion.Syntax,
                 function,
-                conversion.FunctionOwnerType);
+                conversion.FunctionOwnerType,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         }
 
         return new BoundClrStaticCallExpression(
@@ -1561,14 +1562,15 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return BuildUserFunctionMethodInfoLookup(
             expression.Syntax,
             function,
-            expression.FunctionOwnerType);
+            expression.FunctionOwnerType,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
     }
 
     private static BoundExpression BuildUserFunctionMethodInfoLookup(
         SyntaxNode? syntax,
         FunctionSymbol function,
         StructSymbol? functionOwnerType,
-        BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+        BindingFlags flags)
     {
         var ownerType = functionOwnerType ?? function.StaticOwnerType as StructSymbol
             ?? throw new NotSupportedException($"Function '{function.Name}' has no same-compilation declaring type.");

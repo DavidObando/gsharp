@@ -1728,6 +1728,30 @@ public sealed class Issue4755GenericStructInitializerEmitTests
     }
 
     [Fact]
+    public void ConstructedGenericArrayInitializer_ReportsRequiredElementDiagnostic()
+    {
+        InDirectory(directory =>
+        {
+            var source = """
+                package GenericArrayInitializer4755
+                struct S[T] {
+                    private var Handles []T = [1]T
+                }
+                func Bad() {
+                    let value = S[readonly managed[int32]]{}
+                }
+                """;
+            var result = TryCompile(directory, source);
+            Assert.Equal(1, result.Code);
+            Assert.Contains("error GS0604:", result.Output, StringComparison.Ordinal);
+            Assert.Contains("array initialization must supply every non-null managed-reference element", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", result.Output, StringComparison.Ordinal);
+            Assert.False(File.Exists(result.AssemblyPath));
+            Assert.Single(result.Output.Split('\n'), text => text.Contains("error GS0604:", StringComparison.Ordinal));
+        });
+    }
+
+    [Fact]
     public void MissingLegalPrimaryInputs_AndExplicitRequiredInputsRetainNativeRuntime()
     {
         InDirectory(directory =>

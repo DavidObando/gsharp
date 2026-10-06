@@ -165,16 +165,13 @@ internal sealed partial class MethodBodyEmitter
             var openMethod = constraintInterface != null
                 ? ResolveOpenInterfaceMethod(constraintInterface, call.Method)
                 : call.Method;
-            var constraintGenericOwner = constraintClass != null
-                ? this.ResolveInheritedGenericBase(constraintClass, call.Method)
-                    ?? (ReflectionMetadataEmitter.IsUserGenericTypeReference(constraintClass)
-                        ? constraintClass
-                        : null)
+            var constraintOwner = constraintClass != null
+                ? ResolveUserInstanceMethodOwner(constraintClass, call.Method)
                 : null;
             var constrainedMethodToken = constraintInterface != null
                 ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(constraintInterface, openMethod)
-                : constraintGenericOwner != null
-                    ? this.outer.userTokens.ResolveUserInstanceMethodToken(constraintGenericOwner, call.Method)
+                : constraintOwner != null
+                    ? this.outer.userTokens.ResolveUserInstanceMethodToken(constraintOwner, call.Method)
                 : this.outer.cache.MethodHandles[call.Method];
             if (call.Method.IsGeneric && !call.Method.TypeParameters.IsDefaultOrEmpty)
             {
@@ -194,20 +191,19 @@ internal sealed partial class MethodBodyEmitter
         // generic user type, the method must be referenced via a
         // MemberRef parented at the constructed TypeSpec (e.g.
         // `Container`1<int32>`, not the open `Container`1<!0>`).
-        // Use the receiver expression's type — `Method.ReceiverType`
-        // is the OPEN class symbol from declaration, which yields the
-        // wrong (open) TypeSpec for the parent. The R0/R1 box at
+        // Resolve the declaring class as instantiated by the receiver,
+        // including inherited methods on constructed generic bases. The R0/R1 box at
         // TypeParameterSymbol parameter slots is dropped: the method
         // signature is `!0`/`!!0` and resolves through the parent
         // TypeSpec.
         var receiverType = (call.Receiver.Type as StructSymbol) ?? (call.Method.ReceiverType as StructSymbol);
 
-        // Hold the receiver rather than a bare `isGenericReceiver` flag: the
-        // token resolver below needs the symbol, and a separate bool would
-        // leave the compiler unable to correlate the two.
-        var genericReceiver = receiverType != null
-            && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverType)
-            ? receiverType
+        var methodOwner = receiverType != null
+            ? ResolveUserInstanceMethodOwner(receiverType, call.Method)
+            : null;
+        var genericOwner = methodOwner != null
+            && ReflectionMetadataEmitter.IsUserGenericTypeReference(methodOwner)
+            ? methodOwner
             : null;
 
         // ADR-0087 R5 / issue #765: same TypeSpec-parenting requirement
@@ -220,25 +216,10 @@ internal sealed partial class MethodBodyEmitter
         // at the constructed TypeSpec via <see cref="ResolveUserInterfaceInstanceMethodToken"/>.
         var receiverIface = call.Receiver.Type as InterfaceSymbol;
 
-        // Issue #1254: an inherited instance method declared on a generic base
-        // type, invoked through a (non-generic) derived receiver, must be
-        // referenced via a MemberRef parented at the CONSTRUCTED base TypeSpec
-        // (e.g. `Base`1<int32>`) — never the bare MethodDef on the open generic
-        // definition, which the runtime rejects with "the containing type is
-        // not fully instantiated". The `genericReceiver` branch already covers
-        // the case where the receiver itself is the generic type.
-        var inheritedGenericBase = genericReceiver is null
-            ? this.ResolveInheritedGenericBase(call.Receiver.Type as StructSymbol, call.Method)
-            : null;
-
         EntityHandle methodHandle;
-        if (genericReceiver != null)
+        if (genericOwner != null)
         {
-            methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(genericReceiver, call.Method);
-        }
-        else if (inheritedGenericBase != null)
-        {
-            methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(inheritedGenericBase, call.Method);
+            methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(genericOwner, call.Method);
         }
         else if (receiverIface != null
             && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(receiverIface))
@@ -285,45 +266,25 @@ internal sealed partial class MethodBodyEmitter
         // level). No erasure-widening is required at the call boundary.
     }
 
-    // Issue #1254: returns the constructed generic base instantiation that
-    // declares an inherited <paramref name="method"/>, when the call's receiver
-    // inherits it from a generic base (e.g. `Derived : Base[int32]` calling an
-    // inherited `Base.Hello()`). Returns null when the method is not inherited
-    // from a generic base — including when the receiver itself is the declaring
-    // type or the declaring type is non-generic.
-    private StructSymbol? ResolveInheritedGenericBase(StructSymbol? receiver, FunctionSymbol method)
+    /// <summary>
+    /// Resolves the declaring class as the receiver's hierarchy instantiates it,
+    /// for both calls and method groups, without requiring an open MethodDef cache entry.
+    /// </summary>
+    private static StructSymbol ResolveUserInstanceMethodOwner(StructSymbol receiver, FunctionSymbol function)
     {
-        if (receiver == null || method == null)
+        if (function.ReceiverType is not StructSymbol declaring)
         {
-            return null;
+            return receiver;
         }
 
-        if (!this.outer.cache.MethodHandles.ContainsKey(method))
+        var declaringDefinition = declaring.Definition ?? declaring;
+        if (ReferenceEquals(receiver.Definition ?? receiver, declaringDefinition))
         {
-            return null;
+            return receiver;
         }
 
-        var declaring = method.ReceiverType as StructSymbol;
-        if (declaring == null)
-        {
-            return null;
-        }
-
-        var declaringDef = declaring.Definition ?? declaring;
-        if (declaringDef.TypeParameters.IsDefaultOrEmpty)
-        {
-            return null;
-        }
-
-        // Not inherited — the receiver itself declares the method.
-        if (ReferenceEquals(receiver.Definition ?? receiver, declaringDef))
-        {
-            return null;
-        }
-
-        bool IsDeclaringDefinition(StructSymbol definition) =>
-            ReferenceEquals(definition, declaringDef);
-        return receiver.FindConstructedGenericBase(IsDeclaringDefinition);
+        return receiver.FindConstructedGenericBase(
+            definition => ReferenceEquals(definition, declaringDefinition)) ?? declaring;
     }
 
     // ADR-0087 R5 / issue #765: bridges from a substituted FunctionSymbol on

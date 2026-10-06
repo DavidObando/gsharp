@@ -953,7 +953,38 @@ internal sealed class ReflectionMetadataEmitter
         emitter.emitCtx.DebugInformation = debugInformation ?? new DebugInformationOptions();
         emitter.emitCtx.PdbStream = pdbStream;
 
-        emitter.EmitCore(peStream, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
+        // Lazy data signatures must use source vectors, not emission-scoped
+        // enclosing+own vectors installed by nested generic reification.
+        foreach (var symbol in program.Structs)
+        {
+            if (symbol.IsData && symbol.ClrType == null)
+            {
+                _ = symbol.DataEqualsSelf;
+                _ = symbol.DataEqualsBase;
+                _ = symbol.DataEqualsObject;
+            }
+        }
+
+        // Nested generic reification belongs to this emission. A following
+        // reference-assembly emission must start from the same source vector.
+        var structParameters = program.Structs.Select(s => (Symbol: s, Parameters: s.TypeParameters)).ToArray();
+        var enumParameters = program.Enums.Select(e => (Symbol: e, Parameters: e.TypeParameters)).ToArray();
+        try
+        {
+            emitter.EmitCore(peStream, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
+        }
+        finally
+        {
+            foreach (var (symbol, parameters) in structParameters)
+            {
+                symbol.SetTypeParameters(parameters);
+            }
+
+            foreach (var (symbol, parameters) in enumParameters)
+            {
+                symbol.SetTypeParameters(parameters);
+            }
+        }
     }
 
     // Phase records retain the original mutable collection instances so row
@@ -1270,6 +1301,8 @@ internal sealed class ReflectionMetadataEmitter
             this.userTokens.GetUserStructMethodRef,
             (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType),
             this.typeDefEmitter.EmitValueStructDefaultConstructor,
+            this.userTokens.ResolveUserInstanceMethodToken,
+            this.customAttrEncoder.EmitNullableAttributeOnParameter,
             this.memberRefs.GetCtorReference);
 
         // PR-E-9: ClosureEmitter wires up after TypeDefEmitter. It depends
@@ -2187,7 +2220,16 @@ internal sealed class ReflectionMetadataEmitter
                 this.cache.DataClassCopyConstructorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 1);
                 this.cache.DataClassCloneHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 2);
                 this.cache.MethodHandles[c.DataClassCloneMethod] = this.cache.DataClassCloneHandles[c];
+                this.cache.MethodHandles[c.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow + 3);
+                this.cache.MethodHandles[c.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 4);
+                if (c.DataEqualsBase is { } baseEquals)
+                {
+                    this.cache.MethodHandles[baseEquals] = MetadataTokens.MethodDefinitionHandle(methodRow + 5);
+                }
+
+                this.cache.MethodHandles[c.DataClassCloneMethod] = this.cache.DataClassCloneHandles[c];
                 methodRow += 10
+                    + (c.DataEqualsBase != null ? 1 : 0)
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
                     - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
             }
@@ -2356,6 +2398,9 @@ internal sealed class ReflectionMetadataEmitter
             }
             else if (s.IsData)
             {
+                this.cache.MethodHandles[s.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow);
+                this.cache.MethodHandles[s.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 1);
+
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef

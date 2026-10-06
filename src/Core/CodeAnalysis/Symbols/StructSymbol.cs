@@ -101,6 +101,10 @@ public sealed class StructSymbol : TypeSymbol
     private TypeArraySnapshot? substitutedImplementedClrInterfaces;
     private TypeSnapshot? substitutedImportedBaseType;
     private FunctionSymbol? dataClassCloneMethod;
+    private FunctionSymbol? dataEqualsSelf;
+    private FunctionSymbol? dataEqualsObject;
+    private FunctionSymbol? dataEqualsBase;
+    private TypeSymbol? dataEqualsBaseOwner;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructSymbol"/> class.
@@ -683,6 +687,33 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets imported accessors selected by interface conformance binding.</summary>
     internal List<(InterfaceSymbol Interface, PropertySymbol Property, MethodInfo Accessor, TypeSymbol ContainingType, bool IsSetter)> ImportedInterfaceAccessors { get; } = new();
 
+    /// <summary>Gets the compiler-owned self equality signature on this exact construction.</summary>
+    internal FunctionSymbol DataEqualsSelf => dataEqualsSelf ??= DataEqualityMemberModel.Create(this, this, isOverride: false);
+
+    /// <summary>Gets the compiler-owned override of the nullable object equality slot.</summary>
+    internal FunctionSymbol DataEqualsObject => dataEqualsObject ??= DataEqualityMemberModel.CreateObject(this);
+
+    /// <summary>Gets the compiler-owned override of a direct data base's typed equality slot.</summary>
+    internal FunctionSymbol? DataEqualsBase
+    {
+        get
+        {
+            var directBase = DataEqualityMemberModel.GetDirectBase(this, out var importedMethod);
+            if (directBase is null)
+            {
+                return null;
+            }
+
+            if (!ReferenceEquals(dataEqualsBaseOwner, directBase))
+            {
+                dataEqualsBase = DataEqualityMemberModel.Create(this, directBase, isOverride: true, importedMethod);
+                dataEqualsBaseOwner = directBase;
+            }
+
+            return dataEqualsBase;
+        }
+    }
+
     /// <summary>
     /// Gets a value indicating whether the class was declared with the
     /// <c>abstract</c> modifier (ADR-0195 / issue #4674). Unlike the
@@ -779,7 +810,7 @@ public sealed class StructSymbol : TypeSymbol
         builder.AddRange(ConstFields);
         builder.AddRange(Properties);
         builder.AddRange(StaticProperties);
-        builder.AddRange(Methods);
+        builder.AddRange(GetDeclaredInstanceMethods());
         builder.AddRange(StaticMethods);
         builder.AddRange(Events);
         builder.AddRange(StaticEvents);
@@ -1203,6 +1234,12 @@ public sealed class StructSymbol : TypeSymbol
             }
         }
 
+        if (IsData && ClrType == null && name == "Equals")
+        {
+            method = DataEqualsSelf;
+            return true;
+        }
+
         method = null;
         return false;
     }
@@ -1214,13 +1251,8 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns>The overload set; empty if none.</returns>
     public System.Collections.Immutable.ImmutableArray<FunctionSymbol> GetMethods(string name)
     {
-        if (Methods.IsDefaultOrEmpty)
-        {
-            return System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty;
-        }
-
         var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<FunctionSymbol>();
-        foreach (var m in Methods)
+        foreach (var m in GetDeclaredInstanceMethods())
         {
             if (m.Name == name)
             {
@@ -1245,12 +1277,7 @@ public sealed class StructSymbol : TypeSymbol
         System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Builder? builder = null;
         foreach (var c in GetHierarchy())
         {
-            if (c.Methods.IsDefaultOrEmpty)
-            {
-                continue;
-            }
-
-            foreach (var m in c.Methods)
+            foreach (var m in c.GetMethods(name))
             {
                 if (m.Name != name)
                 {
@@ -1744,6 +1771,28 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Gets declared source or imported instance methods, including compiler-owned data slots.
+    /// </summary>
+    /// <returns>The declared instance method set.</returns>
+    internal ImmutableArray<FunctionSymbol> GetDeclaredInstanceMethods()
+    {
+        if (!IsData || ClrType != null)
+        {
+            return Methods;
+        }
+
+        var builder = Methods.ToBuilder();
+        builder.Add(DataEqualsSelf);
+        if (DataEqualsBase is { } baseEquals)
+        {
+            builder.Add(baseEquals);
+        }
+
+        builder.Add(DataEqualsObject);
+        return builder.ToImmutable();
     }
 
     /// <summary>

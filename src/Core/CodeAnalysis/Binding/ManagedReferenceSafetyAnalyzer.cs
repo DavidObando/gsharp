@@ -128,7 +128,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 this.CheckConstructorArguments(chaining.Arguments, chaining.SelectedConstructor);
                 break;
             case BoundArrayCreationExpression array:
-                if (this.RequiredHandle(array.ElementType) != null
+                if (this.RequiredHandle(this.initializerOwner?.SubstituteMemberType(array.ElementType) ?? array.ElementType) != null
                     && (array.LengthExpression != null || (array.ContainerType is ArrayTypeSymbol fixedArray && fixedArray.Length > array.Elements.Length)))
                 {
                     this.Report(array, "array initialization must supply every non-null managed-reference element");
