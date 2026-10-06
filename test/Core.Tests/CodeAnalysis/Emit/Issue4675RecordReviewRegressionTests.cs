@@ -107,6 +107,24 @@ public class Issue4675RecordReviewRegressionTests
     }
 
     [Fact]
+    public void PositionalLiteral_UsesPrimaryParameterNullability()
+    {
+        var result = EmittedOracle.Evaluate("""
+            data class Item(Value string) {
+                private let Storage string = Value
+                public prop Value string? {
+                    get { return Storage }
+                    init { }
+                }
+            }
+            Item{Value: nil}
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0155");
+        Assert.Null(result.UnhandledException);
+    }
+
+    [Fact]
     public void NestedStructZeroSynthesis_RemainsLinearEnoughForDeepChains()
     {
         const int depth = 24;

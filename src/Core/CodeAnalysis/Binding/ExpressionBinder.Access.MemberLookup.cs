@@ -365,6 +365,29 @@ internal sealed partial class ExpressionBinder
         return expression;
     }
 
+    private static bool IsAtLeastAsNearInHierarchy(
+        StructSymbol receiver,
+        StructSymbol left,
+        StructSymbol right)
+    {
+        foreach (var candidate in receiver.GetHierarchy())
+        {
+            if (ReferenceEquals(candidate, left)
+                || ReferenceEquals(candidate.Definition, left.Definition ?? left))
+            {
+                return true;
+            }
+
+            if (ReferenceEquals(candidate, right)
+                || ReferenceEquals(candidate.Definition, right.Definition ?? right))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static BoundExpression RewrapTransparentMemberResult(
         BoundExpression original,
         BoundExpression replacement)
@@ -1352,8 +1375,27 @@ internal sealed partial class ExpressionBinder
                     // ADR-0112 A3: this-first base-chain instance field walk via
                     // the canonical member-resolution layer, surfacing the
                     // declaring struct so the emitted field token names the right owner.
-                    if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, ne.IdentifierToken.ValueText, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
+                    var hasProperty = TypeMemberModel.TryGetProperty(
+                        structSym,
+                        ne.IdentifierToken.ValueText,
+                        out var nearestProperty,
+                        out var nearestPropertyDeclaringType);
+                    var hasField = TypeMemberModel.TryGetFieldIncludingInherited(
+                        structSym,
+                        ne.IdentifierToken.ValueText,
+                        MemberQuery.Instance(MemberKinds.Field),
+                        out var field,
+                        out var declaringType);
+                    if (hasField
+                        && (!hasProperty
+                            || IsAtLeastAsNearInHierarchy(
+                                structSym,
+                                Invariant.Required(declaringType, "a resolved field has a declaring type"),
+                                Invariant.Required(nearestPropertyDeclaringType, "a resolved property has a declaring type"))))
                     {
+                        field = Invariant.Required(field, "a resolved field has a symbol");
+                        declaringType = Invariant.Required(declaringType, "a resolved field has a declaring type");
+
                         // Issue #186 / #175: dotted field read fires
                         // GS0204 if the field carries `@Obsolete`.
                         reportObsoleteUseIfApplicable(ne.IdentifierToken.Location, field, $"{declaringType.Name}.{field.Name}");
@@ -1382,8 +1424,10 @@ internal sealed partial class ExpressionBinder
                     }
 
                     // ADR-0051: check properties before reporting "unable to find member".
-                    if (TypeMemberModel.TryGetProperty(structSym, ne.IdentifierToken.ValueText, out var prop, out var propDeclaringType))
+                    if (hasProperty)
                     {
+                        var prop = Invariant.Required(nearestProperty, "a resolved property has a symbol");
+                        var propDeclaringType = nearestPropertyDeclaringType;
                         if (!prop.HasGetter)
                         {
                             Diagnostics.ReportCannotAssign(ne.Location, ne.IdentifierToken.ValueText);

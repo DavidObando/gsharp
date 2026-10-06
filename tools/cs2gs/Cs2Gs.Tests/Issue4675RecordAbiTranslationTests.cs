@@ -183,6 +183,56 @@ public sealed class Issue4675RecordAbiTranslationTests
         Assert.Equal("Value = 1|Value = 2|2", actual);
     }
 
+    [Fact]
+    public void HiddenBaseFieldPrintMembers_MatchesRoslynMemberSelection()
+    {
+        const string source = """
+            namespace PrintMembersHiding {
+                public record Base {
+                    public int Value = 1;
+                }
+                public record Derived : Base {
+                    public new int Value => 2;
+                }
+            }
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Item.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        using var baselineImage = new MemoryStream();
+        Assert.True(project.Compilation.WithAssemblyName("PrintMembersHidingBaseline").Emit(baselineImage).Success);
+        var baseline = Assembly.Load(baselineImage.ToArray());
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        using var translatedImage = new MemoryStream();
+        var compilation = new GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(translated)))
+        {
+            IsLibrary = true,
+        };
+        var emit = compilation.Emit(
+            translatedImage,
+            pdbStream: null,
+            refStream: null,
+            assemblyName: "PrintMembersHidingTranslated");
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+        var migrated = Assembly.Load(translatedImage.ToArray());
+        static string Render(Assembly assembly)
+        {
+            var type = assembly.GetType("PrintMembersHiding.Derived", throwOnError: true);
+            var instance = Activator.CreateInstance(type);
+            var builder = new System.Text.StringBuilder();
+            type.GetMethod("PrintMembers", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(instance, new object[] { builder });
+            return builder.ToString();
+        }
+
+        var expected = Render(baseline);
+        var actual = Render(migrated);
+        Assert.Equal(expected, actual);
+        Assert.Equal("Value = 1, Value = 2", actual);
+    }
+
     [Theory]
     [InlineData("record", "Value", "", false, false, false, 0)]
     [InlineData("record struct", "Value", "", false, false, false, 0)]

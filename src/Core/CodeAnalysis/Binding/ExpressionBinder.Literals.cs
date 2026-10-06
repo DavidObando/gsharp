@@ -2430,6 +2430,8 @@ internal sealed partial class ExpressionBinder
 
         var seenFieldNames = new HashSet<string>();
         var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        var definition = structSymbol.Definition ?? structSymbol;
+        bool callsPrimary = structSymbol.ClrType == null && definition.IsData && definition.HasPrimaryConstructor;
         List<StructLiteralOrderedStep>? orderedInitializers =
             hasContentElement ||
             syntax.Initializers.Any(initializer =>
@@ -2485,6 +2487,15 @@ internal sealed partial class ExpressionBinder
             var memberType = hasField
                 ? Invariant.Required(field, "a resolved field has a type").Type
                 : Invariant.Required(property, "a resolved property has a type").Type;
+            var primaryMember = callsPrimary
+                ? BoundStructLiteralExpression.GetPrimaryMember(structSymbol, fieldName)
+                : null;
+            var consumesPrimaryArgument = primaryMember != null
+                && (field == primaryMember || property == primaryMember);
+            var inputType = consumesPrimaryArgument
+                ? structSymbol.PrimaryConstructorParameters
+                    .First(parameter => parameter.Name == fieldName).Type
+                : memberType;
             if (!AccessibilityChecker.IsAccessible(
                 memberAccessibility,
                 Invariant.Required(memberDeclaringType, "a resolved member has a declaring type"),
@@ -2559,7 +2570,7 @@ internal sealed partial class ExpressionBinder
 
                 orderedInitializers.Add(StructLiteralOrderedStep.ForMember(
                     initSyntax,
-                    memberType,
+                    inputType,
                     braced: null,
                     field,
                     fieldDeclaringType,
@@ -2569,7 +2580,7 @@ internal sealed partial class ExpressionBinder
 
             // Issue #3521: member type must reach target-dependent initializer
             // forms before they bind, not only their later conversion.
-            var valueExpr = BindExpression(initSyntax.Value, memberType);
+            var valueExpr = BindExpression(initSyntax.Value, inputType);
             inits.Add(hasField
                 ? new BoundFieldInitializer(
                     Invariant.Required(field, "a resolved field has an initializer"),
@@ -2587,8 +2598,6 @@ internal sealed partial class ExpressionBinder
         // (For class/data-class literals the
         // synthesized default constructor — invoked by `newobj` — already runs
         // the instance field initializers, so this only applies to value types.)
-        var definition = structSymbol.Definition ?? structSymbol;
-        bool callsPrimary = structSymbol.ClrType == null && definition.IsData && definition.HasPrimaryConstructor;
         if (!structSymbol.IsClass && !callsPrimary)
         {
             foreach (var field in structSymbol.Fields)
