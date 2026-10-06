@@ -37,6 +37,7 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -125,12 +126,39 @@ def evaluate_project(path: Path, tree: Path, env: dict, config: str) -> dict:
         raise Stage2Error(f"invalid MSBuild evaluation for {path.relative_to(tree)}: {error}") from error
 
 
+def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
+    immutable = {"GsharpCompilerFullPath", "GsharpToolFullPath"}
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            root = ET.parse(path).getroot()
+        except (ET.ParseError, OSError) as error:
+            raise Stage2Error(f"cannot inspect evaluated MSBuild file {path}: {error}") from error
+        local = {name.strip() for name in root.attrib.get("TreatAsLocalProperty", "").split(";")
+                 if name.strip()}
+        forbidden = sorted(local & immutable)
+        if forbidden:
+            raise Stage2Error(
+                f"{path} exempts immutable stage-2 properties via TreatAsLocalProperty: "
+                + ", ".join(forbidden))
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] != "UsingTask":
+                continue
+            if element.attrib.get("TaskName") != "Gsharp.NET.Sdk.Tools.BuildTask":
+                continue
+            if not path.resolve().is_relative_to(expected_sdk):
+                raise Stage2Error(
+                    f"{path} registers Gsharp.NET.Sdk.Tools.BuildTask outside the verified SDK")
+
+
 def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                                     config: str, sdk_version: str) -> list[str]:
     cache = Path(env["NUGET_PACKAGES"])
     expected_sdk = (cache / packer.SDK_ID.lower() / sdk_version.lower()).resolve()
     pending = [tree / root for root in roots]
     seen = set()
+    gsharp_projects = set()
     while pending:
         path = pending.pop().resolve()
         if path in seen:
@@ -170,6 +198,8 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                     raise Stage2Error(
                         f"{path.relative_to(tree)} overrides {property_name}: "
                         f"expected {expected_path}, got {actual!r}")
+            inspect_msbuild_files([path, *imports], expected_sdk)
+            gsharp_projects.add(path)
         for reference in evaluation.get("Items", {}).get("ProjectReference", []):
             full_path = reference.get("FullPath")
             if not full_path:
@@ -186,43 +216,109 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                     f"{path.relative_to(tree)} changes ProjectReference build context for "
                     f"{full_path}: {details}")
             pending.append(Path(full_path))
+    if not gsharp_projects:
+        raise Stage2Error("participating build closure contains no G# project")
     return sorted(path.relative_to(tree).as_posix() for path in seen)
 
 
-def toolchain_guard(work: Path, stage: str, expected_sdk: Path) -> Path:
-    work.mkdir(parents=True, exist_ok=True)
-    path = work / f"{stage}.toolchain-guard.targets"
+def verify_resolved_sdk_payload(nupkg: Path, expected_sdk: Path) -> int:
+    expected = {}
+    with zipfile.ZipFile(nupkg) as archive:
+        for info in archive.infolist():
+            name = packer.entry_name(info.filename).lstrip("/")
+            if info.is_dir() or not name.startswith(("Sdk/", "tools/", "build/")):
+                continue
+            expected[name] = hashlib.sha256(archive.read(info)).digest()
+    actual = {}
+    for root in ("Sdk", "tools", "build"):
+        directory = expected_sdk / root
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*"):
+            if path.is_file():
+                actual[path.relative_to(expected_sdk).as_posix()] = hashlib.sha256(path.read_bytes()).digest()
+    if expected != actual:
+        missing = sorted(expected.keys() - actual.keys())
+        extra = sorted(actual.keys() - expected.keys())
+        changed = sorted(name for name in expected.keys() & actual.keys()
+                         if expected[name] != actual[name])
+        details = [*(f"missing {name}" for name in missing),
+                   *(f"extra {name}" for name in extra),
+                   *(f"changed {name}" for name in changed)]
+        raise Stage2Error(
+            f"resolved {packer.SDK_ID} payload does not match supplied {nupkg}:\n  "
+            + "\n  ".join(details))
+    return len(expected)
+
+
+def add_toolchain_validation(parent: ET.Element, expected_sdk: Path) -> None:
+    namespace = parent.tag[1:].split("}", 1)[0] if parent.tag.startswith("{") else ""
+    tag = lambda name: f"{{{namespace}}}{name}" if namespace else name
     compiler = expected_sdk / "tools/compiler/gsc.dll"
     task = expected_sdk / "tools/task/Gsharp.NET.Sdk.dll"
-    project = ET.Element("Project")
-    target = ET.SubElement(
-        project, "Target",
-        {"Name": "_Stage2ValidateToolchain", "AfterTargets": "CoreCompile",
-         "Condition": "'$(GsharpCompilerFullPath)' != ''"})
-    properties = ET.SubElement(target, "PropertyGroup")
-    ET.SubElement(properties, "_Stage2ActualCompiler").text = (
+    properties = ET.SubElement(parent, tag("PropertyGroup"))
+    ET.SubElement(properties, tag("_Stage2ActualCompiler")).text = (
         "$([System.IO.Path]::GetFullPath('$(GsharpCompilerFullPath)'))")
-    ET.SubElement(properties, "_Stage2ActualTool").text = (
+    ET.SubElement(properties, tag("_Stage2ActualTool")).text = (
         "$([System.IO.Path]::GetFullPath('$(GsharpToolFullPath)'))")
-    ET.SubElement(properties, "_Stage2ExpectedCompiler").text = str(compiler)
-    ET.SubElement(properties, "_Stage2ExpectedTool").text = str(task)
+    ET.SubElement(properties, tag("_Stage2ExpectedCompiler")).text = str(compiler)
+    ET.SubElement(properties, tag("_Stage2ExpectedTool")).text = str(task)
     escaped_actual_compiler = "$([MSBuild]::Escape($(_Stage2ActualCompiler)))"
     escaped_expected_compiler = "$([MSBuild]::Escape($(_Stage2ExpectedCompiler)))"
     escaped_actual_tool = "$([MSBuild]::Escape($(_Stage2ActualTool)))"
     escaped_expected_tool = "$([MSBuild]::Escape($(_Stage2ExpectedTool)))"
     ET.SubElement(
-        target, "Error",
+        parent, tag("Error"),
         {"Condition": f"'{escaped_actual_compiler}' != '{escaped_expected_compiler}'",
          "Text": "stage-2 gate: CoreCompile used unexpected "
                  "GsharpCompilerFullPath=$(GsharpCompilerFullPath); "
                  "expected $(_Stage2ExpectedCompiler)"})
     ET.SubElement(
-        target, "Error",
+        parent, tag("Error"),
         {"Condition": f"'{escaped_actual_tool}' != '{escaped_expected_tool}'",
          "Text": "stage-2 gate: CoreCompile used unexpected "
                  "GsharpToolFullPath=$(GsharpToolFullPath); expected $(_Stage2ExpectedTool)"})
+
+
+def toolchain_guard(work: Path, stage: str, expected_sdk: Path) -> Path:
+    work.mkdir(parents=True, exist_ok=True)
+    path = work / f"{stage}.toolchain-guard.targets"
+    project = ET.Element("Project")
+    target = ET.SubElement(
+        project, "Target",
+        {"Name": "_Stage2ValidateToolchain", "AfterTargets": "CoreCompile",
+         "Condition": "'$(GsharpCompilerFullPath)' != ''"})
+    add_toolchain_validation(target, expected_sdk)
     ET.ElementTree(project).write(path, encoding="utf-8", xml_declaration=True)
     return path
+
+
+def install_sdk_task_guard(expected_sdk: Path) -> Path:
+    path = expected_sdk / "build/Gsharp.NET.Core.Sdk.targets"
+    try:
+        document = ET.parse(path)
+    except (ET.ParseError, OSError) as error:
+        raise Stage2Error(f"cannot install task guard in {path}: {error}") from error
+    root = document.getroot()
+    for target in root.iter():
+        if target.tag.rsplit("}", 1)[-1] != "Target" or target.attrib.get("Name") != "CoreCompile":
+            continue
+        children = list(target)
+        for index, child in enumerate(children):
+            if child.tag.rsplit("}", 1)[-1] != "BuildTask":
+                continue
+            namespace = target.tag[1:].split("}", 1)[0] if target.tag.startswith("{") else ""
+            if namespace:
+                ET.register_namespace("", namespace)
+            holder = ET.Element(target.tag)
+            add_toolchain_validation(holder, expected_sdk)
+            target.remove(child)
+            for offset, validation in enumerate(list(holder)):
+                target.insert(index + offset, validation)
+            target.insert(index + len(holder), child)
+            document.write(path, encoding="utf-8", xml_declaration=True)
+            return path
+    raise Stage2Error(f"{path} has no CoreCompile BuildTask to guard")
 
 
 def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemblies: list[str],
@@ -234,7 +330,14 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         shutil.rmtree(cache)
     participating = (validate_participating_projects(
         tree, validation_projects, env, config, version) if validation_projects is not None else [])
-    guard = toolchain_guard(work, stage, cache / packer.SDK_ID.lower() / version.lower())
+    expected_sdk = cache / packer.SDK_ID.lower() / version.lower()
+    payload_files = (verify_resolved_sdk_payload(nupkg, expected_sdk)
+                     if validation_projects is not None else 0)
+    if validation_projects is not None:
+        install_sdk_task_guard(expected_sdk)
+    guard = toolchain_guard(work, stage, expected_sdk)
+    compiler = expected_sdk / "tools/compiler/gsc.dll"
+    task = expected_sdk / "tools/task/Gsharp.NET.Sdk.dll"
     clean_outputs(tree, assemblies)
     log = work / f"{stage}.build.log"
     log.write_text("", encoding="utf-8")
@@ -242,7 +345,9 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
     for project in projects:
         code, elapsed = run(
             ["dotnet", "build", project, "-c", config, "-t:Rebuild", "-nodeReuse:false",
-             f"-p:CustomAfterMicrosoftCommonTargets={guard}"], tree, env, log)
+             f"-p:CustomAfterMicrosoftCommonTargets={guard}",
+             f"-p:GsharpCompilerFullPath={compiler}", f"-p:GsharpToolFullPath={task}"],
+            tree, env, log)
         seconds += elapsed
         if code != 0:
             raise Stage2Error(f"{stage}: dotnet build {project} failed (exit {code}); see {log}")
@@ -261,7 +366,8 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         if pdb.is_file():
             shutil.copy2(pdb, destination.with_suffix(".pdb"))
         copied[assembly] = str(destination)
-    return {"sdkVersion": version, "participatingProjects": participating,
+    return {"sdkVersion": version, "sdkPayloadFiles": payload_files,
+            "participatingProjects": participating,
             "buildSeconds": round(seconds, 1), "assemblies": copied}
 
 
@@ -300,11 +406,15 @@ def compare(stage1: dict, stage2: dict, work: Path) -> list[dict]:
     return rows
 
 
-def run_tests(tree: Path, tests: list[str], work: Path, config: str) -> list[dict]:
+def run_tests(tree: Path, tests: list[str], work: Path, config: str,
+              sdk_version: str) -> list[dict]:
     env = stage_env(work, "stage2")
     guard = work / "stage2.toolchain-guard.targets"
     if tests and not guard.is_file():
         raise Stage2Error(f"stage-2 toolchain guard is missing: {guard}")
+    expected_sdk = Path(env["NUGET_PACKAGES"]) / packer.SDK_ID.lower() / sdk_version.lower()
+    compiler = expected_sdk / "tools/compiler/gsc.dll"
+    task = expected_sdk / "tools/task/Gsharp.NET.Sdk.dll"
     results = []
     for index, spec in enumerate(tests):
         project, _, test_filter = spec.partition("::")
@@ -316,6 +426,7 @@ def run_tests(tree: Path, tests: list[str], work: Path, config: str) -> list[dic
         log.write_text("", encoding="utf-8")
         command = ["dotnet", "test", project, "-c", config, "-nodeReuse:false",
                    f"-p:CustomAfterMicrosoftCommonTargets={guard}",
+                   f"-p:GsharpCompilerFullPath={compiler}", f"-p:GsharpToolFullPath={task}",
                    "--logger", "trx", "--results-directory", str(results_dir)]
         if test_filter:
             command += ["--filter", test_filter]
@@ -395,13 +506,19 @@ def main(argv: list[str]) -> int:
                              for name in ("stage1", "stage2", "nuget-stage1", "nuget-stage2"))
         cleanup_roots.extend((work / f"test-{index}").resolve()
                              for index in range(len(args.test)))
+        cleanup_files = {
+            path
+            for assembly in assemblies
+            for path in ((tree / assembly).resolve(), (tree / assembly).resolve().with_suffix(".pdb"))
+        }
         supplied_packages = {
             path.resolve()
             for package in (bootstrap, stage1)
             for path in packer.sibling_nupkgs(package, packer.package_version(package))
         }
         endangered = sorted(path for path in supplied_packages
-                            if any(path.is_relative_to(root) for root in cleanup_roots))
+                            if any(path.is_relative_to(root) for root in cleanup_roots)
+                            or path in cleanup_files)
         if endangered:
             raise Stage2Error(
                 "SDK package inputs overlap a cleaned stage-2 path:\n  "
@@ -413,7 +530,8 @@ def main(argv: list[str]) -> int:
             tree, "stage2", stage1, projects, assemblies, work, args.config,
             [*projects, *test_projects])
         report["comparison"] = compare(report["stage1Build"], report["stage2Build"], work)
-        report["tests"] = run_tests(tree, args.test, work, args.config)
+        report["tests"] = run_tests(
+            tree, args.test, work, args.config, report["stage2Build"]["sdkVersion"])
     except (Stage2Error, packer.SelfHostError, OSError) as error:
         report["error"] = str(error)
         (work / "stage2-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
