@@ -124,12 +124,14 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
     {
         const string contract = """
             #nullable enable
-            public sealed partial class Outer<T> {
+            public sealed partial class Outer<T>(T primary) {
+                public T Primary => primary;
                 public sealed class Rows<U> {
                     public U Read(ref T value) => default!;
                     public V Read<V>(ref U value, V replacement) => replacement;
                 }
             }
+            public sealed record Snapshot(string? Value);
             public sealed class Consumer { public Outer<string?>.Rows<(string? Value, int Code)> Value; }
             """;
         LoadedCSharpProject native = CSharpProjectLoader.LoadInMemory(
@@ -198,6 +200,22 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
                     Assert.Equal(NullableAnnotation.Annotated, result.ReturnType.NullableAnnotation);
                 }
             }
+
+            INamedTypeSymbol outer = native.Compilation.GetTypeByMetadataName("Outer`1");
+            IParameterSymbol primary = Assert.Single(
+                Assert.Single(outer.InstanceConstructors,
+                    constructor => constructor.Parameters.Any(parameter => parameter.Name == "primary")).Parameters);
+            IParameterSymbol remappedPrimary = Assert.IsAssignableFrom<IParameterSymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, primary }));
+            Assert.Equal(primary.Name, remappedPrimary.Name);
+
+            INamedTypeSymbol snapshot = native.Compilation.GetTypeByMetadataName("Snapshot");
+            IParameterSymbol positional = Assert.Single(
+                Assert.Single(snapshot.InstanceConstructors,
+                    constructor => constructor.Parameters.Any(parameter => parameter.Name == "Value")).Parameters);
+            IParameterSymbol remappedPositional = Assert.IsAssignableFrom<IParameterSymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, positional }));
+            Assert.Equal(positional.Name, remappedPositional.Name);
         }
 
         LoadedCSharpProject unrelated = CSharpProjectLoader.LoadInMemory(new[] { ("Unrelated.cs", "public sealed class Unrelated { }") });

@@ -1421,7 +1421,7 @@ internal static class ObliviousNullabilityAnalyzer
                     method.Parameters[parameter.Ordinal],
                 IPropertySymbol indexer when parameter.Ordinal < indexer.Parameters.Length =>
                     indexer.Parameters[parameter.Ordinal],
-                _ => null,
+                _ => sourceDeclaration as IParameterSymbol,
             };
         }
 
