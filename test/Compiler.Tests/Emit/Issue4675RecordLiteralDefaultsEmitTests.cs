@@ -391,6 +391,63 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
     }
 
     [Fact]
+    public void EmptyPrimarySpread_EvaluatesDeclarationInitializersOnce()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package EmptyPrimarySpread
+            import System
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            data struct Source(Value int32)
+            data struct Target() {
+                public var Value int32
+                public var Marker int32 = Counter.Next()
+            }
+            func Main() {
+                let target = Target{...Source{Value: 7}}
+                Console.WriteLine(target.Value)
+                Console.WriteLine(target.Marker)
+                Console.WriteLine(Counter.Count)
+            }
+            """, "EmptyPrimarySpread", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("7\n1\n1\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void ExpressionTree_OrdinaryStructZero_RetainsZeroStoreAfterInitializerConstructor()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package TreeOrdinaryZeroStore
+            import System
+            import System.Linq.Expressions
+            struct Inner[T] {
+                public var Items []int32 = []int32{9}
+                public init() { }
+            }
+            data class Box(Item Inner[int32])
+            func Main() {
+                let direct = Box{}
+                let tree Expression[Func[Box]] = () -> Box{}
+                let compiled = tree.Compile()()
+                Console.WriteLine(direct.Item.Items.Length)
+                Console.WriteLine(compiled.Item.Items.Length)
+            }
+            """, "TreeOrdinaryZeroStore", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("0\n0\n", fixture.Run(dll));
+    }
+
+    [Fact]
     public void ImportedRecordLiteral_KeepsItsExistingBoundDefaultPath()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

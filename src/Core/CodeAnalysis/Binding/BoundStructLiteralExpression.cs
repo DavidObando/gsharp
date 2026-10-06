@@ -37,7 +37,10 @@ public sealed class BoundStructLiteralExpression : BoundExpression
         CopySource = copySource;
         IsZeroInitialization = isZeroInitialization;
         Initializers = CallsPrimaryConstructor
-            ? PreparePrimaryArguments(syntax, structType, initializers)
+            ? PreparePrimaryArguments(
+                syntax,
+                structType,
+                initializers.Where(initializer => !initializer.IsDeclarationInitializer).ToImmutableArray())
             : initializers;
     }
 

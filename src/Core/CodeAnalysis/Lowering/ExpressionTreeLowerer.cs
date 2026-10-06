@@ -893,7 +893,10 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         var bindings = ImmutableArray.CreateBuilder<BoundExpression>(literal.Initializers.Length);
         foreach (var initializer in literal.Initializers)
         {
-            if (literal.IsZeroInitialization && markerCount > 0 && initializer.Field is { } zeroField
+            if (literal.IsZeroInitialization
+                && literal.StructType.ValueStructDefaultCtorIsZeroInitialization
+                && markerCount > 0
+                && initializer.Field is { } zeroField
                 && MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(literal.Syntax, literal.StructType, zeroField) != null)
             {
                 continue;
