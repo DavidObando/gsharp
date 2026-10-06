@@ -194,25 +194,34 @@ def toolchain_guard(work: Path, stage: str, expected_sdk: Path) -> Path:
     path = work / f"{stage}.toolchain-guard.targets"
     compiler = expected_sdk / "tools/compiler/gsc.dll"
     task = expected_sdk / "tools/task/Gsharp.NET.Sdk.dll"
-    path.write_text(
-        "<Project>\n"
-        f'  <Target Name="_Stage2ValidateToolchain" AfterTargets="CoreCompile" '
-        f"Condition=\"'$(GsharpCompilerFullPath)' != ''\">\n"
-        "    <PropertyGroup>\n"
-        "      <_Stage2ActualCompiler>$([System.IO.Path]::GetFullPath("
-        "'$(GsharpCompilerFullPath)'))</_Stage2ActualCompiler>\n"
-        "      <_Stage2ActualTool>$([System.IO.Path]::GetFullPath("
-        "'$(GsharpToolFullPath)'))</_Stage2ActualTool>\n"
-        "    </PropertyGroup>\n"
-        f'    <Error Condition="\'$(_Stage2ActualCompiler)\' != \'{compiler}\'" '
-        f'Text="stage-2 gate: CoreCompile used unexpected '
-        f'GsharpCompilerFullPath=$(GsharpCompilerFullPath); expected {compiler}" />\n'
-        f'    <Error Condition="\'$(_Stage2ActualTool)\' != \'{task}\'" '
-        f'Text="stage-2 gate: CoreCompile used unexpected '
-        f'GsharpToolFullPath=$(GsharpToolFullPath); expected {task}" />\n'
-        "  </Target>\n"
-        "</Project>\n",
-        encoding="utf-8")
+    project = ET.Element("Project")
+    target = ET.SubElement(
+        project, "Target",
+        {"Name": "_Stage2ValidateToolchain", "AfterTargets": "CoreCompile",
+         "Condition": "'$(GsharpCompilerFullPath)' != ''"})
+    properties = ET.SubElement(target, "PropertyGroup")
+    ET.SubElement(properties, "_Stage2ActualCompiler").text = (
+        "$([System.IO.Path]::GetFullPath('$(GsharpCompilerFullPath)'))")
+    ET.SubElement(properties, "_Stage2ActualTool").text = (
+        "$([System.IO.Path]::GetFullPath('$(GsharpToolFullPath)'))")
+    ET.SubElement(properties, "_Stage2ExpectedCompiler").text = str(compiler)
+    ET.SubElement(properties, "_Stage2ExpectedTool").text = str(task)
+    escaped_actual_compiler = "$([MSBuild]::Escape($(_Stage2ActualCompiler)))"
+    escaped_expected_compiler = "$([MSBuild]::Escape($(_Stage2ExpectedCompiler)))"
+    escaped_actual_tool = "$([MSBuild]::Escape($(_Stage2ActualTool)))"
+    escaped_expected_tool = "$([MSBuild]::Escape($(_Stage2ExpectedTool)))"
+    ET.SubElement(
+        target, "Error",
+        {"Condition": f"'{escaped_actual_compiler}' != '{escaped_expected_compiler}'",
+         "Text": "stage-2 gate: CoreCompile used unexpected "
+                 "GsharpCompilerFullPath=$(GsharpCompilerFullPath); "
+                 "expected $(_Stage2ExpectedCompiler)"})
+    ET.SubElement(
+        target, "Error",
+        {"Condition": f"'{escaped_actual_tool}' != '{escaped_expected_tool}'",
+         "Text": "stage-2 gate: CoreCompile used unexpected "
+                 "GsharpToolFullPath=$(GsharpToolFullPath); expected $(_Stage2ExpectedTool)"})
+    ET.ElementTree(project).write(path, encoding="utf-8", xml_declaration=True)
     return path
 
 
@@ -293,6 +302,9 @@ def compare(stage1: dict, stage2: dict, work: Path) -> list[dict]:
 
 def run_tests(tree: Path, tests: list[str], work: Path, config: str) -> list[dict]:
     env = stage_env(work, "stage2")
+    guard = work / "stage2.toolchain-guard.targets"
+    if tests and not guard.is_file():
+        raise Stage2Error(f"stage-2 toolchain guard is missing: {guard}")
     results = []
     for index, spec in enumerate(tests):
         project, _, test_filter = spec.partition("::")
@@ -303,6 +315,7 @@ def run_tests(tree: Path, tests: list[str], work: Path, config: str) -> list[dic
         log = results_dir / "test.log"
         log.write_text("", encoding="utf-8")
         command = ["dotnet", "test", project, "-c", config, "-nodeReuse:false",
+                   f"-p:CustomAfterMicrosoftCommonTargets={guard}",
                    "--logger", "trx", "--results-directory", str(results_dir)]
         if test_filter:
             command += ["--filter", test_filter]

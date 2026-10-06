@@ -16,6 +16,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 import zipfile
 from unittest.mock import patch
 from pathlib import Path
@@ -52,6 +53,11 @@ def test_results_path(command: list[str], work: Path) -> Path:
     # The old gate used a fixed logger path; keep the pre-fix witness runnable.
     logger = command[command.index("--logger") + 1]
     return Path(logger.split("LogFileName=", 1)[1])
+
+
+def test_toolchain_guard(work: Path) -> Path:
+    return stage2.toolchain_guard(
+        work, "stage2", work / "nuget-stage2" / "gsharp.net.sdk" / "1.0-stage1")
 
 
 def mvid_offset(image: bytes) -> int:
@@ -136,6 +142,7 @@ class RunTests(unittest.TestCase):
         for case in ("missing", "stale", "zero", "malformed", "failed", "unpassed"):
             with self.subTest(case=case), work_directory() as directory:
                 work = Path(directory)
+                guard = test_toolchain_guard(work)
                 cache = work / "nuget-stage2" / "gsharp.net.sdk" / "1.0-stage1" / "gsc.dll"
                 cache.parent.mkdir(parents=True)
                 cache.write_bytes(b"stage2 compiler")
@@ -145,6 +152,7 @@ class RunTests(unittest.TestCase):
 
                 def run(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
                     self.assertEqual(b"stage2 compiler", cache.read_bytes())
+                    self.assertIn(f"-p:CustomAfterMicrosoftCommonTargets={guard}", command)
                     target = test_results_path(command, work)
                     if case == "zero":
                         write_trx(target, executed=0, passed=0)
@@ -166,9 +174,11 @@ class RunTests(unittest.TestCase):
     def test_same_stem_and_multiple_frameworks_have_independent_evidence(self) -> None:
         with work_directory() as directory:
             work = Path(directory)
+            guard = test_toolchain_guard(work)
             result_paths = []
 
             def run(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
+                self.assertIn(f"-p:CustomAfterMicrosoftCommonTargets={guard}", command)
                 target = test_results_path(command, work)
                 result_paths.append(target)
                 write_trx(target, executed=2, passed=2)
@@ -182,6 +192,23 @@ class RunTests(unittest.TestCase):
             self.assertNotEqual(result_paths[0], result_paths[1])
             self.assertEqual([5, 5], [row.get("executedTests") for row in results])
             self.assertTrue(stage2.decide({"comparison": [{"contentEqual": True}], "tests": results})[1])
+
+    def test_test_builds_receive_the_stage2_toolchain_guard(self) -> None:
+        with work_directory() as directory:
+            work = Path(directory)
+            guard = test_toolchain_guard(work)
+
+            def run(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
+                self.assertEqual(str(work / "nuget-stage2"), env["NUGET_PACKAGES"])
+                self.assertIn(f"-p:CustomAfterMicrosoftCommonTargets={guard}", command)
+                write_trx(test_results_path(command, work))
+                return 0, 0.0
+
+            with patch.object(stage2, "run", side_effect=run):
+                result = stage2.run_tests(
+                    work, ["test/Override.Tests.gsproj::TargetTimeOverride"], work, "Release")[0]
+            self.assertEqual(0, result["exitCode"])
+            self.assertEqual(1, result["executedTests"])
 
 
 class MainTests(unittest.TestCase):
@@ -459,6 +486,28 @@ class ParticipatingProjectTests(unittest.TestCase):
                 capture_output=True, text=True)
             self.assertNotEqual(0, result.returncode)
             self.assertIn("CoreCompile used unexpected GsharpCompilerFullPath", result.stdout)
+
+    def test_toolchain_guard_supports_special_character_paths(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            project, work = root / "SpecialPath.csproj", root / "gate & evidence"
+            expected = root / "expected & sdk"
+            project_xml = ET.Element("Project", {"Sdk": "Microsoft.NET.Sdk"})
+            properties = ET.SubElement(project_xml, "PropertyGroup")
+            ET.SubElement(properties, "TargetFramework").text = "net10.0"
+            ET.SubElement(properties, "GsharpCompilerFullPath").text = str(
+                expected / "tools/compiler/gsc.dll")
+            ET.SubElement(properties, "GsharpToolFullPath").text = str(
+                expected / "tools/task/Gsharp.NET.Sdk.dll")
+            ET.ElementTree(project_xml).write(project, encoding="utf-8", xml_declaration=True)
+            guard = stage2.toolchain_guard(work, "stage2", expected)
+            ET.parse(guard)
+            result = subprocess.run(
+                ["dotnet", "build", str(project), "-nodeReuse:false",
+                 "-p:ImportDirectoryBuildProps=false", "-p:ImportDirectoryBuildTargets=false",
+                 f"-p:CustomAfterMicrosoftCommonTargets={guard}"],
+                capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 
 class CleanOutputsTests(unittest.TestCase):
