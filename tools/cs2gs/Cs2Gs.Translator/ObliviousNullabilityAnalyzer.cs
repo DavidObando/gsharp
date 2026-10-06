@@ -1495,7 +1495,8 @@ internal static class ObliviousNullabilityAnalyzer
         if (sourceDeclaration != null
             && (declarationId == null
                 || symbol is ILocalSymbol
-                || symbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction }))
+                || (symbol is IMethodSymbol localFunction
+                    && localFunction.MethodKind == MethodKind.LocalFunction)))
         {
             remapped = sourceDeclaration;
         }
