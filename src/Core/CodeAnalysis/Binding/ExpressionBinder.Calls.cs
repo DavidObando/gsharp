@@ -120,7 +120,17 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (TypeMemberModel.TryGetFieldIncludingInherited(structType, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
+            var hasUpdateProperty = TypeMemberModel.TryGetProperty(
+                structType,
+                memberName,
+                out _,
+                out var updatePropertyDeclaringType);
+            if (TypeMemberModel.TryGetFieldIncludingInherited(structType, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType)
+                && (!hasUpdateProperty
+                    || IsAtLeastAsNearInHierarchy(
+                        structType,
+                        fieldDeclaringType,
+                        Invariant.Required(updatePropertyDeclaringType, "a resolved property has a declaring type"))))
             {
                 // Issue #2059: a `with` update is a write to the named field —
                 // enforce the same `protected`/`private` accessibility rule as a

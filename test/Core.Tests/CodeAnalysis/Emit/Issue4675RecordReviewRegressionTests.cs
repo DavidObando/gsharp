@@ -125,6 +125,41 @@ public class Issue4675RecordReviewRegressionTests
     }
 
     [Fact]
+    public void OmittedPositionalSlice_UsesSoundZeroValue()
+    {
+        var result = EmittedOracle.Evaluate("""
+            data struct Bag(Items []int32)
+            Bag{}.Items.Length
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void NearestPropertyWinsOverInheritedFieldForAssignmentAndRead()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base { public var Value int32 = 1 }
+            class Derived : Base {
+                private var current int32
+                public prop Value int32 {
+                    get { return current }
+                    set { current = value }
+                }
+            }
+            let item = Derived()
+            item.Value = 7
+            item.Value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
     public void ConstructedGenericZeroSynthesis_RemainsLinearEnoughForDeepChains()
     {
         const int depth = 24;
@@ -157,6 +192,22 @@ public class Issue4675RecordReviewRegressionTests
         Assert.Contains("Equals", diagnostic.Message, StringComparison.Ordinal);
         Assert.Null(result.UnhandledException);
         Assert.Null(result.Value);
+    }
+
+    [Fact]
+    public void OpenIntermediaryDataEqualityOverride_IsRejectedBeforeEmission()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Root(Tag int32) : IEquatable[Root]
+            open class Middle : Root {
+                public open override func Equals(other Root?) bool -> true
+            }
+            data class Leaf(Value int32) : Middle
+            Leaf(1)
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0184");
+        Assert.Null(result.UnhandledException);
     }
 
     [Fact]

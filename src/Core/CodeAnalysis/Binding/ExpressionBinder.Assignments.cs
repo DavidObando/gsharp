@@ -1312,7 +1312,23 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, syntax.FieldIdentifier.ValueText, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
+        var hasNearestProperty = TypeMemberModel.TryGetProperty(
+            structSymbol,
+            syntax.FieldIdentifier.ValueText,
+            out _,
+            out var nearestPropertyDeclaringType);
+        var hasAssignmentField = TypeMemberModel.TryGetFieldIncludingInherited(
+            structSymbol,
+            syntax.FieldIdentifier.ValueText,
+            MemberQuery.Instance(MemberKinds.Field),
+            out var field,
+            out var fieldDeclaringType);
+        if (!hasAssignmentField
+            || (hasNearestProperty
+                && !IsAtLeastAsNearInHierarchy(
+                    structSymbol,
+                    Invariant.Required(fieldDeclaringType, "a resolved field has a declaring type"),
+                    Invariant.Required(nearestPropertyDeclaringType, "a resolved property has a declaring type"))))
         {
             // ADR-0051: check if it's a property.
             if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.ValueText, out var prop, out var propDeclaringType))
@@ -1411,6 +1427,8 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        field = Invariant.Required(field, "a resolved assignment field has a symbol");
+        fieldDeclaringType = Invariant.Required(fieldDeclaringType, "a resolved assignment field has a declaring type");
         assignmentReceiver = RecoverDeclaredMemberWriteReceiver(
             assignmentReceiver,
             syntax.FieldIdentifier.Location,
@@ -2364,7 +2382,17 @@ internal sealed partial class ExpressionBinder
 
         // ADR-0112 A3: this-first base-chain instance field walk, using the
         // declaring struct as the owner for both the read access and assignment.
-        if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
+        var hasCompoundProperty = TypeMemberModel.TryGetProperty(
+            structSym,
+            memberName,
+            out _,
+            out var compoundPropertyDeclaringType);
+        if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType)
+            && (!hasCompoundProperty
+                || IsAtLeastAsNearInHierarchy(
+                    structSym,
+                    declaringType,
+                    Invariant.Required(compoundPropertyDeclaringType, "a resolved property has a declaring type"))))
         {
             var boundRhs = BindExpression(syntax.Value);
             if (field.IsReadOnly

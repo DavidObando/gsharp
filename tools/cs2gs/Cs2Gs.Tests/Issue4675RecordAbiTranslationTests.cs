@@ -233,6 +233,25 @@ public sealed class Issue4675RecordAbiTranslationTests
         Assert.Equal("Value = 1, Value = 2", actual);
     }
 
+    [Fact]
+    public void ExplicitAbstractPrintMembers_IsNotSynthesizedTwice()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Item.cs", """
+                public abstract record Item {
+                    protected abstract bool PrintMembers(System.Text.StringBuilder builder);
+                }
+                """),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Equal(1, translated.Split("func PrintMembers(", StringSplitOptions.None).Length - 1);
+        Assert.True(TranslationTestValidation.AssertBinds(translated).Success, translated);
+    }
+
     [Theory]
     [InlineData("record", "Value", "", false, false, false, 0)]
     [InlineData("record struct", "Value", "", false, false, false, 0)]

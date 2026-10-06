@@ -76,7 +76,8 @@ public sealed class BoundStructLiteralExpression : BoundExpression
 
             // Defaults are children of the bound literal, so rewriting and
             // slot planning see exactly the nodes that emission will consume.
-            var value = new BoundDefaultExpression(syntax, parameter.Type);
+            var value = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, parameter.Type)
+                ?? new BoundDefaultExpression(syntax, parameter.Type);
             builder ??= initializers.ToBuilder();
             builder.Add(member is FieldSymbol field
                 ? new BoundFieldInitializer(field, value)

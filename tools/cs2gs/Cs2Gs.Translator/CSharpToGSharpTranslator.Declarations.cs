@@ -2126,7 +2126,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && method.MethodKind == MethodKind.Ordinary
                 && !method.IsStatic
                 && method.DeclaredAccessibility == Accessibility.Protected
-                && (method.IsVirtual || method.IsOverride)
+                && (method.IsVirtual || method.IsOverride || method.IsAbstract)
                 && method.Arity == 0
                 && method.ReturnType.SpecialType == SpecialType.System_Boolean
                 && method.Parameters.Length == 1

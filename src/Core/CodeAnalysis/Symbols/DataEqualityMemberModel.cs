@@ -120,7 +120,6 @@ internal static class DataEqualityMemberModel
         StructSymbol? constructedOwner = null)
         => method.Name == "Equals"
             && method.IsOverride
-            && !method.IsOpen
             && method.TypeParameters.IsDefaultOrEmpty
             && method.Type == TypeSymbol.Bool
             && method.ReturnRefKind == RefKind.None
