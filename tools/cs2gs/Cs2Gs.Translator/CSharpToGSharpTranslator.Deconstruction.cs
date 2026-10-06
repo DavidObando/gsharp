@@ -188,7 +188,7 @@ public sealed partial class CSharpToGSharpTranslator
                     this.state.PendingSpillPrologue = outerSpillPrologue;
                 }
 
-                string temp = $"__spill{this.state.SpillCounter++}";
+                string temp = this.NewSpillName();
                 statements.Add(new LocalDeclarationStatement(
                     BindingKind.Let,
                     temp,
@@ -702,7 +702,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression value,
             List<GStatement> statements)
         {
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             statements.Add(new LocalDeclarationStatement(
                 BindingKind.Let,
                 temp,
@@ -1148,12 +1148,12 @@ public sealed partial class CSharpToGSharpTranslator
             string stem = this.nameAllocator.GetName(
                 preferredName ?? this.DeconstructionTempStem(anchor));
             SyntaxNode body = this.state.CurrentBodyScope ?? anchor.SyntaxTree.GetRoot();
-            if (!this.state.DeconstructionOccupiedNamesByBody.TryGetValue(
+            if (!this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(
                 body,
                 out HashSet<string> occupied))
             {
-                occupied = this.CollectOccupiedDeconstructionNames(body);
-                this.state.DeconstructionOccupiedNamesByBody.Add(body, occupied);
+                occupied = this.CollectOccupiedSynthesizedLocalNames(body);
+                this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, occupied);
             }
 
             if (!this.state.DeconstructionTempNamesByBody.TryGetValue(
@@ -1165,7 +1165,11 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             string candidate = stem;
-            for (int suffix = 2; occupied.Contains(candidate) || allocated.Contains(candidate); suffix++)
+            for (int suffix = 2;
+                occupied.Contains(candidate)
+                    || allocated.Contains(candidate)
+                    || !this.ReserveSynthesizedLocalName(candidate, anchor);
+                suffix++)
             {
                 candidate = stem + suffix.ToString(CultureInfo.InvariantCulture);
             }
@@ -1174,7 +1178,7 @@ public sealed partial class CSharpToGSharpTranslator
             return candidate;
         }
 
-        private HashSet<string> CollectOccupiedDeconstructionNames(SyntaxNode body)
+        private HashSet<string> CollectOccupiedSynthesizedLocalNames(SyntaxNode body)
         {
             bool DescendIntoCurrentBody(SyntaxNode node) =>
                 ReferenceEquals(node, body) ||
@@ -1610,7 +1614,7 @@ public sealed partial class CSharpToGSharpTranslator
                 spillType = MakeNullable(spillType);
             }
 
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             var reference = new IdentifierExpression(temp);
             this.state.ShortCircuitSpillDeclarations.Add(
                 new LocalDeclarationStatement(
@@ -1708,9 +1712,21 @@ public sealed partial class CSharpToGSharpTranslator
                 return operand;
             }
 
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             prologue.Add(new LocalDeclarationStatement(BindingKind.Let, temp, type: null, initializer: operand));
             return new IdentifierExpression(temp);
+        }
+
+        private string NewSpillName()
+        {
+            string candidate;
+            do
+            {
+                candidate = $"__spill{this.state.SpillCounter++}";
+            }
+            while (!this.TryClaimSynthesizedLocalName(candidate));
+
+            return candidate;
         }
 
         // Rebuilds an assignment TARGET (a link's left-hand side in a chained
@@ -1806,11 +1822,97 @@ public sealed partial class CSharpToGSharpTranslator
 
         private IReadOnlyList<GStatement> TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedSuspending
+                && this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Contains(
+                    unsupportedSuspending))
+            {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    $"recursive async or iterator local function '{localFunction.Identifier.Text}' captures storage written in its declaring scope; G# forbids the ref parameter needed to preserve that shared storage on a suspending helper.");
+                return new GStatement[]
+                {
+                    new RawStatement($"// unsupported: suspending recursive local function '{localFunction.Identifier.Text}' requires a ref capture"),
+                };
+            }
+
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedGeneric
+                && this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(
+                    unsupportedGeneric))
+            {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    $"recursive local function '{localFunction.Identifier.Text}' cannot preserve an enclosing type parameter in G# lowering.");
+                return new GStatement[]
+                {
+                    new RawStatement($"// unsupported: recursive local function '{localFunction.Identifier.Text}' cannot preserve an enclosing type parameter"),
+                };
+            }
+
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedTopLevel
+                && this.state.UnsupportedTopLevelRecursiveLocalFunctions.Contains(unsupportedTopLevel))
+            {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    $"top-level recursive local function '{localFunction.Identifier.Text}' requires a member-helper fallback, but top-level statements have no containing aggregate for that helper.");
+                return new GStatement[]
+                {
+                    new RawStatement($"// unsupported: top-level recursive local function '{localFunction.Identifier.Text}'"),
+                };
+            }
+
+            // Issue #4302: a lifted helper keeps `ref` on its own signature, but
+            // a delegate or function value built from it is a value-returning
+            // wrapper that drops the aliasing contract. Decide this before any
+            // lift path returns, so every lowering of a ref-returning local
+            // used as a value stays a loud gap.
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol refValueLocal
+                && (refValueLocal.ReturnsByRef || refValueLocal.ReturnsByRefReadonly)
+                && (this.IsLocalFunctionReferencedAsValue(
+                        refValueLocal,
+                        GetLocalFunctionSiblingStatements(localFunction))
+                    || this.IsLocalFunctionReferencedAsValueFromAnotherSwitchSection(
+                        refValueLocal,
+                        localFunction)))
+            {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    $"ref-returning local function '{localFunction.Identifier.Text}' cannot be used as a delegate or function value in G#.");
+                return new GStatement[]
+                {
+                    new RawStatement($"// unsupported: ref-returning local function '{localFunction.Identifier.Text}'"),
+                };
+            }
+
             if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol recursiveLocal
                 && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
                     recursiveLocal,
                     out LiftedRecursiveLocalFunction recursiveLift))
             {
+                if (recursiveLift.Captures.Count > 0
+                    && (this.IsLocalFunctionReferencedAsValue(
+                            recursiveLocal,
+                            GetLocalFunctionSiblingStatements(localFunction))
+                        || this.IsLocalFunctionReferencedAsValueFromAnotherSwitchSection(
+                            recursiveLocal,
+                            localFunction)))
+                {
+                    this.context.ReportUnsupported(
+                        localFunction,
+                        $"capturing recursive local function '{localFunction.Identifier.Text}' cannot be used as a delegate or function value after member lifting.");
+                    return new GStatement[]
+                    {
+                        new RawStatement($"// unsupported: capturing recursive local function value '{localFunction.Identifier.Text}'"),
+                    };
+                }
+
+                if (!this.state.EmittedLiftedRecursiveLocalFunctions.Add(recursiveLocal))
+                {
+                    return new GStatement[]
+                    {
+                        new RawStatement($"// lifted recursive local function {recursiveLift.Name}"),
+                    };
+                }
+
                 bool liftedIsAsync = localFunction.Modifiers.Any(SyntaxKind.AsyncKeyword);
                 List<Parameter> liftedParameters = this.MapParameters(
                     recursiveLocal,
@@ -1889,6 +1991,14 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(staticLocal, out string liftedName)
                 && this.state.PendingStaticSynthHelpers != null)
             {
+                if (!this.state.EmittedLiftedStaticLocalFunctions.Add(staticLocal))
+                {
+                    return new GStatement[]
+                    {
+                        new RawStatement($"// lifted static local function {liftedName}"),
+                    };
+                }
+
                 bool liftedIsAsync = localFunction.Modifiers.Any(SyntaxKind.AsyncKeyword);
                 List<Parameter> liftedParameters = this.MapParameters(
                     staticLocal,
@@ -1918,23 +2028,51 @@ public sealed partial class CSharpToGSharpTranslator
                 };
             }
 
-            // Issue #1900: a ref-returning local function (`static ref int
-            // Pick(...)`) has no G# canonical form. A C# local function lowers to
-            // a G# `func` LITERAL bound via `let` (ParseFunctionLiteralExpression
-            // has no `ref`-return-modifier slot at all — only a genuine top-level
-            // `func`/method declaration does, ADR-0060 §follow-up/issue #490), and
-            // gsc separately forbids a managed pointer as a function-literal
-            // return type outright (GS9004 "a managed pointer (*T) cannot be the
-            // return type of a function literal"). There is no lowering that
-            // preserves ref-aliasing through a func literal, so this gaps loudly
-            // rather than emitting a form that either drops the aliasing (a
-            // silent semantic change) or fails to compile.
             if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol refLocalFunction
-                && (refLocalFunction.ReturnsByRef || refLocalFunction.ReturnsByRefReadonly))
+                && (refLocalFunction.ReturnsByRefReadonly
+                    || (refLocalFunction.ReturnsByRef
+                        && (!refLocalFunction.IsStatic
+                            || refLocalFunction.IsGenericMethod
+                            || this.IsLocalFunctionReferencedAsValue(
+                                refLocalFunction,
+                                GetLocalFunctionSiblingStatements(localFunction))
+                            || this.IsLocalFunctionReferencedFromAnotherSwitchSection(
+                                refLocalFunction,
+                                localFunction)
+                            || this.IsLocalFunctionReferencedBeforeDeclarationInSwitchSection(
+                                refLocalFunction,
+                                localFunction)))))
             {
+                string refFunctionName = localFunction.Identifier.Text;
+                string reason;
+                if (refLocalFunction.ReturnsByRefReadonly)
+                {
+                    reason = $"ref-readonly local function '{refFunctionName}' has no canonical G# function-literal form.";
+                }
+                else if (refLocalFunction.IsGenericMethod)
+                {
+                    reason = $"generic ref-returning local function '{refFunctionName}' is not supported by G#'s direct function-literal form.";
+                }
+                else if (!refLocalFunction.IsStatic)
+                {
+                    reason = $"capturing ref-returning local function '{refFunctionName}' cannot use G#'s direct function-literal form safely; declare it static or move it to a member.";
+                }
+                else if (this.IsLocalFunctionReferencedFromAnotherSwitchSection(refLocalFunction, localFunction))
+                {
+                    reason = $"ref-returning local function '{refFunctionName}' is referenced from another switch section, where its G# function literal is out of scope.";
+                }
+                else if (this.IsLocalFunctionReferencedBeforeDeclarationInSwitchSection(refLocalFunction, localFunction))
+                {
+                    reason = $"ref-returning local function '{refFunctionName}' is referenced before its declaration in the switch section, where its G# function literal is not yet bound.";
+                }
+                else
+                {
+                    reason = $"ref-returning local function '{refFunctionName}' cannot be used as a delegate or function value in G#.";
+                }
+
                 this.context.ReportUnsupported(
                     localFunction,
-                    $"ref-returning local function '{localFunction.Identifier.Text}' has no canonical G# form: a local function lowers to a `func` literal, and G#'s `ref` return modifier only exists on a genuine top-level/method function declaration (issue #1900).");
+                    reason);
                 return new GStatement[]
                 {
                     new RawStatement($"// unsupported: ref-returning local function '{localFunction.Identifier.Text}'"),
@@ -1981,7 +2119,13 @@ public sealed partial class CSharpToGSharpTranslator
                 if (localFunction.Body != null)
                 {
                     BlockStatement innerBody = this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body));
-                    lambda = new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                    lambda = new LambdaExpression(
+                        parameters,
+                        blockBody: innerBody,
+                        isAsync: isAsync,
+                        returnType: returnType,
+                        isFunctionLiteral: true,
+                        isRefReturn: localSymbol?.ReturnsByRef == true);
                 }
                 else if (localFunction.ExpressionBody != null)
                 {
@@ -1996,15 +2140,28 @@ public sealed partial class CSharpToGSharpTranslator
                             () => new List<GStatement>
                             {
                                 new ReturnStatement(
-                                    this.TranslateValueWithNullForgiveness(localFunction.ExpressionBody.Expression)),
+                                    this.TranslateValueWithNullForgiveness(localFunction.ExpressionBody.Expression),
+                                    isRef: localFunction.ExpressionBody.Expression is RefExpressionSyntax),
                             }).ToList())
                         : new BlockStatement(this.WithSpillSeam(
                             () => this.TranslateExpressionStatements(localFunction.ExpressionBody.Expression).ToList()).ToList());
-                    lambda = new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                    lambda = new LambdaExpression(
+                        parameters,
+                        blockBody: innerBody,
+                        isAsync: isAsync,
+                        returnType: returnType,
+                        isFunctionLiteral: true,
+                        isRefReturn: localSymbol?.ReturnsByRef == true);
                 }
                 else
                 {
-                    lambda = new LambdaExpression(parameters, blockBody: new BlockStatement(new List<GStatement>()), isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                    lambda = new LambdaExpression(
+                        parameters,
+                        blockBody: new BlockStatement(new List<GStatement>()),
+                        isAsync: isAsync,
+                        returnType: returnType,
+                        isFunctionLiteral: true,
+                        isRefReturn: localSymbol?.ReturnsByRef == true);
                 }
             }
             finally

@@ -136,8 +136,24 @@ for flat enums. `sealed interface` works analogously.
 
 Plain `class Foo` (no `open`, no `sealed`) is still CLR-sealed by
 default — the distinction is *open* (any package can subclass) vs.
-*sealed-hierarchy* (only same-package subclasses, exhaustiveness-bound)
+*sealed-hierarchy* (only declaring-assembly subclasses, exhaustiveness-bound)
 vs. *closed* (no subclasses, plain `class`).
+
+Cross-assembly import preserves this restriction through the existing
+`GSharp.TypeSemantics` assembly metadata (PR #4808, issue #4807). Every emitted
+G# class records a fifth payload field, `open`, `closed` or `sealed`, after the
+type token, kind, data flag and primary-constructor entries. Implementation and
+reference assemblies carry the same policy. A foreign compilation may derive
+only from a marked `open` class; friendship, matching package or matching
+assembly-name text does not make it the declaring compilation. Native CLR
+classes without this G# marker retain their actual CLR inheritance eligibility.
+
+Legacy four-field G# markers still support construction and data operations,
+but cannot establish external inheritance permission because they did not
+distinguish open classes from sealed hierarchies. Rebuild such a producer to
+record its mode before deriving from it. Previously unmarked legacy plain
+classes cannot have a missing source mode reconstructed from CLR flags; rebuilding
+their producer records the policy as well.
 
 ### 5. Discriminated-union enums (lands #725)
 

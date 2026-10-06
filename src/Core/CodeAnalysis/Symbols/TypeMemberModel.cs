@@ -138,7 +138,7 @@ public static class TypeMemberModel
             {
                 if (query.IncludeInstance)
                 {
-                    AddMethodsDeduped(ref builder, c.Methods, name);
+                    AddMethodsDeduped(ref builder, c.GetMethods(name), name);
                 }
 
                 if (query.IncludeStatic)
@@ -922,7 +922,7 @@ public static class TypeMemberModel
             {
                 if (query.IncludeInstance)
                 {
-                    foreach (var m in c.Methods)
+                    foreach (var m in c.GetDeclaredInstanceMethods())
                     {
                         yield return m;
                     }
@@ -1037,7 +1037,7 @@ public static class TypeMemberModel
             }
 
             if ((query.Kinds & MemberKinds.Method) != 0
-                && TryFirst(query.IncludeInstance ? c.Methods : ImmutableArray<FunctionSymbol>.Empty, query.IncludeStatic ? c.StaticMethods : ImmutableArray<FunctionSymbol>.Empty, name, out FunctionSymbol? method))
+                && TryFirst(query.IncludeInstance ? c.GetMethods(name) : ImmutableArray<FunctionSymbol>.Empty, query.IncludeStatic ? c.StaticMethods : ImmutableArray<FunctionSymbol>.Empty, name, out FunctionSymbol? method))
             {
                 return method;
             }

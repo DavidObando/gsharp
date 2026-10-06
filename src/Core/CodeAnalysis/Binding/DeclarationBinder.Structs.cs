@@ -130,14 +130,23 @@ internal sealed partial class DeclarationBinder
     /// Issue #950: reports GS0380 for any member declared <c>protected</c> when
     /// the enclosing type is not an inheritable <c>open class</c>. Structs
     /// (value types) and non-open/sealed classes cannot be derived from, so a
-    /// <c>protected</c> member there has no meaning.
+    /// <c>protected</c> member there has no meaning. A <c>protected override</c>
+    /// method, property or event is exempt on a class (issue #4674).
     /// </summary>
     private void ValidateProtectedMemberPlacement(StructDeclarationSyntax syntax)
     {
-        if (syntax.IsClass && syntax.IsOpen)
+        if (syntax.IsClass && (syntax.IsOpen || syntax.IsAbstract))
         {
             return;
         }
+
+        // Issue #4674: an `override` takes its accessibility from the base member
+        // it overrides, so `protected override` is legal on a sealed (non-`open`)
+        // class — that is how a `sealed class Lowerer : BoundTreeRewriter` keeps
+        // overriding the base's protected visitor hooks while staying CLR-sealed.
+        // Value types cannot be derived from, so they have no base class members
+        // to override and keep the diagnostic.
+        var overridesAllowed = syntax.IsClass;
 
         foreach (var field in syntax.Fields)
         {
@@ -146,17 +155,26 @@ internal sealed partial class DeclarationBinder
 
         foreach (var method in syntax.Methods)
         {
-            ReportProtectedToken(method.AccessibilityModifier);
+            if (!(overridesAllowed && method.IsOverride))
+            {
+                ReportProtectedToken(method.AccessibilityModifier);
+            }
         }
 
         foreach (var prop in syntax.Properties)
         {
-            ReportProtectedToken(prop.AccessibilityModifier);
+            if (!(overridesAllowed && prop.OverrideModifier != null))
+            {
+                ReportProtectedToken(prop.AccessibilityModifier);
+            }
         }
 
         foreach (var evt in syntax.Events)
         {
-            ReportProtectedToken(evt.AccessibilityModifier);
+            if (!(overridesAllowed && evt.OverrideModifier != null))
+            {
+                ReportProtectedToken(evt.AccessibilityModifier);
+            }
         }
 
         if (!syntax.Constructors.IsDefaultOrEmpty)
@@ -729,7 +747,9 @@ internal sealed partial class DeclarationBinder
                         continue;
                     }
 
-                    if (resolved is StructSymbol baseStruct && baseStruct.IsClass)
+                    // Imported semantic aggregates still follow CLR inheritance
+                    // eligibility and constructor binding, not source `open` policy.
+                    if (resolved is StructSymbol baseStruct && baseStruct.IsClass && baseStruct.ClrType == null)
                     {
                         // Issue #949: reject genuine self-inheritance
                         // (`class A : A`, or the generic `class A[T] : A[T]`)
@@ -796,6 +816,12 @@ internal sealed partial class DeclarationBinder
 
                         if (clrType.IsClass && !clrType.IsSealed)
                         {
+                            if (!ImportedAssemblySemantics.IsInheritableClass(clrType))
+                            {
+                                Diagnostics.ReportBaseClassNotOpen(baseLocation, baseName);
+                                continue;
+                            }
+
                             if (i != 0)
                             {
                                 Diagnostics.ReportUnableToFindType(baseLocation, baseName);
@@ -4090,7 +4116,7 @@ internal sealed partial class DeclarationBinder
             // Issue #950: a `protected` nested type is only meaningful when the
             // container is an inheritable `open class`. Otherwise nothing can
             // derive from the container to reach the nested type.
-            if (!(containerSyntax.IsClass && containerSyntax.IsOpen))
+            if (!(containerSyntax.IsClass && (containerSyntax.IsOpen || containerSyntax.IsAbstract)))
             {
                 ReportProtectedToken(GetMemberAccessibilityModifier(nested));
             }

@@ -133,9 +133,9 @@ namespace Corpus.Issue1909
 }
 ");
 
-        Assert.Contains("data class Message(Type int32, Text string) {", rendered, StringComparison.Ordinal);
+        Assert.Contains("data class Message(Type int32, Text string) : IEquatable[Message] {", rendered, StringComparison.Ordinal);
         Assert.Contains(
-            "data class CustomMessage(Type int32, Text string, Extra string) : Message(Type, Text) {",
+            "data class CustomMessage(Type int32, Text string, Extra string) : Message(Type, Text), IEquatable[CustomMessage] {",
             rendered,
             StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
@@ -154,7 +154,7 @@ namespace Corpus.Issue1909
 ");
 
         Assert.Contains(
-            "data class CustomMessage(Text string?) : Message(Text!!) {",
+            "data class CustomMessage(Text string?) : Message(Text!!), IEquatable[CustomMessage] {",
             rendered,
             StringComparison.Ordinal);
         AssertRoundTripParses(rendered);

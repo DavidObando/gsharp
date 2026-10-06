@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "1.0",
+  "comment": "Issue #4633: justified per-test-name parity differences for the repo self-migration gate. Kinds: missing / extra (one exact display name, optional count), rows (one theory method whose rows render differently, paired by argument names) and renamed-argument (one theory method whose parameter is renamed; rows must otherwise match exactly). 'reason' and 'issue' are mandatory; unused entries are reported as stale. Seeded from branch nightly 36948633989: every entry cites the P0 self-migration bug that causes it. Rules: tools/cs2gs/README.md, 'Per-test-name parity'.",
+  "entries": [
+    {
+      "app": "test/Core.Tests/Core.Tests.csproj",
+      "kind": "missing",
+      "test": "GSharp.Core.Tests.CodeAnalysis.Symbols.Issue3705LoadContextDifferentialTests.SameAnswer_ForRuntimeType_AndMetadataLoadContextTwin(hostTypeName: \"System.Predicate`1[[System.String, System.Private.\"···, query: DelegateSignature, expected: \"(System.String) -> System.Boolean\")",
+      "reason": "cs2gs translates typeof(Predicate<string>) to the function type (string) -> bool, i.e. Func<string,bool>; this row runs against Func`2 instead.",
+      "issue": "#4679"
+    },
+    {
+      "app": "test/Core.Tests/Core.Tests.csproj",
+      "kind": "missing",
+      "test": "GSharp.Core.Tests.CodeAnalysis.Symbols.Issue3705LoadContextDifferentialTests.SameAnswer_ForRuntimeType_AndMetadataLoadContextTwin(hostTypeName: \"System.Predicate`1[[System.String, System.Private.\"···, query: IsDelegate, expected: \"True\")",
+      "reason": "cs2gs translates typeof(Predicate<string>) to the function type (string) -> bool, i.e. Func<string,bool>; this row runs against Func`2 instead.",
+      "issue": "#4679"
+    },
+    {
+      "app": "test/Core.Tests/Core.Tests.csproj",
+      "kind": "extra",
+      "test": "GSharp.Core.Tests.CodeAnalysis.Symbols.Issue3705LoadContextDifferentialTests.SameAnswer_ForRuntimeType_AndMetadataLoadContextTwin(hostTypeName: \"System.Func`2[[System.String, System.Private.CoreL\"···, query: DelegateSignature, expected: \"(System.String) -> System.Boolean\")",
+      "reason": "The Func`2 row cs2gs produces in place of the C# Predicate`1 row (typeof(Predicate<string>) becomes (string) -> bool).",
+      "issue": "#4679"
+    },
+    {
+      "app": "test/Core.Tests/Core.Tests.csproj",
+      "kind": "extra",
+      "test": "GSharp.Core.Tests.CodeAnalysis.Symbols.Issue3705LoadContextDifferentialTests.SameAnswer_ForRuntimeType_AndMetadataLoadContextTwin(hostTypeName: \"System.Func`2[[System.String, System.Private.CoreL\"···, query: IsDelegate, expected: \"True\")",
+      "reason": "The Func`2 row cs2gs produces in place of the C# Predicate`1 row (typeof(Predicate<string>) becomes (string) -> bool).",
+      "issue": "#4679"
+    }
+  ]
+}

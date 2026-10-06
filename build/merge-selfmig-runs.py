@@ -62,6 +62,7 @@ def merge_app(migrate_app: dict, shard_app: dict | None) -> dict:
         # it excused, and which entries no longer fire.
         "allowedTestFailures": [],
         "staleAllowListEntries": [],
+        "testNameParity": None,
     }
 
     if not translated:
@@ -86,6 +87,9 @@ def merge_app(migrate_app: dict, shard_app: dict | None) -> dict:
     merged["fingerprints"] += list(shard_app.get("fingerprints", []))
     merged["allowedTestFailures"] = list(shard_app.get("allowedTestFailures", []))
     merged["staleAllowListEntries"] = list(shard_app.get("staleAllowListEntries", []))
+    # Issue #4633: the per-test-name parity numbers, PASS or FAIL, so a passing
+    # app's case counts are auditable from the merged run.
+    merged["testNameParity"] = shard_app.get("testNameParity")
     if not merged["succeeded"]:
         merged["failureCategory"] = shard_app.get("failureCategory")
     else:

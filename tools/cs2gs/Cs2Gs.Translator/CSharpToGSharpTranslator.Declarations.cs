@@ -129,7 +129,7 @@ public sealed partial class CSharpToGSharpTranslator
             return new EnumDeclaration(
                 this.EmittedName(symbol, node.Identifier.ValueText),
                 cases,
-                MapVisibility(symbol, this.context, node, preserveStaticClassPrivate: true),
+                MapVisibility(symbol, this.context, node),
                 attributes: this.MapAttributes(node.AttributeLists));
         }
 
@@ -342,8 +342,10 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            this.RegisterCapturingRecursiveLocalFunctions(
-                ordered.Where(statement => !topLevelHoistedStatements.Contains(statement)).ToList());
+            List<StatementSyntax> retainedLocalStatements =
+                ordered.Where(statement => !topLevelHoistedStatements.Contains(statement)).ToList();
+            this.RegisterCapturingRecursiveLocalFunctions(retainedLocalStatements);
+            this.RegisterRecursiveLocalFunctionLifts(retainedLocalStatements);
             bool renamedArgs = argsParameter != null && argsParameter.Name != "args";
             if (renamedArgs)
             {
@@ -617,8 +619,7 @@ public sealed partial class CSharpToGSharpTranslator
         private Visibility MapVisibility(
             ISymbol symbol,
             TranslationContext context,
-            SyntaxNode node,
-            bool preserveStaticClassPrivate = false)
+            SyntaxNode node)
         {
             if (symbol is null)
             {
@@ -632,34 +633,14 @@ public sealed partial class CSharpToGSharpTranslator
                     // positions, so it is omitted (ADR-0115 §B.10).
                     return Visibility.Default;
                 case Accessibility.Private:
-                    // Issues #4301/#4472: see IsMemberOfKeptTopLevelProgram. This must
-                    // precede the extension-owner rule below: a kept top-level
-                    // Program can also declare extension methods, but its
+                    // Issues #4301/#4472: a kept top-level Program can also
+                    // declare extension methods, but its
                     // remaining members still need `internal` so hoisted
                     // top-level statements can reach them.
                     if (!IsExplicitInterfaceImplementation(symbol) &&
                         IsMemberOfKeptTopLevelProgram(symbol))
                     {
                         return Visibility.Internal;
-                    }
-
-                    // A `private` static member of a `static class` that ALSO
-                    // declares extension methods becomes unreachable once those
-                    // methods are lifted to top-level `func`s (ADR-0115 §B.5): the
-                    // lifted func qualifies the sibling reference through the owning
-                    // type (`Owner.Helper`), but G# accessibility then treats the
-                    // former class-private member as inaccessible (GS0472). Widen it
-                    // to the position default so the qualified reference still binds
-                    // (a private helper of a static utility class is an internal
-                    // implementation detail with no external callers to over-expose).
-                    // Issue #3413 owners with private nested aggregates keep their
-                    // extension bodies as in-owner static helpers, so their private
-                    // siblings remain reachable and must not be widened.
-                    if (!preserveStaticClassPrivate &&
-                        IsMemberOfExtensionBearingStaticClass(symbol) &&
-                        !HasPrivateNestedAggregate(symbol.ContainingType))
-                    {
-                        return Visibility.Default;
                     }
 
                     return Visibility.Private;
@@ -720,36 +701,6 @@ public sealed partial class CSharpToGSharpTranslator
             };
 
         /// <summary>
-        /// Returns <see langword="true"/> when <paramref name="symbol"/> is a member
-        /// of a <c>static class</c> that also declares at least one extension method.
-        /// Such a class is normally decomposed at translation time — its extension
-        /// methods are lifted to top-level receiver-clause <c>func</c>s (ADR-0115
-        /// §B.5) — so any sibling <c>private</c> member the lifted funcs reference
-        /// must be widened to stay reachable across the resulting file scope (would
-        /// otherwise be GS0472). Issue #3413's private-nested-owner exception is
-        /// applied by the caller.
-        /// </summary>
-        private static bool IsMemberOfExtensionBearingStaticClass(ISymbol symbol)
-        {
-            if (symbol.ContainingType is not INamedTypeSymbol container
-                || !container.IsStatic
-                || container.TypeKind != TypeKind.Class)
-            {
-                return false;
-            }
-
-            foreach (ISymbol member in container.GetMembers())
-            {
-                if (member is IMethodSymbol { IsExtensionMethod: true })
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        /// <summary>
         /// Issue #950: returns <see langword="true"/> when <paramref name="type"/>
         /// declares any member with a <c>protected</c>-family accessibility.
         /// Such a class is intended for inheritance, so it must be emitted as an
@@ -757,18 +708,64 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private static bool HasProtectedMember(INamedTypeSymbol type)
         {
+            // Issue #4674: a C# `sealed` type is emitted as a non-`open` G# class
+            // (CLR-sealed), and `protected` is valid there only on an `override`
+            // (its accessibility is dictated by the base member, so gsc exempts
+            // it from GS0380). Only an explicit non-override `protected` member
+            // of a sealed type still forces `open`; counting the others made
+            // `Lowerer` and every sealed record (whose compiler-synthesized
+            // `EqualityContract`/`PrintMembers` are `protected`) un-sealed.
+            //
+            // `protected internal` / `private protected` are emitted as
+            // `internal` (see MapVisibility), so they never need `open` for the
+            // sealed case either (`FunctionSymbol`'s `private protected override`).
+            bool isSealed = type.IsSealed;
             foreach (var member in type.GetMembers())
             {
                 switch (member.DeclaredAccessibility)
                 {
                     case Accessibility.Protected:
+                        if (!isSealed || (!member.IsImplicitlyDeclared && !member.IsOverride))
+                        {
+                            return true;
+                        }
+
+                        break;
                     case Accessibility.ProtectedOrInternal:
                     case Accessibility.ProtectedAndInternal:
-                        return true;
+                        if (!isSealed)
+                        {
+                            return true;
+                        }
+
+                        break;
                 }
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Issue #4674: whether <paramref name="type"/> and every type enclosing it
+        /// are reachable from another assembly (public, protected or protected
+        /// internal), i.e. whether the type is part of the assembly's API.
+        /// </summary>
+        private static bool IsExternallyVisible(INamedTypeSymbol type)
+        {
+            for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+            {
+                switch (current.DeclaredAccessibility)
+                {
+                    case Accessibility.Public:
+                    case Accessibility.Protected:
+                    case Accessibility.ProtectedOrInternal:
+                        break;
+                    default:
+                        return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -830,16 +827,23 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (type.IsAbstract
-                || HasProtectedMember(type)
-                || this.efEntityTypes.Contains(type.OriginalDefinition))
+            if (type.IsAbstract || HasProtectedMember(type))
             {
                 return true;
             }
 
+            // Issue #4674: a C# class that is not `sealed` is inheritable, and when it
+            // is reachable from another assembly that inheritability is API (an
+            // analyzer deriving from `SyntaxTree` or `Parser` stops loading if
+            // the migrated type is CLR-sealed). `subclassedBases` only sees
+            // this project's own subclasses and the other signals only see
+            // members, so a public non-sealed class with none of them was
+            // emitted sealed.
             return !type.IsSealed
-                && (this.subclassedBases.Contains(type.OriginalDefinition)
-                    || DeclaresOverridableMember(type));
+                && (this.efEntityTypes.Contains(type.OriginalDefinition)
+                    || this.subclassedBases.Contains(type.OriginalDefinition)
+                    || DeclaresOverridableMember(type)
+                    || IsExternallyVisible(type));
         }
 
         /// <summary>
@@ -1398,8 +1402,10 @@ public sealed partial class CSharpToGSharpTranslator
             // nested type translation must not leak them outward.
             List<MethodDeclaration> outerInstanceSynthHelpers = this.state.PendingInstanceSynthHelpers;
             List<MethodDeclaration> outerStaticSynthHelpers = this.state.PendingStaticSynthHelpers;
+            INamedTypeSymbol outerEmittedAggregate = this.state.CurrentEmittedAggregate;
             this.state.PendingInstanceSynthHelpers = new List<MethodDeclaration>();
             this.state.PendingStaticSynthHelpers = new List<MethodDeclaration>();
+            this.state.CurrentEmittedAggregate = symbol;
             try
             {
                 return this.VisitAggregateCore(node, kind.Value, symbol, otherParts);
@@ -1408,6 +1414,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 this.state.PendingInstanceSynthHelpers = outerInstanceSynthHelpers;
                 this.state.PendingStaticSynthHelpers = outerStaticSynthHelpers;
+                this.state.CurrentEmittedAggregate = outerEmittedAggregate;
             }
         }
 
@@ -1453,15 +1460,6 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             bool isStaticClass = symbol != null && symbol.IsStatic && kind == TypeDeclarationKind.Class;
-
-            if (isStaticClass)
-            {
-                this.context.Report(new TranslationDiagnostic(
-                    nameof(SyntaxKind.ClassDeclaration),
-                    $"C# 'static class {node.Identifier.Text}' has no direct G# form; mapped to a class whose members are all wrapped in a 'shared {{ }}' block (ADR-0115 §B.11 / ADR-0053).",
-                    node.GetLocation(),
-                    TranslationSeverity.Info));
-            }
 
             // Issue #1910: merge in every other partial part's members (from any
             // file) so the constructor-lift/static-initializer/property-inits
@@ -1834,7 +1832,17 @@ public sealed partial class CSharpToGSharpTranslator
             var members = new List<GMember>(instanceMembers);
             if (sharedMembers.Count > 0)
             {
-                members.Add(new SharedBlock(sharedMembers));
+                if (isStaticClass)
+                {
+                    // ADR-0195 / issue #4674: a C# static class is a G# `shared class`,
+                    // whose body IS its shared member list; a `shared { }` block
+                    // inside it is an error.
+                    members.AddRange(sharedMembers);
+                }
+                else
+                {
+                    members.Add(new SharedBlock(sharedMembers));
+                }
             }
 
             // Issue #1729 (mode 4): remove only the entries this invocation added
@@ -1870,12 +1878,30 @@ public sealed partial class CSharpToGSharpTranslator
             // point of keeping it is to give the self-hosted MethodDef this
             // class's CLR identity back (matching the native assembly's
             // metadata shape), not the package's `<Program>`.
+            //
+            // Issue #4674 (ADR-0195): only an extension HOLDER is elided, that is a class whose
+            // every member was an extension method. A static class the author wrote empty
+            // (`public static class Marker { }`), or one that holds only things that also
+            // leave the body (a nested delegate is lifted to a top-level declaration), is a
+            // declared type of the assembly's API and now has a direct form, a
+            // `shared class`, so it is kept.
             if (isStaticClass &&
                 members.Count == 0 &&
+                mergedMembers.Count > 0 &&
+                mergedMembers.All(IsExtensionMethodDeclaration) &&
                 !hostedAnyExtensionOnStaticClass &&
                 !IsTypeOfReferenced(this.context.Compilation, symbol, this.retainedFilePaths))
             {
                 return null;
+            }
+
+            if (isStaticClass)
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.ClassDeclaration),
+                    $"C# 'static class {node.Identifier.Text}' is mapped to a G# 'shared class' whose members sit directly in its body, with no 'shared {{ }}' block (ADR-0195 / ADR-0115 §B.11).",
+                    node.GetLocation(),
+                    TranslationSeverity.Info));
             }
 
             (GTypeReference baseType, List<GTypeReference> interfaces) = this.MapBaseClause(symbol, node, kind.Value);
@@ -1883,10 +1909,10 @@ public sealed partial class CSharpToGSharpTranslator
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
 
             // A class with `protected` members must be an `open class` in G#
-            // (GS0380) — `protected` is meaningless on a non-inheritable type. A C#
-            // `sealed` class that carries `protected override` members (it overrides
-            // an abstract/virtual protected base) therefore still maps to `open`;
-            // G# has no `sealed` modifier so the sealedness is dropped (ADR-0115 §B.4).
+            // (GS0380) — `protected` is meaningless on a non-inheritable type —
+            // except that a `protected override` (whose accessibility the base
+            // dictates) is valid on a sealed, non-`open` class, so a C# `sealed`
+            // class keeps its sealedness (issue #4674; see HasProtectedMember).
             // A C# `record` (G# `data class`) is reference-typed and may be
             // subclassed (e.g. `record Derived : Base`); like a plain class it must
             // be declared `open` in G# to permit subclassing (GS0181) or to carry a
@@ -1895,31 +1921,27 @@ public sealed partial class CSharpToGSharpTranslator
             // nature).
             bool isOpenableKind = kind == TypeDeclarationKind.Class
                 || kind == TypeDeclarationKind.DataClass;
+
+            // Issue #4674: the openness decision lives in IsTypeEmittedOpen alone, so a
+            // member's `open` (IsMemberEmittedOpen) can never disagree with its
+            // declaring type's.
             bool isOpen = symbol != null &&
                 isOpenableKind &&
-                !symbol.IsStatic &&
-                ((!symbol.IsSealed && this.subclassedBases.Contains(symbol.OriginalDefinition))
-                    || HasProtectedMember(symbol)
+                this.IsTypeEmittedOpen(symbol);
 
-                    // Issue #3724: a `virtual`/`abstract` member declares inheritance
-                    // intent that `subclassedBases` cannot see when the only subclass
-                    // lives in a referencing project — see DeclaresOverridableMember.
-                    || (!symbol.IsSealed && DeclaresOverridableMember(symbol))
-                    || (!symbol.IsSealed && this.efEntityTypes.Contains(symbol.OriginalDefinition)));
+            // ADR-0195 / issue #4674: a C# `abstract class`/`abstract record` maps to
+            // G#'s `abstract class`/`abstract data class`, which is inheritable
+            // (the modifier implies `open`) and uninstantiable even when the
+            // type declares no abstract member (gsc used to infer abstractness
+            // from abstract members alone, so `BoundTreeWalker` became concrete).
+            bool isAbstract = symbol != null && symbol.IsAbstract && isOpenableKind;
 
-            // G# has no `abstract` class modifier (the keyword is not recognized by
-            // the parser); a C# `abstract class`/`abstract record` therefore maps to
-            // an `open class`/`open data class` — subclassable but without enforced
-            // non-instantiation (ADR-0115 §B.4). The abstractness is intentionally
-            // dropped.
-            bool wasAbstract = symbol != null && symbol.IsAbstract && isOpenableKind;
-            if (wasAbstract)
+            // A gsgen stub can be temporarily abstract while instance partial
+            // methods await generation. Do not declare that status on a generated
+            // part unless the generator itself stated the modifier.
+            if (this.emitGeneratedImplementingParts && !node.Modifiers.Any(SyntaxKind.AbstractKeyword))
             {
-                this.context.Report(new TranslationDiagnostic(
-                    nameof(SyntaxKind.ClassDeclaration),
-                    $"C# 'abstract' on '{node.Identifier.Text}' is dropped; G# has no abstract-class modifier, so the type maps to an 'open class' (ADR-0115 §B.4).",
-                    node.GetLocation(),
-                    TranslationSeverity.Info));
+                isAbstract = false;
             }
 
             // Issue #1910 (gap 1 & 2): a `partial` type's attributes/`unsafe`
@@ -1964,14 +1986,20 @@ public sealed partial class CSharpToGSharpTranslator
                 baseConstructorArguments: baseConstructorArguments,
                 interfaces: interfaces,
                 members: members,
-                visibility: MapVisibility(symbol, this.context, node, preserveStaticClassPrivate: true),
-                isOpen: isOpen || wasAbstract,
-                isAbstract: false,
+                visibility: MapVisibility(symbol, this.context, node),
+                isOpen: isOpen && !isAbstract,
+                isAbstract: isAbstract,
                 attributes: this.MapAttributes(mergedAttributeLists),
                 isUnsafe: isUnsafe,
                 isPartial: isPartial,
-                isRefLike: isRefLike);
+                isRefLike: isRefLike,
+                isShared: isStaticClass);
         }
+
+        private static bool IsExtensionMethodDeclaration(MemberDeclarationSyntax member) =>
+            member is MethodDeclarationSyntax method
+            && method.ParameterList.Parameters.Count > 0
+            && method.ParameterList.Parameters[0].Modifiers.Any(SyntaxKind.ThisKeyword);
 
         private bool ShouldAttachOwnedExtensions(
             TypeDeclarationSyntax node,
@@ -2464,6 +2492,80 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return false;
+        }
+
+        private bool IsArrayFieldOverwrittenBeforeObservation(IFieldSymbol field)
+        {
+            INamedTypeSymbol owner = field.ContainingType;
+
+            // ponytail: prove only straight-line constructor prefixes on sealed,
+            // object-based types without finalizers; all other shapes keep fresh zeros.
+            if (!owner.IsSealed
+                || owner.BaseType?.SpecialType != SpecialType.System_Object
+                || owner.GetMembers().OfType<IMethodSymbol>().Any(method => method.MethodKind == MethodKind.Destructor))
+            {
+                return false;
+            }
+
+            foreach (IMethodSymbol constructor in owner.InstanceConstructors)
+            {
+                if (constructor.DeclaringSyntaxReferences.Length != 1
+                    || constructor.DeclaringSyntaxReferences[0].GetSyntax() is not ConstructorDeclarationSyntax syntax
+                    || syntax.Body == null
+                    || syntax.Initializer != null)
+                {
+                    return false;
+                }
+
+                using IDisposable modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree);
+                bool overwritten = false;
+                foreach (StatementSyntax statement in syntax.Body.Statements)
+                {
+                    if (statement is not ExpressionStatementSyntax expression)
+                    {
+                        return false;
+                    }
+
+                    if (expression.Expression is AssignmentExpressionSyntax assignment
+                        && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                    {
+                        ExpressionSyntax left = StripParentheses(assignment.Left);
+                        bool directReceiver = left is IdentifierNameSyntax
+                            || (left is MemberAccessExpressionSyntax access
+                                && StripParentheses(access.Expression) is ThisExpressionSyntax);
+                        if (directReceiver
+                            && this.context.GetSymbolInfo(left).Symbol is IFieldSymbol assigned
+                            && !assigned.IsStatic
+                            && SymbolEqualityComparer.Default.Equals(assigned.ContainingType, owner))
+                        {
+                            if (this.ReferencesInstanceMember(assignment.Right, owner))
+                            {
+                                return false;
+                            }
+
+                            if (SymbolEqualityComparer.Default.Equals(assigned, field))
+                            {
+                                overwritten = true;
+                                break;
+                            }
+
+                            continue;
+                        }
+                    }
+
+                    if (this.ReferencesInstanceMember(expression.Expression, owner))
+                    {
+                        return false;
+                    }
+                }
+
+                if (!overwritten)
+                {
+                    return false;
+                }
+            }
+
+            return owner.InstanceConstructors.Length > 0;
         }
 
         /// <summary>

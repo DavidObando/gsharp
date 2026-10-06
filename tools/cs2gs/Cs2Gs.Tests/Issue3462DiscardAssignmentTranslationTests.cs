@@ -17,7 +17,7 @@ namespace Cs2Gs.Tests;
 public sealed class Issue3462DiscardAssignmentTranslationTests
 {
     [Fact]
-    public void MethodBody_InertValuesAreRemoved_AndReservedParameterStaysSanitized()
+    public void MethodBody_InertValuesAreRemoved_AndReservedParameterStaysEscaped()
     {
         string rendered = Render("""
             public static class Server
@@ -33,9 +33,9 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
             }
             """);
 
-        Assert.Contains("Initialized(params_ object)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Initialized($params object)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("let _ =", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("\n        params_\n", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n        $params\n", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 

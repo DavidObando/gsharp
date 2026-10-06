@@ -340,6 +340,51 @@ public sealed class Conversion
     internal static bool ContainsPlatformTypeInStructure(TypeSymbol? type)
         => ContainsPlatformType(type);
 
+    /// <summary>Recognizes source and imported interfaces, including symbolic constructed owners.</summary>
+    /// <param name="type">The candidate interface type.</param>
+    /// <returns>Whether the type denotes an interface.</returns>
+    internal static bool IsInterfaceLikeType(TypeSymbol? type)
+    {
+        if (type is InterfaceSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol
+            or ImportedTypeSymbol { OpenDefinition.IsInterface: true })
+        {
+            return true;
+        }
+
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        // Issue #1100: querying IsInterface on a TypeBuilderInstantiation
+        // throws NotSupportedException. A constructed delegate is not an interface.
+        try
+        {
+            return clr.IsInterface;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Checks the actual runtime relation of a slot already admitted by CLR
+    /// applicability; this does not replace a declared nullability contract.
+    /// </summary>
+    /// <param name="source">The argument's actual type.</param>
+    /// <param name="target">The emitted MethodSpec slot.</param>
+    /// <returns>Whether their runtime shapes satisfy identity or reference variance.</returns>
+    internal static bool HasClrArgumentRuntimeRelation(TypeSymbol source, TypeSymbol target)
+        => TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(source, target)
+            || (!NullableLifting.IsAnyValueTypeNullable(source as NullableTypeSymbol)
+                && (IsMapInterfaceReferenceUpcast(source.StripToBareShape(), target.StripToBareShape())
+                    || TryClassifyConstructedImportedReferenceConversion(
+                        source.StripToBareShape(),
+                        target.StripToBareShape(),
+                        clrArgumentBoundary: true)));
+
     /// <summary>
     /// Classifies only pre-ADR-0148 conversions. Projection planning uses this
     /// to keep member conversion non-recursive.
@@ -944,11 +989,10 @@ public sealed class Conversion
         // applies equally to imported interfaces/classes, inferred or explicit
         // method arguments, nested generic arguments, and cross-context CLR
         // identities.
-        if (from is ImportedTypeSymbol fromConstructedReference
-            && to is ImportedTypeSymbol toConstructedReference
+        if (from is ImportedTypeSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol
             && TryClassifyConstructedImportedReferenceConversion(
-                fromConstructedReference,
-                toConstructedReference))
+                from,
+                to))
         {
             return Conversion.Implicit;
         }
@@ -1555,10 +1599,23 @@ public sealed class Conversion
             // CLR's IsAssignableFrom to cover interface inheritance from the
             // imported side (e.g. implementing `IList<T>` also satisfies
             // `IEnumerable<T>`).
-            if (to?.ClrType != null && to.ClrType.IsInterface)
+            if (to is not null and not InterfaceSymbol && IsInterfaceLikeType(to))
             {
                 foreach (var c in GetStructHierarchy(fromClass))
                 {
+                    // #4731: imported bases supply nominal interface implementations
+                    // too. Classify their substituted symbols, not erased CLR probes;
+                    // neither structural adapters nor unrelated cross-casts are upcasts.
+                    if (c.ImportedBaseType is { } importedBase
+                        && ClassifyCore(
+                            importedBase,
+                            to,
+                            allowStructuralProjection: false,
+                            allowExplicitReference: false).IsImplicit)
+                    {
+                        return Conversion.Implicit;
+                    }
+
                     foreach (var iface in c.ImplementedClrInterfaces)
                     {
                         var ifaceClr = iface?.ClrType;
@@ -2062,8 +2119,7 @@ public sealed class Conversion
                 || (TypeSymbol.ContainsSourceArrayShape(from)
                     && TypeSymbol.ContainsSourceArrayShape(to)
                     && IsRejectedFixedArrayShapeMismatch(from, to)))
-            && to is ImportedTypeSymbol mismatchedConstructedTarget
-            && TryGetConstructedGenericShape(mismatchedConstructedTarget, out _, out _))
+            && TryGetConstructedGenericShape(to, out _, out _))
         {
             return Conversion.None;
         }
@@ -2521,6 +2577,14 @@ public sealed class Conversion
             return removesReferenceNullability;
         }
 
+        // Slice covariance must be explicitly spelled, including when either
+        // array reference is nullable. Reuse the same element relationship as
+        // the bare-array cast; lifting it preserves nil and reference identity.
+        if (IsCovariantArrayUpcast(from, to))
+        {
+            return true;
+        }
+
         // A checked downcast exists whenever the target widens back to the
         // source. Disable this same explicit-reference fallback during the
         // reverse probe so unrelated reference pairs cannot recurse forever.
@@ -2630,8 +2694,8 @@ public sealed class Conversion
     /// <returns><see langword="true"/> for a covariant one-dimensional array upcast.</returns>
     internal static bool IsCovariantArrayUpcast(TypeSymbol? from, TypeSymbol? to)
     {
-        var sourceElement = OneDimensionalArrayElement(from);
-        var targetElement = OneDimensionalArrayElement(to);
+        var sourceElement = UnwrapReferenceNullable(OneDimensionalArrayElement(from));
+        var targetElement = UnwrapReferenceNullable(OneDimensionalArrayElement(to));
         if (sourceElement == null
             || targetElement == null
             || !IsReferenceLikeTarget(sourceElement)
@@ -3102,25 +3166,41 @@ public sealed class Conversion
 
     /// <summary>
     /// Issue #1420: extracts the open generic CLR definition and the symbolic
-    /// type arguments of a constructed generic <see cref="ImportedTypeSymbol"/>,
+    /// type arguments of a constructed generic imported type or sequence alias,
     /// whether the arguments are carried symbolically (#313 construction) or only
     /// by the closed <see cref="TypeSymbol.ClrType"/>. CLR-backed arguments are
     /// projected through <see cref="TypeSymbol.FromClrType"/> so primitive
     /// aliases and their BCL counterparts unify.
     /// </summary>
     private static bool TryGetConstructedGenericShape(
-        ImportedTypeSymbol symbol,
+        TypeSymbol? symbol,
         [NotNullWhen(true)] out Type? openDefinition,
         out ImmutableArray<TypeSymbol> typeArguments)
     {
-        if (symbol.OpenDefinition != null && !symbol.TypeArguments.IsDefaultOrEmpty)
+        // #4731: aliases must use the same symbolic relation AND rejection
+        // guard as their imported interface spellings, never erased CLR probes.
+        if (symbol is SequenceTypeSymbol or AsyncSequenceTypeSymbol
+            && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(symbol, out openDefinition, out var elementType))
         {
-            openDefinition = symbol.OpenDefinition;
-            typeArguments = symbol.TypeArguments;
+            typeArguments = ImmutableArray.Create(elementType);
+            return openDefinition != null;
+        }
+
+        if (symbol is not ImportedTypeSymbol imported)
+        {
+            openDefinition = null;
+            typeArguments = ImmutableArray<TypeSymbol>.Empty;
+            return false;
+        }
+
+        if (imported.OpenDefinition != null && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            openDefinition = imported.OpenDefinition;
+            typeArguments = imported.TypeArguments;
             return true;
         }
 
-        var clr = symbol.ClrType;
+        var clr = imported.ClrType;
         if (clr != null && clr.IsGenericType && !clr.IsGenericTypeDefinition)
         {
             var clrArgs = clr.GetGenericArguments();
@@ -3142,7 +3222,7 @@ public sealed class Conversion
 
     /// <summary>
     /// Issue #1088: determines whether two constructed generic
-    /// <see cref="ImportedTypeSymbol"/> instances denote the same closed type
+    /// imported types or sequence aliases denote the same closed type
     /// by comparing their open definitions and SYMBOLIC type arguments, rather
     /// than their (possibly erased) <see cref="TypeSymbol.ClrType"/>. A
     /// same-compilation user type used as a CLR generic argument has a
@@ -3151,22 +3231,24 @@ public sealed class Conversion
     /// otherwise identical instantiations (e.g. the declared variable type
     /// <c>Channel[BufferEntry]</c> vs. a factory method's return type).
     /// </summary>
-    private static bool AreConstructedGenericsIdentical(ImportedTypeSymbol from, ImportedTypeSymbol to)
+    private static bool AreConstructedGenericsIdentical(TypeSymbol from, TypeSymbol to)
     {
-        if (!ClrTypeUtilities.IsSameAs(from.OpenDefinition, to.OpenDefinition))
+        if (!TryGetConstructedGenericShape(from, out var fromOpen, out var fromArguments)
+            || !TryGetConstructedGenericShape(to, out var toOpen, out var toArguments)
+            || !ClrTypeUtilities.IsSameAs(fromOpen, toOpen))
         {
             return false;
         }
 
-        if (from.TypeArguments.IsDefaultOrEmpty || to.TypeArguments.IsDefaultOrEmpty
-            || from.TypeArguments.Length != to.TypeArguments.Length)
+        if (fromArguments.IsDefaultOrEmpty || toArguments.IsDefaultOrEmpty
+            || fromArguments.Length != toArguments.Length)
         {
             return false;
         }
 
-        for (var i = 0; i < from.TypeArguments.Length; i++)
+        for (var i = 0; i < fromArguments.Length; i++)
         {
-            if (!AreTypeArgumentsEquivalent(from.TypeArguments[i], to.TypeArguments[i]))
+            if (!AreTypeArgumentsEquivalent(fromArguments[i], toArguments[i]))
             {
                 return false;
             }
@@ -3180,9 +3262,14 @@ public sealed class Conversion
     /// imported generic types from their symbolic open-definition hierarchy
     /// instead of their possibly-erased CLR probe types.
     /// </summary>
+    /// <param name="from">The actual source shape.</param>
+    /// <param name="to">The actual target shape.</param>
+    /// <param name="clrArgumentBoundary">Whether CLR applicability already admitted reference annotations.</param>
+    /// <returns>Whether the symbolic hierarchy and variance admit the relation.</returns>
     private static bool TryClassifyConstructedImportedReferenceConversion(
-        ImportedTypeSymbol from,
-        ImportedTypeSymbol to)
+        TypeSymbol from,
+        TypeSymbol? to,
+        bool clrArgumentBoundary = false)
     {
         if (from == null
             || !TryGetConstructedGenericShape(to, out var targetOpen, out var targetArguments)
@@ -3199,24 +3286,31 @@ public sealed class Conversion
         // boxes, and the boxed reference is runtime-assignment-compatible with
         // the variant interface, so only classification was missing. Non-
         // interface targets keep the value-type exclusion.
+
+        // Closed CLR signatures have no symbolic owner vector to map.
+        // Project their real interface closure; symbolic sources must
+        // keep the owner-aware path and never fall back to erased probes.
         ImmutableArray<TypeSymbol> sourceArguments;
-        if (from.OpenDefinition != null
-            && !from.TypeArguments.IsDefaultOrEmpty
-            && (!from.OpenDefinition.IsValueType || targetOpen.IsInterface))
+        if (TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments)
+            && (!sourceOpen.IsValueType || targetOpen.IsInterface))
         {
-            if (ClrTypeUtilities.AreSame(from.OpenDefinition, targetOpen))
+            if (ClrTypeUtilities.AreSame(sourceOpen, targetOpen))
             {
-                sourceArguments = from.TypeArguments;
+                sourceArguments = sourceTypeArguments;
             }
-            else if (!MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
-                         from,
-                         targetOpen,
-                         out sourceArguments))
+            else if (from is not ImportedTypeSymbol importedSource
+                || (importedSource.OpenDefinition != null && !importedSource.TypeArguments.IsDefaultOrEmpty
+                    ? !MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
+                          importedSource,
+                          targetOpen,
+                          out sourceArguments)
+                    : !TryProjectClrInterfaceArguments(importedSource, targetOpen, out sourceArguments)))
             {
                 return false;
             }
         }
-        else if (!TryProjectClrInterfaceArguments(from, targetOpen, out sourceArguments))
+        else if (from is not ImportedTypeSymbol importedSource
+            || !TryProjectClrInterfaceArguments(importedSource, targetOpen, out sourceArguments))
         {
             // Issue #3501: a NON-generic imported class (e.g. Roslyn's
             // `SymbolEqualityComparer : IEqualityComparer<ISymbol?>`) has no
@@ -3276,12 +3370,17 @@ public sealed class Conversion
             // classifies, matching C# (issue #3501 Translator burn-down).
             var variance = genericParameters[i].GenericParameterAttributes
                 & System.Reflection.GenericParameterAttributes.VarianceMask;
+            var clrReferenceArguments = clrArgumentBoundary
+                && IsReferenceTypeArgument(sourceArgument)
+                && IsReferenceTypeArgument(targetArgument);
             var compatible = variance switch
             {
                 System.Reflection.GenericParameterAttributes.Covariant =>
-                    IsVarianceArgumentCompatible(sourceArgument, targetArgument, isDelegateConformanceBoundary),
+                    IsVarianceArgumentCompatible(sourceArgument, targetArgument, isDelegateConformanceBoundary)
+                        || (clrReferenceArguments && HasClrArgumentRuntimeRelation(sourceArgument, targetArgument)),
                 System.Reflection.GenericParameterAttributes.Contravariant =>
-                    IsVarianceArgumentCompatible(targetArgument, sourceArgument, isDelegateConformanceBoundary),
+                    IsVarianceArgumentCompatible(targetArgument, sourceArgument, isDelegateConformanceBoundary)
+                        || (clrReferenceArguments && HasClrArgumentRuntimeRelation(targetArgument, sourceArgument)),
                 _ => false,
             };
             if (!compatible)
@@ -4870,11 +4969,15 @@ public sealed class Conversion
             return false;
         }
 
-        // Nested constructed generics (e.g. List[List[MyGs]]) compare structurally.
-        if (a is ImportedTypeSymbol nestedA && b is ImportedTypeSymbol nestedB
-            && nestedA.OpenDefinition != null && nestedB.OpenDefinition != null)
+        a = a.StripToBareShape();
+        b = b.StripToBareShape();
+
+        // Nested generic arguments retain their symbolic shape through aliases
+        // and annotation carriers instead of comparing erased CLR envelopes.
+        if (TryGetConstructedGenericShape(a, out _, out _)
+            && TryGetConstructedGenericShape(b, out _, out _))
         {
-            return AreConstructedGenericsIdentical(nestedA, nestedB);
+            return AreConstructedGenericsIdentical(a, b);
         }
 
         // Issue #3962: a fixed-length array `[N]T` is backed by the plain
@@ -5517,6 +5620,13 @@ public sealed class Conversion
     // <see cref="TypeSymbol.ContainsFixedLengthArray"/>.
     private static bool RequiresSymbolicTypeArgumentIdentity(TypeSymbol? type)
     {
+        type = type?.StripToBareShape();
+        if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol
+            && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(type, out _, out var elementType))
+        {
+            return RequiresSymbolicTypeArgumentIdentity(elementType);
+        }
+
         if (type is not ImportedTypeSymbol { OpenDefinition: not null } imported)
         {
             return false;
@@ -6182,32 +6292,6 @@ public sealed class Conversion
         => type is TypeParameterSymbol tp
             && (tp.HasReferenceTypeConstraint || tp.ClassConstraint != null);
 
-    private static bool IsInterfaceLikeType(TypeSymbol? type)
-    {
-        if (type is InterfaceSymbol)
-        {
-            return true;
-        }
-
-        var clr = type?.ClrType;
-        if (clr == null)
-        {
-            return false;
-        }
-
-        // Issue #1100: as with IsEnumLikeType, querying IsInterface on a
-        // TypeBuilderInstantiation throws NotSupportedException. A constructed
-        // generic delegate is never an interface.
-        try
-        {
-            return clr.IsInterface;
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
-    }
-
     private static bool HasExplicitUnboxingConversion(TypeSymbol? from, TypeSymbol? to)
     {
         if (from is NullableTypeSymbol nullableFrom)
@@ -6351,8 +6435,14 @@ public sealed class Conversion
             }
         }
 
-        // Either side imported / CLR-typed: defer to the CLR's own
-        // assignability check.
+        if (from is ImportedTypeSymbol
+            && RequiresSymbolicTypeArgumentIdentity(from)
+            && TryGetConstructedGenericShape(to, out _, out _))
+        {
+            return TryClassifyConstructedImportedReferenceConversion(from, to);
+        }
+
+        // Only faithful closed CLR shapes may decide interface boxing.
         var fromClr = from?.ClrType;
         var toClr = to?.ClrType;
         if (fromClr != null && toClr != null)

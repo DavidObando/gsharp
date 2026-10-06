@@ -120,7 +120,7 @@ internal sealed partial class OverloadResolver
         // Issue #306: a class declaring an explicit `init(...)` constructor is
         // constructed against that constructor's parameter list rather than a
         // primary-constructor parameter list.
-        if (classType.ExplicitConstructor != null)
+        if (!classType.EffectiveExplicitConstructors.IsDefaultOrEmpty)
         {
             return BindExplicitConstructorCallExpression(syntax, classType);
         }
@@ -198,7 +198,7 @@ internal sealed partial class OverloadResolver
                         paramIdx = -1;
                         for (var p = 0; p < defParams.Length; p++)
                         {
-                            if (string.Equals(defParams[p].Name, named.NameToken.Text, StringComparison.Ordinal))
+                            if (string.Equals(defParams[p].Name, named.NameToken.ValueText, StringComparison.Ordinal))
                             {
                                 paramIdx = p;
                                 break;
@@ -2561,7 +2561,7 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
-            var name = named.NameToken.Text;
+            var name = named.NameToken.ValueText;
             var matched = false;
             for (var p = 0; p < parameters.Length; p++)
             {

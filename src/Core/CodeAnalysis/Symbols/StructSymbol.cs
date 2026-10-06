@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -99,6 +100,10 @@ public sealed class StructSymbol : TypeSymbol
     private InterfaceArraySnapshot? substitutedInterfaces;
     private TypeArraySnapshot? substitutedImplementedClrInterfaces;
     private TypeSnapshot? substitutedImportedBaseType;
+    private FunctionSymbol? dataEqualsSelf;
+    private FunctionSymbol? dataEqualsObject;
+    private FunctionSymbol? dataEqualsBase;
+    private TypeSymbol? dataEqualsBaseOwner;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructSymbol"/> class.
@@ -329,12 +334,13 @@ public sealed class StructSymbol : TypeSymbol
     public bool IsOpen { get; }
 
     /// <summary>
-    /// Gets a value indicating whether this class is abstract — issue #987. A
-    /// class is abstract when its effective member set (own + inherited, after
-    /// override resolution) contains at least one abstract method (a no-body
-    /// <c>open func</c>), or when a non-data class inherits an abstract
-    /// synthesized record clone. Such a type cannot be instantiated and is
-    /// emitted with <c>TypeAttributes.Abstract</c>. Always <c>false</c> for
+    /// Gets a value indicating whether this class is abstract: an explicit <c>abstract</c> or
+    /// <c>shared</c> modifier (ADR-0195), an unimplemented abstract member in
+    /// its effective own/inherited member set after override resolution
+    /// (including imported CLR contracts), or a non-data descendant of an
+    /// abstract synthesized record-clone ancestor. Such a type cannot be
+    /// instantiated and is emitted with <c>TypeAttributes.Abstract</c>;
+    /// a <c>shared</c> class is also sealed. Always <c>false</c> for
     /// value-type structs.
     /// </summary>
     public bool IsAbstract
@@ -367,7 +373,11 @@ public sealed class StructSymbol : TypeSymbol
                 return effectiveProperties.Values.Any(property => property.IsAbstract);
             }
 
-            return (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
+            // ADR-0195 / issue #4674: an explicitly `abstract` or `shared` class is
+            // abstract whatever its members are.
+            return IsDeclaredAbstract
+                || IsSharedClass
+                || (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
                 || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
                 || HasUnimplementedAbstractProperties()
                 || ExternalClrOverrideResolver.HasUnimplementedAbstractMembers(this);
@@ -673,6 +683,55 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public DeinitSymbol? Deinitializer { get; private set; }
 
+    /// <summary>Gets imported accessors selected by interface conformance binding.</summary>
+    internal List<(InterfaceSymbol Interface, PropertySymbol Property, MethodInfo Accessor, TypeSymbol ContainingType, bool IsSetter)> ImportedInterfaceAccessors { get; } = new();
+
+    /// <summary>Gets the compiler-owned self equality signature on this exact construction.</summary>
+    internal FunctionSymbol DataEqualsSelf => dataEqualsSelf ??= DataEqualityMemberModel.Create(this, this, isOverride: false);
+
+    /// <summary>Gets the compiler-owned override of the nullable object equality slot.</summary>
+    internal FunctionSymbol DataEqualsObject => dataEqualsObject ??= DataEqualityMemberModel.CreateObject(this);
+
+    /// <summary>Gets the compiler-owned override of a direct data base's typed equality slot.</summary>
+    internal FunctionSymbol? DataEqualsBase
+    {
+        get
+        {
+            var directBase = DataEqualityMemberModel.GetDirectBase(this, out var importedMethod);
+            if (directBase is null)
+            {
+                return null;
+            }
+
+            if (!ReferenceEquals(dataEqualsBaseOwner, directBase))
+            {
+                dataEqualsBase = DataEqualityMemberModel.Create(this, directBase, isOverride: true, importedMethod);
+                dataEqualsBaseOwner = directBase;
+            }
+
+            return dataEqualsBase;
+        }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the class was declared with the
+    /// <c>abstract</c> modifier (ADR-0195 / issue #4674). Unlike the
+    /// member-derived <see cref="IsAbstract"/>, this is the author's explicit
+    /// statement, so a class with no abstract member can still be
+    /// uninstantiable (a migrated C# <c>abstract class</c> with only concrete
+    /// members). Such a class is inheritable: the binder gives it
+    /// <see cref="IsOpen"/>.
+    /// </summary>
+    internal bool IsDeclaredAbstract => IsClass && (Declaration?.IsAbstract ?? false);
+
+    /// <summary>
+    /// Gets a value indicating whether the class was declared with the
+    /// <c>shared</c> modifier (ADR-0195 / issue #4674): emitted CLR
+    /// <c>abstract sealed</c> with no instance constructor, every member shared,
+    /// the shape of a C# <c>static class</c>.
+    /// </summary>
+    internal bool IsSharedClass => IsClass && (Declaration?.IsShared ?? false);
+
     /// <summary>
     /// Gets a value indicating whether non-public value-struct field initializers require an
     /// in-type default constructor rather than call-site field stores.
@@ -700,7 +759,7 @@ public sealed class StructSymbol : TypeSymbol
         builder.AddRange(ConstFields);
         builder.AddRange(Properties);
         builder.AddRange(StaticProperties);
-        builder.AddRange(Methods);
+        builder.AddRange(GetDeclaredInstanceMethods());
         builder.AddRange(StaticMethods);
         builder.AddRange(Events);
         builder.AddRange(StaticEvents);
@@ -1124,6 +1183,12 @@ public sealed class StructSymbol : TypeSymbol
             }
         }
 
+        if (IsData && ClrType == null && name == "Equals")
+        {
+            method = DataEqualsSelf;
+            return true;
+        }
+
         method = null;
         return false;
     }
@@ -1135,13 +1200,8 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns>The overload set; empty if none.</returns>
     public System.Collections.Immutable.ImmutableArray<FunctionSymbol> GetMethods(string name)
     {
-        if (Methods.IsDefaultOrEmpty)
-        {
-            return System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty;
-        }
-
         var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<FunctionSymbol>();
-        foreach (var m in Methods)
+        foreach (var m in GetDeclaredInstanceMethods())
         {
             if (m.Name == name)
             {
@@ -1166,12 +1226,7 @@ public sealed class StructSymbol : TypeSymbol
         System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Builder? builder = null;
         foreach (var c in GetHierarchy())
         {
-            if (c.Methods.IsDefaultOrEmpty)
-            {
-                continue;
-            }
-
-            foreach (var m in c.Methods)
+            foreach (var m in c.GetMethods(name))
             {
                 if (m.Name != name)
                 {
@@ -1644,49 +1699,49 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>
-    /// Issue #1087: gets the parameter types of <paramref name="constructor"/>
-    /// as observed on this (possibly constructed) symbol. For a constructed
-    /// closed generic type, the open-definition constructor's parameter types
-    /// have this symbol's type arguments substituted for the definition's type
-    /// parameters (e.g. <c>init(a T)</c> on <c>Base[T]</c> surfaces as
-    /// <c>init(a int32)</c> on <c>Base[int32]</c>); for a non-generic or open
-    /// symbol the declared parameter types are returned unchanged.
+    /// Gets the parameter types of <paramref name="constructor"/> in this
+    /// construction, substituting both enclosing and own type arguments through
+    /// the same member-type projection used by fields and properties.
     /// </summary>
     /// <param name="constructor">A constructor drawn from <see cref="EffectiveExplicitConstructors"/>.</param>
     /// <returns>The (substituted, when constructed) parameter types in declaration order.</returns>
     public ImmutableArray<TypeSymbol> GetConstructorParameterTypesForConstruction(ConstructorSymbol constructor)
     {
         var parameters = constructor.Parameters;
-        if (Definition == null
-            || TypeArguments.IsDefaultOrEmpty
-            || Definition.TypeParameters.IsDefaultOrEmpty
-            || parameters.IsDefaultOrEmpty)
+        if (parameters.IsDefaultOrEmpty)
         {
-            var asTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.IsDefaultOrEmpty ? 0 : parameters.Length);
-            if (!parameters.IsDefaultOrEmpty)
-            {
-                foreach (var p in parameters)
-                {
-                    asTypes.Add(p.Type);
-                }
-            }
-
-            return asTypes.ToImmutable();
-        }
-
-        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(Definition.TypeParameters.Length);
-        for (var i = 0; i < Definition.TypeParameters.Length && i < TypeArguments.Length; i++)
-        {
-            subst[Definition.TypeParameters[i]] = TypeArguments[i];
+            return ImmutableArray<TypeSymbol>.Empty;
         }
 
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
         foreach (var p in parameters)
         {
-            builder.Add(SubstituteTypeForConstruction(p.Type, subst, mapClrType));
+            builder.Add(SubstituteMemberType(p.Type));
         }
 
         return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Gets declared source or imported instance methods, including compiler-owned data slots.
+    /// </summary>
+    /// <returns>The declared instance method set.</returns>
+    internal ImmutableArray<FunctionSymbol> GetDeclaredInstanceMethods()
+    {
+        if (!IsData || ClrType != null)
+        {
+            return Methods;
+        }
+
+        var builder = Methods.ToBuilder();
+        builder.Add(DataEqualsSelf);
+        if (DataEqualsBase is { } baseEquals)
+        {
+            builder.Add(baseEquals);
+        }
+
+        builder.Add(DataEqualsObject);
+        return builder.ToImmutable();
     }
 
     /// <summary>

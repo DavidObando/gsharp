@@ -196,9 +196,21 @@ public sealed class Receiver : GNode
     /// <param name="name">The receiver parameter name.</param>
     /// <param name="type">The receiver type.</param>
     public Receiver(string name, GTypeReference type)
+        : this(name, type, null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Receiver"/> class with parameter attributes.
+    /// </summary>
+    /// <param name="name">The receiver parameter name.</param>
+    /// <param name="type">The receiver type.</param>
+    /// <param name="attributes">Optional receiver-parameter attributes.</param>
+    public Receiver(string name, GTypeReference type, IReadOnlyList<AttributeUse> attributes)
     {
         Name = name;
         Type = type;
+        Attributes = attributes ?? new List<AttributeUse>();
     }
 
     /// <summary>Gets the receiver parameter name.</summary>
@@ -206,4 +218,7 @@ public sealed class Receiver : GNode
 
     /// <summary>Gets the receiver type.</summary>
     public GTypeReference Type { get; }
+
+    /// <summary>Gets the receiver-parameter attributes.</summary>
+    public IReadOnlyList<AttributeUse> Attributes { get; }
 }

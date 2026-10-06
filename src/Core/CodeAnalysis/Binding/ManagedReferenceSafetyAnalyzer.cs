@@ -98,7 +98,11 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 this.Report(value, "default would synthesize a null non-null managed-reference slot; use a nullable handle or initialize the aggregate");
                 break;
             case BoundStructLiteralExpression literal:
-                this.CheckConstruction(literal.StructType, literal, literal.Initializers.Where(i => i.Field != null).Select(i => i.Field), explicitConstructor: false);
+                if (literal.CopySource == null)
+                {
+                    this.CheckConstruction(literal.StructType, literal, literal.Initializers.Where(i => i.Field != null).Select(i => i.Field), explicitConstructor: false);
+                }
+
                 foreach (var initializer in literal.Initializers)
                 {
                     this.CheckScopedStore(initializer.Value);

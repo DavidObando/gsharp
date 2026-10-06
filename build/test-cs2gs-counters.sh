@@ -264,8 +264,8 @@ grep -Fq '| lines >300 chars (total) | n/a | 1 |' <<< "$report"
 grep -Fq '| synthetic `__` identifiers | 3 | 3 |' <<< "$report"
 grep -Fq '| `__cs2gs_` | 0 | 0 | never emitted; reserved alias prefix was not implemented (#4299) |' <<< "$report"
 
-# Issue #4198: one retained helper means three CODE occurrences, not one
-# identifier or four raw occurrences (the lift comment is not code).
+# Issue #4302: the retired family remains counted, and any code occurrence
+# fails the zero ceiling.
 lift_tree="$scratch/lift-tree"
 mkdir -p "$lift_tree"
 cat > "$lift_tree/Retained.gs" <<'GS'
@@ -274,22 +274,19 @@ func __local_Owner_Helper() {}
 __local_Owner_Helper()
 __local_Owner_Helper()
 GS
-jq '.liftedLocalCeiling = 3' "$scratch/baseline.json" > "$scratch/lift-baseline.json"
 selfmig_measure "$lift_tree"
-assert_eq "$lifts" "3" "retained helper occurrence count"
-if ! output=$(TMPDIR="$scratch" selfmig_apply_baseline "$scratch/lift-baseline.json" 0 0 2>&1); then
-  echo "expected three lifted-helper occurrences to pass ceiling 3: $output" >&2
+assert_eq "$lifts" "3" "retired helper occurrence count"
+if output=$(TMPDIR="$scratch" selfmig_apply_baseline "$scratch/baseline.json" 0 0 2>&1); then
+  echo "expected a retired lifted-helper occurrence to fail ceiling 0" >&2
   exit 1
 fi
+grep -Fq '__local_ count 3 exceeded ceiling 0' <<< "$output"
 
-echo '__local_Owner_Helper()' >> "$lift_tree/Retained.gs"
-selfmig_measure "$lift_tree"
-assert_eq "$lifts" "4" "additional lifted-helper occurrence count"
-if output=$(TMPDIR="$scratch" selfmig_apply_baseline "$scratch/lift-baseline.json" 0 0 2>&1); then
-  echo "expected a fourth lifted-helper occurrence to fail ceiling 3" >&2
-  exit 1
-fi
-grep -Fq 'GATE: __local_ count 4 exceeded ceiling 3.' <<< "$output"
+zero_lift_tree="$scratch/zero-lift-tree"
+mkdir -p "$zero_lift_tree"
+selfmig_measure "$zero_lift_tree"
+assert_eq "$lifts" "0" "retired helper zero count"
+TMPDIR="$scratch" selfmig_apply_baseline "$scratch/baseline.json" 0 0 >/dev/null
 
 # Issue #3501 (raw-string blind spot): cs2gs_code_lines() must drop a line
 # that STARTS inside a backtick raw string, not just a line containing a

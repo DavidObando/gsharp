@@ -78,6 +78,23 @@ public sealed partial class CSharpToGSharpTranslator
                         return new TypeExpression(typeRef);
                     }
 
+                    if (this.TryTranslateLiftedLocalFunctionReference(generic, out GExpression liftedGeneric))
+                    {
+                        IMethodSymbol invoke = GetDelegateInvokeMethod(
+                            this.context.GetTypeInfo(generic).ConvertedType);
+                        if (invoke != null
+                            && this.context.GetSymbolInfo(generic).Symbol is IMethodSymbol localFunction)
+                        {
+                            return this.typeMapper.WithMetadataImportCollisionQualification(
+                                () => this.TranslateExactMethodGroupArgument(
+                                    generic,
+                                    localFunction,
+                                    invoke));
+                        }
+
+                        return liftedGeneric;
+                    }
+
                     return new IdentifierExpression(this.EmittedName(
                         this.context.GetSymbolInfo(generic).Symbol,
                         generic.Identifier.ValueText));
@@ -557,7 +574,11 @@ public sealed partial class CSharpToGSharpTranslator
                             suppressTargetType,
                             suppressTargetSymbol)
                                 ? suppressed
-                                : EnsureNonNullAssertion(suppressed);
+                                : this.ReportForgivenStoreBridge(
+                                    suppressNullable,
+                                    suppressed,
+                                    EnsureNonNullAssertion(suppressed),
+                                    suppressTargetSymbol);
 
                 case PostfixUnaryExpressionSyntax postfixValue
                     when postfixValue.IsKind(SyntaxKind.PostIncrementExpression)
@@ -1408,7 +1429,7 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns><c>{ let t = member; test(t) }</c>.</returns>
         private GExpression BindPatternMemberOnce(GExpression member, Func<GExpression, GExpression> test)
         {
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             var local = new IdentifierExpression(temp);
             if (this.IsGSharpNullablePatternReceiver(member))
             {
@@ -1445,7 +1466,7 @@ public sealed partial class CSharpToGSharpTranslator
                 storageType = MakeNullable(storageType);
             }
 
-            string temp = $"__spill{this.state.SpillCounter++}";
+            string temp = this.NewSpillName();
             var local = new IdentifierExpression(temp);
             this.state.StoredPatternCaptures.Add(local);
             if (gsharpNullable)
@@ -3590,11 +3611,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return translated;
             }
 
+            // Issue #4612: the array the element is stored into, used only to
+            // classify a reported bridge.
+            ITypeSymbol arrayType = expression.Parent is InitializerExpressionSyntax initializer
+                ? this.ArrayTypeOfInitializer(initializer)
+                : null;
             translated = this.ForgiveNullableReferenceValue(
                 expression,
                 translated,
                 elementType,
-                targetSymbol: null);
+                targetSymbol: null,
+                reportedTarget: arrayType);
             if (translated is NonNullAssertionExpression
                 || !this.TargetWillRemainNonNullableReference(elementType, targetSymbol: null)
                 || IsNullOrSuppressedNull(expression))
@@ -3615,7 +3642,7 @@ public sealed partial class CSharpToGSharpTranslator
             return sourceType is { IsReferenceType: true }
                 && (sourceType.NullableAnnotation == NullableAnnotation.Annotated
                     || this.ShouldPromoteToNullableReference(symbol))
-                ? EnsureNonNullAssertion(translated)
+                ? this.ReportStoreBridge(expression, translated, EnsureNonNullAssertion(translated), arrayType)
                 : translated;
         }
 
@@ -3924,6 +3951,17 @@ public sealed partial class CSharpToGSharpTranslator
             return new NamedTypeReference("object");
         }
 
+        private static bool CanUseCachedEmptyArray(GTypeReference elementType)
+            => elementType is not (PointerTypeReference or FunctionPointerTypeReference);
+
+        private static InvocationExpression MakeArrayEmptyInvocation(GTypeReference elementType)
+            => new InvocationExpression(
+                new MemberAccessExpression(
+                    new MemberAccessExpression(new IdentifierExpression("System"), "Array"),
+                    "Empty"),
+                new List<GExpression>(),
+                new List<GTypeReference> { elementType });
+
         private GExpression TranslateCollectionExpression(CollectionExpressionSyntax collection)
         {
             // An empty collection expression (`[]`) targeting a concrete
@@ -4056,6 +4094,14 @@ public sealed partial class CSharpToGSharpTranslator
                 else
                 {
                     var expressionElement = (ExpressionElementSyntax)element;
+
+                    // Nullable elements still need their bound slot recorded
+                    // before translating any explicit C# `!` inside them.
+                    if (elementTypeSymbol != null)
+                    {
+                        this.state.CollectionElementSlots[expressionElement.Expression] = elementTypeSymbol;
+                    }
+
                     elements.Add(sliceAcceptsNil
                         ? this.TranslateExpression(expressionElement.Expression)
                         : this.CoerceCollectionElement(
@@ -4063,6 +4109,22 @@ public sealed partial class CSharpToGSharpTranslator
                             elementType,
                             elementTypeSymbol));
                 }
+            }
+
+            // An empty collection expression targeting a one-dimensional array
+            // (`T[] a = []`) is lowered by csc to the cached `Array.Empty<T>()`
+            // singleton, never a fresh zero-length array. A `[]T{}` literal would
+            // allocate on every evaluation (24 bytes for a struct element), so a
+            // migrated hot path such as `Gsharp.Runtime.Values`'
+            // `ManagedLocationKey.Element` would allocate more than its C# source
+            // (issue #4684). Mirror the C# lowering; an explicit `new T[0]` is a
+            // distinct expression that keeps its literal.
+            if (collection.Elements.Count == 0
+                && target is IArrayTypeSymbol { Rank: 1 }
+                && CanUseCachedEmptyArray(sliceElementType)
+                && !TryGetCollectionBuilder(target, out _, out _))
+            {
+                return MakeArrayEmptyInvocation(sliceElementType);
             }
 
             var slice = new ArrayLiteralExpression(sliceElementType, elements);
@@ -4141,6 +4203,11 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference elementType,
             ITypeSymbol targetElementSymbol)
         {
+            if (targetElementSymbol != null)
+            {
+                this.state.CollectionElementSlots[element] = targetElementSymbol;
+            }
+
             // A bare integer literal in a typed-narrower array (`[0, 0]` into a
             // `byte[]`) needs an explicit G# conversion, since untyped numeric
             // literals do not auto-narrow. Wrap such elements in `T(elem)`.
@@ -4149,11 +4216,19 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol elementSymbol = elementInfo.Type;
             ITypeSymbol convertedSymbol = elementInfo.ConvertedType;
             ITypeSymbol declaredElementType = this.GetDeclaredValueType(element);
+
+            // Issue #4612: the collection the element is stored into, used only
+            // to classify a reported bridge.
+            ITypeSymbol collectionType = element.Parent?.Parent is CollectionExpressionSyntax collection
+                ? this.context.GetTypeInfo(collection).ConvertedType
+                : null;
             translated = this.ForgiveNullableReferenceValue(
                 element,
                 translated,
                 targetElementSymbol ?? convertedSymbol,
-                targetSymbol: null);
+                targetSymbol: null,
+                reportedTarget: collectionType,
+                reportedSlotType: targetElementSymbol);
             translated = this.AssertFlowNarrowedNullableReference(
                 element,
                 translated,
@@ -4176,7 +4251,8 @@ public sealed partial class CSharpToGSharpTranslator
                     || elementSymbol?.NullableAnnotation == NullableAnnotation.Annotated
                     || declaredElementType?.NullableAnnotation == NullableAnnotation.Annotated))
             {
-                translated = EnsureNonNullAssertion(translated);
+                // Reported against the collection the element is stored into.
+                translated = this.ReportStoreBridge(element, translated, EnsureNonNullAssertion(translated), collectionType, targetElementSymbol);
             }
 
             ITypeSymbol numericTarget = targetElementSymbol ?? convertedSymbol;

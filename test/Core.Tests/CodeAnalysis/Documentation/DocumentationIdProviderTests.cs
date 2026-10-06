@@ -128,7 +128,7 @@ public class DocumentationIdProviderTests
     [Fact]
     public void Method_MultidimensionalArrayParameter()
     {
-        var method = typeof(DocIdSamples).GetMethod(nameof(DocIdSamples.TakesGrid));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Documentation.DocIdSamples").GetMethod("TakesGrid");
         Assert.Equal(
             "M:GSharp.Core.Tests.CodeAnalysis.Documentation.DocIdSamples.TakesGrid(System.Int32[0:,0:])",
             DocumentationIdProvider.GetDocumentationId(method));
@@ -137,7 +137,7 @@ public class DocumentationIdProviderTests
     [Fact]
     public void Method_NullableValueTypeParameter_UsesNullableBraces()
     {
-        var method = typeof(DocIdSamples).GetMethod(nameof(DocIdSamples.TakesNullable));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Documentation.DocIdSamples").GetMethod("TakesNullable");
         Assert.Equal(
             "M:GSharp.Core.Tests.CodeAnalysis.Documentation.DocIdSamples.TakesNullable(System.Nullable{System.Int32})",
             DocumentationIdProvider.GetDocumentationId(method));
@@ -232,24 +232,5 @@ public class DocumentationIdProviderTests
         }
 
         return result;
-    }
-}
-
-/// <summary>
-/// Local sample surface giving the provider deterministic shapes (multidim arrays,
-/// nullables) that are rare in the BCL but must be encoded exactly.
-/// </summary>
-public static class DocIdSamples
-{
-    /// <summary>Sample with a rank-2 array parameter.</summary>
-    /// <param name="grid">A grid.</param>
-    public static void TakesGrid(int[,] grid)
-    {
-    }
-
-    /// <summary>Sample with a nullable value-type parameter.</summary>
-    /// <param name="value">A nullable.</param>
-    public static void TakesNullable(int? value)
-    {
     }
 }

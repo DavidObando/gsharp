@@ -435,6 +435,10 @@ internal sealed class MemberDefEmitter
             // Issue #248: implicit interface implementation requires Virtual | NewSlot.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
+        else if (this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, true)))
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
+        }
         else if (prop.ExplicitInterfaceMember != null)
         {
             // Issue #2362: a mangled-name explicit interface property
@@ -549,6 +553,10 @@ internal sealed class MemberDefEmitter
         {
             // Issue #248: implicit interface implementation requires Virtual | NewSlot.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
+        else if (this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, false)))
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
         }
         else if (prop.ExplicitInterfaceMember != null)
         {

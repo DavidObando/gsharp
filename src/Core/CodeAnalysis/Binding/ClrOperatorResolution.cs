@@ -188,6 +188,31 @@ internal static class ClrOperatorResolution
         return false;
     }
 
+    /// <summary>
+    /// Resolves the actual operand signature before considering its underlying
+    /// lifted conversion. A nullable-value parameter accepts the whole operand
+    /// and must take precedence over an operator accepting its underlying value.
+    /// </summary>
+    /// <param name="sourceType">The source operand type.</param>
+    /// <param name="targetType">The requested result type.</param>
+    /// <param name="allowExplicit">Whether explicit operators are acceptable.</param>
+    /// <param name="method">The resolved operator.</param>
+    /// <param name="isExplicit">Whether the operator is explicit.</param>
+    /// <returns>Whether a matching operator exists.</returns>
+    public static bool TryResolveConversionForTypes(
+        TypeSymbol? sourceType,
+        TypeSymbol? targetType,
+        bool allowExplicit,
+        [NotNullWhen(true)] out MethodInfo? method,
+        out bool isExplicit)
+        => TryResolveConversion(
+                NullableLifting.GetEffectiveClrType(sourceType),
+                targetType?.ClrType,
+                allowExplicit,
+                out method,
+                out isExplicit)
+            || TryResolveConversion(sourceType?.ClrType, targetType?.ClrType, allowExplicit, out method, out isExplicit);
+
     private static void CollectOperators(Type? type, string name, List<MethodInfo> sink)
     {
         if (type == null)
@@ -327,9 +352,12 @@ internal static class ClrOperatorResolution
 
     private static ConversionProbeResult ResolveConversionUncached(Type sourceType, Type targetType, bool allowExplicit)
     {
+        var sourceOwner = NullableLifting.GetValueTypeNullableUnderlyingClr(sourceType) ?? sourceType;
+        var targetOwner = NullableLifting.GetValueTypeNullableUnderlyingClr(targetType) ?? targetType;
+
         // Pass 1: implicits on source then target.
-        if (TryFind(sourceType, "op_Implicit", sourceType, targetType, out var method)
-            || TryFind(targetType, "op_Implicit", sourceType, targetType, out method))
+        if (TryFind(sourceOwner, "op_Implicit", sourceType, targetType, out var method)
+            || TryFind(targetOwner, "op_Implicit", sourceType, targetType, out method))
         {
             return new ConversionProbeResult(found: true, method, isExplicit: false);
         }
@@ -340,8 +368,8 @@ internal static class ClrOperatorResolution
         }
 
         // Pass 2: explicits on source then target.
-        if (TryFind(sourceType, "op_Explicit", sourceType, targetType, out method)
-            || TryFind(targetType, "op_Explicit", sourceType, targetType, out method))
+        if (TryFind(sourceOwner, "op_Explicit", sourceType, targetType, out method)
+            || TryFind(targetOwner, "op_Explicit", sourceType, targetType, out method))
         {
             return new ConversionProbeResult(found: true, method, isExplicit: true);
         }

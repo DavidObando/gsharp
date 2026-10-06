@@ -47,7 +47,7 @@ public class ClrNullabilityTests
     {
         // Sample.AnnotatedReturn is annotated `string?` so the binder should
         // see NullableTypeSymbol(String).
-        var method = typeof(Sample).GetMethod(nameof(Sample.AnnotatedReturn));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("AnnotatedReturn");
         var sym = ClrNullability.GetReturnTypeSymbol(method!);
         var nullable = Assert.IsType<NullableTypeSymbol>(sym);
         Assert.Same(TypeSymbol.String, nullable.UnderlyingType);
@@ -56,7 +56,7 @@ public class ClrNullabilityTests
     [Fact]
     public void ReferenceTypeNonNullAnnotation_StaysFlat()
     {
-        var method = typeof(Sample).GetMethod(nameof(Sample.NonNullReturn));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("NonNullReturn");
         var sym = ClrNullability.GetReturnTypeSymbol(method!);
         Assert.Same(TypeSymbol.String, sym);
     }
@@ -73,7 +73,7 @@ public class ClrNullabilityTests
         //   [0] = 1 → Dictionary itself is non-null
         //   [1] = 1 → string key is non-null
         //   [2] = 2 → string? value is nullable
-        var method = typeof(Sample).GetMethod(nameof(Sample.GetDictionary));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("GetDictionary");
         var sym = ClrNullability.GetReturnTypeSymbol(method!);
 
         // Top level: Dictionary is non-nullable → NullabilityAnnotatedTypeSymbol (not NullableTypeSymbol)
@@ -94,7 +94,7 @@ public class ClrNullabilityTests
     [Fact]
     public void Dictionary_ValueAnnotatedNullable_GetTypeArgumentSymbolForClrType_Works()
     {
-        var method = typeof(Sample).GetMethod(nameof(Sample.GetDictionary));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("GetDictionary");
         var sym = ClrNullability.GetReturnTypeSymbol(method!);
         var annotated = Assert.IsType<NullabilityAnnotatedTypeSymbol>(sym);
 
@@ -113,7 +113,7 @@ public class ClrNullabilityTests
         // NullableAttribute byte array: {1, 2}
         //   [0] = 1 → List is non-null
         //   [1] = 2 → string? element is nullable
-        var method = typeof(Sample).GetMethod(nameof(Sample.GetList));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("GetList");
         var sym = ClrNullability.GetReturnTypeSymbol(method!);
 
         var annotated = Assert.IsType<NullabilityAnnotatedTypeSymbol>(sym);
@@ -128,7 +128,7 @@ public class ClrNullabilityTests
     [Fact]
     public void List_ElementAnnotatedNullable_GetTypeArgumentSymbolForClrType_Works()
     {
-        var method = typeof(Sample).GetMethod(nameof(Sample.GetList));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("GetList");
         var sym = ClrNullability.GetReturnTypeSymbol(method!);
         var annotated = Assert.IsType<NullabilityAnnotatedTypeSymbol>(sym);
 
@@ -140,7 +140,7 @@ public class ClrNullabilityTests
     [Fact]
     public void List_ElementAnnotatedNullable_OpenIndexerParameterMapsByPosition()
     {
-        var method = typeof(Sample).GetMethod(nameof(Sample.GetList));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("GetList");
         var sym = ClrNullability.GetReturnTypeSymbol(method!);
         var annotated = Assert.IsType<NullabilityAnnotatedTypeSymbol>(sym);
         var openElement = typeof(List<>).GetGenericArguments()[0];
@@ -152,26 +152,26 @@ public class ClrNullabilityTests
     }
 
     [Theory]
-    [InlineData(nameof(Sample.GetNullableSurface), true)]
-    [InlineData(nameof(Sample.GetNonNullSurface), false)]
+    [InlineData("GetNullableSurface", true)]
+    [InlineData("GetNonNullSurface", false)]
     public void ImportedGenericReceiver_ProjectsArgumentNullabilityAcrossMembers(
         string factoryName,
         bool expectedNullable)
     {
         var factory = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
-            typeof(Sample).GetMethod(factoryName));
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod(factoryName));
         var receiver = ClrNullability.GetReturnTypeSymbol(factory);
         var receiverClr = Assert.IsAssignableFrom<Type>(receiver.ClrType);
         var property = Assert.IsAssignableFrom<System.Reflection.PropertyInfo>(
-            receiverClr.GetProperty(nameof(GenericSurface<string>.Property)));
+            receiverClr.GetProperty("Property"));
         var field = Assert.IsAssignableFrom<System.Reflection.FieldInfo>(
-            receiverClr.GetField(nameof(GenericSurface<string>.Field)));
+            receiverClr.GetField("Field"));
         var get = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
-            receiverClr.GetMethod(nameof(GenericSurface<string>.Get)));
+            receiverClr.GetMethod("Get"));
         var set = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
-            receiverClr.GetMethod(nameof(GenericSurface<string>.Set)));
+            receiverClr.GetMethod("Set"));
         var tryGet = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
-            receiverClr.GetMethod(nameof(GenericSurface<string>.TryGet)));
+            receiverClr.GetMethod("TryGet"));
         var indexer = Assert.IsAssignableFrom<System.Reflection.PropertyInfo>(
             receiverClr.GetProperty("Item"));
 
@@ -201,18 +201,18 @@ public class ClrNullabilityTests
     }
 
     [Theory]
-    [InlineData(nameof(Sample.GetNullableSurface), true)]
-    [InlineData(nameof(Sample.GetNonNullSurface), false)]
+    [InlineData("GetNullableSurface", true)]
+    [InlineData("GetNonNullSurface", false)]
     public void ImportedGenericReceiver_ProjectsNestedMemberArgumentNullability(
         string factoryName,
         bool expectedNullable)
     {
         var factory = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
-            typeof(Sample).GetMethod(factoryName));
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod(factoryName));
         var receiver = ClrNullability.GetReturnTypeSymbol(factory);
         var receiverClr = Assert.IsAssignableFrom<Type>(receiver.ClrType);
         var nested = Assert.IsAssignableFrom<System.Reflection.PropertyInfo>(
-            receiverClr.GetProperty(nameof(GenericSurface<string>.Nested)));
+            receiverClr.GetProperty("Nested"));
         var projected = MemberLookup.GetClrPropertyTypeSymbol(receiver, nested);
         var imported = Assert.IsType<ImportedTypeSymbol>(
             projected is NullabilityAnnotatedTypeSymbol annotated
@@ -248,7 +248,7 @@ public class ClrNullabilityTests
         //   [0] = 1 → Func is non-null
         //   [1] = 2 → string? first arg is nullable
         // (int is a value type — contributes no byte)
-        var method = typeof(Sample).GetMethod(nameof(Sample.AcceptFunc));
+        var method = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("AcceptFunc");
         var parameter = method!.GetParameters()[0];
         var sym = ClrNullability.GetParameterTypeSymbol(parameter);
 
@@ -316,7 +316,7 @@ public class ClrNullabilityTests
     [Fact]
     public void NullableGenericValueArgument_DoesNotShiftFollowingSibling()
     {
-        var clrType = typeof(PairContainer<KeyValuePair<string, object>?, string>);
+        var clrType = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+PairContainer`2").MakeGenericType(typeof(KeyValuePair<string, object>?), typeof(string));
         var flags = ImmutableArray.Create<byte>(1, 0, 2, 1, 1);
 
         Assert.Equal(5, ClrNullability.CountNullabilityBytes(clrType));
@@ -353,7 +353,7 @@ public class ClrNullabilityTests
             """);
         // throwOnError guarantees the fixture type is returned or the lookup throws.
         var sample = fixture.Load().GetType("Sample", throwOnError: true)!;
-        var pairMethod = sample.GetMethod(nameof(Sample.MakeStructPair));
+        var pairMethod = sample.GetMethod("MakeStructPair");
         Assert.NotNull(pairMethod);
         var pairFlags = ClrNullability.ReadNullableFlags(
             pairMethod.ReturnParameter,
@@ -367,7 +367,7 @@ public class ClrNullabilityTests
         Assert.IsType<NullableTypeSymbol>(pair.GetTypeArgumentSymbol(1));
         Assert.Equal(pairFlags.ToArray(), NullableFlagsBuilder.Build(pair).ToArray());
 
-        var valueMethod = sample.GetMethod(nameof(Sample.MakeStructValue));
+        var valueMethod = sample.GetMethod("MakeStructValue");
         Assert.NotNull(valueMethod);
         var valueFlags = ClrNullability.ReadNullableFlags(
             valueMethod.ReturnParameter,
@@ -398,14 +398,14 @@ public class ClrNullabilityTests
             HasValueTypeConstraint = true,
         };
         var pair = ImportedTypeSymbol.GetConstructed(
-            typeof(PairContainer<int, string>),
-            typeof(PairContainer<,>),
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+PairContainer`2").MakeGenericType(typeof(int), typeof(string)),
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+PairContainer`2"),
             ImmutableArray.Create<TypeSymbol>(
                 parameter,
                 NullableTypeSymbol.Get(TypeSymbol.String)));
         var value = ImportedTypeSymbol.GetConstructed(
-            typeof(ValueContainer<int>),
-            typeof(ValueContainer<>),
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+ValueContainer`1").MakeGenericType(typeof(int)),
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+ValueContainer`1"),
             ImmutableArray.Create<TypeSymbol>(parameter));
 
         Assert.Equal(
@@ -419,16 +419,16 @@ public class ClrNullabilityTests
     [Fact]
     public void RectangularArray_NullableElementAndOuterAnnotations_RoundTrip()
     {
-        var nonNullMethod = typeof(Sample).GetMethod(nameof(Sample.GetNullableElementGrid));
-        // nameof targets a declared Sample method, establishing reflection lookup success.
+        var nonNullMethod = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("GetNullableElementGrid");
+        // The embedded native Sample contract declares this method.
         var nonNullSymbol = Assert.IsType<RectangularArrayTypeSymbol>(
             ClrNullability.GetReturnTypeSymbol(nonNullMethod!));
         Assert.Equal(2, nonNullSymbol.Rank);
         var nullableElement = Assert.IsType<NullableTypeSymbol>(nonNullSymbol.ElementType);
         Assert.Same(TypeSymbol.String, nullableElement.UnderlyingType);
 
-        var nullableMethod = typeof(Sample).GetMethod(nameof(Sample.GetNullableGrid));
-        // nameof targets a declared Sample method, establishing reflection lookup success.
+        var nullableMethod = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetMethod("GetNullableGrid");
+        // The embedded native Sample contract declares this method.
         var nullableOuter = Assert.IsType<NullableTypeSymbol>(
             ClrNullability.GetReturnTypeSymbol(nullableMethod!));
         var nullableGrid = Assert.IsType<RectangularArrayTypeSymbol>(nullableOuter.UnderlyingType);
@@ -901,7 +901,7 @@ public class ClrNullabilityTests
         // Issue #1701 crack 1: a ref-returning indexer element must keep the
         // declaring property's `[NullableAttribute]` metadata instead of
         // erasing via a raw `TypeSymbol.FromClrType`.
-        var prop = typeof(Sample).GetProperty(nameof(Sample.AnnotatedProperty));
+        var prop = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetProperty("AnnotatedProperty");
         var sym = ClrNullability.GetPropertyElementTypeSymbol(prop!, typeof(string));
         var nullable = Assert.IsType<NullableTypeSymbol>(sym);
         Assert.Same(TypeSymbol.String, nullable.UnderlyingType);
@@ -910,128 +910,9 @@ public class ClrNullabilityTests
     [Fact]
     public void GetPropertyElementTypeSymbol_NonNullProperty_StaysFlat()
     {
-        var prop = typeof(Sample).GetProperty(nameof(Sample.NonNullProperty));
+        var prop = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Symbols.ClrNullabilityTests+Sample").GetProperty("NonNullProperty");
         var sym = ClrNullability.GetPropertyElementTypeSymbol(prop!, typeof(string));
         Assert.Same(TypeSymbol.String, sym);
-    }
-
-    public sealed class PairContainer<TFirst, TSecond>
-    {
-    }
-
-    public struct ValueContainer<T>
-    {
-    }
-
-    /// <summary>
-    /// Carries the C# 8 nullability annotations we need to test against.
-    /// Compiled with the surrounding project's nullable context — the
-    /// <c>?</c> on <see cref="AnnotatedReturn"/> emits a
-    /// <c>[NullableAttribute(2)]</c> on the return parameter and the
-    /// non-annotated <see cref="NonNullReturn"/> picks up the
-    /// <c>[NullableContextAttribute(1)]</c> from the enclosing type.
-    /// </summary>
-    public class Sample
-    {
-        public static PairContainer<T, string?> MakeStructPair<T>()
-            where T : struct
-        {
-            return new PairContainer<T, string?>();
-        }
-
-        public static ValueContainer<T> MakeStructValue<T>()
-            where T : struct
-        {
-            return default;
-        }
-
-        public string? AnnotatedReturn()
-        {
-            return null;
-        }
-
-        public string NonNullReturn()
-        {
-            return string.Empty;
-        }
-
-        // Issue #1701: stand-ins for a ref-returning indexer's dereferenced
-        // element type. A genuine `ref T?` indexer is not exercisable through
-        // G# surface syntax today (Span/ReadOnlySpan element T is always
-        // value-typed in practice), so these validate the routed helper
-        // (`ClrNullability.GetPropertyElementTypeSymbol`) directly: it must
-        // read the `[NullableAttribute]` metadata off the declaring property
-        // and apply it to the supplied (dereferenced) element type, exactly
-        // like `GetPropertyTypeSymbol` does for the non-byref case.
-        public string? AnnotatedProperty => null;
-
-        public string NonNullProperty => string.Empty;
-
-        public Dictionary<string, string?> GetDictionary()
-        {
-            return new Dictionary<string, string?>();
-        }
-
-        public List<string?> GetList()
-        {
-            return new List<string?>();
-        }
-
-        public GenericSurface<string?> GetNullableSurface()
-        {
-            return new GenericSurface<string?>(null);
-        }
-
-        public GenericSurface<string> GetNonNullSurface()
-        {
-            return new GenericSurface<string>(string.Empty);
-        }
-
-        public int AcceptFunc(Func<string?, int> f)
-        {
-            return f(null);
-        }
-
-        public string?[,] GetNullableElementGrid()
-        {
-            return new string?[1, 1];
-        }
-
-        public string?[,]? GetNullableGrid()
-        {
-            return null;
-        }
-    }
-
-    public sealed class GenericSurface<T>
-    {
-        public GenericSurface(T value)
-        {
-            Property = value;
-            Field = value;
-        }
-
-        public T Property { get; set; }
-
-        public T Field;
-
-        public List<T> Nested { get; } = new();
-
-        public T this[int index]
-        {
-            get => Property;
-            set => Property = value;
-        }
-
-        public T Get() => Property;
-
-        public void Set(T value) => Property = value;
-
-        public bool TryGet(out T value)
-        {
-            value = Property;
-            return true;
-        }
     }
 
     /// <summary>

@@ -188,6 +188,87 @@ public class Issue950ProtectedModifierEmitTests
         Assert.Contains("GS0380", output);
     }
 
+    /// <summary>
+    /// Issue #4674: a <c>protected override</c> takes its accessibility from the
+    /// base member, so it is legal on a non-<c>open</c> class. The class stays
+    /// CLR-sealed (that is what a migrated C# <c>sealed class Lowerer :
+    /// BoundTreeRewriter</c> needs), the override is emitted <c>family</c>, and
+    /// the dispatch still reaches it.
+    /// </summary>
+    [Fact]
+    public void ProtectedOverride_OnSealedClass_IsSealedFamilyAndDispatches()
+    {
+        var source =
+            """
+            package Maui.Issue4674.Tests
+
+            import System
+
+            open class Animal {
+                protected open func Sound() string {
+                    return "..."
+                }
+                func Describe() string {
+                    return Sound()
+                }
+            }
+
+            class Dog : Animal {
+                protected override func Sound() string {
+                    return "Woof"
+                }
+            }
+
+            func Main() {
+                let a Animal = Dog{}
+                Console.WriteLine(a.Describe())
+            }
+            """;
+        CompileVerifyAndRun(source, "Woof\n");
+
+        var dll = CompileToDll(source);
+        try
+        {
+            Assert.Equal(TypeAttributes.Sealed, GetTypeAttributes(dll, "Dog") & TypeAttributes.Sealed);
+            Assert.Equal(MethodAttributes.Family, GetMethodAttributes(dll, "Dog", "Sound") & MethodAttributes.MemberAccessMask);
+        }
+        finally
+        {
+            TryDeleteDir(Path.GetDirectoryName(dll));
+        }
+    }
+
+    /// <summary>
+    /// Issue #4674: the exemption is for overrides only — a NEW protected member
+    /// of a non-open class is still GS0380, and so is a protected override on a
+    /// struct.
+    /// </summary>
+    [Fact]
+    public void NewProtectedMember_OnSealedClassDerivingFromOpen_StillFailsToCompile()
+    {
+        var (exit, output) = TryCompile(
+            """
+            package Maui.Issue4674.Tests
+
+            open class Animal {
+                protected open func Sound() string {
+                    return "..."
+                }
+            }
+
+            class Dog : Animal {
+                protected func Fetch() string {
+                    return "ball"
+                }
+            }
+
+            func Main() {
+            }
+            """);
+        Assert.NotEqual(0, exit);
+        Assert.Contains("GS0380", output);
+    }
+
     [Fact]
     public void ProtectedOnStruct_FailsToCompile()
     {
@@ -204,6 +285,23 @@ public class Issue950ProtectedModifierEmitTests
             """);
         Assert.NotEqual(0, exit);
         Assert.Contains("GS0380", output);
+    }
+
+    private static TypeAttributes GetTypeAttributes(string dllPath, string typeName)
+    {
+        using var fs = File.OpenRead(dllPath);
+        using var pe = new PEReader(fs);
+        var mr = pe.GetMetadataReader();
+        foreach (var typeHandle in mr.TypeDefinitions)
+        {
+            var type = mr.GetTypeDefinition(typeHandle);
+            if (mr.GetString(type.Name) == typeName)
+            {
+                return type.Attributes;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException($"type {typeName} not found in {dllPath}");
     }
 
     private static FieldAttributes GetFieldAttributes(string dllPath, string typeName, string fieldName)
@@ -301,7 +399,17 @@ public class Issue950ProtectedModifierEmitTests
     private static string CompileToDll(string source)
     {
         var (exit, output, outPath) = RunCompiler(source);
-        Assert.True(exit == 0, $"compile failed ({exit}): {output}");
+        try
+        {
+            Assert.True(exit == 0, $"compile failed ({exit}): {output}");
+        }
+        catch
+        {
+            // The caller owns the temporary directory only once this returns.
+            TryDeleteDir(Path.GetDirectoryName(outPath));
+            throw;
+        }
+
         return outPath;
     }
 

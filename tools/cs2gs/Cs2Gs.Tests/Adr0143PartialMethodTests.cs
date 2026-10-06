@@ -339,7 +339,7 @@ namespace Demo
     }
 
     [Fact]
-    public void ImplementedPair_PreserveMode_Static_EmitsBothPartsInSharedBlocks()
+    public void ImplementedPair_PreserveMode_Static_EmitsBothPartsAsSharedClassParts()
     {
         IReadOnlyList<string> printed = TranslateFiles(
             preservePartialParts: true,
@@ -360,9 +360,13 @@ namespace Demo
     }
 }"));
 
-        Assert.Contains("shared {", printed[0]);
+        // ADR-0195: every part of a partial static class is a `shared partial class`
+        // with its members flat (no `shared { }` block).
+        Assert.Contains("shared partial class Calc", printed[0]);
+        Assert.DoesNotContain("shared {", printed[0]);
         Assert.Contains("partial func Twice(x int32) int32;", printed[0]);
-        Assert.Contains("shared {", printed[1]);
+        Assert.Contains("shared partial class Calc", printed[1]);
+        Assert.DoesNotContain("shared {", printed[1]);
         Assert.Contains("partial func Twice(x int32) int32 -> x * 2", printed[1]);
     }
 

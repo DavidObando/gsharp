@@ -147,6 +147,20 @@ public class GoldenTests
         AssertGolden(expected, unit);
     }
 
+    [Fact]
+    public void B5_ReceiverAttributesUseOrdinaryParameterRendering()
+    {
+        var receiver = new Receiver("value", Type("object"),
+            List(new AttributeUse("NotNullWhen", List(new AttributeArgument(LiteralExpression.Bool(true))), "param")));
+        var method = new MethodDeclaration("Present", receiver: receiver,
+            returnType: Type("bool"), body: Block(new ReturnStatement(LiteralExpression.Bool(true))));
+        var unit = new CompilationUnit("Demo", members: Nodes(method));
+        AssertGolden(Lines("package Demo", string.Empty,
+            "func (@param:NotNullWhen(true) value object) Present() bool {",
+            "    return true",
+            "}"), unit);
+    }
+
     /// <summary>B.6: an interface plus an <c>open</c> base class and an
     /// implementing class with a base-first <c>:</c> clause and <c>override</c>.</summary>
     [Fact]

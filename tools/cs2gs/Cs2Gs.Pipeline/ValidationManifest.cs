@@ -5,6 +5,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -95,6 +98,16 @@ public sealed class ValidationManifest
     [JsonPropertyOrder(9)]
     public List<ValidationManifestFile> EmittedFiles { get; set; } = new List<ValidationManifestFile>();
 
+    /// <summary>Gets or sets the producing corpus root, retained as source-path provenance.</summary>
+    [JsonPropertyName("sourceRoot")]
+    [JsonPropertyOrder(10)]
+    public string SourceRoot { get; set; }
+
+    /// <summary>Gets or sets the corpus-relative source project owning this manifest.</summary>
+    [JsonPropertyName("sourceProjectPath")]
+    [JsonPropertyOrder(11)]
+    public string SourceProjectPath { get; set; }
+
     /// <summary>
     /// Captures the translate-derived state of one app into a manifest.
     /// </summary>
@@ -113,6 +126,12 @@ public sealed class ValidationManifest
         }
 
         string root = Path.GetFullPath(migratedRoot ?? throw new ArgumentNullException(nameof(migratedRoot)));
+        string sourceRoot = CanonicalRootPath.Resolve(context.Options.SourceRoot);
+        if (string.IsNullOrEmpty(sourceRoot))
+        {
+            throw new InvalidOperationException("Validation manifests require the producing corpus root.");
+        }
+
         var manifest = new ValidationManifest
         {
             AppId = context.App.Id,
@@ -122,7 +141,10 @@ public sealed class ValidationManifest
             IsAnalyzerTestProject = context.IsAnalyzerTestProject,
             RootNamespace = context.RootNamespace,
             AssemblyName = context.AssemblyName,
+            SourceRoot = sourceRoot,
+            SourceProjectPath = Relativize(sourceRoot, CanonicalRootPath.Resolve(context.App.ProjectPath)),
         };
+        ResolveWithinRoot(sourceRoot, manifest.SourceProjectPath);
 
         foreach (string friend in context.GeneratedFriendAssemblies)
         {
@@ -142,12 +164,22 @@ public sealed class ValidationManifest
 
         foreach (EmittedGsFile file in context.EmittedFiles)
         {
+            string csFilePath = CanonicalRootPath.Resolve(file.CsFilePath);
+            if (string.IsNullOrEmpty(csFilePath))
+            {
+                throw new InvalidOperationException($"Validation file '{file.GsPath}' has no original source identity.");
+            }
+
+            string relativeCsPath = Relativize(sourceRoot, csFilePath);
+            ResolveWithinRoot(sourceRoot, relativeCsPath);
             manifest.EmittedFiles.Add(new ValidationManifestFile
             {
                 Path = Relativize(root, file.GsPath),
                 RelativeGsPath = file.RelativeGsPath,
-                CsFilePath = file.CsFilePath,
+                CsFilePath = csFilePath,
+                RelativeCsPath = relativeCsPath,
                 FromReferencedProject = file.IsFromReferencedProject,
+                GeneratedSource = file.GeneratedSource,
             });
         }
 
@@ -216,6 +248,47 @@ public sealed class ValidationManifest
         }
 
         string root = Path.GetFullPath(migratedRoot ?? throw new ArgumentNullException(nameof(migratedRoot)));
+        if (!string.Equals(this.AppId, context.App.Id, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Validation manifest for '{this.AppId}' cannot hydrate app '{context.App.Id}'.");
+        }
+
+        string sourceRoot = CanonicalRootPath.Resolve(context.Options.SourceRoot);
+        if (string.IsNullOrEmpty(sourceRoot))
+        {
+            throw new InvalidOperationException("Validation requires the authoritative --corpus source root.");
+        }
+
+        string producingRoot = this.SourceRoot;
+        if (producingRoot is not null)
+        {
+            if (string.IsNullOrWhiteSpace(producingRoot))
+            {
+                throw new InvalidOperationException(
+                    "Validation manifest requires a non-empty producing corpus source root.");
+            }
+
+            string projectPath = ResolveWithinRoot(sourceRoot, this.SourceProjectPath);
+            if (!string.Equals(
+                projectPath,
+                CanonicalRootPath.Resolve(context.App.ProjectPath),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Validation manifest source project '{this.SourceProjectPath}' does not own app '{context.App.Id}'.");
+            }
+        }
+        else
+        {
+            if (this.SourceProjectPath is not null || this.EmittedFiles.Any(file => file.RelativeCsPath is not null))
+            {
+                throw new InvalidOperationException("Validation manifest has incomplete portable source metadata.");
+            }
+
+            producingRoot = this.LegacySourceRoot(context, sourceRoot);
+        }
+
         context.IsTestProject = this.IsTestProject;
         context.IsAnalyzerProject = this.IsAnalyzerProject;
         context.IsAnalyzerTestProject = this.IsAnalyzerTestProject;
@@ -242,7 +315,55 @@ public sealed class ValidationManifest
 
         foreach (ValidationManifestFile file in this.EmittedFiles)
         {
-            string gsPath = Path.GetFullPath(Path.Combine(root, file.Path));
+            string gsPath = ResolveWithinRoot(root, file.Path);
+            string csPath = file.CsFilePath;
+            if (string.IsNullOrEmpty(csPath))
+            {
+                throw new InvalidOperationException($"Validation file '{file.Path}' has no original source identity.");
+            }
+
+            string relativeCsPath = SourceRelativePath(producingRoot, csPath);
+            if (this.SourceRoot is not null &&
+                !string.Equals(relativeCsPath, Normalize(file.RelativeCsPath), StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Validation manifest source identity disagrees for '{csPath}'.");
+            }
+
+            csPath = ResolveWithinRoot(sourceRoot, relativeCsPath);
+            if (file.GeneratedSource is not null)
+            {
+                if (this.SourceRoot is null || !RepositoryFileInventory.IsBuildOutputPath(relativeCsPath))
+                {
+                    throw new InvalidOperationException(
+                        $"Validation source '{relativeCsPath}' is not a portable build-generated input.");
+                }
+
+                string owner = ResolveWithinRoot(sourceRoot, file.GeneratedSource.SourceProjectPath);
+                bool ownsApp = string.Equals(
+                    owner,
+                    CanonicalRootPath.Resolve(context.App.ProjectPath),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+                if (!File.Exists(owner) || ownsApp == file.FromReferencedProject)
+                {
+                    throw new InvalidOperationException(
+                        $"Generated validation source '{relativeCsPath}' has inconsistent project ownership.");
+                }
+
+                file.GeneratedSource.Validate();
+            }
+            else if (!File.Exists(csPath))
+            {
+                throw new InvalidOperationException(
+                    $"Validation source '{relativeCsPath}' is missing from authoritative corpus '{sourceRoot}'.");
+            }
+            else
+            {
+                // Unlike the best-effort Fact reader, replay must not silently
+                // lose authoritative source evidence to a stale/unreadable path.
+                using FileStream source = File.OpenRead(csPath);
+            }
+
             if (!File.Exists(gsPath))
             {
                 continue;
@@ -251,13 +372,109 @@ public sealed class ValidationManifest
             context.EmittedFiles.Add(new EmittedGsFile(
                 gsPath,
                 file.RelativeGsPath,
-                file.CsFilePath,
+                csPath,
                 File.ReadAllText(gsPath))
             {
                 IsFromReferencedProject = file.FromReferencedProject,
+                GeneratedSource = file.GeneratedSource,
             });
         }
     }
+
+    private string LegacySourceRoot(StageExecutionContext context, string sourceRoot)
+    {
+        // Repository translation preserves the FULL corpus-relative path of
+        // every primary C# unit. Namespace splits/resx output are not anchors.
+        // Never search by basename or choose a root because a file exists there.
+        var roots = new HashSet<string>(StringComparer.Ordinal);
+        string projectPath = CanonicalRootPath.Resolve(context.App.ProjectPath);
+        var owners = RepositoryExcludedScope.Compute(sourceRoot, new[] { projectPath });
+        bool ownsCorpusRoot = string.Equals(
+            Path.GetDirectoryName(projectPath),
+            sourceRoot,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        bool hasOwnedAnchor = false;
+        foreach (ValidationManifestFile file in this.EmittedFiles)
+        {
+            if (string.IsNullOrEmpty(file.CsFilePath) ||
+                !file.CsFilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string relative = Normalize(Path.ChangeExtension(Normalize(file.Path), Path.GetExtension(Normalize(file.CsFilePath))));
+            ValidateRelativePath(relative);
+            string original = Normalize(file.CsFilePath);
+            string suffix = "/" + relative;
+            if (!original.EndsWith(suffix, ProducingPathComparison(original)))
+            {
+                continue;
+            }
+
+            string producingRoot = original[..^relative.Length];
+            roots.Add(ProducingPathComparison(producingRoot) == StringComparison.OrdinalIgnoreCase
+                ? producingRoot.ToUpperInvariant()
+                : producingRoot);
+            hasOwnedAnchor |= !file.FromReferencedProject && (ownsCorpusRoot || owners.IsExcluded(relative));
+        }
+
+        if (roots.Count != 1 || !hasOwnedAnchor)
+        {
+            throw new InvalidOperationException(
+                $"Legacy validation manifest for '{this.AppId}' has no unambiguous owning corpus source root.");
+        }
+
+        return roots.Single();
+    }
+
+    private static string SourceRelativePath(string producingRoot, string original)
+    {
+        string root = Normalize(producingRoot);
+        string prefix = root?.TrimEnd('/') + "/";
+        string path = Normalize(original);
+        if (string.IsNullOrEmpty(root) ||
+            !(root.StartsWith("/", StringComparison.Ordinal) ||
+                (root.Length > 2 && char.IsLetter(root[0]) && root[1] == ':' && root[2] == '/')) ||
+            root.Contains('\0', StringComparison.Ordinal) ||
+            root.Split('/').Any(segment => segment is "." or "..") ||
+            !path.StartsWith(prefix, ProducingPathComparison(root)))
+        {
+            throw new InvalidOperationException(
+                $"Validation source '{original}' is outside producing corpus '{producingRoot}'.");
+        }
+
+        string relative = path[prefix.Length..];
+        ValidateRelativePath(relative);
+        return relative;
+    }
+
+    private static string ResolveWithinRoot(string root, string relative)
+    {
+        relative = Normalize(relative);
+        ValidateRelativePath(relative);
+        string canonicalRoot = CanonicalRootPath.Resolve(root);
+        string path = CanonicalRootPath.Resolve(Path.Combine(canonicalRoot, relative));
+        ValidateRelativePath(Relativize(canonicalRoot, path));
+        return path;
+    }
+
+    private static void ValidateRelativePath(string relative)
+    {
+        if (string.IsNullOrEmpty(relative) || relative.StartsWith("/", StringComparison.Ordinal) ||
+            relative.Contains(':', StringComparison.Ordinal) ||
+            relative.Split('/').Any(segment => segment is "" or "." or ".."))
+        {
+            throw new InvalidOperationException($"Invalid corpus-relative validation path '{relative}'.");
+        }
+    }
+
+    private static string Normalize(string path) => path?.Replace('\\', '/');
+
+    private static StringComparison ProducingPathComparison(string path) =>
+        path.StartsWith("//", StringComparison.Ordinal) ||
+            (path.Length > 2 && char.IsLetter(path[0]) && path[1] == ':' && path[2] == '/')
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
     private static string Relativize(string root, string path)
     {
@@ -289,4 +506,51 @@ public sealed class ValidationManifestFile
     [JsonPropertyName("fromReferencedProject")]
     [JsonPropertyOrder(3)]
     public bool FromReferencedProject { get; set; }
+
+    /// <summary>Gets or sets the corpus-relative original source path; absent in legacy manifests.</summary>
+    [JsonPropertyName("relativeCsPath")]
+    [JsonPropertyOrder(4)]
+    public string RelativeCsPath { get; set; }
+
+    /// <summary>Gets or sets captured build-generated source evidence; absent for authored and old inputs.</summary>
+    [JsonPropertyName("generatedSource")]
+    [JsonPropertyOrder(5)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GeneratedValidationSource GeneratedSource { get; set; }
+}
+
+/// <summary>
+/// The actual text of a retained build-generated compilation input, not a
+/// recipe for regenerating it in the validator's configuration.
+/// </summary>
+public sealed class GeneratedValidationSource
+{
+    /// <summary>Gets or sets the corpus-relative project that contributed this compilation input.</summary>
+    [JsonPropertyName("sourceProjectPath")]
+    public string SourceProjectPath { get; set; }
+
+    /// <summary>Gets or sets the producing syntax tree's complete source text.</summary>
+    [JsonPropertyName("text")]
+    public string Text { get; set; }
+
+    /// <summary>Gets or sets SHA-256 of the UTF-8 source text, without an encoding preamble.</summary>
+    [JsonPropertyName("sha256")]
+    public string Sha256 { get; set; }
+
+    internal static GeneratedValidationSource Capture(string text, string sourceProjectPath) => new GeneratedValidationSource
+    {
+        SourceProjectPath = sourceProjectPath,
+        Text = text,
+        Sha256 = Hash(text),
+    };
+
+    internal void Validate()
+    {
+        if (this.Text is null || !string.Equals(this.Sha256, Hash(this.Text), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Generated validation source text is absent or its SHA-256 disagrees.");
+        }
+    }
+
+    private static string Hash(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 }

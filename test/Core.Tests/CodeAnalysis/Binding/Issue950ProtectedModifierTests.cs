@@ -127,6 +127,62 @@ struct Val {
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0380");
     }
 
+    /// <summary>
+    /// Issue #4674: a <c>protected override</c> takes its accessibility from the
+    /// base member, so a non-<c>open</c> class may declare one.
+    /// </summary>
+    [Fact]
+    public void ProtectedOverride_OnNonOpenClass_NoPlacementDiagnostic()
+    {
+        var source = @"
+open class Base {
+    protected open func Reveal() int32 {
+        return 1
+    }
+    protected open prop Size int32 { get { return 1 } }
+    protected open event Changed func()
+}
+class Sealed : Base {
+    protected override func Reveal() int32 {
+        return 2
+    }
+    protected override prop Size int32 { get { return 2 } }
+    protected override event Changed func()
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0380");
+    }
+
+    /// <summary>
+    /// Issue #4674: the exemption does not extend to a NEW protected member of a
+    /// non-<c>open</c> class, even one that also declares an override.
+    /// </summary>
+    [Fact]
+    public void NewProtectedMethod_OnNonOpenClassWithOverride_ReportsGS0380()
+    {
+        var source = @"
+open class Base {
+    protected open func Reveal() int32 {
+        return 1
+    }
+}
+class Sealed : Base {
+    protected override func Reveal() int32 {
+        return 2
+    }
+    protected func Other() int32 {
+        return 3
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0380");
+        Assert.Equal(11, diagnostic.Location.StartLine + 1);
+    }
+
     [Fact]
     public void ProtectedMethod_OnOpenClass_NoPlacementDiagnostic()
     {

@@ -186,15 +186,14 @@ internal sealed class ImportedMemberRefFactory
             return this.GetTypeReference(this.emitCtx.CoreStringType);
         }
 
-        // Issue #3285 sibling sweep: an unmanaged pointer used as an array
-        // element must be encoded as a TypeSpec (`PTR T`). A TypeRef whose name
-        // is `System.Int32*` is not a real runtime type and fails to load.
-        if (element is PointerTypeSymbol pointerElement)
+        // Pointer elements need their PTR/FNPTR TypeSpec, not a named pointer
+        // TypeRef or the function pointer's native-int runtime projection.
+        if (element is PointerTypeSymbol or FunctionPointerTypeSymbol)
         {
             var sigBlob = new BlobBuilder();
             this.signatures.EncodeTypeSymbol(
                 new BlobEncoder(sigBlob).TypeSpecificationSignature(),
-                pointerElement);
+                element);
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
@@ -220,6 +219,15 @@ internal sealed class ImportedMemberRefFactory
             var sigBlob = new BlobBuilder();
             var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
             this.signatures.EncodeTypeSymbol(encoder, nestedSlice);
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        }
+
+        // Interface aliases use the same reified element in opcode tokens
+        // as in signatures, including source-defined and open elements.
+        if (element is SequenceTypeSymbol or AsyncSequenceTypeSymbol)
+        {
+            var sigBlob = new BlobBuilder();
+            this.signatures.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), element);
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 

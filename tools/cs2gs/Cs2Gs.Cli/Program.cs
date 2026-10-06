@@ -73,6 +73,19 @@ internal static class Program
             }
         }
 
+        if (verb is "capture-test-oracle")
+        {
+            try
+            {
+                return CaptureTestOracleCommand.Run(args.Skip(1).ToArray());
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("cs2gs: " + ex.Message);
+                return 2;
+            }
+        }
+
         if (verb is "report")
         {
             try
@@ -267,6 +280,12 @@ internal static class Program
         {
             options.TestParityAllowList = TestParityAllowList.LoadForRepository(
                 options.SourceRoot, allowListPath);
+
+            // The default baseline only matters when per-name parity runs.
+            if (options.TestNameParityBaseline is null && !string.IsNullOrEmpty(options.CSharpTestOracleDirectory))
+            {
+                options.TestNameParityBaseline = TestNameParityBaseline.LoadForRepository(options.SourceRoot, null);
+            }
         }
         catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
         {
@@ -581,6 +600,7 @@ internal static class Program
         string allowListPath = null;
         bool baselineStrict = false;
         bool translateOnly = false;
+        bool sdkPinSpecified = false;
         var appIds = new List<string>();
         var options = new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository };
 
@@ -634,6 +654,13 @@ internal static class Program
                     case "--test-allowlist":
                         allowListPath = NextValue(args, ref i, arg);
                         break;
+                    case "--csharp-test-oracle":
+                        options.CSharpTestOracleDirectory = Path.GetFullPath(NextValue(args, ref i, arg));
+                        break;
+                    case "--test-name-baseline":
+                        options.TestNameParityBaseline = TestNameParityBaseline.Load(
+                            Path.GetFullPath(NextValue(args, ref i, arg)));
+                        break;
                     case "--baseline-strict":
                         baselineStrict = true;
                         break;
@@ -655,6 +682,27 @@ internal static class Program
                     case "--allow-conditional-compilation":
                         options.ConditionalCompilation = Cs2Gs.Translator.ConditionalCompilationPolicy.Warn;
                         break;
+                    case "--sdk-version":
+                        options.SdkVersion = NextValue(args, ref i, arg);
+                        if (!SdkPinArguments.IsValidVersion(options.SdkVersion))
+                        {
+                            Console.Error.WriteLine(
+                                $"cs2gs: --sdk-version expects a version such as 0.4.1200, not '{options.SdkVersion}'.");
+                            return null;
+                        }
+
+                        break;
+                    case "--sdk-pin":
+                        sdkPinSpecified = true;
+                        string pin = NextValue(args, ref i, arg);
+                        if (!SdkPinArguments.TryParseLocation(pin, out SdkPinLocation location))
+                        {
+                            Console.Error.WriteLine($"cs2gs: --sdk-pin expects 'project' or 'global-json', not '{pin}'.");
+                            return null;
+                        }
+
+                        options.SdkPinLocation = location;
+                        break;
                     default:
                         Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
                         PrintUsage();
@@ -667,6 +715,13 @@ internal static class Program
                 PrintUsage();
                 return null;
             }
+        }
+
+        if (options.OutputLayout == MigrationOutputLayout.DiagnosticRun
+            && (options.SdkVersion is not null || sdkPinSpecified))
+        {
+            Console.Error.WriteLine("cs2gs: --sdk-version and --sdk-pin apply to repository migration only.");
+            return null;
         }
 
         if (string.IsNullOrEmpty(corpus))
@@ -746,6 +801,7 @@ internal static class Program
         Console.WriteLine("Usage:");
         Console.WriteLine("  cs2gs migrate [options]");
         Console.WriteLine("  cs2gs validate --corpus <repo-root> --migrated <dir> [--shard i/N | --app <id>...]");
+        Console.WriteLine("  cs2gs capture-test-oracle --corpus <repo-root> --out <dir> [--exclude <path>...]");
         Console.WriteLine("  cs2gs report --run <runDir> [--out <file-or-dir>]");
         Console.WriteLine("  cs2gs coverage [--write] [--repo-root <dir>]");
         Console.WriteLine("  cs2gs triage list --run <runDir> [--gaps <file>]");
@@ -771,6 +827,10 @@ internal static class Program
         Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries (nightly mode).");
         Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list (issue #3885); default:");
         Console.WriteLine("                    <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.");
+        Console.WriteLine("  --csharp-test-oracle <dir>  Check mirrored test projects name for name against the");
+        Console.WriteLine("                    C# case lists `cs2gs capture-test-oracle` wrote (issue #4633); the");
+        Console.WriteLine("                    justified differences are read from <corpus>/" + TestNameParityBaseline.DefaultRelativePath);
+        Console.WriteLine("  --test-name-baseline <file>  Use this per-test-name baseline instead of the default.");
         Console.WriteLine("  --via-sdk         Build emitted G# via 'dotnet build' + Gsharp.NET.Sdk (default).");
         Console.WriteLine("  --no-via-sdk      Use the legacy direct-gsc compile path.");
         Console.WriteLine("  --allow-conditional-compilation  Report each C# #if/#elif as a non-fatal");
@@ -782,6 +842,13 @@ internal static class Program
         Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE");
         Console.WriteLine("                    repository and stop, writing a per-app validation-context.json so");
         Console.WriteLine("                    'cs2gs validate' shards can run stages 2-4 in parallel elsewhere.");
+        Console.WriteLine("  --sdk-version <v> Repository migration only: pin Gsharp.NET.Sdk to exactly <v> (default:");
+        Console.WriteLine("                    the newest local nupkg). A local nupkg of <v> is staged into .nugs;");
+        Console.WriteLine("                    otherwise <v> must be on nuget.org (e.g. a published release).");
+        Console.WriteLine("  --sdk-pin <where> Repository migration only: 'project' (default) writes the version into");
+        Console.WriteLine("                    every generated project's Sdk declaration; 'global-json' writes it");
+        Console.WriteLine("                    under msbuild-sdks in the root and nested global.json files");
+        Console.WriteLine("                    and keeps Gsharp.NET.Sdk declarations unversioned.");
         Console.WriteLine("  --format          Run the ADR-0179 gsfmt post-pass (default).");
         Console.WriteLine("  --no-format       Keep the printer layout instead (A/B measurement only).");
         Console.WriteLine();

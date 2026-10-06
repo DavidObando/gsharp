@@ -844,7 +844,13 @@ internal sealed class ReflectionMetadataEmitter
         this.embeddedResources = embeddedResources;
         this.moduleInitializers = program is null
             ? ImmutableArray<FunctionSymbol>.Empty
-            : program.Functions.Keys.Where(IsModuleInitializer).ToImmutableArray();
+            : program.Functions.Keys
+                .Where(IsModuleInitializer)
+
+                // Issue #4663: the <Module> .cctor calls these in this order,
+                // so it must be deterministic (source order), never hash order.
+                .OrderBy(function => function, SymbolSourceOrderComparer.Instance)
+                .ToImmutableArray();
         this.cache = new MetadataTokenCache();
         this.remaps = new GenericRemapState();
         this.signatures = new SignatureEncoder(this);
@@ -947,7 +953,38 @@ internal sealed class ReflectionMetadataEmitter
         emitter.emitCtx.DebugInformation = debugInformation ?? new DebugInformationOptions();
         emitter.emitCtx.PdbStream = pdbStream;
 
-        emitter.EmitCore(peStream, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
+        // Lazy data signatures must use source vectors, not emission-scoped
+        // enclosing+own vectors installed by nested generic reification.
+        foreach (var symbol in program.Structs)
+        {
+            if (symbol.IsData && symbol.ClrType == null)
+            {
+                _ = symbol.DataEqualsSelf;
+                _ = symbol.DataEqualsBase;
+                _ = symbol.DataEqualsObject;
+            }
+        }
+
+        // Nested generic reification belongs to this emission. A following
+        // reference-assembly emission must start from the same source vector.
+        var structParameters = program.Structs.Select(s => (Symbol: s, Parameters: s.TypeParameters)).ToArray();
+        var enumParameters = program.Enums.Select(e => (Symbol: e, Parameters: e.TypeParameters)).ToArray();
+        try
+        {
+            emitter.EmitCore(peStream, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
+        }
+        finally
+        {
+            foreach (var (symbol, parameters) in structParameters)
+            {
+                symbol.SetTypeParameters(parameters);
+            }
+
+            foreach (var (symbol, parameters) in enumParameters)
+            {
+                symbol.SetTypeParameters(parameters);
+            }
+        }
     }
 
     // Phase records retain the original mutable collection instances so row
@@ -1205,7 +1242,10 @@ internal sealed class ReflectionMetadataEmitter
             this.userTokens.ResolveUserTypeToken,
             this.userTokens.ResolveFieldToken,
             this.userTokens.GetUserStructMethodRef,
-            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType));
+            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType),
+            this.userTokens.ResolveUserInstanceMethodToken,
+            this.customAttrEncoder.EmitNullableAttributeOnParameter,
+            this.memberRefs.GetCtorReference);
 
         // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -2181,7 +2221,15 @@ internal sealed class ReflectionMetadataEmitter
                 // this row; their clone is abstract and has no body.
                 this.cache.DataClassCopyConstructorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 1);
                 this.cache.DataClassCloneHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 2);
+                this.cache.MethodHandles[c.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow + 3);
+                this.cache.MethodHandles[c.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 4);
+                if (c.DataEqualsBase is { } baseEquals)
+                {
+                    this.cache.MethodHandles[baseEquals] = MetadataTokens.MethodDefinitionHandle(methodRow + 5);
+                }
+
                 methodRow += 10
+                    + (c.DataEqualsBase != null ? 1 : 0)
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
                     - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
             }
@@ -2235,6 +2283,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             methodRow += this.interfaceImpls.PlanInheritedEventBridges(c, methodRow);
+            methodRow += this.interfaceImpls.PlanImportedAccessorBridges(c, methodRow);
 
             // ADR-0053: plan method rows for static methods on classes.
             if (!c.StaticMethods.IsDefaultOrEmpty)
@@ -2349,6 +2398,9 @@ internal sealed class ReflectionMetadataEmitter
             }
             else if (s.IsData)
             {
+                this.cache.MethodHandles[s.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow);
+                this.cache.MethodHandles[s.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 1);
+
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
@@ -3105,7 +3157,8 @@ internal sealed class ReflectionMetadataEmitter
             functionsByPackage[pkg] = [];
         }
 
-        foreach (var kvp in this.emitCtx.Program.Functions)
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var kvp in BoundProgramOrder.Functions(this.emitCtx.Program))
         {
             // Issue #3883: an AUTHORED async `Main` is NOT skipped here — it
             // needs its own ordinary (Task-returning) row alongside the
@@ -3184,7 +3237,7 @@ internal sealed class ReflectionMetadataEmitter
         // table is emitted in the same order every run.
         foreach (var pkgKey in functionsByPackage.Keys.ToList())
         {
-            functionsByPackage[pkgKey].Sort(FunctionEmitOrderComparer.Instance);
+            functionsByPackage[pkgKey].Sort(SymbolSourceOrderComparer.Instance);
         }
 
         // Phase 4 emit parity (E1): non-capture function literals are attached
@@ -3350,6 +3403,56 @@ internal sealed class ReflectionMetadataEmitter
         return new PackageMethodPlan(packages, functionsByPackage, entryPointPackage, packageCtorRows, entryHandle);
     }
 
+    /// <summary>
+    /// Issue #4676: the accessibility of a package's synthesized <c>&lt;Program&gt;</c>
+    /// host type. The host is how a package exposes its top-level functions to
+    /// other assemblies, so it stays <c>public</c> whenever it carries a function
+    /// another assembly can reach, and in an executable (every package of
+    /// an executable keeps its host public, to leave application behaviour alone).
+    /// A LIBRARY package that hosts no such member (every GSharp.Core
+    /// namespace whose code is all types, say) is a compiler-generated detail,
+    /// like the C# compiler's own generated types, and is emitted NotPublic so it
+    /// is not part of the assembly's API (reflection-based tooling such as an
+    /// analyzer-target enumeration no longer sees one <c>&lt;Program&gt;</c> per
+    /// namespace). An assembly granted InternalsVisibleTo still reaches the
+    /// host's internal members, since it can see the NotPublic type too.
+    /// </summary>
+    /// <param name="pkg">The package whose host is being emitted.</param>
+    /// <param name="hasEntryPoint">Whether the compilation has an entry point (an executable).</param>
+    /// <param name="packageMethods">The planned per-package functions.</param>
+    /// <returns>The type visibility flag for the host's TypeDef.</returns>
+    private static TypeAttributes ProgramHostAccessibility(
+        PackageSymbol pkg,
+        bool hasEntryPoint,
+        PackageMethodPlan packageMethods)
+    {
+        // A library has no globals (a top-level variable is a top-level statement, GS0285),
+        // so only an executable can host one, and an executable keeps every host public.
+        if (hasEntryPoint)
+        {
+            return TypeAttributes.Public;
+        }
+
+        static bool IsReachableFromOtherAssemblies(Accessibility accessibility)
+            => accessibility is Accessibility.Public or Accessibility.Protected;
+
+        // Only AUTHORED top-level functions count. The package's bucket also holds the
+        // zero-capture function literals and hoisted local functions the emitter hosts on
+        // `<Program>`, whose symbols default to public accessibility but which no other
+        // assembly can name.
+        if (packageMethods.FunctionsByPackage.TryGetValue(pkg, out var functions)
+            && functions.Any(function =>
+                !function.IsFunctionLiteral
+                && !function.IsLocalFunction
+                && function.LocalDeclaration is null
+                && IsReachableFromOtherAssemblies(function.Accessibility)))
+        {
+            return TypeAttributes.Public;
+        }
+
+        return TypeAttributes.NotPublic;
+    }
+
     private Dictionary<PackageSymbol, TypeDefinitionHandle> EmitProgramAndStateMachineTypeDefinitions(
         AggregateTypeLayout aggregateTypes,
         FieldRowPlan fieldRows,
@@ -3389,7 +3492,8 @@ internal sealed class ReflectionMetadataEmitter
             this.functions.EmitGlobalFieldDefs(globals);
 
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
-                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
+                attributes: TypeAttributes.Class | ProgramHostAccessibility(globalsHostPkg, this.emitCtx.Program.EntryPoint is not null, packageMethods)
+                    | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                     | TypeAttributes.Sealed | TypeAttributes.Abstract,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(globalsHostPkg.Name),
@@ -3413,7 +3517,8 @@ internal sealed class ReflectionMetadataEmitter
             // range so the monotone <Program> fieldList constraint holds.
             var fieldListRow = programFirstFieldRow + globals.Length;
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
-                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
+                attributes: TypeAttributes.Class | ProgramHostAccessibility(pkg, this.emitCtx.Program.EntryPoint is not null, packageMethods)
+                    | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                     | TypeAttributes.Sealed | TypeAttributes.Abstract,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(pkg.Name),
@@ -3768,6 +3873,7 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0052: emit event accessor methods for classes.
             this.memberDefEmitter.EmitEventAccessors(c);
             this.interfaceImpls.EmitInheritedEventBridges(c);
+            this.interfaceImpls.EmitImportedAccessorBridges(c);
 
             // ADR-0053: emit static methods for classes.
             if (!c.StaticMethods.IsDefaultOrEmpty)
@@ -4112,7 +4218,10 @@ internal sealed class ReflectionMetadataEmitter
                             body = this.lambdaBodies[m];
                         }
 
-                        var emittedHandle = this.functions.EmitFunction(m, body, isEntryPoint: false);
+                        // Iterator interfaces are attached directly to metadata, not
+                        // to the receiver symbol. Every synthesized method here
+                        // implements one of those slots and must remain virtual.
+                        var emittedHandle = this.functions.EmitFunction(m, body, isEntryPoint: false, isInterfaceImplementation: true);
                         this.cache.MethodHandles[m] = emittedHandle;
                     }
                 }
@@ -5808,81 +5917,6 @@ internal sealed class ReflectionMetadataEmitter
     // functionDelegateInvokeRefCache) moved with the delegate MemberRef
     // producers to ImportedMemberRefFactory as its private fields, since they
     // were RME privates consumed solely by that band.
-
-    /// <summary>
-    /// Issue #456: deterministic ordering for FunctionSymbols emitted into
-    /// the MethodDef table. Sort first by the function's source declaration
-    /// start (so user-visible order matches source order), then by name
-    /// (Ordinal) for synthesized helpers that lack a Declaration or share a
-    /// span. This guarantees byte-identical MethodDef layout across
-    /// Compilation instances, which is required for byte-deterministic emit
-    /// (cf. <see cref="DebugInformationOptions.Deterministic"/>).
-    /// </summary>
-    private sealed class FunctionEmitOrderComparer : IComparer<FunctionSymbol>
-    {
-        public static readonly FunctionEmitOrderComparer Instance = new FunctionEmitOrderComparer();
-
-        private FunctionEmitOrderComparer()
-        {
-        }
-
-        public int Compare(FunctionSymbol? x, FunctionSymbol? y)
-        {
-            if (ReferenceEquals(x, y))
-            {
-                return 0;
-            }
-
-            if (x is null)
-            {
-                return -1;
-            }
-
-            if (y is null)
-            {
-                return 1;
-            }
-
-            int xPos = x.Declaration?.Span.Start ?? int.MaxValue;
-            int yPos = y.Declaration?.Span.Start ?? int.MaxValue;
-            int cmp = xPos.CompareTo(yPos);
-            if (cmp != 0)
-            {
-                return cmp;
-            }
-
-            cmp = string.CompareOrdinal(x.Name ?? string.Empty, y.Name ?? string.Empty);
-            if (cmp != 0)
-            {
-                return cmp;
-            }
-
-            // Final tiebreaker for distinct-but-otherwise-equal symbols (e.g.
-            // synthesized partial-method shadows): fall back to a stable
-            // signature string so equal-named overloads get a deterministic
-            // order even when source positions and names coincide.
-            return string.CompareOrdinal(FormatSignature(x), FormatSignature(y));
-        }
-
-        private static string FormatSignature(FunctionSymbol fn)
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.Append(fn.Type?.Name ?? "?");
-            sb.Append('(');
-            for (int i = 0; i < fn.Parameters.Length; i++)
-            {
-                if (i > 0)
-                {
-                    sb.Append(',');
-                }
-
-                sb.Append(fn.Parameters[i].Type?.Name ?? "?");
-            }
-
-            sb.Append(')');
-            return sb.ToString();
-        }
-    }
 
     // PR-E-11: BodyEmitter promoted to top-level MethodBodyEmitter
     // (src/Core/CodeAnalysis/Emit/MethodBodyEmitter.cs and partials).

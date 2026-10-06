@@ -71,3 +71,25 @@ How it works:
 Results:
 - **First run (2026-10-01, main `6c4824cbc`): not equivalent.** Stage-1 and stage-2 `GSharp.Core.dll` had identical tables and heaps but different numbering on 1,093 capture-box classes. The cause was a gsc determinism bug: lowering passes numbered synthesized types in identity-hash order ([#4663](https://github.com/DavidObando/gsharp/issues/4663)). The C#-built compiler had the same bug: adding an unrelated file renumbered its boxes. RefactoringBaselineTests passed under stage 2. All 162 `samples/` compiled to identical IL+metadata with either compiler.
 - **With the #4663 fix:** `GSharp.Core.dll`, `GSharp.Cs2Gs.Translator.dll` and `GSharp.Cs2Gs.CodeModel.dll` are **byte-identical** between stage 1 and stage 2.
+
+## Windows: the migrated Core.Tests on a 1 MB stack
+
+The compiler recurses deeply: the binder, lowering and emit all walk syntax and bound trees. Windows gives the main thread
+a 1 MB stack (Linux: 8 MB), and the frame sizes of G#-compiled code have never been measured. The workflow
+`.github/workflows/selfhost-windows.yml` (manual dispatch; it also runs on pull requests that change it) does the following:
+- It takes the migrated tree from a `cs2gs-selfmig-nightly` run (default: the latest successful one) and replays that run's polish deltas.
+- Git Bash extracts polish archives using POSIX paths; the resulting tree is passed to native tools and Actions as a Windows path.
+- The C# checkout keeps LF line endings, like the migrated artifact, so raw-string theory arguments have matching xUnit test names.
+- It pins the tree to the commit's own C#-built SDK (`selfhost-pack-stage1.py --prepare-only`).
+- It runs the C# and the migrated Core.Tests on the same `windows-latest` runner.
+- The migrated suite receives `CS2GS_TEST_SOURCE_ROOT` pointing to the original C# checkout, matching the stage-4
+  source-root contract. Older nightly artifacts have C#-only source guards and cannot discover it from the downloaded tree.
+
+`build/selfhost-compare-trx.py` compares the two runs by failing-test multiset. Duplicate display names remain separate
+executions, and additional failing rows cannot be hidden by a passing row with the same name. The job fails if the migrated suite fails a test
+that the C# suite passes, or executes fewer than 95% of the tests the C# suite does (a crashed test host, such as a stack overflow).
+Failures the C# suite already has on Windows (tracked by `windows-nightly`) are reported, not counted.
+An empty C# baseline also fails: it cannot establish migration parity. The existing Windows test failures are tracked in
+[#4635](https://github.com/DavidObando/gsharp/issues/4635); this lane does not skip or weaken those tests.
+Both TRX files must describe completed runs (`Completed`, `Passed` or `Failed`): an aborted, errored or missing run summary
+fails independently of the execution ratio. Completed runs with shared assertion failures remain valid for comparison.

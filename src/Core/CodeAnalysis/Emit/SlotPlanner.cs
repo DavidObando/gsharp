@@ -100,15 +100,16 @@ internal sealed class SlotPlanner
         // Issue #598: iterate Program.Functions in deterministic order
         // (source-position, then name) so lambda literals are collected in a
         // stable sequence regardless of ImmutableDictionary iteration order.
-        foreach (var kvp in this.emitCtx.Program.Functions
-            .OrderBy(p => p.Key.Declaration?.Span.Start ?? int.MaxValue)
-            .ThenBy(p => p.Key.Name ?? string.Empty, StringComparer.Ordinal))
+        // Issues #598/#4663: deterministic order, never identity-hash order.
+        foreach (var kvp in BoundProgramOrder.Functions(this.emitCtx.Program))
         {
             collector.Visit(kvp.Value);
         }
 
-        foreach (var plan in this.emitCtx.Program.Initializers.Values)
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var entry in BoundProgramOrder.Initializers(this.emitCtx.Program))
         {
+            var plan = entry.Value;
             collector.Visit(plan.Prologue);
             foreach (var argument in plan.Arguments)
             {
@@ -197,15 +198,16 @@ internal sealed class SlotPlanner
         var collector = new GoStatementCollector(sink);
 
         // Issue #598: iterate Program.Functions in deterministic order.
-        foreach (var kvp in this.emitCtx.Program.Functions
-            .OrderBy(p => p.Key.Declaration?.Span.Start ?? int.MaxValue)
-            .ThenBy(p => p.Key.Name ?? string.Empty, StringComparer.Ordinal))
+        // Issues #598/#4663: deterministic order, never identity-hash order.
+        foreach (var kvp in BoundProgramOrder.Functions(this.emitCtx.Program))
         {
             collector.Visit(kvp.Value);
         }
 
-        foreach (var plan in this.emitCtx.Program.Initializers.Values)
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var entry in BoundProgramOrder.Initializers(this.emitCtx.Program))
         {
+            var plan = entry.Value;
             collector.Visit(plan.Prologue);
             foreach (var argument in plan.Arguments)
             {
@@ -1625,8 +1627,8 @@ internal sealed class SlotPlanner
         }
     }
 
-    // Issues #1236/#3518: lifted numeric and CLR user-defined conversions
-    // between value-type Nullable<T> shapes share the same two-slot lowering.
+    // Issues #1236/#3518/#4741: lifted conversions spill a nullable value
+    // source; value results additionally need a slot for default construction.
     private sealed class NullableValueTypeConversionCollector : BoundTreeWalker
     {
         private readonly List<BoundExpression> sink;
@@ -1648,10 +1650,7 @@ internal sealed class SlotPlanner
 
         protected override void VisitClrConversionCallExpression(BoundClrConversionCallExpression node)
         {
-            if (IsLiftedNullableConversion(
-                node.Source.Type,
-                node.Type,
-                allowSymbolic: node.Function != null))
+            if (node.IsLifted)
             {
                 this.sink.Add(node);
             }
@@ -1660,19 +1659,10 @@ internal sealed class SlotPlanner
         }
 
         private static bool IsLiftedNullableConversion(TypeSymbol source, TypeSymbol target)
-            => IsLiftedNullableConversion(source, target, allowSymbolic: false);
-
-        private static bool IsLiftedNullableConversion(
-            TypeSymbol source,
-            TypeSymbol target,
-            bool allowSymbolic)
             => source is NullableTypeSymbol from
                 && target is NullableTypeSymbol to
-                && ((from.UnderlyingType?.ClrType is { IsValueType: true }
-                        && to.UnderlyingType?.ClrType is { IsValueType: true })
-                    || (allowSymbolic
-                        && NullableLifting.IsAnyValueTypeNullable(from)
-                        && NullableLifting.IsAnyValueTypeNullable(to)))
+                && from.UnderlyingType?.ClrType is { IsValueType: true }
+                && to.UnderlyingType?.ClrType is { IsValueType: true }
                 && from.UnderlyingType != to.UnderlyingType;
     }
 }

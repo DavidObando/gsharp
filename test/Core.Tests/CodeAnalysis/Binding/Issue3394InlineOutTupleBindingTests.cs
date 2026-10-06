@@ -125,48 +125,48 @@ public class Issue3394InlineOutTupleBindingTests
             typeof(System.Collections.Generic.List<>),
             ImmutableArray.Create<TypeSymbol>(sourceTypeParameter));
 
-        var invariant = typeof(Issue3394InlineOutTupleBindingTests)
-            .GetMethod(nameof(InvariantPair), BindingFlags.NonPublic | BindingFlags.Static)!;
+        var invariant = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests")
+            .GetMethod("InvariantPair", BindingFlags.NonPublic | BindingFlags.Static)!;
         Assert.True(MemberLookup.IsSymbolicInferenceConflict(
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 invariant,
                 ImmutableArray.Create<TypeSymbol>(listObject, listSourceType)))));
 
-        var invariantParams = typeof(Issue3394InlineOutTupleBindingTests)
-            .GetMethod(nameof(InvariantParams), BindingFlags.NonPublic | BindingFlags.Static)!;
+        var invariantParams = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests")
+            .GetMethod("InvariantParams", BindingFlags.NonPublic | BindingFlags.Static)!;
         Assert.True(MemberLookup.IsSymbolicInferenceConflict(
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 invariantParams,
                 ImmutableArray.Create<TypeSymbol>(listObject, listSourceType),
                 isExpanded: true))));
 
-        var byRef = typeof(Issue3394InlineOutTupleBindingTests)
-            .GetMethod(nameof(ByRefPair), BindingFlags.NonPublic | BindingFlags.Static)!;
+        var byRef = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests")
+            .GetMethod("ByRefPair", BindingFlags.NonPublic | BindingFlags.Static)!;
         Assert.True(MemberLookup.IsSymbolicInferenceConflict(
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 byRef,
                 ImmutableArray.Create<TypeSymbol>(TypeSymbol.Object, sourceTypeParameter)))));
 
-        var direct = typeof(Issue3394InlineOutTupleBindingTests)
-            .GetMethod(nameof(DirectPair), BindingFlags.NonPublic | BindingFlags.Static)!;
+        var direct = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests")
+            .GetMethod("DirectPair", BindingFlags.NonPublic | BindingFlags.Static)!;
         Assert.Same(
             sourceTypeParameter,
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 direct,
                 ImmutableArray.Create<TypeSymbol>(sourceTypeParameter, TypeSymbol.Error))));
 
-        var upper = typeof(Issue3394InlineOutTupleBindingTests)
-            .GetMethod(nameof(UpperPair), BindingFlags.NonPublic | BindingFlags.Static)!;
-        var baseAction = TypeSymbol.FromClrType(typeof(System.Action<InferenceBase>));
-        var derivedAction = TypeSymbol.FromClrType(typeof(System.Action<InferenceDerived>));
+        var upper = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests")
+            .GetMethod("UpperPair", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var baseAction = TypeSymbol.FromClrType(typeof(System.Action<>).MakeGenericType(NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests+InferenceBase")));
+        var derivedAction = TypeSymbol.FromClrType(typeof(System.Action<>).MakeGenericType(NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests+InferenceDerived")));
 
         Assert.Equal(
-            typeof(InferenceDerived),
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests+InferenceDerived"),
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 upper,
                 ImmutableArray.Create<TypeSymbol>(baseAction, derivedAction)))!.ClrType);
         Assert.Equal(
-            typeof(InferenceDerived),
+            NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests+InferenceDerived"),
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 upper,
                 ImmutableArray.Create<TypeSymbol>(derivedAction, baseAction)))!.ClrType);
@@ -380,8 +380,8 @@ public class Issue3394InlineOutTupleBindingTests
     [Fact]
     public void ImportedOptionalNullParameter_IsReferenceNullable()
     {
-        var parameter = typeof(OptionalNullFixture)
-            .GetMethod(nameof(OptionalNullFixture.Accept))!
+        var parameter = NativeMetadataFixtures.GetType("GSharp.Core.Tests.CodeAnalysis.Binding.Issue3394InlineOutTupleBindingTests+OptionalNullFixture")
+            .GetMethod("Accept")!
             .GetParameters()[0];
 
         Assert.IsType<NullableTypeSymbol>(ClrNullability.GetParameterTypeSymbol(parameter));
@@ -991,42 +991,5 @@ public class Issue3394InlineOutTupleBindingTests
             """);
 
         Assert.Empty(result.Diagnostics.Where(d => d.IsError));
-    }
-
-    private static void InvariantPair<T>(
-        System.Collections.Generic.List<T> first,
-        System.Collections.Generic.List<T> second)
-    {
-    }
-
-    private static void DirectPair<T>(T first, T second)
-    {
-    }
-
-    private static void ByRefPair<T>(ref T first, ref T second)
-    {
-    }
-
-    private static void InvariantParams<T>(params System.Collections.Generic.List<T>[] values)
-    {
-    }
-
-    private static void UpperPair<T>(System.Action<T> first, System.Action<T> second)
-    {
-    }
-
-    private static class OptionalNullFixture
-    {
-        public static void Accept(string value = null)
-        {
-        }
-    }
-
-    private class InferenceBase
-    {
-    }
-
-    private sealed class InferenceDerived : InferenceBase
-    {
     }
 }

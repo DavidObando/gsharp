@@ -1650,6 +1650,23 @@ internal sealed class UserTokenResolver
     /// </summary>
     internal EntityHandle ResolveUserInstanceMethodToken(StructSymbol containingType, FunctionSymbol method)
     {
+        if (containingType.Definition is { } definition && !ReferenceEquals(definition, containingType)
+            && containingType.IsData)
+        {
+            if (ReferenceEquals(method, containingType.DataEqualsSelf))
+            {
+                method = definition.DataEqualsSelf;
+            }
+            else if (ReferenceEquals(method, containingType.DataEqualsObject))
+            {
+                method = definition.DataEqualsObject;
+            }
+            else if (ReferenceEquals(method, containingType.DataEqualsBase))
+            {
+                method = Invariant.Required(definition.DataEqualsBase, "a constructed typed-base slot has a definition");
+            }
+        }
+
         if (!this.cache.MethodHandles.TryGetValue(method, out var openDef)
             && containingType.ClrType != null)
         {
@@ -2348,6 +2365,28 @@ internal sealed class UserTokenResolver
         return memberRef;
     }
 
+    /// <summary>Resolves the planned data-class clone on its effective generic owner.</summary>
+    /// <param name="structType">The receiver's constructed or self type.</param>
+    /// <returns>The existing clone MethodDef or TypeSpec-parented MemberRef.</returns>
+    internal EntityHandle ResolveDataClassCloneToken(StructSymbol structType)
+    {
+        var definition = structType.Definition ?? structType;
+        if (!this.cache.DataClassCloneHandles.TryGetValue(definition, out var clone))
+        {
+            throw new InvalidOperationException($"Data class '{structType.Name}' has no planned clone contract.");
+        }
+
+        if (!ReflectionMetadataEmitter.IsUserGenericTypeReference(structType))
+        {
+            return clone;
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => this.signatures.EncodeTypeSymbol(r.Type(), definition), _ => { });
+        return this.GetUserStructMethodRef(structType, clone, "<Clone>$", signature);
+    }
+
     /// <summary>
     /// ADR-0087 §3 R3: resolves the right token for a <c>newobj</c>
     /// against a user-declared primary ctor. Returns the bare
@@ -2461,28 +2500,9 @@ internal sealed class UserTokenResolver
     {
         var def = constructedBase.Definition ?? constructedBase;
 
-        if (this.cache.ClassPrimaryCtorHandles.TryGetValue(def, out var primaryDef))
+        if (this.cache.ClassPrimaryCtorHandles.ContainsKey(def))
         {
-            var defParams = def.PrimaryConstructorParameters;
-            var primarySig = new BlobBuilder();
-            new BlobEncoder(primarySig)
-                .MethodSignature(isInstanceMethod: true)
-                .Parameters(
-                    defParams.IsDefaultOrEmpty ? 0 : defParams.Length,
-                    r => r.Void(),
-                    ps =>
-                    {
-                        if (defParams.IsDefaultOrEmpty)
-                        {
-                            return;
-                        }
-
-                        foreach (var p in defParams)
-                        {
-                            this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
-                        }
-                    });
-            return this.GetUserStructMethodRef(constructedBase, primaryDef, ".ctor", primarySig);
+            return this.ResolveUserCtorTokenForPrimary(constructedBase);
         }
 
         if (this.cache.ClassCtorHandles.TryGetValue(def, out var defaultDef))
@@ -2542,18 +2562,24 @@ internal sealed class UserTokenResolver
         }
 
         var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob)
-            .MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                ctor.Parameters.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var p in ctor.Parameters)
+        // Match the constructor's MethodDef slots, not the caller's generic
+        // context, just as the primary-constructor token path does (#4803).
+        using (this.remaps.PushSmRemap(structType.Definition ?? structType))
+        {
+            new BlobEncoder(sigBlob)
+                .MethodSignature(isInstanceMethod: true)
+                .Parameters(
+                    ctor.Parameters.Length,
+                    r => r.Void(),
+                    ps =>
                     {
-                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
-                    }
-                });
+                        foreach (var p in ctor.Parameters)
+                        {
+                            this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        }
+                    });
+        }
+
         return this.GetUserStructMethodRef(structType, explicitDef, ".ctor", sigBlob);
     }
 

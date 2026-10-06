@@ -83,6 +83,13 @@ public sealed partial class CSharpToGSharpTranslator
     // cheap and only resolves symbols for those nodes.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<INamedTypeSymbol, HashSet<string>>> TypeOfReferencedTypesCache = new();
 
+    // Lifted helpers from separate partial-type documents share one CLR type;
+    // LiftedLocalFunctionNameAllocator.For keeps their readable names unique
+    // across the whole compilation.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<string, List<SyntaxToken>>> IdentifierTokenIndexes = new();
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, HashSet<INamedTypeSymbol>> AllStaticUsingTargetsCache = new();
+
     // ADR-0145 (§C/§D) / issue #3410: preserve each C# `partial` declaration as
     // a standalone G# `partial` part by default. This keeps members in the G#
     // file corresponding to their declaring C# file and lets the G# compiler's
@@ -623,7 +630,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        return new CompilationUnit(package, allImports, members, fileAttributes: fileAttributes);
+        // The C# file's header comment (license, copyright) stays at the top
+        // of every G# unit translated from it.
+        return new CompilationUnit(
+            package,
+            allImports,
+            members,
+            leadingComments: FileHeader.GetLines(root),
+            fileAttributes: fileAttributes);
     }
 
     /// <summary>Gets the distinct source namespaces declared by a document.</summary>
@@ -990,8 +1004,274 @@ public sealed partial class CSharpToGSharpTranslator
     private static bool RequiresOwnerScopedExtension(IMethodSymbol method)
     {
         IMethodSymbol original = method?.ReducedFrom ?? method;
+
+        // Issue #4676: only an extension whose receiver the project OWNS (a source
+        // type in the same namespace, or an enum) still needs the owner-scoped
+        // scheme, because such an extension is moved into the receiver type, which
+        // cannot reach the owner's private nested types. An extension on an
+        // external receiver (`this Type`, `this string`, `this T`) is lifted to a
+        // top-level function and hosted on its owner through `@ExtensionOwner`,
+        // which gives it the owner's private access: one function with the real
+        // body, one `[Extension]` method on the owner, as in C#. The scheme this
+        // replaces kept the body as an in-owner helper and published a forwarding
+        // companion on the package's public `<Program>`: an extra public type, and
+        // the owner's own method without its extension marker.
+        //
+        // The same scheme also stays for an extension whose SIGNATURE or ATTRIBUTES name one of
+        // the owner's private nested types: gsc binds a function's receiver, parameter and
+        // return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
+        // top-level function cannot name (or access) the private type, while the in-owner
+        // helper can. A method whose SIGNATURE names such a type cannot be public API (CS0050);
+        // one that only has an attribute naming it can: it keeps the helper and its
+        // forwarding companion, and the companion (top level, where the private type cannot
+        // be named) leaves off only the attributes that name it, in any position (see
+        // TranslateOwnerScopedCompanion).
         return original?.IsExtensionMethod == true &&
-            HasPrivateNestedAggregate(original.ContainingType);
+            HasPrivateNestedAggregate(original.ContainingType) &&
+            (TryGetOwnedExtensionReceiver(original, out _)
+                || SignatureTypesNamePrivateNestedType(original)
+                || AttributesNamePrivateNestedType(original));
+    }
+
+    /// <summary>
+    /// Whether the receiver, a parameter, the return type or a type-parameter constraint of
+    /// <paramref name="method"/> names one of its owner's private nested types.
+    /// </summary>
+    /// <param name="method">The extension method.</param>
+    /// <returns><see langword="true"/> when a signature type names an owner-private nested type.</returns>
+    private static bool SignatureTypesNamePrivateNestedType(IMethodSymbol method) =>
+        SignatureTypesNamePrivateNestedType(
+            method,
+            method.ContainingType,
+            new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+
+    private static bool SignatureTypesNamePrivateNestedType(
+        IMethodSymbol method,
+        INamedTypeSymbol owner,
+        HashSet<ITypeSymbol> visited)
+    {
+        if (NamesPrivateNestedType(method.ReturnType, owner, visited))
+        {
+            return true;
+        }
+
+        foreach (IParameterSymbol parameter in method.Parameters)
+        {
+            if (NamesPrivateNestedType(parameter.Type, owner, visited))
+            {
+                return true;
+            }
+        }
+
+        foreach (ITypeParameterSymbol typeParameter in method.TypeParameters)
+        {
+            foreach (ITypeSymbol constraint in typeParameter.ConstraintTypes)
+            {
+                if (NamesPrivateNestedType(constraint, owner, visited))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether an attribute on <paramref name="method"/>, its return value or a parameter
+    /// names one of its owner's private nested types (as the attribute class or in an argument).
+    /// </summary>
+    /// <param name="method">The extension method.</param>
+    /// <returns><see langword="true"/> when an attribute names an owner-private nested type.</returns>
+    private static bool AttributesNamePrivateNestedType(IMethodSymbol method) =>
+        AttributeApplicationsNamingPrivateNestedType(method).Count > 0;
+
+    /// <summary>
+    /// The syntax of every attribute on <paramref name="method"/>, its return value
+    /// or a parameter that names one of its owner's private nested types.
+    /// </summary>
+    /// <param name="method">The extension method.</param>
+    /// <returns>The attribute syntax nodes (empty when none names such a type).</returns>
+    private static HashSet<SyntaxNode> AttributeApplicationsNamingPrivateNestedType(IMethodSymbol method)
+    {
+        var found = new HashSet<SyntaxNode>();
+        INamedTypeSymbol owner = method.ContainingType;
+        CollectAttributeApplicationsNamingPrivateNestedType(method.GetAttributes(), owner, found);
+        CollectAttributeApplicationsNamingPrivateNestedType(method.GetReturnTypeAttributes(), owner, found);
+        foreach (IParameterSymbol parameter in method.Parameters)
+        {
+            CollectAttributeApplicationsNamingPrivateNestedType(parameter.GetAttributes(), owner, found);
+        }
+
+        // Type-parameter attributes are not translated (the code model's type parameter carries
+        // only constraints and variance), so no emitted declaration names the type through one.
+        return found;
+    }
+
+    private static void CollectAttributeApplicationsNamingPrivateNestedType(
+        ImmutableArray<AttributeData> attributes,
+        INamedTypeSymbol owner,
+        HashSet<SyntaxNode> found)
+    {
+        foreach (AttributeData attribute in attributes)
+        {
+            if (AttributesNamePrivateNestedType(ImmutableArray.Create(attribute), owner)
+                && attribute.ApplicationSyntaxReference?.GetSyntax() is SyntaxNode syntax)
+            {
+                found.Add(syntax);
+            }
+        }
+    }
+
+    private static bool AttributesNamePrivateNestedType(
+        ImmutableArray<AttributeData> attributes,
+        INamedTypeSymbol owner)
+    {
+        foreach (AttributeData attribute in attributes)
+        {
+            if (attribute.AttributeClass != null && NamesPrivateNestedType(attribute.AttributeClass, owner))
+            {
+                return true;
+            }
+
+            foreach (TypedConstant argument in attribute.ConstructorArguments)
+            {
+                if (ConstantNamesPrivateNestedType(argument, owner))
+                {
+                    return true;
+                }
+            }
+
+            foreach (KeyValuePair<string, TypedConstant> named in attribute.NamedArguments)
+            {
+                if (ConstantNamesPrivateNestedType(named.Value, owner))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ConstantNamesPrivateNestedType(TypedConstant constant, INamedTypeSymbol owner)
+    {
+        // Every constant carries its own type (an enum constant's is the enum, which the
+        // translated argument names), whatever its kind; then recurse into the two kinds
+        // that hold more types: `typeof(T)` (the value) and arrays (the elements).
+        if (constant.Type != null && NamesPrivateNestedType(constant.Type, owner))
+        {
+            return true;
+        }
+
+        switch (constant.Kind)
+        {
+            case TypedConstantKind.Type:
+                return constant.Value is ITypeSymbol type && NamesPrivateNestedType(type, owner);
+            case TypedConstantKind.Array:
+                // A null array argument (`[Marker(null)]` for a `Type[]` parameter) is an
+                // Array constant whose `Values` is the default array, which cannot be enumerated.
+                if (constant.Values.IsDefaultOrEmpty)
+                {
+                    return false;
+                }
+
+                foreach (TypedConstant element in constant.Values)
+                {
+                    if (ConstantNamesPrivateNestedType(element, owner))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    private static bool NamesPrivateNestedType(ITypeSymbol type, INamedTypeSymbol owner) =>
+        NamesPrivateNestedType(
+            type,
+            owner,
+            new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+
+    private static bool NamesPrivateNestedType(
+        ITypeSymbol type,
+        INamedTypeSymbol owner,
+        HashSet<ITypeSymbol> visited)
+    {
+        if (!visited.Add(type))
+        {
+            return false;
+        }
+
+        switch (type)
+        {
+            case IArrayTypeSymbol array:
+                return NamesPrivateNestedType(array.ElementType, owner, visited);
+            case IPointerTypeSymbol pointer:
+                return NamesPrivateNestedType(pointer.PointedAtType, owner, visited);
+            case IFunctionPointerTypeSymbol functionPointer:
+                return SignatureTypesNamePrivateNestedType(functionPointer.Signature, owner, visited);
+            case ITypeParameterSymbol typeParameter:
+                foreach (ITypeSymbol constraint in typeParameter.ConstraintTypes)
+                {
+                    if (NamesPrivateNestedType(constraint, owner, visited))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case INamedTypeSymbol named:
+                bool liftedDelegate = CSharpTypeMapper.IsLiftedNestedDelegate(named);
+                if (liftedDelegate)
+                {
+                    // Lifting makes the nominal delegate reachable, not private types
+                    // exposed by its declaration. Inspect the definition: constructed
+                    // signatures can expand generic recursion indefinitely.
+                    INamedTypeSymbol definition = named.OriginalDefinition;
+                    if (definition.DelegateInvokeMethod is IMethodSymbol invoke
+                        && SignatureTypesNamePrivateNestedType(invoke, owner, visited))
+                    {
+                        return true;
+                    }
+
+                    foreach (ITypeParameterSymbol parameter in definition.TypeParameters)
+                    {
+                        if (NamesPrivateNestedType(parameter, owner, visited))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                // Every type in the containing chain: it may be an owner-private nested type
+                // itself, and it may carry type arguments (`Outer<Box>.Inner` names `Box`
+                // through the CONTAINING type's arguments, not Inner's own).
+                for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
+                {
+                    if (!liftedDelegate
+                        && SymbolEqualityComparer.Default.Equals(current.ContainingType, owner)
+                        && current.DeclaredAccessibility == Accessibility.Private)
+                    {
+                        return true;
+                    }
+
+                    foreach (ITypeSymbol argument in current.TypeArguments)
+                    {
+                        if (NamesPrivateNestedType(argument, owner, visited))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            default:
+                return false;
+        }
     }
 
     private static bool IsOwnerScopedCompanionShapeEligible(IMethodSymbol method)
@@ -1004,7 +1284,8 @@ public sealed partial class CSharpToGSharpTranslator
             || original.Parameters[0].RefKind != RefKind.None
             || original.Parameters.Any(parameter => parameter.IsParams)
             || original.ReturnsByRef
-            || original.ReturnsByRefReadonly)
+            || original.ReturnsByRefReadonly
+            || SignatureTypesNamePrivateNestedType(original))
         {
             return false;
         }
@@ -1647,6 +1928,43 @@ public sealed partial class CSharpToGSharpTranslator
         return targets;
     }
 
+    private static HashSet<INamedTypeSymbol> GetOrCollectAllStaticUsingTargets(Compilation compilation) =>
+        AllStaticUsingTargetsCache.GetValue(
+            compilation,
+            static current =>
+            {
+                var targets = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+                foreach (SyntaxTree tree in current.SyntaxTrees)
+                {
+                    if (tree.GetRoot() is not CompilationUnitSyntax root)
+                    {
+                        continue;
+                    }
+
+                    SemanticModel model = current.GetSemanticModel(tree);
+                    IEnumerable<UsingDirectiveSyntax> usings = root.Usings
+                        .Concat(root.DescendantNodes()
+                            .OfType<BaseNamespaceDeclarationSyntax>()
+                            .SelectMany(declaration => declaration.Usings));
+                    foreach (UsingDirectiveSyntax directive in usings)
+                    {
+                        if (directive.StaticKeyword.IsKind(SyntaxKind.None)
+                            || directive.Name is null
+                            || directive.Alias != null)
+                        {
+                            continue;
+                        }
+
+                        if (model.GetSymbolInfo(directive.Name).Symbol is INamedTypeSymbol type)
+                        {
+                            targets.Add(type.OriginalDefinition);
+                        }
+                    }
+                }
+
+                return targets;
+            });
+
     /// <summary>
     /// The step-6 declaration dispatcher: a <see cref="CSharpSyntaxVisitor{TResult}"/>
     /// that maps each type declaration (kind, name, visibility, generics, base
@@ -1715,6 +2033,9 @@ public sealed partial class CSharpToGSharpTranslator
         // UNQUALIFIED (gsc resolves it through `import X`), unlike a sibling
         // static, which is qualified through its owning type.
         private readonly HashSet<INamedTypeSymbol> staticUsingTargets;
+
+        // Set only while translating an owner-scoped extension's forwarding companion.
+        private Func<AttributeSyntax, bool> attributeOmission;
 
         // gsc's ADR-0044 implicit numeric widening lattice (mirrors
         // Conversion.NumericWideningTargets), keyed on the C# SpecialType of the

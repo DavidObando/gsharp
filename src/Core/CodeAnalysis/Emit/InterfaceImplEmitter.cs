@@ -47,6 +47,7 @@ internal sealed class InterfaceImplEmitter
     private readonly EmitContext emitCtx;
     private readonly MetadataTokenCache cache;
     private readonly Dictionary<StructSymbol, List<InheritedEventBridge>> inheritedEventBridges = new();
+    private readonly Dictionary<StructSymbol, List<ImportedAccessorBridge>> importedAccessorBridges = new();
 
     public InterfaceImplEmitter(ReflectionMetadataEmitter outer)
     {
@@ -659,6 +660,144 @@ internal sealed class InterfaceImplEmitter
                 }
             }
         }
+    }
+
+    internal int PlanImportedAccessorBridges(StructSymbol structSymbol, int firstMethodRow)
+    {
+        var bridges = new List<ImportedAccessorBridge>();
+        foreach (var selection in structSymbol.ImportedInterfaceAccessors)
+        {
+            if (selection.Accessor.IsVirtual || SourceBaseImplementsInterface(structSymbol.BaseClass, selection.Interface))
+            {
+                continue;
+            }
+
+            var handle = MetadataTokens.MethodDefinitionHandle(firstMethodRow + bridges.Count);
+            // A type-local ordinal keeps names stable when reference emit omits unrelated synthesized rows.
+            var namePrefix = ExplicitInterfaceMetadataNaming.GetMetadataName(selection.Accessor.Name, selection.Interface);
+            bridges.Add(new ImportedAccessorBridge(
+                selection.Interface,
+                selection.Property,
+                selection.Accessor,
+                selection.ContainingType,
+                selection.IsSetter,
+                handle,
+                $"{namePrefix}$forwarder{bridges.Count}"));
+        }
+
+        this.importedAccessorBridges[structSymbol] = bridges;
+        return bridges.Count;
+    }
+
+    internal void EmitImportedAccessorBridges(StructSymbol structSymbol)
+    {
+        foreach (var bridge in this.importedAccessorBridges[structSymbol])
+        {
+            var slot = bridge.IsSetter ? bridge.Property.SetterSymbol : bridge.Property.GetterSymbol;
+            var declaration = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(
+                bridge.Interface,
+                Invariant.Required(slot, "a selected interface accessor has its slot symbol"));
+            var bodyOffset = -1;
+            var parameterCount = bridge.Property.Parameters.Length + (bridge.IsSetter ? 1 : 0);
+            if (!this.emitCtx.MetadataOnly)
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                for (var i = 0; i <= parameterCount; i++)
+                {
+                    il.LoadArgument(i);
+                }
+
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.outer.memberRefs.GetMethodEntityHandle(bridge.Accessor, bridge.ContainingType));
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(
+                    il,
+                    maxStack: MaxStackTracker.ComputeMaxStack(il));
+            }
+
+            var typeMap = DeclarationBinder.BuildInterfaceTypeParameterMap(bridge.Interface);
+            var propertyType = DeclarationBinder.GetInterfacePropertyExpectedType(bridge.Property.Type, typeMap);
+            var signature = new BlobBuilder();
+            new BlobEncoder(signature).MethodSignature(isInstanceMethod: true).Parameters(
+                parameterCount,
+                returnType =>
+                {
+                    if (bridge.IsSetter && bridge.Property.IsInitOnly)
+                    {
+                        returnType.CustomModifiers().AddModifier(
+                            this.outer.wellKnown.GetIsExternalInitTypeRef(),
+                            isOptional: false);
+                    }
+
+                    this.outer.signatures.EncodeReturnSymbol(
+                        returnType,
+                        bridge.IsSetter ? TypeSymbol.Void : propertyType,
+                        bridge.IsSetter ? RefKind.None : bridge.Property.ReturnRefKind);
+                },
+                parameters =>
+                {
+                    foreach (var parameter in bridge.Property.Parameters)
+                    {
+                        TypeDefEmitter.EncodeParameterSignature(
+                            parameters,
+                            parameter,
+                            (encoder, type) => this.outer.signatures.EncodeTypeSymbol(
+                                encoder,
+                                DeclarationBinder.GetInterfacePropertySlotType(type, typeMap)),
+                            this.outer.wellKnown);
+                    }
+
+                    if (bridge.IsSetter)
+                    {
+                        this.outer.signatures.EncodeTypeSymbol(parameters.AddParameter().Type(), propertyType);
+                    }
+                });
+            var firstParameter = this.outer.customAttrEncoder.NextParameterHandle();
+            for (var i = 0; i < parameterCount; i++)
+            {
+                var name = i < bridge.Property.Parameters.Length ? bridge.Property.Parameters[i].Name : "value";
+                this.emitCtx.Metadata.AddParameter(
+                    ParameterAttributes.None,
+                    this.emitCtx.Metadata.GetOrAddString(name),
+                    sequenceNumber: i + 1);
+            }
+
+            var emittedHandle = this.emitCtx.Metadata.AddMethodDefinition(
+                MethodAttributes.Private | MethodAttributes.Final | MethodAttributes.Virtual
+                    | MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.SpecialName,
+                MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                this.emitCtx.Metadata.GetOrAddString(bridge.Name),
+                this.emitCtx.Metadata.GetOrAddBlob(signature),
+                bodyOffset,
+                firstParameter);
+            if (emittedHandle != bridge.Handle)
+            {
+                throw new InvalidOperationException("Imported accessor bridge MethodDef row was not emitted in planned order.");
+            }
+
+            this.emitCtx.Metadata.AddMethodImplementation(this.cache.StructTypeDefs[structSymbol], bridge.Handle, declaration);
+        }
+    }
+
+    private static bool SourceBaseImplementsInterface(StructSymbol? baseClass, InterfaceSymbol iface)
+    {
+        if (baseClass == null)
+        {
+            return false;
+        }
+
+        foreach (var ancestor in baseClass.GetHierarchy())
+        {
+            foreach (var implemented in ancestor.Interfaces)
+            {
+                if (DeclarationBinder.ConformanceSignaturesEquivalent(implemented, iface))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     internal int PlanInheritedEventBridges(StructSymbol structSymbol, int firstMethodRow)
@@ -1558,4 +1697,13 @@ internal sealed class InterfaceImplEmitter
         EventSymbol Event,
         MethodDefinitionHandle Add,
         MethodDefinitionHandle Remove);
+
+    private sealed record ImportedAccessorBridge(
+        InterfaceSymbol Interface,
+        PropertySymbol Property,
+        MethodInfo Accessor,
+        TypeSymbol ContainingType,
+        bool IsSetter,
+        MethodDefinitionHandle Handle,
+        string Name);
 }

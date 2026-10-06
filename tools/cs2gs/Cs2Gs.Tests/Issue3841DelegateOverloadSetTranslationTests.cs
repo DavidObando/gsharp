@@ -30,11 +30,11 @@ namespace Cs2Gs.Tests;
 /// the arrow form.
 /// </para>
 /// <para>
-/// Preserving every imported delegate's nominal name would rewrite
-/// <c>Func</c>/<c>Action</c> across the corpus for no benefit, so the rule is
-/// scoped to the members that actually collide. The
-/// <c>NonCollidingDelegates_StillRenderInArrowForm</c> test is the guard on
-/// that scoping.
+/// Imported delegates retain their nominal names, except canonical
+/// <c>System.Func</c>/<c>System.Action</c>, which retain arrow form unless
+/// overload collisions require their nominal identity. The
+/// <c>NonCollidingCanonicalDelegates_StillRenderInArrowForm</c> test is the guard on
+/// canonical-delegate exception.
 /// </para>
 /// </summary>
 public class Issue3841DelegateOverloadSetTranslationTests
@@ -182,21 +182,19 @@ namespace Overloads
 
     /// <summary>
     /// The scoping guard. Delegate parameters that do NOT participate in a
-    /// colliding overload set keep ADR-0115 §B.8's arrow form — including a
-    /// <c>Predicate</c> and a <c>Func</c> on unrelated members and even side by
-    /// side in one signature. Without this, the fix would be a corpus-wide
-    /// readability regression rather than a targeted one.
+    /// colliding overload set keep ADR-0115 §B.8's arrow form when their CLR
+    /// identity is Func/Action. Predicate has a distinct identity (#4679),
+    /// even without an overload collision.
     /// </summary>
     [Fact]
-    public void NonCollidingDelegates_StillRenderInArrowForm()
+    public void NonCollidingCanonicalDelegates_StillRenderInArrowForm()
     {
         string rendered = Render();
 
         Assert.Contains("Length(length (string) -> int32)", rendered, StringComparison.Ordinal);
         Assert.Contains("Sink(sink (string) -> void)", rendered, StringComparison.Ordinal);
-        Assert.Contains("Test(test (string) -> bool)", rendered, StringComparison.Ordinal);
-        Assert.Contains("Both(test (string) -> bool, length (string) -> int32)", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("Predicate[string]", rendered, StringComparison.Ordinal);
+        Assert.Contains("Test(test Predicate[string])", rendered, StringComparison.Ordinal);
+        Assert.Contains("Both(test Predicate[string], length (string) -> int32)", rendered, StringComparison.Ordinal);
     }
 
     /// <summary>

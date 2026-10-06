@@ -239,6 +239,15 @@ public sealed class StageExecutionContext
     /// the run over them.
     /// </summary>
     public List<string> StaleTestAllowListEntries { get; } = new List<string>();
+
+    /// <summary>
+    /// Gets or sets the per-test-name parity summary the test-parity stage
+    /// recorded for a completed mirrored test run (issue #4633), carried into
+    /// the run record PASS or FAIL. <see langword="null"/> when no completed
+    /// mirrored run happened (this file is nullable-oblivious, like the
+    /// sibling <see cref="EmittedAssemblyPath"/>).
+    /// </summary>
+    public TestNameParitySummary TestNameParity { get; set; }
 }
 
 /// <summary>
@@ -273,6 +282,12 @@ public sealed class EmittedGsFile
 
     /// <summary>Gets the emitted G# source text.</summary>
     public string GSharpSource { get; }
+
+    /// <summary>
+    /// Gets or sets the producing compilation's build-generated source evidence.
+    /// Authored sources (including checked-in generated code) have no payload.
+    /// </summary>
+    public GeneratedValidationSource GeneratedSource { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this file was emitted from a

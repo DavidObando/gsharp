@@ -45,12 +45,24 @@ runs_dir="$work_root/runs"
 
 selfmig_build_prerequisites
 
+# Issue #4633: list every C# test project's cases first; this single-job path
+# runs test parity inside the same `migrate` invocation, so the oracle must
+# already exist. (The sharded gate captures after translation instead.) A
+# capture failure only fails the affected apps, as TEST-ORACLE-MISSING.
+dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
+  --corpus "$repo_root" \
+  --out "$work_root/csharp-tests" \
+  "${selfmig_project_filters[@]}" \
+  || echo "self-migration gate: capturing the C# test oracle failed for some test project(s)." >&2
+
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$repo_root" \
+  --sdk-pin global-json \
   --out "$migrated_dir" \
   --artifacts "$runs_dir" \
   --config Release \
+  --csharp-test-oracle "$work_root/csharp-tests" \
   "${selfmig_project_filters[@]}" \
   | tee "$work_root/migrate.log"
 migrate_exit=${PIPESTATUS[0]}

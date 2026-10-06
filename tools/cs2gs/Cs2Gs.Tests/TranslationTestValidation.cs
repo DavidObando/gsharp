@@ -57,7 +57,7 @@ internal static class TranslationTestValidation
             trees,
             references);
         var errors = scope.Diagnostics
-            .Concat(Binder.BindProgram(scope).Diagnostics)
+            .Concat(Binder.BindProgram(scope, references).Diagnostics)
             .Where(diagnostic => diagnostic.IsError)
             .ToArray();
         Assert.True(

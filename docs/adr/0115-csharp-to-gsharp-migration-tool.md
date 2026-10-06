@@ -110,7 +110,7 @@ Since issue #948, the inline field initializers the translator emits here — `p
 
 `data class`/`data struct` synthesize equality and copy/update ergonomics (ADR-0029, ADR-0032). The `record` *keyword* is **not** emitted (removed by ADR-0078); the canonical spelling is `data class`/`data struct`. C# positional records map to the G# primary-constructor form (`data struct Point(X int32, Y int32)`), fields-only records to the body form. A C# `struct` with exactly one field that C# treats as a newtype is *not* auto-promoted to `inline struct` (ADR-0033) — that is a semantic judgment the tool will not make; it emits a plain `struct` and leaves `inline struct` adoption to the human.
 
-**T4 — fieldless record → plain (`open`) `class`/`struct`.** A G# `data` type requires **at least one field** (`GS0104`, "a data type requires at least one field"). A C# **fieldless record** — typically the `abstract record Shape;` base of a closed `record` hierarchy — therefore maps to a plain `class` (or `struct`), **not** a `data class`; it is marked `open` when any case derives from it (§B.6). Two further losses are made faithfully: G# has **no `abstract` class modifier** (the keyword is not recognized by the parser; `abstract class` → `GS0125`), so C# `abstract` is **dropped** (the `open class` is subclassable but not non-instantiable); and the record-synthesized `IEquatable<Self>` interface is **dropped from the base list** because a fieldless record maps to a plain `class` that has no synthesized `Equals`, so emitting `: IEquatable[Shape]` would leave the interface unimplemented (`GS0187`). Naming the enclosing type as a base-clause type *argument* is itself legal since issue #949 (`open class Shape : IEquatable[Shape]` now compiles); the drop is a semantic-redundancy filter, not the former `GS0113` syntax limitation. Each loss is recorded as an Info diagnostic. The case records (`sealed record Circle(double Radius) : Shape`) keep the `data class Circle(Radius float64) : Shape` mapping.
+**T4 — fieldless record → zero-field `data class`.** A C# **fieldless record** with no positional parameter list — typically the `abstract record Shape;` base of a closed `record` hierarchy — maps to a zero-field `data class` (a zero-field data type is supported by gsc). C# `abstract` is **kept** as G#'s `abstract` class modifier (ADR-0195, issue #4674), so `abstract record Shape;` becomes `abstract data class Shape : IEquatable[Shape] { … }` (`abstract` implies `open`; it was dropped before the modifier existed, leaving an instantiable `open class`). The record-synthesized `IEquatable<Self>` interface is **preserved in the base list**: structural equality alone does not supply the native CLR interface contract (#4675). The case records (`sealed record Circle(double Radius) : Shape`) keep the `data class Circle(Radius float64) : Shape, IEquatable[Circle]` mapping and their self interfaces. *(Superseded: earlier revisions mapped a fieldless record to a plain `open class` because they believed `GS0104` forbade a zero-field data type; that mapping no longer applies.)*
 
 **T1 — C# tuples → native G# positional tuples.** *Amended by ADR-0172 (2026-08-28): G# now supports named tuple elements (`(name string, price int32)` types, `(name: e)` literal labels), so the name-dropping described below is superseded — cs2gs preserves element names once its ADR-0172 Phase C lands. The remainder of this section records the original positional-only mapping.* A C# value/named tuple (`(string Name, int Price, int Quantity)`) maps to the **native G# positional tuple type** `(string, int32, int32)` (spec §Type syntax), *not* to a synthesized `data struct`. G# tuples were **positional only** — the named-element spelling `(Name string, …)` did not parse — so C# element **names were dropped** at the type, and a named-element **access** `item.Price` lowered to the positional field `item.Item2` (resolved via Roslyn's `IFieldSymbol.CorrespondingTupleField`); positional `item.Item1` passes through. Tuple **construction** `(a, b, c)` maps to the G# tuple literal `(a, b, c)`. The mapping is recorded as an Info diagnostic. This was chosen over synthesizing a `data struct` per tuple shape because a `data struct` element type triggers a real compiler gap (below) and because native tuples are the genuinely canonical, round-trippable G# form.
 
@@ -170,6 +170,30 @@ Instance methods on a **`class`** (or `data class`) the package **owns** are dec
 
 C# **extension methods** (`static R M(this T self, …)`) translate to `func (self T) M(…) R` (ADR-0019; historically `func extension (self T) M(…) R` for enum/owned receivers per ADR-0165, superseded above — the plain form now covers every receiver kind and ownership).
 
+Issue #4676 narrows the exception below to extensions whose receiver the project
+*owns* (a source type in the same namespace, or an enum). An extension on an
+external receiver (`this Type`, `this string`, `this T`) of a static class with a
+private nested aggregate is lifted like any other and hosted on its owner through
+`@ExtensionOwner(typeof(Owner))` (issue #4234): a function hosted on its owner
+reaches the owner's private nested types and members, so the real body is kept in
+one function, the owner carries the one `[Extension]` method the C# assembly had,
+and no forwarding companion lands on the package's public `<Program>`. A
+second case keeps the scheme: an extension whose signature or attributes name one of
+the owner's private nested types (gsc binds a function's receiver, parameter and
+return types, and its attributes, before it resolves `@ExtensionOwner`, so a lifted
+function cannot name the private type; a method whose signature names one cannot be
+public API, and one that only has an attribute naming it keeps the in-owner helper and
+its forwarding companion, the companion leaving off only the attributes that name the
+private type, since at top level they cannot resolve; every other attribute is copied). The
+description that follows applies to those two cases only. Source-declared nested
+delegates use the mapper's allocated lifted top-level name, so their original
+private nominal container is not itself an inaccessible type exposure. Their
+original-definition invoke signature, delegate constraints and actual generic
+type arguments (including containing types) are still checked for genuine private
+types, cycle-safely; constructed invoke signatures can expand generic recursion.
+Imported delegates retain
+their nominal CLR accessibility and identity; they are not source-lifted.
+
 Issue #3413 adds one ownership-preserving exception: when the declaring static
 class contains a private nested aggregate, its extension methods stay as
 ordinary static methods in that owner's `shared` block. A forwarding
@@ -190,11 +214,11 @@ nested type or members whose signatures contain it.
 
 #### B.6 Inheritance and the `:` clause — ADR-0017, spec §Type declarations
 
-- C# classes are sealed-by-default in G#; a base class that is subclassed must be emitted `open class`, and the overriding member must carry `override` (ADR-0017). The translator uses Roslyn's `INamedTypeSymbol.IsSealed`/`IsAbstract`/inheritance graph to decide: a class that any other corpus type derives from → `open`; a C# `abstract`/`virtual` member that is overridden → `open`/`override` on the pair. C# `sealed class` → plain `class` (already the default) or `sealed class` when it participates in a closed hierarchy switched on exhaustively (ADR-0078).
+- C# classes are sealed-by-default in G#; a base class that is subclassed must be emitted `open class`, and the overriding member must carry `override` (ADR-0017). The translator uses Roslyn's `INamedTypeSymbol.IsSealed`/`IsAbstract`/inheritance graph to decide: a class that any other corpus type derives from → `open`; a **non-sealed class reachable from another assembly (public, protected or protected internal, and every enclosing type likewise) → `open` even with no in-project subclass** (issue #4674: that inheritability is API); a C# `abstract`/`virtual` member that is overridden → `open`/`override` on the pair. C# `sealed class` → plain `class` (already the default) or `sealed class` when it participates in a closed hierarchy switched on exhaustively (ADR-0078).
 - **Member `open`/`override` openness (Oahu.Decrypt round).** G# only treats a member as overridable when it is explicitly `open`, and unlike C# this does **not** extend automatically to framework/metadata virtuals or to existing `override`s. Three rules keep an inheritance chain compiling:
   - **External-base overrides drop `override`.** G# does not treat a virtual declared in *referenced metadata* (e.g. `Object.ToString`, `Stream.Read`, `IDisposable.Dispose`) as `open`, so emitting `override` for a method/property that overrides such an external base member fails (`GS0183`). The translator detects this (`OverridesExternalBaseMethod`/`OverridesExternalBaseProperty`: the overridden root is declared outside the compilation) and emits a plain `func`/`prop` — which still binds as the override — instead of `override`.
   - **A non-sealed override is re-emitted `open`.** A C# `override` member is itself overridable unless `sealed`, so a further subclass can override it again; G# requires the base member to be `open` for that (`GS0184`). A kept (non-external, non-`sealed`) override is therefore emitted as `override open`.
-  - **Member `open` is gated on class openness.** G# rejects `open` on a member whose enclosing class is not itself `open` (`GS0190`). The translator only marks a member `open` when the containing type *will be* emitted `open class` (`IsTypeEmittedOpen` mirrors the class-declaration openness logic: abstract, has a `protected` member, or subclassed-and-not-sealed), so an override in a leaf/sealed class stays a plain `override func`.
+  - **Member `open` is gated on class openness.** G# rejects `open` on a member whose enclosing class is not itself `open` (`GS0190`). The translator only marks a member `open` when the containing type *will be* emitted `open class` (`IsTypeEmittedOpen` is the single openness decision for both the class declaration and its members: abstract, has a `protected` member, or non-sealed and subclassed / declaring a virtual member / reachable from another assembly; a `sealed` class stays non-`open` — its `protected override` members are legal there since issue #4674 — unless it declares a new `protected` member), so an override in a leaf/sealed class stays a plain `override func`.
 - **Explicit class and plain-struct constructors preserve ABI (Oahu.Decrypt OD-T1 / issues #2746/#2766).** The translator does **not** replace an explicit class or plain-struct constructor with a G# primary constructor: lifting renames constructor parameters after assignment targets, turns private fields into public fields, and turns assigned properties into fields without CLR getters. Instead it keeps the explicit `init(...)` and uses the normal field/property translators. A C# get-only auto-property (`{ get; }`) assigned by that constructor becomes a G# **init-only** property `prop X T { get; init; }` (a bare `{ get; }` is read-only and the kept `init` assignment would be `GS0127`). An inline get-only-auto-property initializer (`{ get; } = new();`) — which G# cannot express as a property member initializer — is moved into the explicit constructor body. Native C# primary constructors are unchanged. Record ABI remains tracked separately by issue #2744.
 - The base clause lists the **base class first, then interfaces**: `class Dog : Animal, IBark { … }` (spec `BaseClause = ":" QualifiedTypeName … { "," QualifiedTypeName }`; `samples/Class.gs`). Constructor chaining renders as `: Base(args)` on the base clause or `init(...) : Base(args) { … }` (ADR-0065, `samples/ExplicitConstructor.gs`).
 
@@ -226,7 +250,9 @@ nested type or members whose signatures contain it.
 
 #### B.8 Delegate types — arrow form, ADR-0075
 
-Delegate **types** normally render in the canonical arrow form `(A, B) -> R`, **never** `func(A, B) R` (that legacy spelling emits `GS0303`). Void returns spell `-> void`; multi-return spell `-> (T1, T2)`; async spell `async (T) -> R`. C# `Func<int,int>` → `(int32) -> int32`; `Action<string>` → `(string) -> void`; `Func<Task<int>>` → `async () -> int32`. CLR delegate identity is preserved where it is semantically explicit: source-declared delegates keep their nominal name in every type position, and an explicitly typed local such as `EventHandler handler = ...` stays `let handler EventHandler = ...` rather than becoming the incompatible structural `System.Action<object, EventArgs>` (issues #2835 and #4045). A C# **named** `delegate` declaration becomes `delegate Name(...) R` (ADR-0059, `samples/NamedDelegate.gs`) — the one place the `func` keyword stays, because it is a *named delegate declaration*, not a type clause. Function-literal expressions keep `func(x int32) int32 { … }`; arrow lambdas use `(x int32) -> expr` (ADR-0074).
+Canonical `System.Func`/`System.Action` delegate **types** normally render in the arrow form `(A, B) -> R`, **never** `func(A, B) R` (that legacy spelling emits `GS0303`). Void returns spell `-> void`; multi-return spell `-> (T1, T2)`; async spell `async (T) -> R`. C# `Func<int,int>` → `(int32) -> int32`; `Action<string>` → `(string) -> void`; `Func<Task<int>>` → `async () -> int32`. All other named delegates, including imported BCL delegates such as `Predicate<T>`, keep their nominal name in every type position, including inferred types and nested generic arguments (issue #4679). Their CLR identity is distinct even when their signature matches a function type: `Predicate<string>` is not `Func<string,bool>`. An explicitly typed local such as `EventHandler handler = ...` stays `let handler EventHandler = ...` rather than becoming the incompatible structural `System.Action<object, EventArgs>` (issues #2835 and #4045). A C# **named** `delegate` declaration becomes `delegate Name(...) R` (ADR-0059, `samples/NamedDelegate.gs`) — the one place the `func` keyword stays, because it is a *named delegate declaration*, not a type clause. Function-literal expressions keep `func(x int32) int32 { … }`; arrow lambdas use `(x int32) -> expr` (ADR-0074).
+
+Imported nested delegates retain constructed containing types and their own type arguments: `Outer<string>.Callback<int>` becomes `Outer[string].Callback[int32]`, not `Outer.Callback[int32]`. This uses the shared constructed nested-type mapping, including deeper owners, aliases and escaped names. Source-declared nested delegates keep their distinct lifted top-level names instead of adopting CLR nesting syntax. The compiler's independent escaped **nested** CLR identifier lookup failure is tracked in #4754; escaped containing types and module names are unaffected.
 
 #### B.9 String interpolation — ADR-0055, ADR-0007, ADR-0011
 
@@ -264,8 +290,8 @@ with a triage note.
 - **Fields** require `var`/`let` (ADR-0067, §B.3).
 - **Properties** → `prop Name T` for auto-properties, with `{ get { … } set(v) { … } }` bodies for computed/custom accessors (ADR-0051, `samples/PropertyRef/Lib/Lib.gs`). `open prop`/`override prop` mirror method virtuality. A C# **`init` accessor** maps to the first-class G# `init` accessor (issue #946); an init-only auto-property `{ get; init; }` keeps its explicit accessors (it is *not* collapsed to the read-write `prop Name T` auto form, which would lose the init-only semantics). *(Superseded note: earlier revisions mapped C# `init` to G# `set` with an Info gap diagnostic because G# had no `init` accessor; that gap is now closed.)*
 - **Constructors** → `init(params) { … }`, chaining via `: Base(args)` (ADR-0065). C# primary constructors / positional records map to the G# primary-constructor `Name(params)` head.
-- **Static members** → a `shared { … }` block (ADR-0053); except the program entry's static class, which is hoisted to top level (T3, above). Sibling static calls inside a non-entry `shared { }` block are emitted **qualified** (`Geometry.Round(...)`), since an unqualified sibling static call does not resolve there (`GS0130`).
-- **Static constructor body** (`static Type() { … }`) → a `shared { init { … } }` static-initializer block (ADR-0140, issue #2131). The block's statements run in the type's `.cctor` after the static-field initializers, and the type drops `beforefieldinit` — matching C# static-constructor semantics. *(Superseded note: earlier revisions had no G# surface for a C# static constructor body; that gap is now closed.)*
+- **Static members** → a `shared { … }` block (ADR-0053), and a C# `static class` itself maps to a G# `shared class` (ADR-0195, issue #4674: CLR `abstract sealed`, uninstantiable) whose members sit directly in its body, with no `shared { }` block; except the program entry's static class, which is hoisted to top level (T3, above). Sibling static calls inside a non-entry `shared { }` block are emitted **qualified** (`Geometry.Round(...)`), since an unqualified sibling static call does not resolve there (`GS0130`).
+- **Static constructor body** (`static Type() { … }`) → a `shared { init { … } }` static-initializer block in an ordinary class, or a flat `init { … }` member of a `shared class` (a C# `static class`, ADR-0195) (ADR-0140, issue #2131). The block's statements run in the type's `.cctor` after the static-field initializers, and the type drops `beforefieldinit` — matching C# static-constructor semantics. *(Superseded note: earlier revisions had no G# surface for a C# static constructor body; that gap is now closed.)*
 
 > **Static (`shared`) method overload resolution by arity — RESOLVED (#940).**
 > A user type whose `shared { }` block declares **overloaded** static methods
@@ -308,9 +334,9 @@ Canonical output uses **width-bearing** primitive names (ADR-0049): C# `int`→`
 
 #### B.13 Data-type structural equality and `IEquatable<Self>` — ADR-0078, ADR-0025
 
-A `data class`/`data struct` auto-synthesizes value (structural) equality, `GetHashCode`, and the `with` updater. A C# record therefore drops its compiler-synthesized `IEquatable<Self>` from the base clause when emitted as a `data` type — re-stating `: IEquatable[Self]` is redundant because equality already comes from the `data` modifier. (Naming the enclosing type as a base-clause type *argument* is legal since issue #949; the drop is a redundancy filter, not a syntax restriction.) The structural `==`/`!=` and `with` come for free from the `data` modifier.
+A `data class`/`data struct` auto-synthesizes value (structural) equality, `GetHashCode`, and the `with` updater. A C# record keeps its compiler-synthesized `IEquatable<Self>` in the base clause when emitted as a `data` type (#4675); the compiler-owned typed equality member implements that actual CLR contract. Naming the enclosing type as a base-clause type *argument* is legal since issue #949. For inherited data classes, a compiler-owned typed-base override preserves most-derived structural dispatch (#4777), including calls through inherited interfaces. The self comparison's nonvirtual base-field call remains separate from that virtual dispatch (ADR-0029's 2026-10-04 amendment). The structural `==`/`!=` and `with` come from the `data` modifier.
 
-A **non-`data` `struct`** that *explicitly* implements an interface (`struct Money : IEquatable<Money>` with a hand-written `Equals`) keeps its interface clause: gap #976 — the parser rejecting a `:` after a struct name — is **resolved** (issue #976), so the translator emits `struct Money(Cents int32) : IEquatable[Money]` and the struct's own `Equals`/`GetHashCode` satisfy the interface. A `struct` naming a **class or struct** base (rather than an interface) is now rejected with the dedicated diagnostic `GS0382` rather than the former generic `GS0005`, matching the value-type-has-no-base-class rule. Only the redundant `data`-synthesized `IEquatable[Self]` is dropped (above); a genuinely hand-implemented interface on a plain `struct` is preserved.
+A **non-`data` `struct`** that *explicitly* implements an interface (`struct Money : IEquatable<Money>` with a hand-written `Equals`) keeps its interface clause: gap #976 — the parser rejecting a `:` after a struct name — is **resolved** (issue #976), so the translator emits `struct Money(Cents int32) : IEquatable[Money]` and the struct's own `Equals`/`GetHashCode` satisfy the interface. A `struct` naming a **class or struct** base (rather than an interface) is now rejected with the dedicated diagnostic `GS0382` rather than the former generic `GS0005`, matching the value-type-has-no-base-class rule. Both data-synthesized and genuinely hand-implemented interfaces are preserved.
 
 #### B.14 Owned value-aggregate methods → lifted receiver-clause funcs — issue #938, ADR-0079
 
@@ -493,8 +519,18 @@ empirically before adoption.
 - **`: this(args)` constructor delegation → `init(params) : this(args)`.** A
   `ThisConstructorInitializer` maps to the G# `this`-chained initializer, mirroring
   the `: base(args)` mapping of §B.28.
-- **Local function → nested `func`.** A `LocalFunctionStatement` maps to a G# local
-  `func` declaration in the enclosing body.
+- **Local functions retain their declaring activation** (issue #4802). Ordinary
+  local functions with nullable-callable-compatible signatures use
+  `let Name = func …`; mutual recursion among those signatures uses the existing
+  nullable callable forward declarations and assignments in the declaring block.
+  Registration inventories only that block's immediate local-function
+  statements. Dependency scans still descend into nested bodies to find
+  references to those siblings, but do not merge descendant helpers into the
+  siblings' storage group. Each recursive invocation therefore creates its own
+  nested helper bindings, including escaped closures, rather than overwriting a
+  caller's bindings. Generic, ref-returning, variadic and ref-kind groups remain
+  on the existing native direct-local-function or source-named member-lifting
+  fallback paths; this storage strategy does not broaden signature support.
 - **`break` / `continue` → `break` / `continue`.** Both map to their identical G#
   loop-control keywords (these had no prior translator case).
 - **`do … while (c)` → G# do-while.** A `DoStatement` maps to the canonical G#
@@ -994,12 +1030,12 @@ for n in numbers() { Console.WriteLine(n) }
 **L5's discovered gaps** follow. L5 itself reaches **full E2E parity** (translate →
 compile → ilverify → test-parity all PASS) by using only the canonical/compiling
 forms; every construct below that has *no* canonical form or that ICEs/mis-compiles
-was held out of L5 and captured here as a verified triage record. The `abstract`
-class modifier has **no** G# spelling (`abstract class Shape {…}` → `GS0125`
-"Variable 'abstract' doesn't exist", the parser not recognising `abstract` as a
-modifier); the translator faithfully **drops** it and emits `open class` (§B.4,
-recorded as Info), so an abstract base does **not** block the compile — its
-non-instantiability is simply not enforced. The canonical polymorphism spelling
+was held out of L5 and captured here as a verified triage record. *(Superseded
+by ADR-0195, issue #4674: the `abstract` class modifier now exists and cs2gs
+emits it. The record below describes the pre-modifier behaviour: `abstract class
+Shape {…}` → `GS0125` "Variable 'abstract' doesn't exist", the translator
+dropped it and emitted `open class`, so an abstract base did **not** block the
+compile — its non-instantiability was simply not enforced.)* The canonical polymorphism spelling
 requires `open` on **both** the base class and each overridable method:
 
 ```gs

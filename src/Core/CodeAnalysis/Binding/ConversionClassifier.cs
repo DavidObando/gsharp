@@ -350,10 +350,9 @@ internal sealed class ConversionClassifier
     public static bool HasUserDefinedImplicitConversionForTypes(TypeSymbol sourceType, TypeSymbol targetType)
     {
         if (sourceType is NullableTypeSymbol liftedSource
-            && targetType is NullableTypeSymbol liftedTarget
             && TryResolveLiftedUserDefinedSymbolConversion(
                 liftedSource,
-                liftedTarget,
+                targetType,
                 allowExplicit: false,
                 out _,
                 out _))
@@ -368,12 +367,13 @@ internal sealed class ConversionClassifier
 
         return sourceType?.ClrType != null
             && targetType?.ClrType != null
-            && ClrOperatorResolution.TryResolveConversion(
-                sourceType.ClrType,
-                targetType.ClrType,
+            && ClrOperatorResolution.TryResolveConversionForTypes(
+                sourceType,
+                targetType,
                 allowExplicit: false,
-                out _,
-                out _);
+                out var method,
+                out _)
+            && BoundClrConversionCallExpression.CanApplyImplicitClrConversion(sourceType, targetType, method);
     }
 
     /// <summary>
@@ -778,14 +778,13 @@ internal sealed class ConversionClassifier
             }
         }
 
-        // Issue #3518: lift a same-compilation user conversion S -> T to
-        // S? -> T?. The emit-side conversion node owns the HasValue branch,
-        // unwrap, call, and target re-wrap/default construction.
+        // Issues #3518/#4741: lift a same-compilation value conversion S -> T
+        // to S? -> T?, including reference results. The conversion node owns
+        // the effective result type and the shared null-bypass decision.
         if (expression.Type is NullableTypeSymbol liftedSource
-            && type is NullableTypeSymbol liftedTarget
             && TryResolveLiftedUserDefinedSymbolConversion(
                 liftedSource,
-                liftedTarget,
+                type,
                 allowExplicit,
                 out var liftedMethod,
                 out var liftedOwner))
@@ -881,13 +880,15 @@ internal sealed class ConversionClassifier
             // Issue #4350: a conversion between symbolic generics (`Span[T]` ->
             // `ReadOnlySpan[T]`) resolves on the open definition first; the
             // CLR branch below would pick the erased `<object>` operator.
-            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var symbolicConvMethod))
+            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var symbolicConvMethod)
+                && (allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(expression.Type, type, symbolicConvMethod)))
             {
                 return new BoundClrConversionCallExpression(null, expression, symbolicConvMethod, type);
             }
 
             if (expression.Type?.ClrType != null && type?.ClrType != null
-                && ClrOperatorResolution.TryResolveConversion(expression.Type.ClrType, type.ClrType, allowExplicit, out var convMethod, out var isExplicit))
+                && ClrOperatorResolution.TryResolveConversionForTypes(expression.Type, type, allowExplicit, out var convMethod, out var isExplicit)
+                && (allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(expression.Type, type, convMethod)))
             {
                 _ = isExplicit;
                 return new BoundClrConversionCallExpression(null, expression, convMethod, type);
@@ -1027,18 +1028,20 @@ internal sealed class ConversionClassifier
                     allowExplicit);
             }
 
-            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var projectionSymbolicConvMethod))
+            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var projectionSymbolicConvMethod)
+                && (allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(expression.Type, type, projectionSymbolicConvMethod)))
             {
                 return new BoundClrConversionCallExpression(null, expression, projectionSymbolicConvMethod, type);
             }
 
             if (expression.Type?.ClrType != null && type?.ClrType != null
-                && ClrOperatorResolution.TryResolveConversion(
-                    expression.Type.ClrType,
-                    type.ClrType,
+                && ClrOperatorResolution.TryResolveConversionForTypes(
+                    expression.Type,
+                    type,
                     allowExplicit,
                     out var projectionConvMethod,
-                    out _))
+                    out _)
+                && (allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(expression.Type, type, projectionConvMethod)))
             {
                 return new BoundClrConversionCallExpression(null, expression, projectionConvMethod, type);
             }
@@ -1550,7 +1553,22 @@ internal sealed class ConversionClassifier
                         substituted = nilTarget;
                     }
 
+                    var methodSlot = substituted ?? TrySubstituteParameterTypeFromMethodTypeArgs(
+                        method,
+                        paramIndex,
+                        symbolicMethodTypeArgs);
+                    var requiresRuntimeContract = substituted == null
+                        && methodSlot != null
+                        && !Conversion.HasClrArgumentRuntimeRelation(argument.Type, methodSlot);
+                    if (requiresRuntimeContract)
+                    {
+                        substituted = methodSlot;
+                    }
+
+                    // CLR applicability has already decided reference annotations;
+                    // reification must still reject a genuinely different runtime shape.
                     var targetType = substituted
+                        ?? methodSlot
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
                     var rejectionTargetType = substituted
                         ?? TrySubstituteParameterTypeFromMethodTypeArgs(
@@ -1676,7 +1694,8 @@ internal sealed class ConversionClassifier
                         // `ContainsMetadataRecoveredArray` line), so this
                         // cannot fire on an interop slot.
                         var allowExplicitArgument = !parameterConversion.IsStructuralProjection
-                            && targetType is not ArrayTypeSymbol;
+                            && targetType is not ArrayTypeSymbol
+                            && !requiresRuntimeContract;
                         rebound = BindConversion(
                             location,
                             argument,
@@ -1812,10 +1831,23 @@ internal sealed class ConversionClassifier
     /// <returns>Whether a user-defined implicit conversion was applied.</returns>
     public bool TryApplyUserDefinedImplicitArgumentConversion(BoundExpression argument, TypeSymbol expectedType, out BoundExpression converted)
     {
+        if (argument.Type is NullableTypeSymbol sourceNullable
+            && TryResolveLiftedUserDefinedSymbolConversion(
+                sourceNullable,
+                expectedType,
+                allowExplicit: false,
+                out var liftedMethod,
+                out var liftedOwner))
+        {
+            converted = new BoundClrConversionCallExpression(null, argument, liftedMethod, liftedOwner, expectedType);
+            return true;
+        }
+
         // Issue #4350: resolve symbolic generic pairs before the erased CLR
         // branch can bind the `<object>` operator.
         if (argument.Type != TypeSymbol.Error
-            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var symbolicConvMethod))
+            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var symbolicConvMethod)
+            && BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType, symbolicConvMethod))
         {
             converted = new BoundClrConversionCallExpression(null, argument, symbolicConvMethod, expectedType);
             return true;
@@ -1824,7 +1856,8 @@ internal sealed class ConversionClassifier
         if (argument.Type?.ClrType != null
             && expectedType.ClrType != null
             && argument.Type != TypeSymbol.Error
-            && ClrOperatorResolution.TryResolveConversion(argument.Type.ClrType, expectedType.ClrType, allowExplicit: false, out var convMethod, out _))
+            && ClrOperatorResolution.TryResolveConversionForTypes(argument.Type, expectedType, allowExplicit: false, out var convMethod, out _)
+            && BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType, convMethod))
         {
             converted = new BoundClrConversionCallExpression(null, argument, convMethod, expectedType);
             return true;
@@ -1841,7 +1874,8 @@ internal sealed class ConversionClassifier
         if (argument.Type != null
             && expectedType != null
             && argument.Type != TypeSymbol.Error
-            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var openConvMethod))
+            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var openConvMethod)
+            && BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType, openConvMethod))
         {
             converted = new BoundClrConversionCallExpression(null, argument, openConvMethod, expectedType);
             return true;
@@ -1951,8 +1985,12 @@ internal sealed class ConversionClassifier
         // measured it, and it changed nothing — the ordinary imported
         // instance-call path never consults it for parameter types. The gate
         // that actually decides is this inline one.
+        // Issue #4738: source classes inherit the same symbolic imported slots.
+        // Project through the actual declaring owner, not the receiver's
+        // argument order (an imported base may reorder or nest those arguments).
         if (method == null
-            || receiverType is not ImportedTypeSymbol imported
+            || receiverType == null
+            || MemberLookup.GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imported
             || imported.TypeArguments.IsDefaultOrEmpty
             || !imported.TypeArguments.Any(
                 static argument => TypeSymbol.RequiresSymbolicProjection(argument)
@@ -1968,7 +2006,16 @@ internal sealed class ConversionClassifier
             return null;
         }
 
-        var openDef = declaring.GetGenericTypeDefinition();
+        if (!MemberLookup.TryGetSymbolicDeclaringContext(
+                imported,
+                declaring,
+                out var openDef,
+                out var declaringTypeArguments)
+            || openDef == null)
+        {
+            return null;
+        }
+
         MethodInfo? openMethod = null;
         foreach (var candidate in openDef.GetMethods(
             BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
@@ -2043,7 +2090,7 @@ internal sealed class ConversionClassifier
         var mapped = MemberLookup.GetClrOpenParameterConversionTargetTypeSymbol(
             openParams[paramIndex],
             openDef,
-            imported.TypeArguments,
+            declaringTypeArguments,
             openMethod,
             effectiveMethodTypeArgs);
 
@@ -3914,36 +3961,7 @@ internal sealed class ConversionClassifier
     }
 
     private static bool IsNaturalStructuralDelegateTarget(TypeSymbol source, TypeSymbol target)
-    {
-        source = source is NullableTypeSymbol sourceNullable ? sourceNullable.UnderlyingType : source;
-        target = target is NullableTypeSymbol targetNullable ? targetNullable.UnderlyingType : target;
-        target = target is NullabilityAnnotatedTypeSymbol annotated ? annotated.BaseType : target;
-
-        if (source is not FunctionTypeSymbol sourceFunction
-            || !MemberLookup.TryCanonicalizeStructuralFunctionType(sourceFunction, target, out _)
-            || target.ClrType == null
-            || sourceFunction.Arity > 16)
-        {
-            return false;
-        }
-
-        var naturalFullName = FunctionTypeSymbol.IsVoidReturn(sourceFunction.ReturnType)
-            ? sourceFunction.Arity == 0
-                ? "System.Action"
-                : "System.Action`" + sourceFunction.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : "System.Func`" + (sourceFunction.Arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var targetDefinition = target.ClrType.IsGenericType
-            ? target.ClrType.GetGenericTypeDefinition()
-            : target.ClrType;
-        var baseType = targetDefinition.BaseType;
-        return string.Equals(targetDefinition.FullName, naturalFullName, StringComparison.Ordinal)
-            && baseType != null
-            && string.Equals(baseType.FullName, "System.MulticastDelegate", StringComparison.Ordinal)
-            && string.Equals(
-                targetDefinition.Assembly.FullName,
-                baseType.Assembly.FullName,
-                StringComparison.Ordinal);
-    }
+        => MemberLookup.IsNaturalStructuralDelegateTarget(source, target);
 
     /// <summary>
     /// Issue #2148: returns the <see cref="TypeSymbol.ClrType"/> of the nearest
@@ -4006,20 +4024,30 @@ internal sealed class ConversionClassifier
 
     private static bool TryResolveLiftedUserDefinedSymbolConversion(
         NullableTypeSymbol source,
-        NullableTypeSymbol target,
+        TypeSymbol target,
         bool allowExplicit,
         [NotNullWhen(true)] out FunctionSymbol? method,
         [NotNullWhen(true)] out StructSymbol? methodOwner)
     {
         method = null;
         methodOwner = null;
+        if (TryResolveUserDefinedSymbolConversion(source, target, allowExplicit, out var ordinary, out var ordinaryOwner)
+            && Conversion.ClassifyNonStructural(
+                source,
+                ordinaryOwner.SubstituteMemberType(ordinary.Parameters[0].Type)).IsIdentity)
+        {
+            return false;
+        }
+
+        var targetUnderlying = target is NullableTypeSymbol nullable ? nullable.UnderlyingType : target;
         return NullableLifting.IsAnyValueTypeNullable(source)
-            && NullableLifting.IsAnyValueTypeNullable(target)
+            && BoundClrConversionCallExpression.CanLiftTo(target)
+            && (allowExplicit || BoundClrConversionCallExpression.CanLiftImplicitlyTo(target))
             && !TypeSymbol.IsByRefLike(source)
             && !TypeSymbol.IsByRefLike(target)
             && TryResolveUserDefinedSymbolConversion(
                 source.UnderlyingType,
-                target.UnderlyingType,
+                targetUnderlying,
                 allowExplicit,
                 out method,
                 out methodOwner)
@@ -4030,9 +4058,9 @@ internal sealed class ConversionClassifier
             && Conversion.ClassifyNonStructural(
                 source.UnderlyingType,
                 methodOwner.SubstituteMemberType(method.Parameters[0].Type)).IsIdentity
-            && Conversion.ClassifyNonStructural(
+            && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                 methodOwner.SubstituteMemberType(method.Type),
-                target.UnderlyingType).IsIdentity;
+                targetUnderlying);
     }
 
     private static bool TryResolveUserDefinedSymbolConversion(

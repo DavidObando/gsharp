@@ -134,12 +134,11 @@ public sealed class CSharpTypeMapper
     private readonly HashSet<string> reservedInvokedLocalNames =
         new(System.StringComparer.Ordinal);
 
-    // Issue #3471: static member simple names declared by source aggregates in
-    // the contributing trees. Sibling static references print bare inside
-    // their declaring aggregate, and a file-scope import alias shadows class
-    // members in gsc scope resolution, so a synthesized readable alias must
-    // never take one of these names.
-    private readonly HashSet<string> reservedSiblingStaticMemberNames =
+    // Issue #3471/#4302: source static members and allocated lifted helpers
+    // can print bare inside their declaring aggregate. A file-scope import
+    // alias shadows class members in gsc scope resolution, so a synthesized
+    // readable alias must never take one of these names.
+    private readonly HashSet<string> reservedSiblingMemberNames =
         new(System.StringComparer.Ordinal);
 
     /// <summary>
@@ -447,6 +446,11 @@ public sealed class CSharpTypeMapper
         bool analyzerNamespaceString = this.AnalyzerApiMode
             && Analyzers.RoslynAnalyzerApiMap.IsNamespaceSymbolType(type);
         GTypeReference mapped = this.MapCore(type, context, location);
+        if (type is INamedTypeSymbol { IsGenericType: true } constructed && !constructed.IsTupleType)
+        {
+            mapped = this.PromoteTupleTypeArguments(mapped, type, constructed, context, new List<int>());
+        }
+
         return nullableReference || analyzerNamespaceString ? WithNullable(mapped, true) : mapped;
     }
 
@@ -544,15 +548,7 @@ public sealed class CSharpTypeMapper
             && named.TypeKind == TypeKind.Delegate
             && named.DelegateInvokeMethod != null)
         {
-            if (named.IsGenericType)
-            {
-                List<GTypeReference> delegateArgs = named.TypeArguments
-                    .Select(a => this.Map(a, context, location))
-                    .ToList();
-                return new NamedTypeReference(this.DelegateTypeName(named, context, location), delegateArgs);
-            }
-
-            return new NamedTypeReference(this.DelegateTypeName(named, context, location));
+            return this.MapNominalDelegate(named, context, location);
         }
 
         return this.Map(type, context, location);
@@ -577,8 +573,7 @@ public sealed class CSharpTypeMapper
             && named.DelegateInvokeMethod != null
             && (named.ContainingNamespace?.ToDisplayString() != "System"
                 || (named.Name != "Func"
-                    && named.Name != "Action"
-                    && named.Name != "Predicate")))
+                    && named.Name != "Action")))
         {
             GTypeReference mapped = this.MapEventType(type, context, location);
             return type.NullableAnnotation == NullableAnnotation.Annotated
@@ -650,9 +645,10 @@ public sealed class CSharpTypeMapper
             List<GTypeReference> explicitArgs = genericNamed.TypeArguments
                 .Select(a => this.MapExplicitType(a, context, location))
                 .ToList();
-            return explicitArgs.SequenceEqual(structural.TypeArguments)
+            GTypeReference mapped = explicitArgs.SequenceEqual(structural.TypeArguments)
                 ? structural
                 : new NamedTypeReference(structural.Name, explicitArgs, structural.ContainingType) { IsNullable = structural.IsNullable };
+            return this.PromoteTupleTypeArguments(mapped, type, genericNamed, context, new List<int>());
         }
 
         return this.Map(type, context, location);
@@ -940,7 +936,7 @@ public sealed class CSharpTypeMapper
                                 || (member is IMethodSymbol method
                                     && method.MethodKind == MethodKind.Ordinary)))
                         {
-                            this.reservedSiblingStaticMemberNames.Add(names.GetName(member));
+                            this.reservedSiblingMemberNames.Add(names.GetName(member));
                         }
                     }
                 }
@@ -1076,6 +1072,9 @@ public sealed class CSharpTypeMapper
             || this.synthesizedTypeAliases.ContainsKey(name)
             || this.sourceDeclaredTypeNames.Contains(name);
     }
+
+    internal void ReserveSiblingMemberName(string name) =>
+        this.reservedSiblingMemberNames.Add(name);
 
     /// <summary>
     /// Maps an exact inferred contract while qualifying metadata homonyms
@@ -1218,18 +1217,16 @@ public sealed class CSharpTypeMapper
         reserved.UnionWith(this.reservedTypeParameterNames);
         reserved.UnionWith(this.reservedInvokedLocalNames);
         reserved.UnionWith(this.sourceDeclaredTypeNames);
-        reserved.UnionWith(this.reservedSiblingStaticMemberNames);
+        reserved.UnionWith(this.reservedSiblingMemberNames);
 
         string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
-        string baseAlias = $"{namespaceQualifier}{simpleName}";
-        string alias = baseAlias;
-        for (var suffix = 2;
-            reserved.Contains(alias)
-                || HasVisibleCallableName(alias, context, location, names);
-            suffix++)
-        {
-            alias = $"{baseAlias}_{suffix}";
-        }
+        string alias = LiftedLocalFunctionNameAllocator
+            .For(context.Compilation)
+            .ClaimAlias(
+                target,
+                $"{namespaceQualifier}{simpleName}",
+                candidate => reserved.Contains(candidate)
+                    || HasVisibleCallableName(candidate, context, location, names));
 
         this.synthesizedTypeAliases.Add(alias, target);
         return alias;
@@ -1351,6 +1348,15 @@ public sealed class CSharpTypeMapper
         return string.Join("_", parts);
     }
 
+    /// <summary>Whether a source delegate is emitted with a lifted top-level name.</summary>
+    /// <param name="named">The candidate type.</param>
+    /// <returns>Whether the delegate's nominal containing chain is flattened.</returns>
+    internal static bool IsLiftedNestedDelegate(INamedTypeSymbol named) =>
+        named != null
+        && named.TypeKind == TypeKind.Delegate
+        && named.ContainingType != null
+        && IsSourceDeclaredDelegate(named);
+
     /// <summary>
     /// Issue #2222: strips a leading `global::` alias-qualifier from a
     /// dotted namespace/type name (e.g. <c>using global::Foo.Bar;</c> yields
@@ -1388,11 +1394,113 @@ public sealed class CSharpTypeMapper
         TranslationContext context,
         Location location)
     {
-        return type.IsGenericType
-            ? new NamedTypeReference(
-                this.DelegateTypeName(type, context, location),
-                type.TypeArguments.Select(argument => this.Map(argument, context, location)).ToList())
-            : new NamedTypeReference(this.DelegateTypeName(type, context, location));
+        // Imported owners remain constructed; source delegates are lifted to top level.
+        GTypeReference mapped = !IsSourceDeclaredDelegate(type) && HasGenericContainingType(type)
+            ? this.MapConstructedNestedType(type, context, location)
+            : type.IsGenericType
+                ? new NamedTypeReference(
+                    this.DelegateTypeName(type, context, location),
+                    type.TypeArguments.Select(argument => this.Map(argument, context, location)).ToList())
+                : new NamedTypeReference(this.DelegateTypeName(type, context, location));
+        return this.PromoteTupleTypeArguments(mapped, type, type, context, new List<int>());
+    }
+
+    internal GTypeReference PromoteTupleTypeArguments(
+        GTypeReference mapped,
+        ITypeSymbol declaredType,
+        ISymbol symbol,
+        TranslationContext context,
+        List<int> path)
+    {
+        if (path.Count == 0
+            && declaredType is not INamedTypeSymbol { IsTupleType: true }
+            && !ObliviousNullabilityAnalyzer.HasNestedTupleSlots(declaredType))
+        {
+            return mapped;
+        }
+
+        if (mapped is TupleTypeReference tuple
+            && declaredType is INamedTypeSymbol { IsTupleType: true } tupleType
+            && tuple.ElementTypes.Count == tupleType.TupleElements.Length)
+        {
+            var elements = new List<GTypeReference>(tuple.ElementTypes.Count);
+            bool changed = false;
+            for (int i = 0; i < tuple.ElementTypes.Count; i++)
+            {
+                path.Add(i);
+                GTypeReference element = this.PromoteTupleTypeArguments(
+                    tuple.ElementTypes[i], tupleType.TupleElements[i].Type, symbol, context, path);
+                path.RemoveAt(path.Count - 1);
+                changed |= !ReferenceEquals(element, tuple.ElementTypes[i]);
+                elements.Add(element);
+            }
+
+            return changed
+                ? new TupleTypeReference(elements, tuple.ElementNames) { IsNullable = tuple.IsNullable }
+                : mapped;
+        }
+
+        if (mapped is NamedTypeReference named
+            && declaredType is INamedTypeSymbol declaredNamed
+            && named.TypeArguments.Count > 0
+            && named.TypeArguments.Count == declaredNamed.TypeArguments.Length)
+        {
+            var arguments = new List<GTypeReference>(named.TypeArguments.Count);
+            bool changed = false;
+            for (int i = 0; i < named.TypeArguments.Count; i++)
+            {
+                path.Add(i);
+                GTypeReference argument = this.PromoteTupleTypeArguments(
+                    named.TypeArguments[i], declaredNamed.TypeArguments[i], symbol, context, path);
+                path.RemoveAt(path.Count - 1);
+                changed |= !ReferenceEquals(argument, named.TypeArguments[i]);
+                arguments.Add(argument);
+            }
+
+            if (changed)
+            {
+                mapped = new NamedTypeReference(named.Name, arguments, named.ContainingType)
+                    { IsNullable = named.IsNullable };
+            }
+        }
+
+        return path.Count > 0
+            && !mapped.IsNullable
+            && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                context.Compilation, symbol, path, context.SiblingCompilations)
+                ? WithNullable(mapped, true)
+                : mapped;
+    }
+
+    private GTypeReference MapConstructedNestedType(
+        INamedTypeSymbol named,
+        TranslationContext context,
+        Location location)
+    {
+        IReadOnlyList<ITypeSymbol> ownTypeArguments = named.Arity == 0
+            ? System.Array.Empty<ITypeSymbol>()
+            : named.TypeArguments.Skip(named.TypeArguments.Length - named.Arity).ToArray();
+        List<GTypeReference> mappedOwnTypeArguments = ownTypeArguments
+            .Select(argument => this.Map(argument, context, location))
+            .ToList();
+
+        // A source nested type used from inside its own generic
+        // containing type remains directly in scope. Qualifying it
+        // through Outer[T] makes gsc treat the inherited nested type
+        // as an external constructed lookup and fail to resolve it.
+        if (named.Locations.Any(candidate => candidate.IsInSource)
+            && !this.HasSourceHomonym(named, context)
+            && IsWithinContainingType(named, context, location))
+        {
+            return new NamedTypeReference(
+                this.Names(context).GetName(named),
+                mappedOwnTypeArguments);
+        }
+
+        return new NamedTypeReference(
+            this.Names(context).GetName(named),
+            mappedOwnTypeArguments,
+            this.Map(named.ContainingType, context, location));
     }
 
     private static INamespaceSymbol GetExtensionMethodNamespace(IMethodSymbol method)
@@ -1764,8 +1872,12 @@ public sealed class CSharpTypeMapper
             // `Action[string]`) makes the translated program fail at runtime the
             // moment a value crosses between the two spellings. This is the same
             // reasoning `MapEventType` already applies to an event's own handler
-            // type, now extended to every type position. Imported/BCL delegates
-            // keep the arrow form.
+            // type, now extended to every type position.
+            //
+            // Issue #4679: imported delegates other than System.Func/Action
+            // also have distinct CLR identities. Predicate<T> is NOT Func<T,
+            // bool>. Preserve those names here so inferred types, casts,
+            // patterns and nested arguments agree with explicit type positions.
             //
             // Issue #3841: ALSO except an imported delegate whose identity is
             // load-bearing in this compilation — one that discriminates an
@@ -1776,13 +1888,12 @@ public sealed class CSharpTypeMapper
             // IsIdentityCriticalDelegate.
             if (named.TypeKind == TypeKind.Delegate && named.DelegateInvokeMethod != null)
             {
-                if (IsSourceDeclaredDelegate(named) || this.IsIdentityCriticalDelegate(named, context))
+                if (IsSourceDeclaredDelegate(named)
+                    || named.ContainingNamespace?.ToDisplayString() != "System"
+                    || (named.Name != "Func" && named.Name != "Action")
+                    || this.IsIdentityCriticalDelegate(named, context))
                 {
-                    return named.IsGenericType
-                        ? new NamedTypeReference(
-                            this.DelegateTypeName(named, context, location),
-                            named.TypeArguments.Select(a => this.Map(a, context, location)).ToList())
-                        : new NamedTypeReference(this.DelegateTypeName(named, context, location));
+                    return this.MapNominalDelegate(named, context, location);
                 }
 
                 return this.MapDelegate(named.DelegateInvokeMethod, context, location);
@@ -1803,30 +1914,7 @@ public sealed class CSharpTypeMapper
 
             if (HasGenericContainingType(named))
             {
-                IReadOnlyList<ITypeSymbol> ownTypeArguments = named.Arity == 0
-                    ? System.Array.Empty<ITypeSymbol>()
-                    : named.TypeArguments.Skip(named.TypeArguments.Length - named.Arity).ToArray();
-                List<GTypeReference> mappedOwnTypeArguments = ownTypeArguments
-                    .Select(argument => this.Map(argument, context, location))
-                    .ToList();
-
-                // A source nested type used from inside its own generic
-                // containing type remains directly in scope. Qualifying it
-                // through Outer[T] makes gsc treat the inherited nested type
-                // as an external constructed lookup and fail to resolve it.
-                if (named.Locations.Any(candidate => candidate.IsInSource)
-                    && !this.HasSourceHomonym(named, context)
-                    && IsWithinContainingType(named, context, location))
-                {
-                    return new NamedTypeReference(
-                        this.Names(context).GetName(named),
-                        mappedOwnTypeArguments);
-                }
-
-                return new NamedTypeReference(
-                    this.Names(context).GetName(named),
-                    mappedOwnTypeArguments,
-                    this.Map(named.ContainingType, context, location));
+                return this.MapConstructedNestedType(named, context, location);
             }
 
             if (named.IsGenericType)
@@ -1979,7 +2067,7 @@ public sealed class CSharpTypeMapper
         TranslationContext context,
         Location location)
     {
-        return IsSourceDeclaredDelegate(named) && named.ContainingType != null
+        return IsLiftedNestedDelegate(named)
             ? this.LiftedNestedDelegateName(named, context)
             : this.QualifiedTypeName(named, context, location);
     }
@@ -3316,11 +3404,6 @@ public sealed class CSharpTypeMapper
         TranslationContext context,
         List<int> tuplePath)
     {
-        if (context.Compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
-        {
-            return mapped;
-        }
-
         if (mapped is TupleTypeReference mappedTuple
             && returnType is INamedTypeSymbol { IsTupleType: true } tupleType
             && mappedTuple.ElementTypes.Count == tupleType.TupleElements.Length)

@@ -333,6 +333,9 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0614 | Error | A named attribute argument's constant value is not assignable to the selected property or field type. | Supply a constant of the member's declared type. |
 | GS0615 | Error | A selected named attribute property or field has a type that cannot be encoded in a CLR custom-attribute blob. | Change the attribute member to a primitive, string, `System.Type`, object, enum, or one-dimensional array thereof. |
 | GS0616 | Error | An attribute constructor argument appears after a property or field assignment. | Move every positional or `name: value` constructor argument before all `Name = value` member assignments. |
+| GS0617 | Error | A `shared` class declares an `init(…)` constructor, a primary constructor, a `deinit`, a `shared { }` block, or an `open` or `override` method, property or event (ADR-0195). | A shared class has only shared members, declared directly in its body, and a shared member is never virtual; remove the declaration or modifier, or drop `shared`. |
+| GS0618 | Error | `shared` is combined with `open`, `sealed`, `abstract` or `data` (ADR-0195). | A shared class is neither inheritable nor instantiable; remove the conflicting modifier. |
+| GS0619 | Error | A `shared` class lists a base class or an interface (ADR-0195). | Remove the base-type clause, or drop `shared`. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |
@@ -657,7 +660,9 @@ declaration order; `const` fields fold to compile-time literal fields; static
 The `protected` access modifier (CIL `family`) makes a member
 accessible within its declaring type and the bodies of derived types only.
 Because protection is only meaningful where a derived type can exist,
-`protected` is restricted to members of an inheritable `open class`.
+`protected` is restricted to members of an inheritable `open class`. A
+`protected override` method, property or event is exempt, because the base member
+dictates its accessibility: a non-`open` (CLR-sealed) class may declare one.
 
 | Code | Severity | Message |
 |------|----------|---------|

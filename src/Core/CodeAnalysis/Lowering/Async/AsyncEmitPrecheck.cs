@@ -44,7 +44,8 @@ public static class AsyncEmitPrecheck
 
         var builder = ImmutableArray.CreateBuilder<Diagnostic>();
 
-        foreach (var pair in program.Functions)
+        // Issue #4663: deterministic order, never identity-hash order.
+        foreach (var pair in BoundProgramOrder.Functions(program))
         {
             var function = pair.Key;
             if (!function.IsAsyncOrSuspending)

@@ -49,6 +49,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\..\test\Shared\EmittedFixture.cs" Link="EmittedFixture.cs" />
+    <Compile Include="..\..\..\test\Core.Tests\CSharpFixture.cs" Link="CSharpFixture.cs" />
     <!-- ADR-0156 Phase 3c (#3176): the shared emitted oracle replaces the
          retired Compilation.Evaluate for semantic round-trip checks. -->
     <Compile Include="..\..\..\test\Shared\EmittedOracle.cs" Link="EmittedOracle.cs" />
@@ -60,6 +62,10 @@
     <!-- Fixture .cs files are translation-test DATA, not test code. -->
     <Compile Remove="Fixtures\**\*.cs" />
     <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Native C# source data: .cs.txt must not infer the Czech "cs" culture. -->
+    <EmbeddedResource Include="..\..\..\test\Compiler.Tests\TestData\RuntimeValuesSource\*.cs.txt"
+                      LogicalName="Cs2Gs.Tests.RuntimeValues.%(Filename)"
+                      WithCulture="false" />
   </ItemGroup>
 
 </Project>

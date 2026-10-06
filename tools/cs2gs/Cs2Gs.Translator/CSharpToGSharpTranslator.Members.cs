@@ -43,10 +43,9 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
 
                 case MethodDeclarationSyntax method:
-                    if (ownedExtensionTarget is null && this.CanLowerOwnedExtension(method))
-                    {
-                        break;
-                    }
+                    bool preservedOwnedExtension = ownedExtensionTarget is null
+                        && this.context.GetDeclaredSymbol(method) is IMethodSymbol ownedMethod
+                        && this.IsPreservedOwnedExtension(ownedMethod);
 
                     // ADR-0169 M5 / issue #3686: private plumbing of a Roslyn
                     // analyzer test harness whose body is being replaced by a
@@ -61,20 +60,22 @@ public sealed partial class CSharpToGSharpTranslator
                     (GMember methodMember, bool methodIsStatic) = this.TranslateMethod(
                         method,
                         ownerKind,
-                        ownedExtensionTarget: ownedExtensionTarget);
+                        ownedExtensionTarget: ownedExtensionTarget,
+                        forceExtensionReceiver: preservedOwnedExtension);
                     if (methodMember != null)
                     {
                         yield return (methodMember, methodIsStatic);
                     }
 
                     if (ownedExtensionTarget is null
+                        && !preservedOwnedExtension
                         && this.context.GetDeclaredSymbol(method) is IMethodSymbol companionSymbol
                         && this.HasReceiverCompanion(companionSymbol))
                     {
-                        (GMember companion, bool companionIsStatic) = this.TranslateMethod(
+                        (GMember companion, bool companionIsStatic) = this.TranslateOwnerScopedCompanion(
                             method,
                             ownerKind,
-                            forceExtensionReceiver: true);
+                            companionSymbol);
                         if (companion != null)
                         {
                             yield return (companion, companionIsStatic);
@@ -301,7 +302,14 @@ public sealed partial class CSharpToGSharpTranslator
             using IDisposable modelScope = this.context.UseSemanticModelFor(method.SyntaxTree);
             if (this.context.GetDeclaredSymbol(method) is not IMethodSymbol symbol ||
                 !symbol.IsExtensionMethod ||
+                symbol.DeclaredAccessibility == Accessibility.Private ||
+                symbol.IsExtern ||
                 symbol.Parameters.Length == 0)
+            {
+                return false;
+            }
+
+            if (!this.CanPreserveSuspendingExtensionSignature(symbol, method))
             {
                 return false;
             }
@@ -407,10 +415,14 @@ public sealed partial class CSharpToGSharpTranslator
                 GTypeReference receiverType = receiverSymbol != null
                     ? this.typeMapper.Map(receiverSymbol.Type, this.context, receiverParameter.GetLocation())
                     : this.MapTypeSyntax(receiverParameter.Type);
+                List<AttributeUse> receiverAttributes = receiverSymbol != null
+                    ? this.MapParameterAttributes(receiverSymbol)
+                    : this.MapAttributes(receiverParameter.AttributeLists);
 
                 receiver = new Receiver(
                     this.EmittedName(receiverSymbol, receiverParameter.Identifier.ValueText),
-                    receiverType);
+                    receiverType,
+                    receiverAttributes);
             }
 
             foreach (MemberDeclarationSyntax member in node.Members)
@@ -690,14 +702,24 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.MapDelegateLikeReturnType(invoke, isAsync: false, node.ReturnType.GetLocation())
                 : this.MapTypeSyntax(node.ReturnType);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
-            bool isNested = symbol?.ContainingType != null;
+            bool isNested = CSharpTypeMapper.IsLiftedNestedDelegate(symbol);
             string name = isNested
                 ? this.typeMapper.LiftedNestedDelegateName(symbol, this.context)
                 : this.EmittedName(symbol, node.Identifier.ValueText);
             Visibility visibility = MapVisibility(symbol, this.context, node);
             if (isNested)
             {
-                if (visibility == Visibility.Private)
+                // Issue #4676: a nested delegate's reach is bounded by every type that
+                // encloses it. A `public` delegate inside an `internal` class
+                // (GSharp.Core's `OverloadResolver.TryBindClrConstructorCallDelegate`)
+                // was lifted to a top-level `public` delegate, publishing a type the
+                // C# assembly never exported.
+                //
+                // Only a delegate that is public (the default) AND has exclusively public
+                // containers stays public. Anything else becomes `internal`: a lifted
+                // delegate has no container left to be `protected` or `private` in, and a
+                // top-level `protected` declaration is GS0380.
+                if (visibility is not (Visibility.Default or Visibility.Public) || !IsEffectivelyPublic(symbol))
                 {
                     visibility = Visibility.Internal;
                 }
@@ -888,6 +910,26 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         type = this.PromoteIfInitializerNullable(type, symbol, declarator.Initializer.Value);
                     }
+                }
+
+                // Issue #4684: gsc gives a bare, non-nullable `[]T` instance field of a
+                // class a synthesized zero value (ADR-0159): a fresh zero-length array
+                // allocated in every constructor prologue, BEFORE the constructor body
+                // assigns the real value. C# leaves such a field null, so the migrated
+                // type allocated 24 extra bytes per instance (the redundant array made
+                // `ManagedLocationKey` 64 bytes instead of 40, tripping the array-location
+                // allocation bound under self-host stage 2). Cache the empty value
+                // only when every constructor overwrites it
+                // before observation; otherwise its fresh identity must be retained.
+                if (initializer == null
+                    && binding != BindingKind.Const
+                    && symbol is { IsStatic: false }
+                    && symbol.ContainingType?.TypeKind == TypeKind.Class
+                    && type is ArrayTypeReference { Rank: 1, IsNullable: false } emptyArrayType
+                    && CanUseCachedEmptyArray(emptyArrayType.ElementType)
+                    && this.IsArrayFieldOverwrittenBeforeObservation(symbol))
+                {
+                    initializer = MakeArrayEmptyInvocation(emptyArrayType.ElementType);
                 }
 
                 var declaration = new FieldDeclaration(
@@ -1189,8 +1231,8 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     // Issue #2821: a same-package source receiver is owned by
                     // this output package. Emit the extension as an in-body
-                    // member and preserve its former `this` parameter as a local
-                    // copy of the real instance for the translated body.
+                    // member forwarding to the original static holder. Its body
+                    // and private helpers retain their native declaring owner.
                     ownedExtensionSelf = self;
                     skipFirstParameter = true;
                     isStatic = false;
@@ -1215,7 +1257,8 @@ public sealed partial class CSharpToGSharpTranslator
                     receiverType = this.PromoteIfUsedAsNullable(receiverType, self);
                     receiver = new Receiver(
                         this.EmittedName(self, self.Name),
-                        receiverType);
+                        receiverType,
+                        this.MapParameterAttributes(self));
                     skipFirstParameter = true;
                     isStatic = false;
                 }
@@ -1242,16 +1285,32 @@ public sealed partial class CSharpToGSharpTranslator
                     parameterOffset: skipFirstParameter ? 1 : 0);
             }
 
+            bool isOwnerScopedExtensionCompanion = ownedExtensionSelf != null
+                || (forceExtensionReceiver && RequiresOwnerScopedExtension(symbol));
+
             // ADR-0174 D4: an `async ValueTask`/`ValueTask<T>` method that
             // touches the Gsharp.Concurrency runtime (or carries [Suspending])
             // is a G# `suspend func`; its return type is the awaited result,
             // exactly as B.23 unwraps `async Task<T>`.
-            bool isEmittedSuspend = symbol != null && this.IsSuspendingCandidate(symbol, signatureFactsNode);
+            bool isEmittedSuspend = symbol != null
+                && this.IsSuspendingCandidate(symbol, signatureFactsNode);
+            if (isEmittedSuspend
+                && this.ownedExtensions.Contains(node)
+                && !this.CanPreserveSuspendingExtensionSignature(symbol, signatureFactsNode))
+            {
+                string message = $"owned suspending extension '{symbol.ContainingType.Name}.{symbol.Name}' cannot retain " +
+                    "its native static-holder signature: G# suspension would add a Context parameter " +
+                    "absent from the original declaration (ADR-0174 D7).";
+                this.context.ReportUnsupported(node, message);
+                return (null, false);
+            }
+
             GTypeReference returnType = this.MapReturnType(
                 symbol,
                 node,
                 unwrapValueTask: isEmittedSuspend,
-                iteratorBodySource: signatureFactsNode);
+                iteratorBodySource: signatureFactsNode,
+                preserveEnvelope: isOwnerScopedExtensionCompanion && !isEmittedSuspend);
             List<TypeParameter> typeParameters = this.MapMethodTypeParameters(
                 symbol,
                 isDeclaringPart ? symbol.PartialDefinitionPart : null);
@@ -1279,13 +1338,14 @@ public sealed partial class CSharpToGSharpTranslator
                     returnType = this.typeMapper.Map(symbol.ReturnType, this.context, node.GetLocation());
                 }
             }
-            else if (hasBody
-                && forceExtensionReceiver
-                && RequiresOwnerScopedExtension(symbol))
+            else if (hasBody && isOwnerScopedExtensionCompanion)
             {
+                Receiver companionReceiver = receiver ?? new Receiver(
+                    this.EmittedName(ownedExtensionSelf, ownedExtensionSelf.Name),
+                    this.typeMapper.Map(ownedExtensionSelf.Type, this.context, node.GetLocation()));
                 body = this.BuildOwnerScopedExtensionCompanionBody(
                     symbol,
-                    receiver,
+                    companionReceiver,
                     parameters,
                     returnType);
             }
@@ -1394,7 +1454,10 @@ public sealed partial class CSharpToGSharpTranslator
             // A rewritten analyzer test harness (#3686) delegates to the
             // synchronous G# verifier: there is nothing left to await, and an
             // `async` func returning `Task` cannot `return` a value.
-            bool isEmittedAsync = !isAnalyzerHarness && !isEmittedSuspend && symbol != null && symbol.IsAsync;
+            // Ordinary companions return the holder's envelope directly.
+            // Suspension instead shares the hosted logical-result contract.
+            bool isEmittedAsync = !isOwnerScopedExtensionCompanion && !isAnalyzerHarness && !isEmittedSuspend
+                && symbol != null && symbol.IsAsync;
 
             // Issue #4370: a `[LibraryImport]` definition's import arguments
             // are re-spelled from their constant values; issue #4301: so are
@@ -1403,7 +1466,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.MapLibraryImportMethodAttributes(node, symbol)
                 : isGeneratedRegexDefinition
                     ? this.MapGeneratedRegexMethodAttributes(node, symbol)
-                    : this.MapAttributes(node.AttributeLists);
+                    : this.MapAttributes(node.AttributeLists, isSuspendingDeclaration: isEmittedSuspend);
 
             // ADR-0192 §C: method-level attributes are unioned across the
             // parts by gsc, so each part carries only its OWN — `node` is the
@@ -1766,31 +1829,67 @@ public sealed partial class CSharpToGSharpTranslator
                     this.EmittedName(original, original.Name)),
                 arguments,
                 typeArguments);
-            INamedTypeSymbol asyncEnvelope = original.IsAsync
-                && original.ReturnType is INamedTypeSymbol taskLike
-                && taskLike.Name is "Task" or "ValueTask"
-                && taskLike.ContainingNamespace?.ToDisplayString()
-                    == "System.Threading.Tasks"
-                    ? taskLike
-                    : null;
-            GExpression forwarded = asyncEnvelope != null
-                ? new AwaitExpression(call)
-                : call;
             GStatement statement = returnType == null
-                || asyncEnvelope is { IsGenericType: false }
-                ? new ExpressionStatement(forwarded)
-                : new ReturnStatement(forwarded);
+                ? new ExpressionStatement(call)
+                : new ReturnStatement(call, isRef: original.ReturnsByRef || original.ReturnsByRefReadonly);
             return new BlockStatement(new[] { statement });
+        }
+
+        /// <summary>
+        /// Translates the top-level forwarding companion of an owner-scoped extension. It sits
+        /// outside the owner, so a source attribute that names one of the owner's private
+        /// nested types (as the attribute class or in an argument) cannot resolve there; it is
+        /// left off the companion, in every position (method, return value, parameter), and
+        /// stays on the in-owner helper. Every other attribute is copied as before.
+        /// </summary>
+        /// <param name="method">The extension's declaration.</param>
+        /// <param name="ownerKind">The G# kind of the owner.</param>
+        /// <param name="symbol">The extension's symbol.</param>
+        /// <returns>The translated companion and whether it is static.</returns>
+        private (GMember Member, bool IsStatic) TranslateOwnerScopedCompanion(
+            MethodDeclarationSyntax method,
+            TypeDeclarationKind ownerKind,
+            IMethodSymbol symbol)
+        {
+            HashSet<SyntaxNode> privateTypeAttributes = AttributeApplicationsNamingPrivateNestedType(symbol);
+            Func<AttributeSyntax, bool> previous = this.attributeOmission;
+            if (privateTypeAttributes.Count > 0)
+            {
+                this.attributeOmission = attribute => privateTypeAttributes.Contains(attribute);
+            }
+
+            try
+            {
+                return this.TranslateMethod(method, ownerKind, forceExtensionReceiver: true);
+            }
+            finally
+            {
+                this.attributeOmission = previous;
+            }
         }
 
         private bool HasReceiverCompanion(IMethodSymbol method)
         {
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            if (original != null && original.DeclaringSyntaxReferences.Any(reference =>
+                reference.GetSyntax() is MethodDeclarationSyntax declaration
+                && this.ownedExtensions.Contains(declaration)
+                && !this.CanPreserveSuspendingExtensionSignature(original, declaration)))
+            {
+                return false;
+            }
+
+            if (this.IsPreservedOwnedExtension(method)
+                && (method?.ReducedFrom ?? method).DeclaredAccessibility != Accessibility.Private)
+            {
+                return true;
+            }
+
             if (!this.ownedExtensions.HasReceiverCompanion(method))
             {
                 return false;
             }
 
-            IMethodSymbol original = method?.ReducedFrom ?? method;
             return !RequiresOwnerScopedExtension(original)
                 || this.CanEmitOwnerScopedReceiverCompanion(original);
         }
@@ -2066,9 +2165,63 @@ public sealed partial class CSharpToGSharpTranslator
                 + declarationId;
         }
 
+        private bool IsPreservedOwnedExtension(IMethodSymbol method)
+        {
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            if (original?.IsExtensionMethod == true
+                && !SymbolEqualityComparer.Default.Equals(
+                    original.ContainingAssembly,
+                    this.context.Compilation.Assembly))
+            {
+                CSharpCompilation owner = this.KnownCompilations()
+                    .Concat(this.context.Compilation.References
+                        .OfType<CompilationReference>()
+                        .Select(reference => reference.Compilation)
+                        .OfType<CSharpCompilation>())
+                    .FirstOrDefault(compilation =>
+                        SameAssembly(compilation.Assembly, original.ContainingAssembly));
+                string id = original.OriginalDefinition.GetDocumentationCommentId();
+                if (owner != null && id != null
+                    && DocumentationCommentId.GetFirstSymbolForDeclarationId(id, owner)
+                        is IMethodSymbol declared
+                    && declared.DeclaringSyntaxReferences.FirstOrDefault()
+                        is SyntaxReference reference)
+                {
+                    // Ask the declaring project's registry and eligibility reader,
+                    // including its body-based suspension/nullability context.
+                    var ownerContext = new TranslationContext(
+                        owner,
+                        owner.GetSemanticModel(reference.SyntaxTree),
+                        reference.SyntaxTree.FilePath,
+                        this.context.SiblingCompilations,
+                        this.context.RepositoryCompilations);
+                    var ownerVisitor = new DeclarationVisitor(
+                        ownerContext,
+                        this.typeMapper,
+                        subclassedBases: null,
+                        staticUsingTargets: null,
+                        entryPoint: null,
+                        keptTopLevelProgram: null,
+                        partialTypeParts: null,
+                        GetOrCollectOwnedExtensions(owner),
+                        this.nameAllocator,
+                        widenObliviousReferenceFields: this.widenObliviousReferenceFields);
+                    return ownerVisitor.IsPreservedOwnedExtension(declared);
+                }
+            }
+
+            return original != null
+                && original.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax() is MethodDeclarationSyntax declaration
+                    && this.ownedExtensions.Contains(declaration)
+                    && (original.DeclaredAccessibility == Accessibility.Private
+                        || this.CanLowerOwnedExtension(declaration)));
+        }
+
         private bool IsStaticExtensionHelper(IMethodSymbol method)
         {
-            if (this.ownedExtensions.IsStaticHelper(method))
+            if (this.IsPreservedOwnedExtension(method)
+                || this.ownedExtensions.IsStaticHelper(method))
             {
                 return true;
             }
@@ -2495,7 +2648,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (allParameters.Count > 0)
             {
                 Parameter first = allParameters[0];
-                receiver = new Receiver(first.Name, first.Type);
+                receiver = new Receiver(first.Name, first.Type, first.Attributes);
                 parameters = allParameters.Skip(1).ToList();
             }
             else
@@ -2737,8 +2890,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return MapVisibility(
                     this.context.GetDeclaredSymbol(accessor),
                     this.context,
-                    accessor,
-                    preserveStaticClassPrivate: true);
+                    accessor);
             }
         }
 
@@ -3063,12 +3215,16 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             taken.UnionWith(this.state.SynthesizedPropertyBackingFieldNames.Values);
+            taken.UnionWith(this.state.LiftedStaticLocalFunctions.Values);
+            taken.UnionWith(this.state.LiftedRecursiveLocalFunctions.Values.Select(lift => lift.Name));
+            taken.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
+                ?? Enumerable.Empty<string>());
+            taken.UnionWith(this.state.PendingInstanceSynthHelpers?.Select(helper => helper.Name)
+                ?? Enumerable.Empty<string>());
 
-            string candidate = baseName;
-            for (int suffix = 2; taken.Contains(candidate); suffix++)
-            {
-                candidate = baseName + suffix;
-            }
+            string candidate = LiftedLocalFunctionNameAllocator
+                .For(this.context.Compilation)
+                .AllocateBackingField(symbol, taken, baseName);
 
             this.state.SynthesizedPropertyBackingFieldNames[symbol] = candidate;
             return candidate;

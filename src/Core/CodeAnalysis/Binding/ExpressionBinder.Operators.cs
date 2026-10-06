@@ -1583,13 +1583,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        return ClrOperatorResolution.TryResolveConversion(
-                source.ClrType,
-                target.ClrType,
-                allowExplicit: false,
-                out _,
-                out var isExplicit)
-            && !isExplicit;
+        return ConversionClassifier.HasUserDefinedImplicitConversionForTypes(source, target);
     }
 
     /// <summary>

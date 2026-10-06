@@ -173,7 +173,7 @@ public static class GSharpPrinter
         if (type is ArrayTypeReference array)
         {
             var arrayMarker = array.IsNullable ? "?" : string.Empty;
-            return $"[{new string(',', array.Rank - 1)}]{arrayMarker}{RenderType(array.ElementType)}";
+            return $"[{new string(',', array.Rank - 1)}]{arrayMarker}{RenderArrayElementType(array.ElementType)}";
         }
 
         // Issue #1745: `type` can't be null here — RenderTypeCore already
@@ -215,7 +215,7 @@ public static class GSharpPrinter
                 return $"{name}[{string.Join(", ", named.TypeArguments.Select(RenderType))}]";
 
             case ArrayTypeReference array:
-                return $"[{new string(',', array.Rank - 1)}]{RenderType(array.ElementType)}";
+                return $"[{new string(',', array.Rank - 1)}]{RenderArrayElementType(array.ElementType)}";
 
             case PointerTypeReference pointer:
                 return $"*{RenderType(pointer.ElementType)}";
@@ -240,6 +240,11 @@ public static class GSharpPrinter
                 throw new ArgumentException($"Unsupported type reference: {type?.GetType().Name}");
         }
     }
+
+    private static string RenderArrayElementType(GTypeReference elementType)
+        => elementType is FunctionPointerTypeReference { IsManaged: false }
+            ? $"({RenderType(elementType)})"
+            : RenderType(elementType);
 
     private static string RenderFunctionPointer(FunctionPointerTypeReference functionPointer)
     {
@@ -757,10 +762,10 @@ public static class GSharpPrinter
 
             case ArrayLiteralExpression arrayLiteral:
                 var elements = string.Join(", ", arrayLiteral.Elements.Select(e => RenderExpression(e, indent)));
-                return $"[]{RenderType(arrayLiteral.ElementType)}{{{elements}}}";
+                return $"[]{RenderArrayElementType(arrayLiteral.ElementType)}{{{elements}}}";
 
             case ArrayAllocationExpression arrayAllocation:
-                var allocation = $"[{string.Join(", ", arrayAllocation.Dimensions.Select(d => RenderExpression(d, indent)))}]{RenderType(arrayAllocation.ElementType)}";
+                var allocation = $"[{string.Join(", ", arrayAllocation.Dimensions.Select(d => RenderExpression(d, indent)))}]{RenderArrayElementType(arrayAllocation.ElementType)}";
                 return arrayAllocation.Elements.Count == 0
                     ? allocation
                     : $"{allocation}{{{string.Join(", ", arrayAllocation.Elements.Select(e => RenderExpression(e, indent)))}}}";
@@ -1200,7 +1205,9 @@ public static class GSharpPrinter
             // inferred as void (and supports recursion).
             var arrowOpen = lambda.IsFunctionLiteral
                 ? $"{asyncPrefix}func ({parameters})" +
-                    (lambda.ReturnType != null ? " " + RenderTypeReference(lambda.ReturnType) : string.Empty) +
+                    (lambda.ReturnType != null
+                        ? " " + (lambda.IsRefReturn ? "ref " : string.Empty) + RenderTypeReference(lambda.ReturnType)
+                        : string.Empty) +
                     " {"
                 : $"{asyncPrefix}({parameters}) -> {{";
             var sb = new StringBuilder();
@@ -1903,7 +1910,6 @@ public static class GSharpPrinter
         {
             foreach (var comment in unit.LeadingComments)
             {
-                sb.Append("// ");
                 sb.Append(comment);
                 sb.Append('\n');
             }
@@ -2110,6 +2116,11 @@ public static class GSharpPrinter
         if (declaration.IsAbstract)
         {
             sb.Append("abstract ");
+        }
+
+        if (declaration.IsShared)
+        {
+            sb.Append("shared ");
         }
 
         if (declaration.IsPartial)
@@ -2456,7 +2467,9 @@ public static class GSharpPrinter
         sb.Append("func ");
         if (method.Receiver != null)
         {
-            sb.Append($"({method.Receiver.Name} {RenderType(method.Receiver.Type)}) ");
+            var receiverParameter = new Parameter(
+                method.Receiver.Name, method.Receiver.Type, attributes: method.Receiver.Attributes);
+            sb.Append($"({RenderParameter(receiverParameter)}) ");
         }
         else if (method.ExplicitInterfaceType != null)
         {

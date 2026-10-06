@@ -566,6 +566,61 @@ public sealed class TriageBuilder
     }
 
     /// <summary>
+    /// Issue #4633: builds a triage artifact for a mirrored test project whose
+    /// per-test-name parity could not be established or did not hold. One
+    /// artifact per app, not one per differing name: a whole class going
+    /// missing would otherwise file thousands. The diagnostic id names the
+    /// failure (<c>TEST-NAME-PARITY</c>, <c>TEST-ORACLE-MISSING</c>,
+    /// <c>TEST-ORACLE-INVALID</c>, <c>TEST-RESULTS-UNREADABLE</c>). The
+    /// fingerprint is computed from <c>fingerprintKey</c> when given (the stage
+    /// passes the sorted differences, or the failure kind and app) and from the
+    /// message text only otherwise, so runner paths in a message never split
+    /// one failure into many fingerprints.
+    /// </summary>
+    /// <param name="id">The diagnostic id.</param>
+    /// <param name="message">The human-readable description, differences included.</param>
+    /// <param name="gsFile">The emitted G# file (relative path), or null.</param>
+    /// <param name="fingerprintKey">
+    /// The stable identity of the failure (the sorted differences, or the
+    /// failure kind and app); the message can carry runner-specific paths, so
+    /// it is used only when no key is given.
+    /// </param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact TestParityNameMismatch(string id, string message, string gsFile = null, string fingerprintKey = null)
+    {
+        string text = string.IsNullOrWhiteSpace(message) ? "per-test-name parity failed" : message.Trim();
+        var artifact = this.NewArtifact(MigrationStageKind.TestParity, TriageCategory.TestParityFailure);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = id,
+            Message = text,
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = gsFile,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = "TestNameParity",
+            Snippet = Truncate(text),
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            fingerprintKey ?? text);
+        artifact.SuggestedIssue = this.TestParityIssue(artifact);
+        return artifact;
+    }
+
+    /// <summary>
     /// Issue #2867: builds a triage artifact for a mirrored test project that
     /// BUILT and RAN but whose tests failed. Reporting this as
     /// <c>LIBRARY-BUILD-FAILED</c> points investigation at the

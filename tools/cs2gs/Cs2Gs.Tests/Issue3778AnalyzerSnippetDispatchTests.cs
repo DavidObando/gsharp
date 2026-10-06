@@ -6,11 +6,16 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Analyzers;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -26,6 +31,38 @@ namespace Cs2Gs.Tests;
 /// </summary>
 public class Issue3778AnalyzerSnippetDispatchTests
 {
+    private const string GenericStoreSnippet = """
+        #nullable enable
+        using System.Collections.Generic;
+        namespace One
+        {
+            public static class C
+            {
+                public static void M(List<string> list)
+                {
+                    list.Add(Maybe());
+                    list.Add(Maybe());
+                }
+
+                private static string? Maybe() => null;
+            }
+        }
+
+        namespace Two
+        {
+            public static class C
+            {
+                public static void M(List<string> list)
+                {
+                    list.Add(Maybe());
+                    list.Add(Maybe());
+                }
+
+                private static string? Maybe() => null;
+            }
+        }
+        """;
+
     /// <summary>
     /// The harness shape the detector keys on (a static method taking an
     /// analyzer and a source string), trimmed to what dispatch needs.
@@ -307,6 +344,103 @@ public sealed class Tests
             diagnostics,
             d => d.DiagnosticId == SnippetTranslator.SnippetDiagnosticId
                 && d.Message.Contains("#if", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenericStoreSnippet_DistinctSourceSitesSurvivePackageDeduplication()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate(GenericStoreSnippet);
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.Equal(4, System.Text.RegularExpressions.Regex.Matches(result.GsWithMarkers, @"Maybe\(\)!!").Count);
+        TranslationDiagnostic[] sites = result.Diagnostics
+            .Where(d => d.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId)
+            .ToArray();
+        Assert.Equal(4, sites.Length);
+        Assert.All(sites, site => Assert.Equal(sites[0].Message, site.Message));
+        Assert.Equal(
+            SyntaxFactory.ParseCompilationUnit(GenericStoreSnippet).DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(node => node.Expression.ToString() == "Maybe")
+                .Select(node => node.Span),
+            sites.Select(site => site.Location.SourceSpan));
+    }
+
+    [Fact]
+    public async Task GenericStoreSnippetPipeline_ForwardsEveryInnerSiteAndOneStderrCount()
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "loader-tests", "generic-store-snippets", Guid.NewGuid().ToString("N"));
+        string projectDir = Path.Combine(root, "project");
+        string outRoot = Path.Combine(root, "migration");
+        try
+        {
+            Directory.CreateDirectory(projectDir);
+            File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project />");
+            string projectPath = Path.Combine(projectDir, "Snippets.csproj");
+            File.WriteAllText(projectPath, $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <Reference Include="Microsoft.CodeAnalysis">
+                      <HintPath>{System.Security.SecurityElement.Escape(typeof(Compilation).Assembly.Location)}</HintPath>
+                    </Reference>
+                    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+                      <HintPath>{System.Security.SecurityElement.Escape(typeof(CSharpCompilation).Assembly.Location)}</HintPath>
+                    </Reference>
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDir, "Harness.cs"), HarnessSource);
+            File.WriteAllText(Path.Combine(projectDir, "Analyzer.cs"), AnalyzerSource);
+            File.WriteAllText(Path.Combine(projectDir, "Tests.cs"), $$"""
+                namespace Sample.Tests.Cases;
+                public sealed class Tests
+                {
+                    public System.Threading.Tasks.Task Reports()
+                    {
+                        const string Source = {{Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(GenericStoreSnippet, quote: true)}};
+                        return Sample.Tests.AnalyzerTestHelper.AssertDiagnosticsAsync(new Sample.SampleAnalyzer(), Source, "TEST0001");
+                    }
+                }
+                """);
+            var pipeline = new MigrationPipeline(
+                new PipelineOptions { OutputRoot = outRoot },
+                new IMigrationStage[] { new TranslateStage() });
+            TextWriter originalError = Console.Error;
+            using var capturedError = new StringWriter();
+            RunResult result;
+            Console.SetError(capturedError);
+            try
+            {
+                result = await pipeline.RunAsync(new[] { new CorpusApp("test/GenericStoreSnippets", projectPath, TargetKind.Library) });
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+
+            AppResult app = Assert.Single(result.Apps);
+            Assert.True(app.Succeeded, app.FailureCategory);
+            string printed = File.ReadAllText(Assert.Single(Directory.GetFiles(outRoot, "Tests.gs", SearchOption.AllDirectories)));
+            Assert.Equal(4, System.Text.RegularExpressions.Regex.Matches(printed, @"Maybe\(\)!!").Count);
+            string log = File.ReadAllText(Assert.Single(Directory.GetFiles(outRoot, "translate.log", SearchOption.AllDirectories)));
+            string[] sites = log.Split('\n')
+                .Where(line => line.StartsWith(CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId + " (non-fatal): ", StringComparison.Ordinal))
+                .ToArray();
+            Assert.True(sites.Length == 4, log);
+            Assert.Equal(4, sites.Distinct(StringComparer.Ordinal).Count());
+            Assert.All(sites, site => Assert.Contains("Snippet.cs(", site, StringComparison.Ordinal));
+            string summary = Assert.Single(
+                capturedError.ToString().Split('\n'),
+                line => line.Contains(CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId, StringComparison.Ordinal));
+            Assert.Contains(": 4 " + CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId + " site(s):", summary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     /// <summary>
