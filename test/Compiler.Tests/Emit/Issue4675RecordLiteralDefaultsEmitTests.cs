@@ -45,6 +45,26 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
         Assert.Equal("1\n0\n1\n0\n0\n1\n", fixture.Run(dll));
     }
 
+    [Fact]
+    public void ComputedPositionalProperty_UsesPreparedPrimaryArgument()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package ComputedPrimaryDefaults
+            import System
+            data struct Item(Value int32) {
+                private let Storage int32 = Value + 1
+                public prop Value int32 -> Storage
+            }
+            func Main() {
+                Console.WriteLine(Item{}.Value)
+                Console.WriteLine(Item(8).Value)
+            }
+            """, "ComputedPrimaryDefaults", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("1\n9\n", fixture.Run(dll));
+    }
+
     [Theory]
     [InlineData("data struct", "int64", "box.Value", "int64(9)")]
     [InlineData("data class", "int64", "box.Value", "int64(9)")]
