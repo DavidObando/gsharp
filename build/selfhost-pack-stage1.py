@@ -223,16 +223,22 @@ def pin_global_json(tree: Path, version: str) -> bool:
 
 
 def stage_feed(tree: Path, nupkgs: list[Path]) -> list[dict]:
-    """Copies `nupkgs` into the tree's .nugs feed; returns what was staged and whether it replaced a file."""
+    """Atomically stages `nupkgs` without following destination aliases."""
     feed = tree / ".nugs"
     feed.mkdir(exist_ok=True)
     staged = []
     for nupkg in nupkgs:
         target = feed / nupkg.name
-        replaced = target.exists()
+        replaced = os.path.lexists(target)
         # A bootstrap already in the tree's feed (a natural input) is the target itself.
-        if not (replaced and target.samefile(nupkg)):
-            shutil.copy2(nupkg, target)
+        if not (replaced and target == nupkg):
+            temporary = feed / f".{nupkg.name}.staging-{os.getpid()}"
+            try:
+                temporary.unlink(missing_ok=True)
+                shutil.copy2(nupkg, temporary)
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
         staged.append({"package": nupkg.name, "replacedExisting": replaced})
     return staged
 

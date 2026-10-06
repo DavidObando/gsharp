@@ -145,11 +145,12 @@ def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
         for element in root.iter():
             if element.tag.rsplit("}", 1)[-1] != "UsingTask":
                 continue
-            if element.attrib.get("TaskName") != "Gsharp.NET.Sdk.Tools.BuildTask":
+            task_name = element.attrib.get("TaskName", "").strip()
+            if task_name.rsplit(".", 1)[-1].casefold() != "buildtask":
                 continue
             if not path.resolve().is_relative_to(expected_sdk):
                 raise Stage2Error(
-                    f"{path} registers Gsharp.NET.Sdk.Tools.BuildTask outside the verified SDK")
+                    f"{path} registers {task_name} outside the verified SDK")
 
 
 def validate_participating_projects(tree: Path, roots: list[str], env: dict,
@@ -204,6 +205,9 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
             full_path = reference.get("FullPath")
             if not full_path:
                 raise Stage2Error(f"{path.relative_to(tree)} has a ProjectReference without FullPath")
+            if reference.get("BuildReference", "").strip().casefold() == "false":
+                raise Stage2Error(
+                    f"{path.relative_to(tree)} disables building ProjectReference {full_path}")
             context = {
                 name: reference.get(name)
                 for name in ("AdditionalProperties", "Properties", "SetConfiguration", "SetPlatform",
@@ -280,15 +284,24 @@ def add_toolchain_validation(parent: ET.Element, expected_sdk: Path) -> None:
                  "GsharpToolFullPath=$(GsharpToolFullPath); expected $(_Stage2ExpectedTool)"})
 
 
+def toolchain_token(expected_sdk: Path) -> str:
+    return hashlib.sha256(str(expected_sdk.resolve()).encode()).hexdigest()
+
+
 def toolchain_guard(work: Path, stage: str, expected_sdk: Path) -> Path:
     work.mkdir(parents=True, exist_ok=True)
     path = work / f"{stage}.toolchain-guard.targets"
     project = ET.Element("Project")
+    token = toolchain_token(expected_sdk)
     target = ET.SubElement(
         project, "Target",
         {"Name": "_Stage2ValidateToolchain", "AfterTargets": "CoreCompile",
-         "Condition": "'$(GsharpCompilerFullPath)' != ''"})
+         "Condition": f"'$(_Stage2GuardedSdk)' == '{token}'"})
     add_toolchain_validation(target, expected_sdk)
+    ET.SubElement(
+        target, "Error",
+        {"Condition": f"'$(_Stage2GuardedCoreCompile)' != '{token}'",
+         "Text": "stage-2 gate: effective CoreCompile did not invoke the guarded SDK BuildTask"})
     ET.ElementTree(project).write(path, encoding="utf-8", xml_declaration=True)
     return path
 
@@ -300,6 +313,14 @@ def install_sdk_task_guard(expected_sdk: Path) -> Path:
     except (ET.ParseError, OSError) as error:
         raise Stage2Error(f"cannot install task guard in {path}: {error}") from error
     root = document.getroot()
+    namespace = root.tag[1:].split("}", 1)[0] if root.tag.startswith("{") else ""
+    if namespace:
+        ET.register_namespace("", namespace)
+    tag = lambda name: f"{{{namespace}}}{name}" if namespace else name
+    token = toolchain_token(expected_sdk)
+    properties = ET.Element(tag("PropertyGroup"))
+    ET.SubElement(properties, tag("_Stage2GuardedSdk")).text = token
+    root.insert(0, properties)
     for target in root.iter():
         if target.tag.rsplit("}", 1)[-1] != "Target" or target.attrib.get("Name") != "CoreCompile":
             continue
@@ -307,11 +328,10 @@ def install_sdk_task_guard(expected_sdk: Path) -> Path:
         for index, child in enumerate(children):
             if child.tag.rsplit("}", 1)[-1] != "BuildTask":
                 continue
-            namespace = target.tag[1:].split("}", 1)[0] if target.tag.startswith("{") else ""
-            if namespace:
-                ET.register_namespace("", namespace)
             holder = ET.Element(target.tag)
             add_toolchain_validation(holder, expected_sdk)
+            marker = ET.SubElement(holder, tag("PropertyGroup"))
+            ET.SubElement(marker, tag("_Stage2GuardedCoreCompile")).text = token
             target.remove(child)
             for offset, validation in enumerate(list(holder)):
                 target.insert(index + offset, validation)
@@ -319,6 +339,17 @@ def install_sdk_task_guard(expected_sdk: Path) -> Path:
             document.write(path, encoding="utf-8", xml_declaration=True)
             return path
     raise Stage2Error(f"{path} has no CoreCompile BuildTask to guard")
+
+
+def reject_feed_aliases(tree: Path, packages: set[Path]) -> None:
+    feed = tree / ".nugs"
+    for package in packages:
+        destination = feed / package.name
+        if destination.absolute() == package or not os.path.lexists(destination):
+            continue
+        if any(destination.samefile(other) for other in packages):
+            raise Stage2Error(
+                f"SDK feed destination aliases a supplied package: {destination}")
 
 
 def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemblies: list[str],
@@ -516,6 +547,7 @@ def main(argv: list[str]) -> int:
             for package in (bootstrap, stage1)
             for path in packer.sibling_nupkgs(package, packer.package_version(package))
         }
+        reject_feed_aliases(tree, supplied_packages)
         endangered = sorted(path for path in supplied_packages
                             if any(path.is_relative_to(root) for root in cleanup_roots)
                             or path in cleanup_files)
