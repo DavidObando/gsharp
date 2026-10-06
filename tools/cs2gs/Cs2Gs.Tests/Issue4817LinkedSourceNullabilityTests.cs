@@ -28,8 +28,10 @@ public class Issue4817LinkedSourceNullabilityTests
         }
         """;
 
-    [Fact]
-    public void LinkedParameter_UsesRepositoryTaintRegardlessOfProjectOrder()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void LinkedParameter_UsesRepositoryTaintRegardlessOfProjectOrder(bool nullableFirst)
     {
         LoadedCSharpProject nullableCaller = Load(
             "NullableCaller",
@@ -52,8 +54,9 @@ public class Issue4817LinkedSourceNullabilityTests
             }
             """);
 
-        AssertRepositoryOrder(nullableCaller, nonNullCaller);
-        AssertRepositoryOrder(nonNullCaller, nullableCaller);
+        AssertRepositoryOrder(
+            nullableFirst ? nullableCaller : nonNullCaller,
+            nullableFirst ? nonNullCaller : nullableCaller);
     }
 
     private static void AssertRepositoryOrder(

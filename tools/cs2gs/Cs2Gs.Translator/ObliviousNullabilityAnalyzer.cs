@@ -1430,7 +1430,9 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static ISymbol RemapSourceDeclaration(Compilation targetCompilation, ISymbol symbol)
     {
-        StringComparer pathComparer = StringComparer.OrdinalIgnoreCase;
+        StringComparer pathComparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
         Dictionary<string, SyntaxTree[]> targetTrees = SourceTrees.GetValue(
             targetCompilation,
             compilation => compilation.SyntaxTrees
