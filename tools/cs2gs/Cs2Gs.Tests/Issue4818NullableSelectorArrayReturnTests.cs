@@ -94,6 +94,17 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
                         arguments.Select(argument => argument.Value));
                 }
 
+                public static object[] CastSequenceValues()
+                {
+                    var arguments = new[]
+                    {
+                        new CustomAttributeTypedArgument(typeof(string), null),
+                    };
+                    return ((IEnumerable<object>)arguments
+                            .Select(argument => argument.Value))
+                        .ToArray();
+                }
+
             }
             """;
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
@@ -125,12 +136,13 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
         Assert.Contains("func CastSelectorValues() []object?", printed, StringComparison.Ordinal);
         Assert.Contains("func CastBranchValues() []object?", printed, StringComparison.Ordinal);
         Assert.Contains("func StaticValues() []object?", printed, StringComparison.Ordinal);
+        Assert.Contains("func CastSequenceValues() []object?", printed, StringComparison.Ordinal);
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             """
-            Console.WriteLine("${Probe.Values()[0] == nil}|${Probe.Names()[0]}|${Probe.CastSelectorValues()[0] == nil}|${Probe.CastBranchValues()[0] == nil}|${Probe.StaticValues()[0] == nil}")
+            Console.WriteLine("${Probe.Values()[0] == nil}|${Probe.Names()[0]}|${Probe.CastSelectorValues()[0] == nil}|${Probe.CastBranchValues()[0] == nil}|${Probe.StaticValues()[0] == nil}|${Probe.CastSequenceValues()[0] == nil}")
             """,
-            "True|String|True|True|True");
+            "True|String|True|True|True|True");
     }
 
     [Fact]
@@ -173,5 +185,51 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
 
         Assert.Contains("func Wrapped() []object", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("func Wrapped() []object?", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InterfaceImplementation_DoesNotRepaintFixedArrayContract()
+    {
+        const string source = """
+            #nullable disable
+            using System.Linq;
+            using System.Reflection;
+
+            public interface IProbe
+            {
+                object[] Values();
+            }
+
+            public sealed class Probe : IProbe
+            {
+                public object[] Values()
+                {
+                    var arguments = new[]
+                    {
+                        new CustomAttributeTypedArgument(typeof(string), null),
+                    };
+                    return arguments
+                        .Select(argument => argument.Value)
+                        .ToArray();
+                }
+            }
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Probe.cs", source) });
+        Assert.True(
+            project.BoundWithoutErrors,
+            string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Equal(
+            2,
+            printed.Split("func Values() []object", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("func Values() []object?", printed, StringComparison.Ordinal);
     }
 }

@@ -6182,9 +6182,9 @@ public sealed partial class CSharpToGSharpTranslator
             current = invocation;
             while (true)
             {
-                if (current.Parent is ParenthesizedExpressionSyntax parenthesized)
+                if (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
                 {
-                    current = parenthesized;
+                    current = current.Parent;
                     continue;
                 }
 
@@ -6286,7 +6286,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (method?.ReturnType is not IArrayTypeSymbol returnArray
                 || returnArray.ElementType is not { IsReferenceType: true } element
-                || element.NullableAnnotation != NullableAnnotation.None)
+                || element.NullableAnnotation != NullableAnnotation.None
+                || ObliviousNullabilityAnalyzer.IsReturnSignatureFixedByAnotherDeclaration(method))
             {
                 return false;
             }

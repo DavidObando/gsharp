@@ -1088,6 +1088,9 @@ internal static class ObliviousNullabilityAnalyzer
         type is { IsReferenceType: true } and not ITypeParameterSymbol
             && type.NullableAnnotation == NullableAnnotation.None;
 
+    internal static bool IsReturnSignatureFixedByAnotherDeclaration(IMethodSymbol method) =>
+        IsSignatureFixedByAnotherDeclaration(method);
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,
