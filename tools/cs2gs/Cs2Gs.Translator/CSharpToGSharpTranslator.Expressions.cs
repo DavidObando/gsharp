@@ -2953,6 +2953,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            if (this.LambdaResultFlowsToNullableSink(lambda))
+            {
+                return true;
+            }
+
             SyntaxNode node = lambda;
             while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
             {
@@ -6224,6 +6229,13 @@ public sealed partial class CSharpToGSharpTranslator
                 return !this.TargetWillRemainNonNullableReference(sinkType, sink);
             }
 
+            if (sink is IMethodSymbol sinkMethod
+                && sinkType is IArrayTypeSymbol
+                && this.ArrayReturnElementAcceptsNullableSelectorResult(sinkMethod))
+            {
+                return true;
+            }
+
             // Issue #4180: `current` never left the Select-shaped invocation itself
             // (e.g. `string.Join(sep, xs.Select(i => i.FullName))` — the selector's
             // result is passed WHOLE as a collection argument rather than chained
@@ -6259,6 +6271,82 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.Compilation.ClassifyConversion(resultType, sinkElementType);
             return elementConversion.IsImplicit
                 && (elementConversion.IsReference || elementConversion.IsIdentity);
+        }
+
+        private bool ArrayReturnElementAcceptsNullableSelectorResult(IMethodSymbol method)
+        {
+            if (method?.ReturnType is not IArrayTypeSymbol returnArray
+                || returnArray.ElementType is not { IsReferenceType: true } element
+                || element.NullableAnnotation != NullableAnnotation.None)
+            {
+                return false;
+            }
+
+            foreach (ExpressionSyntax returned in this.GetSourceCallableReturnExpressions(method))
+            {
+                foreach (AnonymousFunctionExpressionSyntax lambda in returned
+                    .DescendantNodesAndSelf()
+                    .OfType<AnonymousFunctionExpressionSyntax>())
+                {
+                    SyntaxNode current = lambda;
+                    while (current.Parent is ParenthesizedExpressionSyntax)
+                    {
+                        current = current.Parent;
+                    }
+
+                    if (current.Parent is not ArgumentSyntax argument
+                        || argument.Expression != current
+                        || !this.IsGenericSelectorResultArgument(argument, lambda)
+                        || !SelectorInvocationFlowsToReturn(argument, returned)
+                        || !GetLambdaResultExpressions(lambda)
+                            .Any(result => this.NullableReferenceValueMayBeNull(
+                                result,
+                                respectDeclaredAnnotations: true)))
+                    {
+                        continue;
+                    }
+
+                    ITypeSymbol resultType =
+                        (this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol)?.ReturnType;
+                    Microsoft.CodeAnalysis.CSharp.Conversion conversion =
+                        this.context.Compilation.ClassifyConversion(
+                            resultType,
+                            element.WithNullableAnnotation(NullableAnnotation.None));
+                    if (conversion.IsImplicit
+                        && (conversion.IsReference || conversion.IsIdentity))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool SelectorInvocationFlowsToReturn(
+            ArgumentSyntax selectorArgument,
+            ExpressionSyntax returned)
+        {
+            SyntaxNode current = selectorArgument.Parent?.Parent;
+            while (current != null && current != returned)
+            {
+                if (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+                {
+                    current = current.Parent;
+                }
+                else if (current.Parent is MemberAccessExpressionSyntax member
+                    && member.Expression == current
+                    && member.Parent is InvocationExpressionSyntax invocation)
+                {
+                    current = invocation;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            return current == returned;
         }
 
         private bool IsGenericSelectorResultArgument(
@@ -6376,9 +6464,27 @@ public sealed partial class CSharpToGSharpTranslator
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)
         {
             SyntaxNode node = use;
-            while (node.Parent is ParenthesizedExpressionSyntax)
+            while (true)
             {
-                node = node.Parent;
+                if (node.Parent is ParenthesizedExpressionSyntax)
+                {
+                    node = node.Parent;
+                }
+                else if (node.Parent is ConditionalExpressionSyntax conditional
+                    && (conditional.WhenTrue == node || conditional.WhenFalse == node))
+                {
+                    node = conditional;
+                }
+                else if (node.Parent is SwitchExpressionArmSyntax arm
+                    && arm.Expression == node
+                    && arm.Parent is SwitchExpressionSyntax switchExpression)
+                {
+                    node = switchExpression;
+                }
+                else
+                {
+                    break;
+                }
             }
 
             if (node.Parent is AnonymousFunctionExpressionSyntax expressionLambda
