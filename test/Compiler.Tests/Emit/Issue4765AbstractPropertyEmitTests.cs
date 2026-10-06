@@ -540,7 +540,9 @@ public sealed class Issue4765AbstractPropertyEmitTests
         var dll = fixture.Compile("""
             package NullableIndexer
             public abstract class Base {
-                public abstract prop this[key string?] int32 { get; }
+                public abstract prop this[
+                    @System.Runtime.CompilerServices.CallerMemberName key string? = ""
+                ] int32 { get; }
             }
             """, "NullableIndexer", false, "/refout:" + reference);
 
@@ -560,6 +562,9 @@ public sealed class Issue4765AbstractPropertyEmitTests
             Assert.Contains(
                 parameter.GetCustomAttributes(),
                 handle => GetCustomAttributeTypeName(metadata, handle) == "System.Runtime.CompilerServices.NullableAttribute");
+            Assert.Contains(
+                parameter.GetCustomAttributes(),
+                handle => GetCustomAttributeTypeName(metadata, handle) == "System.Runtime.CompilerServices.CallerMemberNameAttribute");
         }
     }
 

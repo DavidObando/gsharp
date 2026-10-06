@@ -1976,6 +1976,12 @@ internal sealed partial class DeclarationBinder
                     }
                 }
 
+                var isExplicitAbstract = propSyntax.AbstractModifier != null;
+                if (isExplicitAbstract)
+                {
+                    isAutoProperty = false;
+                }
+
                 if (replacesPositionalProperty && !hasGetter)
                 {
                     Diagnostics.ReportPositionalPropertyReplacementRequiresGetter(
@@ -1998,10 +2004,8 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var isExplicitAbstract = propSyntax.AbstractModifier != null;
                 if (isExplicitAbstract)
                 {
-                    isAutoProperty = false;
                     if (!structSymbol.IsDeclaredAbstract
                         || propSyntax.OpenModifier != null
                         || propSyntax.HasExplicitInterfaceClause

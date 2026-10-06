@@ -98,6 +98,23 @@ public sealed class Issue4675RecordAbiTranslationTests
             """, "Value", 0);
     }
 
+    [Fact]
+    public void NullableNormalizingAbstractPositionalGetter_MatchesRoslyn()
+    {
+        VerifyExplicitPositionalProperty("""
+            #nullable enable
+            namespace PositionalProperty {
+                public abstract record Item(string? Input) {
+                    public abstract string Input { get; }
+                    public static int Run() => new Leaf(null).Input.Length;
+                }
+                public sealed record Leaf(string? Value) : Item(Value) {
+                    public override string Input { get; } = Value ?? "";
+                }
+            }
+            """, "Input", 0);
+    }
+
     [Theory]
     [InlineData(" = 42", 42)]
     [InlineData(" = Seed()", 7)]

@@ -642,6 +642,8 @@ internal sealed class MemberDefEmitter
             {
                 this.emitNullableAttributeOnParameter(parameterHandle, nullableFlags);
             }
+
+            this.emitUserAttributes(parameterHandle, prop.Parameters[index], AttributeTargetKind.Param);
         }
 
         if (!isGetter)
