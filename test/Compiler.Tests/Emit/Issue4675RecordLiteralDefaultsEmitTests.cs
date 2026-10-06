@@ -9,6 +9,42 @@ namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue4675RecordLiteralDefaultsEmitTests
 {
+    [Fact]
+    public void EmptyPrimaryList_SeparatesExplicitConstructionFromBareZeroInitialization()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package EmptyPrimaryDefaults
+            import System
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            data struct Box() {
+                private var Items []int32
+                public var Marker int32 = Counter.Next()
+                public prop Length int32 { get { return Items.Length } }
+            }
+            func Main() {
+                let explicit = Box{}
+                Console.WriteLine(explicit.Marker)
+                Console.WriteLine(explicit.Length)
+                Console.WriteLine(Counter.Count)
+                var bare Box
+                Console.WriteLine(bare.Marker)
+                Console.WriteLine(bare.Length)
+                Console.WriteLine(Counter.Count)
+            }
+            """, "EmptyPrimaryDefaults", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("1\n0\n1\n0\n0\n1\n", fixture.Run(dll));
+    }
+
     [Theory]
     [InlineData("data struct", "int64", "box.Value", "int64(9)")]
     [InlineData("data class", "int64", "box.Value", "int64(9)")]

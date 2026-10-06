@@ -2431,7 +2431,7 @@ internal sealed partial class ExpressionBinder
         var seenFieldNames = new HashSet<string>();
         var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
         var definition = structSymbol.Definition ?? structSymbol;
-        bool callsPrimary = structSymbol.ClrType == null && definition.IsData && definition.HasPrimaryConstructor;
+        bool callsPrimary = structSymbol.ClrType == null && definition.IsData && definition.HasDeclaredPrimaryConstructor;
         List<StructLiteralOrderedStep>? orderedInitializers =
             hasContentElement ||
             syntax.Initializers.Any(initializer =>

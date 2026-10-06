@@ -442,7 +442,7 @@ internal sealed partial class OverloadResolver
             }
 
             if (classType.IsInline
-                || (classType.IsData && classType.ClrType == null && classType.HasPrimaryConstructor))
+                || (classType.IsData && classType.ClrType == null && classType.HasDeclaredPrimaryConstructor))
             {
                 return new BoundConstructorCallExpression(syntax, classType, packedArgs);
             }
@@ -754,7 +754,7 @@ internal sealed partial class OverloadResolver
             parameterNameAt);
 
         if (classType.IsInline
-            || (classType.IsData && classType.ClrType == null && classType.HasPrimaryConstructor))
+            || (classType.IsData && classType.ClrType == null && classType.HasDeclaredPrimaryConstructor))
         {
             return new BoundConstructorCallExpression(syntax, classType, finalArguments);
         }

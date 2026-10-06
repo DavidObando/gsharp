@@ -568,7 +568,7 @@ internal sealed class DataStructSynthesizer
         // newobj-callable instance constructor — both for ordinary compiled
         // code and for ExpressionTreeLowerer.BuildUserConstructorExpression's
         // runtime `Type.GetConstructor` lookup.
-        if (!structSym.IsClass && structSym.HasPrimaryConstructor)
+        if (!structSym.IsClass && structSym.HasDeclaredPrimaryConstructor)
         {
             this.cache.ClassPrimaryCtorHandles[structSym] = this.EmitDataStructPrimaryConstructor(structSym);
         }

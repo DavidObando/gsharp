@@ -58,7 +58,7 @@ public sealed class BoundStructLiteralExpression : BoundExpression
     internal bool CallsPrimaryConstructor => !IsZeroInitialization && CopySource == null
         && StructType.ClrType == null
         && (StructType.Definition ?? StructType).IsData
-        && (StructType.Definition ?? StructType).HasPrimaryConstructor;
+        && (StructType.Definition ?? StructType).HasDeclaredPrimaryConstructor;
 
     internal static ImmutableArray<BoundFieldInitializer> PreparePrimaryArguments(
         SyntaxNode? syntax,

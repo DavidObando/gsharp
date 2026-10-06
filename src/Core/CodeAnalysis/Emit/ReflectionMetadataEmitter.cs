@@ -2431,7 +2431,7 @@ internal sealed class ReflectionMetadataEmitter
 
                 // Native positional data construction invokes a real primary
                 // constructor, including anonymous-class literal backing types.
-                if (s.HasPrimaryConstructor)
+                if (s.HasDeclaredPrimaryConstructor)
                 {
                     classPrimaryCtorRows[s] = methodRow++;
                 }
@@ -2526,7 +2526,8 @@ internal sealed class ReflectionMetadataEmitter
             // parameterless .ctor as the struct's last row. ClassCtorHandles
             // doubles as the default-ctor registry ResolveUserCtorTokenForDefault
             // consults for constructed-generic MemberRef parenting.
-            if (needsSynthesizedDefaultCtor && !(s.IsData && s.HasPrimaryConstructor))
+            if (needsSynthesizedDefaultCtor
+                && (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.ValueStructDefaultCtorIsZeroInitialization))
             {
                 var initializerCtor = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 if (s.HasPrimaryConstructor)
@@ -2832,7 +2833,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(inlineCtorRow);
             }
-            else if (s.IsData && s.HasPrimaryConstructor
+            else if (s.IsData && s.HasDeclaredPrimaryConstructor
                 && classPrimaryCtorRows.TryGetValue(s, out var dataPrimaryCtorRow))
             {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(dataPrimaryCtorRow);
@@ -4004,7 +4005,7 @@ internal sealed class ReflectionMetadataEmitter
             // so the early-out below must not skip a struct whose only row is
             // that ctor.
             var emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s)
-                && !(s.IsData && s.HasPrimaryConstructor);
+                && (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.ValueStructDefaultCtorIsZeroInitialization);
             if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields) && !s.HasStaticInitializerBlock)
             {
                 if (emitsSynthesizedDefaultCtor)

@@ -554,6 +554,21 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         var supplied = initialized.OfType<FieldSymbol>().Select(field => type.GetDefinitionField(field) ?? field).ToHashSet();
         var requireInitializedResult = !ReferenceEquals(node, this.overwrittenInitializerResult);
         type = (StructSymbol)this.InitializerType(type);
+        var defaultedPrimaryFields = new HashSet<FieldSymbol>();
+        if (node is BoundStructLiteralExpression literal
+            && !literal.CallsPrimaryConstructor
+            && type.HasDeclaredPrimaryConstructor)
+        {
+            foreach (var argument in literal.GetPrimaryConstructorArguments())
+            {
+                if (!argument.IsSupplied)
+                {
+                    this.VisitExpression(argument.Value);
+                    defaultedPrimaryFields.Add(type.GetDefinitionField(argument.Field) ?? argument.Field);
+                }
+            }
+        }
+
         if (node is BoundStructLiteralExpression { IsZeroInitialization: true } zeroValue)
         {
             this.CheckImplicitConstructorPath(type, ImmutableArray<FieldSymbol>.Empty, zeroValue, requireInitializedResult);
@@ -562,7 +577,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
         var explicitPath = explicitConstructor || type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty);
         var callsPrimary = node is BoundStructLiteralExpression { CallsPrimaryConstructor: true }
-            || (node is BoundConstructorCallExpression { SelectedConstructor: null } call && type.HasPrimaryConstructor
+            || (node is BoundConstructorCallExpression { SelectedConstructor: null } call && type.HasDeclaredPrimaryConstructor
                 && call.Arguments.Length == type.PrimaryConstructorParameters.Length);
         var constructorStores = new HashSet<FieldSymbol>();
         if (callsPrimary)

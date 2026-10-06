@@ -669,6 +669,17 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public DeinitSymbol? Deinitializer { get; private set; }
 
+    /// <summary>Gets or sets a value indicating whether the definition's constructor arguments carry anonymous-object property members.</summary>
+    internal bool HasAnonymousConstructorMembers { get; set; }
+
+    /// <summary>Gets a value indicating whether this type declares a primary-constructor parameter list, including an empty list.</summary>
+    internal bool HasDeclaredPrimaryConstructor => Definition != null && !ReferenceEquals(Definition, this)
+        ? Definition.HasDeclaredPrimaryConstructor
+        : HasPrimaryConstructor || (Declaration?.HasPrimaryConstructor ?? false);
+
+    /// <summary>Gets a value indicating whether the compiler-owned value-struct default constructor initializes only sound zero values.</summary>
+    internal bool ValueStructDefaultCtorIsZeroInitialization => !IsClass && IsData && HasDeclaredPrimaryConstructor;
+
     /// <summary>Gets imported accessors selected by interface conformance binding.</summary>
     internal List<(InterfaceSymbol Interface, PropertySymbol Property, MethodInfo Accessor, TypeSymbol ContainingType, bool IsSetter)> ImportedInterfaceAccessors { get; } = new();
 
@@ -725,8 +736,8 @@ public sealed class StructSymbol : TypeSymbol
     internal int LiteralInitializerMarkerCount => Definition != null && !ReferenceEquals(Definition, this)
         ? Definition.LiteralInitializerMarkerCount
         : NeedsSynthesizedValueStructDefaultCtor && !HasPrimaryConstructor
-        && ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty)
-        ? ExplicitConstructors.Max(constructor => constructor.Parameters.Length) + 1
+        && (HasDeclaredPrimaryConstructor || ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty))
+        ? (ExplicitConstructors.IsDefaultOrEmpty ? 1 : ExplicitConstructors.Max(constructor => constructor.Parameters.Length) + 1)
         : 0;
 
     /// <summary>Gets the definition-owned symbol for the emitted data-class clone slot.</summary>
