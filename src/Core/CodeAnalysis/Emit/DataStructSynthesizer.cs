@@ -98,6 +98,7 @@ internal sealed class DataStructSynthesizer
     private readonly Func<TypeSymbol, EntityHandle> getElementTypeToken;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
     private readonly Func<ParameterHandle> nextParameterHandle;
+    private readonly Func<ImmutableArray<ParameterSymbol>, ParameterHandle> addPrimaryCtorParameters;
     private readonly Func<StructSymbol, EntityHandle> resolveUserTypeToken;
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken;
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
@@ -125,6 +126,7 @@ internal sealed class DataStructSynthesizer
         Func<TypeSymbol, EntityHandle> getElementTypeToken,
         Func<Type, TypeReferenceHandle> getTypeReference,
         Func<ParameterHandle> nextParameterHandle,
+        Func<ImmutableArray<ParameterSymbol>, ParameterHandle> addPrimaryCtorParameters,
         Func<StructSymbol, EntityHandle> resolveUserTypeToken,
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken,
         Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef,
@@ -143,6 +145,7 @@ internal sealed class DataStructSynthesizer
         this.getElementTypeToken = getElementTypeToken ?? throw new ArgumentNullException(nameof(getElementTypeToken));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
         this.nextParameterHandle = nextParameterHandle ?? throw new ArgumentNullException(nameof(nextParameterHandle));
+        this.addPrimaryCtorParameters = addPrimaryCtorParameters ?? throw new ArgumentNullException(nameof(addPrimaryCtorParameters));
         this.resolveUserTypeToken = resolveUserTypeToken ?? throw new ArgumentNullException(nameof(resolveUserTypeToken));
         this.resolveUserFieldToken = resolveUserFieldToken ?? throw new ArgumentNullException(nameof(resolveUserFieldToken));
         this.resolveUserMethodRef = resolveUserMethodRef ?? throw new ArgumentNullException(nameof(resolveUserMethodRef));
@@ -953,7 +956,7 @@ internal sealed class DataStructSynthesizer
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle());
+            parameterList: this.addPrimaryCtorParameters(parameters));
     }
 
     /// <summary>

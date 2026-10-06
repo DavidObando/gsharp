@@ -3,6 +3,8 @@
 // </copyright>
 
 using System;
+using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -43,6 +45,12 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
             """, "EmptyPrimaryDefaults", true);
         IlVerifier.Verify(dll);
         Assert.Equal("1\n0\n1\n0\n0\n1\n", fixture.Run(dll));
+        var assembly = Assembly.LoadFile(dll);
+        var box = assembly.GetType("EmptyPrimaryDefaults.Box", throwOnError: true);
+        Assert.Single(box.GetConstructors());
+        var boxHelper = Assert.Single(box.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.True(boxHelper.IsAssembly);
+        Assert.Equal(typeof(bool), Assert.Single(boxHelper.GetParameters()).ParameterType);
     }
 
     [Fact]
@@ -63,6 +71,41 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
             """, "ComputedPrimaryDefaults", true);
         IlVerifier.Verify(dll);
         Assert.Equal("1\n9\n", fixture.Run(dll));
+        var type = Assembly.LoadFile(dll).GetType("ComputedPrimaryDefaults.Item", throwOnError: true);
+        var constructor = Assert.Single(type.GetConstructors(), constructor => constructor.GetParameters().Length == 1);
+        Assert.Equal("Value", Assert.Single(constructor.GetParameters()).Name);
+        Assert.Empty(type.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
+        var consumer = fixture.CompileCSharp(
+            """
+            using ComputedPrimaryDefaults;
+            public static class NamedConsumer
+            {
+                public static int Run() => new Item(Value: 8).Value;
+            }
+            """,
+            "ComputedPrimaryDefaultsConsumer",
+            dll);
+        IlVerifier.Verify(consumer, additionalReferences: new[] { dll });
+        var loaded = EmittedFixture.LoadTogether(dll, consumer);
+        Assert.Equal(9, loaded[1].GetType("NamedConsumer", throwOnError: true).GetMethod("Run").Invoke(null, null));
+    }
+
+    [Fact]
+    public void EmptyDataClassPrimaryLiterals_ResolveTheDefaultConstructor()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package EmptyClassPrimary
+            import System
+            data class Empty()
+            data class Generic[T]()
+            func Main() {
+                Console.WriteLine(Empty{} != nil)
+                Console.WriteLine(Generic[int32]{} != nil)
+            }
+            """, "EmptyClassPrimary", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("True\nTrue\n", fixture.Run(dll));
     }
 
     [Theory]

@@ -1851,6 +1851,13 @@ internal sealed class TypeDefEmitter
         return first;
     }
 
+    internal ParameterHandle AddPrimaryCtorParameters(ImmutableArray<ParameterSymbol> parameters)
+    {
+        var first = this.AddPrimaryCtorParameterRows(parameters, out var parameterHandles);
+        this.EmitUserAttributesOnParameters(parameterHandles, parameters);
+        return first;
+    }
+
     /// <summary>
     /// Issue #306 / #2766: emits a class or plain-struct constructor materialized from an explicit
     /// <c>init(...)</c> declaration. The body first chains to the resolved base

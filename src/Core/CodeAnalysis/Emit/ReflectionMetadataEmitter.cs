@@ -1317,6 +1317,7 @@ internal sealed class ReflectionMetadataEmitter
             this.memberRefs.GetElementTypeToken,
             this.memberRefs.GetTypeReference,
             this.customAttrEncoder.NextParameterHandle,
+            this.typeDefEmitter.AddPrimaryCtorParameters,
             this.userTokens.ResolveUserTypeToken,
             this.userTokens.ResolveFieldToken,
             this.userTokens.GetUserStructMethodRef,
@@ -2527,7 +2528,7 @@ internal sealed class ReflectionMetadataEmitter
             // doubles as the default-ctor registry ResolveUserCtorTokenForDefault
             // consults for constructed-generic MemberRef parenting.
             if (needsSynthesizedDefaultCtor
-                && (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.ValueStructDefaultCtorIsZeroInitialization))
+                && (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.NeedsValueStructZeroHelper))
             {
                 var initializerCtor = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 if (s.HasPrimaryConstructor)
@@ -4005,7 +4006,7 @@ internal sealed class ReflectionMetadataEmitter
             // so the early-out below must not skip a struct whose only row is
             // that ctor.
             var emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s)
-                && (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.ValueStructDefaultCtorIsZeroInitialization);
+                && (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.NeedsValueStructZeroHelper);
             if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields) && !s.HasStaticInitializerBlock)
             {
                 if (emitsSynthesizedDefaultCtor)

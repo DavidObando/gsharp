@@ -2406,6 +2406,11 @@ internal sealed class UserTokenResolver
         var ctorKey = structType.Definition ?? structType;
         if (!this.cache.ClassPrimaryCtorHandles.TryGetValue(ctorKey, out var primaryDef))
         {
+            if (ctorKey.HasDeclaredPrimaryConstructor && ctorKey.PrimaryConstructorParameters.IsEmpty)
+            {
+                return this.ResolveUserCtorTokenForDefault(structType);
+            }
+
             throw new InvalidOperationException($"Type '{structType.Name}' has no emitted primary ctor.");
         }
 

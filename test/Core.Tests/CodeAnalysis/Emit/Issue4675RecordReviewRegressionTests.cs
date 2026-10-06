@@ -59,6 +59,42 @@ public class Issue4675RecordReviewRegressionTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void ConstructorInitializerCache_PreservesSameNamedPackageTypeIdentity(bool safeFirst)
+    {
+        var firstType = safeFirst ? "Safe.Payload" : "Required.Payload";
+        var secondType = safeFirst ? "Required.Payload" : "Safe.Payload";
+        var compilation = new Compilation(
+            SyntaxTree.Parse("package Safe\npublic struct Payload { public var Value int32 }"),
+            SyntaxTree.Parse("package Required\npublic struct Payload { public var Handle readonly managed[int32] }"),
+            SyntaxTree.Parse($$"""
+                package SameNamedOwners
+                class Holder[T] { public var Saved T = default(T) }
+                class Pair {
+                    public var First Holder[{{firstType}}]
+                    public var Second Holder[{{secondType}}]
+                }
+                class Outer {
+                    public var Value Pair = Pair{
+                        First: Holder[{{firstType}}]{},
+                        Second: Holder[{{secondType}}]{},
+                    }
+                }
+                func Main() { let outer = Outer{} }
+                """));
+        Assert.Empty(compilation.GlobalScope.Diagnostics.Where(d => d.IsError));
+        var program = compilation.BoundProgram;
+        var analyzerType = typeof(BoundTreeWalker).Assembly.GetType("GSharp.Core.CodeAnalysis.Binding.ManagedReferenceSafetyAnalyzer");
+        Assert.NotNull(analyzerType);
+        var diagnostics = new DiagnosticBag();
+        var analyzer = Assert.IsAssignableFrom<BoundTreeWalker>(Activator.CreateInstance(
+            analyzerType, BindingFlags.Instance | BindingFlags.NonPublic, binder: null, args: new object[] { diagnostics }, culture: null));
+        analyzer.Visit(program.Functions.Single(pair => pair.Key.Name == "Main").Value);
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0604");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void IndirectDataBaseEquality_ComparesInheritedState(bool generic)
     {
         var result = EmittedOracle.Evaluate("""

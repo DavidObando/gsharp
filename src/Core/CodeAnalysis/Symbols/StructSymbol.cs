@@ -680,6 +680,10 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets a value indicating whether the compiler-owned value-struct default constructor initializes only sound zero values.</summary>
     internal bool ValueStructDefaultCtorIsZeroInitialization => !IsClass && IsData && HasDeclaredPrimaryConstructor;
 
+    /// <summary>Gets a value indicating whether a positional data struct needs an in-type collection-zero helper.</summary>
+    internal bool NeedsValueStructZeroHelper => ValueStructDefaultCtorIsZeroInitialization
+        && Fields.Any(member => MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(null, this, member) != null);
+
     /// <summary>Gets imported accessors selected by interface conformance binding.</summary>
     internal List<(InterfaceSymbol Interface, PropertySymbol Property, MethodInfo Accessor, TypeSymbol ContainingType, bool IsSetter)> ImportedInterfaceAccessors { get; } = new();
 
@@ -735,9 +739,11 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     internal int LiteralInitializerMarkerCount => Definition != null && !ReferenceEquals(Definition, this)
         ? Definition.LiteralInitializerMarkerCount
-        : NeedsSynthesizedValueStructDefaultCtor && !HasPrimaryConstructor
-        && (HasDeclaredPrimaryConstructor || ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty))
-        ? (ExplicitConstructors.IsDefaultOrEmpty ? 1 : ExplicitConstructors.Max(constructor => constructor.Parameters.Length) + 1)
+        : NeedsSynthesizedValueStructDefaultCtor
+        && (NeedsValueStructZeroHelper || (!HasPrimaryConstructor && ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty)))
+        ? Math.Max(
+            PrimaryConstructorParameters.Length,
+            ExplicitConstructors.IsDefaultOrEmpty ? 0 : ExplicitConstructors.Max(constructor => constructor.Parameters.Length)) + 1
         : 0;
 
     /// <summary>Gets the definition-owned symbol for the emitted data-class clone slot.</summary>

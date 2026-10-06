@@ -21,7 +21,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     private readonly HashSet<VariableSymbol> managedLocations = new();
     private readonly HashSet<FunctionSymbol> analyzedFunctions = new();
     private readonly HashSet<(StructSymbol Owner, BoundExpression Initializer)> activeInitializers = new();
-    private readonly HashSet<(StructSymbol Owner, BoundExpression Initializer, SyntaxNode? Anchor, bool ResultOverwritten, bool StateMachine)> completedInitializers = new();
+    private readonly HashSet<(StructSymbol Definition, StructSymbol Owner, BoundExpression Initializer, SyntaxNode? Anchor, bool ResultOverwritten, bool StateMachine)> completedInitializers = new();
     private StructSymbol? initializerOwner;
     private SyntaxNode? initializerAnchor;
     private BoundExpression? overwrittenInitializerResult;
@@ -728,8 +728,11 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void VisitConstructedInitializer(StructSymbol owner, BoundExpression site, BoundExpression initializer, bool resultOverwritten)
     {
-        var anchor = this.initializerAnchor ?? site.Syntax;
-        var completedKey = (owner, initializer, anchor, resultOverwritten, this.analyzingStateMachine);
+        var anchor = this.initializerAnchor
+            ?? (owner.IsClass || owner.IsData || site is BoundStructLiteralExpression { IsZeroInitialization: true }
+                ? site.Syntax
+                : null);
+        var completedKey = (owner.Definition, owner, initializer, anchor, resultOverwritten, this.analyzingStateMachine);
         if (this.completedInitializers.Contains(completedKey) || this.activeInitializers.Contains((owner, initializer)))
         {
             return;
