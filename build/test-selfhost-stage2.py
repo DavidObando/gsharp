@@ -274,6 +274,22 @@ class MainTests(unittest.TestCase):
             build.assert_not_called()
             self.assertEqual("retain source", source.read_text(encoding="utf-8"))
 
+    def test_packages_under_cleaned_out_are_rejected_without_deletion(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree = root / "tree"
+            packages = tree / "out" / "nupkgs"
+            packages.mkdir(parents=True)
+            bootstrap = self.package(packages, "1.0.0", "cs")
+            stage1 = self.package(packages, "1.0.0-stage1", "gs")
+            with patch.object(stage2, "build_stage") as build:
+                code = stage2.main(["--tree", str(tree), "--work", str(root / "gate"),
+                                    "--bootstrap", str(bootstrap), "--stage1", str(stage1)])
+            self.assertEqual(2, code)
+            build.assert_not_called()
+            self.assertTrue(bootstrap.is_file())
+            self.assertTrue(stage1.is_file())
+
 
 class ParticipatingProjectTests(unittest.TestCase):
     def test_versioned_participating_root_is_rejected(self) -> None:
@@ -310,7 +326,13 @@ class ParticipatingProjectTests(unittest.TestCase):
             project = tree / "Root.gsproj"
             project.write_text('<Project Sdk="Gsharp.NET.Sdk"/>', encoding="utf-8")
             expected = work / "nuget-preflight" / "gsharp.net.sdk" / "1.0.0-stage1" / "Sdk" / "Sdk.props"
-            evaluation = {"Properties": {"MSBuildAllProjects": str(expected)},
+            expected_root = expected.parents[1]
+            evaluation = {"Properties": {
+                "MSBuildAllProjects": str(expected),
+                "GsharpCompilerFullPath": str(expected_root / "tools/compiler/gsc.dll"),
+                "GsharpToolFullPath": str(expected_root / "tools/task/Gsharp.NET.Sdk.dll"),
+                "TargetFrameworks": "",
+            },
                           "Items": {"ProjectReference": []}}
             with patch.object(stage2, "evaluate_project", return_value=evaluation):
                 self.assertEqual(
@@ -323,6 +345,48 @@ class ParticipatingProjectTests(unittest.TestCase):
                     self.assertRaises(stage2.Stage2Error):
                 stage2.validate_participating_projects(
                     tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1")
+
+    def test_indirect_sdk_and_tool_overrides_are_rejected(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree, work = root / "tree", root / "gate"
+            tree.mkdir()
+            project = tree / "Root.gsproj"
+            project.write_text('<Project Sdk="Microsoft.NET.Sdk"/>', encoding="utf-8")
+            expected = work / "nuget-preflight" / "gsharp.net.sdk" / "1.0.0-stage1"
+            wrong = work / "nuget-preflight" / "gsharp.net.sdk" / "1.0.0"
+            cases = [
+                {"MSBuildAllProjects": str(wrong / "Sdk/Sdk.props"),
+                 "GsharpCompilerFullPath": str(wrong / "tools/compiler/gsc.dll"),
+                 "GsharpToolFullPath": str(wrong / "tools/task/Gsharp.NET.Sdk.dll"),
+                 "TargetFrameworks": ""},
+                {"MSBuildAllProjects": str(expected / "Sdk/Sdk.props"),
+                 "GsharpCompilerFullPath": str(wrong / "tools/compiler/gsc.dll"),
+                 "GsharpToolFullPath": str(expected / "tools/task/Gsharp.NET.Sdk.dll"),
+                 "TargetFrameworks": ""},
+            ]
+            for properties in cases:
+                with self.subTest(properties=properties), \
+                        patch.object(stage2, "evaluate_project",
+                                     return_value={"Properties": properties,
+                                                   "Items": {"ProjectReference": []}}), \
+                        self.assertRaises(stage2.Stage2Error):
+                    stage2.validate_participating_projects(
+                        tree, ["Root.gsproj"], work, "Release", "1.0.0-stage1")
+
+    def test_multi_targeted_project_is_rejected(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree, work = root / "tree", root / "gate"
+            tree.mkdir()
+            project = tree / "Root.csproj"
+            project.write_text('<Project Sdk="Microsoft.NET.Sdk"/>', encoding="utf-8")
+            evaluation = {"Properties": {"TargetFrameworks": "net9.0;net10.0"},
+                          "Items": {"ProjectReference": []}}
+            with patch.object(stage2, "evaluate_project", return_value=evaluation), \
+                    self.assertRaises(stage2.Stage2Error):
+                stage2.validate_participating_projects(
+                    tree, ["Root.csproj"], work, "Release", "1.0.0-stage1")
 
 
 class CleanOutputsTests(unittest.TestCase):

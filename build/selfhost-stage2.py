@@ -112,7 +112,8 @@ def project_sdk_specs(path: Path) -> list[tuple[str, str | None]]:
 def evaluate_project(path: Path, tree: Path, env: dict, config: str) -> dict:
     result = subprocess.run(
         ["dotnet", "msbuild", str(path.relative_to(tree)), "-nologo",
-         "-getProperty:MSBuildAllProjects", "-getItem:ProjectReference",
+         "-getProperty:MSBuildAllProjects,GsharpCompilerFullPath,GsharpToolFullPath,TargetFrameworks",
+         "-getItem:ProjectReference",
          f"-p:Configuration={config}", "-nodeReuse:false"],
         cwd=tree, env=env, capture_output=True, text=True)
     if result.returncode != 0:
@@ -147,13 +148,31 @@ def validate_participating_projects(tree: Path, roots: list[str], work: Path,
                     f"{path.relative_to(tree)} explicitly selects {name}/{version}; "
                     "participating projects must use the global.json SDK pin")
         evaluation = evaluate_project(path, tree, env, config)
-        if any(name.lower() == packer.SDK_ID.lower() for name, _ in specs):
-            imports = evaluation.get("Properties", {}).get("MSBuildAllProjects", "").split(";")
-            if not any(Path(item).resolve().is_relative_to(expected_sdk)
-                       for item in imports if item):
+        properties = evaluation.get("Properties", {})
+        if properties.get("TargetFrameworks"):
+            raise Stage2Error(
+                f"{path.relative_to(tree)} is multi-targeted; stage-2 preflight requires "
+                "a single effective project context")
+        imports = [Path(item).resolve()
+                   for item in properties.get("MSBuildAllProjects", "").split(";") if item]
+        sdk_imports = [item for item in imports
+                       if packer.SDK_ID.lower() in item.as_posix().lower().split("/")]
+        declares_gsharp = any(name.lower() == packer.SDK_ID.lower() for name, _ in specs)
+        if declares_gsharp or sdk_imports:
+            if not sdk_imports or any(not item.is_relative_to(expected_sdk) for item in sdk_imports):
                 raise Stage2Error(
                     f"{path.relative_to(tree)} did not resolve {packer.SDK_ID}/{sdk_version} "
                     f"from {expected_sdk}")
+            expected_tools = {
+                "GsharpCompilerFullPath": expected_sdk / "tools/compiler/gsc.dll",
+                "GsharpToolFullPath": expected_sdk / "tools/task/Gsharp.NET.Sdk.dll",
+            }
+            for property_name, expected_path in expected_tools.items():
+                actual = properties.get(property_name)
+                if not actual or Path(actual).resolve() != expected_path.resolve():
+                    raise Stage2Error(
+                        f"{path.relative_to(tree)} overrides {property_name}: "
+                        f"expected {expected_path}, got {actual!r}")
         for reference in evaluation.get("Items", {}).get("ProjectReference", []):
             full_path = reference.get("FullPath")
             if not full_path:
@@ -321,6 +340,17 @@ def main(argv: list[str]) -> int:
         if packer.package_version(stage1) == packer.package_version(bootstrap):
             raise Stage2Error("stage-1 and bootstrap SDK versions must differ")
         report["stage1PackageVerification"] = packer.verify(stage1, bootstrap)
+        cleanup_root = (tree / "out").resolve()
+        supplied_packages = {
+            path.resolve()
+            for package in (bootstrap, stage1)
+            for path in packer.sibling_nupkgs(package, packer.package_version(package))
+        }
+        endangered = sorted(path for path in supplied_packages if path.is_relative_to(cleanup_root))
+        if endangered:
+            raise Stage2Error(
+                "SDK package inputs must be outside the tree's cleaned out directory:\n  "
+                + "\n  ".join(str(path) for path in endangered))
         test_projects = [spec.partition("::")[0] for spec in args.test]
         report["stage1Build"] = build_stage(
             tree, "stage1", bootstrap, projects, assemblies, work, args.config, projects)
