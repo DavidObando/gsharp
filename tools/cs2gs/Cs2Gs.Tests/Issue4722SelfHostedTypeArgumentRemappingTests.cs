@@ -138,6 +138,12 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
                     string? Echo(string? item) => item;
                     return Echo(local);
                 }
+            #if !TARGET
+                public static string? Conditional(string? value) {
+                    string? conditional = value;
+                    return conditional;
+                }
+            #endif
             }
             public sealed class Consumer { public Outer<string?>.Rows<(string? Value, int Code)> Value; }
             """;
@@ -249,6 +255,22 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             method.Invoke(null, new object[] { linkedTarget.Compilation, local }));
         Assert.IsAssignableFrom<IMethodSymbol>(
             method.Invoke(null, new object[] { linkedTarget.Compilation, localFunction }));
+
+        ILocalSymbol conditional = Assert.IsAssignableFrom<ILocalSymbol>(
+            contractDocument.SemanticModel.GetDeclaredSymbol(
+                Assert.Single(contractRoot.DescendantNodes().OfType<VariableDeclaratorSyntax>(),
+                    declaration => declaration.Identifier.ValueText == "conditional")));
+        SyntaxTree linkedContractTree = Assert.Single(
+            linkedTarget.Compilation.SyntaxTrees,
+            tree => tree.FilePath == "Contracts.cs");
+        SyntaxTree preprocessedTree = CSharpSyntaxTree.ParseText(
+            contract,
+            new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: new[] { "TARGET" }),
+            path: "Contracts.cs");
+        CSharpCompilation preprocessedTarget = linkedTarget.Compilation.ReplaceSyntaxTree(
+            linkedContractTree,
+            preprocessedTree);
+        Assert.Null(method.Invoke(null, new object[] { preprocessedTarget, conditional }));
 
         LoadedCSharpProject unrelated = CSharpProjectLoader.LoadInMemory(new[] { ("Unrelated.cs", "public sealed class Unrelated { }") });
         Assert.Null(method.Invoke(null, new object[] { unrelated.Compilation, input }));

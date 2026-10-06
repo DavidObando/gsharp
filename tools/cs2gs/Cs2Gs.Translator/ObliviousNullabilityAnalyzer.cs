@@ -1168,8 +1168,9 @@ internal static class ObliviousNullabilityAnalyzer
                     continue;
                 }
 
-                // Remap independently-bound symbols by stable metadata identity
-                // before testing the sibling compilation's own cached graph.
+                // Remap identical linked-source declarations first, then fall
+                // back to stable metadata identity before testing the sibling
+                // compilation's own cached graph.
                 ISymbol remapped = RemapToCompilation(sibling, query.Symbol);
                 if (remapped != null
                     && IsTaintedCore(
@@ -1447,6 +1448,12 @@ internal static class ObliviousNullabilityAnalyzer
             SyntaxNode node = targetTree.GetRoot().FindNode(
                 declaration.Span,
                 getInnermostNodeForTie: true);
+            SyntaxNode sourceNode = declaration.GetSyntax();
+            if (node.Span != declaration.Span || node.RawKind != sourceNode.RawKind)
+            {
+                continue;
+            }
+
             ISymbol remapped = targetCompilation.GetSemanticModel(targetTree).GetDeclaredSymbol(node);
             if (remapped != null)
             {
