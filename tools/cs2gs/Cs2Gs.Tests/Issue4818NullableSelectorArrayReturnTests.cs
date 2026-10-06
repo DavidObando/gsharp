@@ -40,6 +40,12 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
                     new[] { typeof(string) }
                         .Select(type => type.Name)
                         .ToArray();
+
+                public static object[] Reprojected() =>
+                    new[] { typeof(string) }
+                        .Select(type => type.FullName)
+                        .Select(_ => new object())
+                        .ToArray();
             }
             """;
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
@@ -64,6 +70,8 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
         Assert.DoesNotContain("argument.Value!!", printed, StringComparison.Ordinal);
         Assert.Contains("func Names() []string", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("func Names() []string?", printed, StringComparison.Ordinal);
+        Assert.Contains("func Reprojected() []object", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("func Reprojected() []object?", printed, StringComparison.Ordinal);
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "Console.WriteLine(\"${Probe.Values()[0] == nil}|${Probe.Names()[0]}\")",

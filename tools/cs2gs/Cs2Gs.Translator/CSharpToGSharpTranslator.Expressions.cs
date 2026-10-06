@@ -6297,7 +6297,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (current.Parent is not ArgumentSyntax argument
                         || argument.Expression != current
                         || !this.IsGenericSelectorResultArgument(argument, lambda)
-                        || !SelectorInvocationFlowsToReturn(argument, returned)
+                        || !SelectorInvocationFlowsDirectlyToArrayReturn(argument, returned)
                         || !GetLambdaResultExpressions(lambda)
                             .Any(result => this.NullableReferenceValueMayBeNull(
                                 result,
@@ -6323,27 +6323,29 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        private static bool SelectorInvocationFlowsToReturn(
+        private bool SelectorInvocationFlowsDirectlyToArrayReturn(
             ArgumentSyntax selectorArgument,
             ExpressionSyntax returned)
         {
             SyntaxNode current = selectorArgument.Parent?.Parent;
-            while (current != null && current != returned)
+            while (current?.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
             {
-                if (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
-                {
-                    current = current.Parent;
-                }
-                else if (current.Parent is MemberAccessExpressionSyntax member
-                    && member.Expression == current
-                    && member.Parent is InvocationExpressionSyntax invocation)
-                {
-                    current = invocation;
-                }
-                else
-                {
-                    return false;
-                }
+                current = current.Parent;
+            }
+
+            if (current?.Parent is not MemberAccessExpressionSyntax member
+                || member.Expression != current
+                || member.Parent is not InvocationExpressionSyntax materializer
+                || this.context.GetSymbolInfo(materializer).Symbol
+                    is not IMethodSymbol { ReturnType: IArrayTypeSymbol })
+            {
+                return false;
+            }
+
+            current = materializer;
+            while (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                current = current.Parent;
             }
 
             return current == returned;
