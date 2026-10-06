@@ -1105,6 +1105,12 @@ public sealed partial class DiagnosticBag
     public void ReportInvalidAbstractProperty(TextLocation location, string propertyName)
         => Report(location, DiagnosticDescriptors.InvalidAbstractProperty, propertyName);
 
+    /// <summary>Reports an unreadable replacement for a positional data property.</summary>
+    /// <param name="location">The property identifier location.</param>
+    /// <param name="propertyName">The positional property name.</param>
+    public void ReportPositionalPropertyReplacementRequiresGetter(TextLocation location, string propertyName)
+        => Report(location, DiagnosticDescriptors.PositionalPropertyReplacementRequiresGetter, propertyName);
+
     /// <summary>
     /// Reports GS0370 — ADR-0118 / issue #944: an indexer member
     /// (<c>prop this[…] T { … }</c>) was declared with no index parameters.

@@ -14,6 +14,22 @@ namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue4675RecordSafetyAndPropertyEmitTests
 {
+    [Fact]
+    public void SetterOnlyPositionalReplacement_ReportsDeclarationDiagnostic()
+    {
+        const string source = """
+            package PositionalReplacement
+            data struct Item(Value int32) {
+                public prop Value int32 { set(v) { } }
+            }
+            """;
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = fixture.TryCompile(source, "PositionalReplacement", true);
+        Assert.NotEqual(0, code);
+        Assert.Contains("(3,17,3,22): error GS0621:", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("data struct", false)]
     [InlineData("data class", false)]

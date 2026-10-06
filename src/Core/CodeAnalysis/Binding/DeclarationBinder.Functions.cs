@@ -2938,14 +2938,33 @@ internal sealed partial class DeclarationBinder
         bool derivedHasGetter,
         bool derivedHasSetter,
         RefKind derivedReturnRefKind)
-        => baseProperty.HasGetter
+        => IsCovariantPropertyOverride(
+            baseProperty.Type,
+            baseProperty.HasGetter,
+            baseProperty.HasSetter,
+            baseProperty.ReturnRefKind,
+            derivedType,
+            derivedHasGetter,
+            derivedHasSetter,
+            derivedReturnRefKind);
+
+    internal static bool IsCovariantPropertyOverride(
+        TypeSymbol baseType,
+        bool baseHasGetter,
+        bool baseHasSetter,
+        RefKind baseReturnRefKind,
+        TypeSymbol derivedType,
+        bool derivedHasGetter,
+        bool derivedHasSetter,
+        RefKind derivedReturnRefKind)
+        => baseHasGetter
             && derivedHasGetter
-            && !baseProperty.HasSetter
+            && !baseHasSetter
             && !derivedHasSetter
-            && baseProperty.ReturnRefKind == RefKind.None
+            && baseReturnRefKind == RefKind.None
             && derivedReturnRefKind == RefKind.None
-            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(baseProperty.Type, derivedType)
-            && Conversion.IsImplicitReferenceVariantSlot(derivedType, baseProperty.Type);
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(baseType, derivedType)
+            && Conversion.IsImplicitReferenceVariantSlot(derivedType, baseType);
 
     /// <summary>
     /// ADR-0187 / issue #4350: finds the base-class property an

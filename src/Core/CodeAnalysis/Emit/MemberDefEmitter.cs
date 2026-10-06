@@ -663,6 +663,41 @@ internal sealed class MemberDefEmitter
             parameterList: firstParameter);
     }
 
+    private static bool PropertyOverrideStartsNewSlot(PropertySymbol prop, bool isGetter)
+    {
+        if (!prop.IsOverride || !isGetter)
+        {
+            return false;
+        }
+
+        if (prop.OverriddenProperty is { } baseProperty)
+        {
+            return DeclarationBinder.IsCovariantPropertyOverride(
+                baseProperty,
+                prop.Type,
+                prop.HasGetter,
+                prop.HasSetter,
+                prop.ReturnRefKind);
+        }
+
+        if (prop.ExternalOverriddenGetter is not { } externalGetter
+            || prop.ExternalOverrideContainingType is not { } externalOwner)
+        {
+            return false;
+        }
+
+        var baseType = MemberLookup.GetClrMethodReturnTypeSymbol(externalOwner, externalGetter);
+        return DeclarationBinder.IsCovariantPropertyOverride(
+            baseType,
+            baseHasGetter: true,
+            baseHasSetter: prop.ExternalOverriddenSetter != null,
+            baseReturnRefKind: externalGetter.ReturnType.IsByRef ? RefKind.Ref : RefKind.None,
+            prop.Type,
+            prop.HasGetter,
+            prop.HasSetter,
+            prop.ReturnRefKind);
+    }
+
     /// <summary>
     /// Issue #263: emits accessor MethodDefs, PropertyDef rows, PropertyMap,
     /// and MethodSemantics rows for static properties declared in a shared block.

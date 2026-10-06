@@ -180,6 +180,88 @@ public sealed class Issue4765AbstractPropertyEmitTests
     }
 
     [Fact]
+    public void CovariantReabstractGetter_MatchesRoslynInImplementationAndReferenceMetadata()
+    {
+        const string nativeSource = """
+            namespace CovariantAbstract {
+                public class Value { }
+                public class NarrowValue : Value { }
+                public abstract class Base { public abstract Value Item { get; } }
+                public abstract class Middle : Base { public abstract override NarrowValue Item { get; } }
+            }
+            """;
+        using var native = new CSharpFixture(nativeSource);
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var reference = Path.Combine(fixture.Directory, "CovariantAbstract.ref.dll");
+        var dll = fixture.Compile("""
+            package CovariantAbstract
+            public open class Value { }
+            public class NarrowValue : Value { }
+            public abstract class Base { public abstract prop Item Value { get; } }
+            public abstract class Middle : Base { public abstract override prop Item NarrowValue { get; } }
+            """, "CovariantAbstract", false, "/refout:" + reference);
+
+        Verify(native.AssemblyPath);
+        Verify(dll);
+        var expected = ReadCovariantAbstractGetterShape(native.AssemblyPath);
+        Assert.True((expected.Attributes & MethodAttributes.NewSlot) != 0);
+        foreach (var path in new[] { dll, reference })
+        {
+            this.LogProduct(path);
+            Assert.Equal(expected, ReadCovariantAbstractGetterShape(path));
+        }
+    }
+
+    [Fact]
+    public void ImportedCovariantReabstractGetter_MatchesReferencedRoslynContract()
+    {
+        using var contract = new CSharpFixture("""
+            namespace ImportedCovariant {
+                public abstract class Base { public abstract object Item { get; } }
+            }
+            """);
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var references = ReferenceResolver.HostTrustedPlatformAssemblyPaths()
+            .Select(path => MetadataReference.CreateFromFile(path))
+            .Append(MetadataReference.CreateFromFile(contract.AssemblyPath));
+        var compilation = CSharpCompilation.Create(
+            "ImportedCovariantRoslyn",
+            new[] { CSharpSyntaxTree.ParseText("""
+                namespace ImportedCovariant {
+                    public abstract class Middle : Base {
+                        public abstract override string Item { get; }
+                    }
+                }
+                """) },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var expected = Path.Combine(fixture.Directory, "ImportedCovariantRoslyn.dll");
+        using (var stream = File.Create(expected))
+        {
+            var emitted = compilation.Emit(stream);
+            Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics));
+        }
+
+        var reference = Path.Combine(fixture.Directory, "ImportedCovariant.ref.dll");
+        var dll = fixture.Compile("""
+            package ImportedCovariant
+            public abstract class Middle : Base {
+                public abstract override prop Item string { get; }
+            }
+            """, "ImportedCovariant", false, "/r:" + contract.AssemblyPath, "/refout:" + reference);
+
+        Verify(expected, contract.AssemblyPath);
+        Verify(dll, contract.AssemblyPath);
+        var expectedShape = ReadCovariantAbstractGetterShape(expected);
+        Assert.True((expectedShape.Attributes & MethodAttributes.NewSlot) != 0);
+        foreach (var path in new[] { dll, reference })
+        {
+            this.LogProduct(path);
+            Assert.Equal(expectedShape, ReadCovariantAbstractGetterShape(path));
+        }
+    }
+
+    [Fact]
     public void InheritedGenericOverrideDischargesTheOriginalAccessorSlots()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

@@ -1974,6 +1974,14 @@ internal sealed partial class DeclarationBinder
                                   && (writeAccessor == null || writeAccessor.Body == null)
                                   && propSyntax.Accessors.All(a => a.Body == null);
 
+                    if (replacesPositionalProperty && !hasGetter)
+                    {
+                        Diagnostics.ReportPositionalPropertyReplacementRequiresGetter(
+                            propSyntax.Identifier.Location,
+                            propName);
+                        continue;
+                    }
+
                     // A bodyless accessor list on an open property declares an
                     // abstract slot; it must not acquire an auto-property field.
                     if (propSyntax.OpenModifier != null
