@@ -69,11 +69,13 @@ public sealed class TranslateStage : IMigrationStage
         // downstream reference/type resolution the app's OWN generated `.gsproj` and
         // gsc compile depend on (a regression caught by re-running the real Oahu
         // corpus, not by any in-memory test). Cross-project taint analysis needs only
-        // read-only sibling `CSharpCompilation`s matched by metadata identity (see
-        // `ObliviousNullabilityAnalyzer.RemapToCompilation`), never object/reference
-        // identity with `project.Compilation` — so it is loaded independently below,
-        // via its own isolated `LoadProjectWithReferencesAsync` call/workspace, and
-        // never touches `projects`/`project` or anything derived from them.
+        // read-only sibling `CSharpCompilation`s. Linked-source declarations remap
+        // by identical path, content and source span; other symbols fall back to
+        // metadata identity (see `ObliviousNullabilityAnalyzer.RemapToCompilation`).
+        // Neither requires object/reference identity with `project.Compilation`, so
+        // the sibling graph is loaded independently below, via its own isolated
+        // `LoadProjectWithReferencesAsync` call/workspace, and never touches
+        // `projects`/`project` or anything derived from them.
         string projectPath = Path.GetFullPath(context.App.ProjectPath);
         IReadOnlyList<LoadedCSharpProject> projects =
             context.Options.RepositoryLoadedProjects is not null
@@ -158,12 +160,13 @@ public sealed class TranslateStage : IMigrationStage
         // loader comment), so it can no longer double as the sibling list here.
         // Load the transitive sibling projects a SECOND time, independently,
         // purely to bind their own compilations for this taint lookup — this
-        // extra MSBuild workspace load only ever feeds `IsTainted`'s read-only,
-        // metadata-identity-based cross-compilation symbol remap (see
-        // `ObliviousNullabilityAnalyzer.RemapToCompilation`), so it is safe for
-        // it to be a wholly separate `Compilation` graph than `project`'s own —
-        // and it never touches `projects`/`project`, PE reference capture, or
-        // anything the generated `.gsproj` depends on.
+        // extra MSBuild workspace load only ever feeds `IsTainted`'s read-only
+        // cross-compilation remap: identical linked-source declarations use path,
+        // content and span, and other symbols use metadata identity (see
+        // `ObliviousNullabilityAnalyzer.RemapToCompilation`). It is therefore safe
+        // for this to be a wholly separate `Compilation` graph than `project`'s
+        // own, and it never touches `projects`/`project`, PE reference capture,
+        // or anything the generated `.gsproj` depends on.
         IReadOnlyList<CSharpCompilation> siblingCompilations;
         if (context.Options.CompileViaSdk)
         {

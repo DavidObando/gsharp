@@ -38,9 +38,10 @@ namespace Cs2Gs.Tests;
 /// <b>Why <see cref="ObliviousNullabilityAnalyzer.IsTainted(CSharpCompilation, ISymbol, IReadOnlyList{CSharpCompilation})"/>
 /// itself is not the bug</b>: its sibling walk (<c>IsTaintedCore</c>) only
 /// ever trusts a candidate's cached fixpoint after remapping the QUERIED
-/// symbol into that candidate's own symbol table by metadata identity
-/// (<c>RemapToCompilation</c>) — a false match requires an accidental
-/// same-metadata-name collision across projects. Its ordinary caller,
+/// symbol into that candidate's own symbol table. <c>RemapToCompilation</c>
+/// first matches an identical linked source by path, content and declaration
+/// span, then falls back to metadata identity; either route requires the same
+/// source declaration or stable assembly/member contract. Its ordinary caller,
 /// <c>ShouldPromoteToNullableReference</c>, additionally never even calls
 /// <c>IsTainted</c> unless the target's own declared type already has
 /// <see cref="NullableAnnotation.None"/> (see its own doc comment). The bugs

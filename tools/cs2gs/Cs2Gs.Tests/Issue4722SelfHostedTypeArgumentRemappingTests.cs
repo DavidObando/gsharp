@@ -33,21 +33,28 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
         string path = Path.Combine(GsharpTestProjectRunner.FindRepoRoot(),
             "tools", "cs2gs", "Cs2Gs.Translator", "ObliviousNullabilityAnalyzer.cs");
         string original = File.ReadAllText(path);
-        MethodDeclarationSyntax[] methods = CSharpSyntaxTree.ParseText(original).GetRoot()
-            .DescendantNodes().OfType<MethodDeclarationSyntax>()
-            .Where(method => method.Identifier.ValueText is "RemapToCompilation" or "RemapMemberOwner").ToArray();
-        Assert.Equal(2, methods.Length);
+        SyntaxNode root = CSharpSyntaxTree.ParseText(original).GetRoot();
+        MethodDeclarationSyntax[] methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Where(method => method.Identifier.ValueText
+                is "RemapToCompilation" or "RemapSourceDeclaration" or "RemapMemberOwner").ToArray();
+        Assert.Equal(3, methods.Length);
+        FieldDeclarationSyntax sourceTrees = Assert.Single(
+            root.DescendantNodes().OfType<FieldDeclarationSyntax>(),
+            field => field.Declaration.Variables.Any(variable => variable.Identifier.ValueText == "SourceTrees"));
         string source = """
             using System;
+            using System.Collections.Generic;
             using System.Linq;
             using System.Collections.Immutable;
+            using System.Runtime.CompilerServices;
             using Microsoft.CodeAnalysis;
             #nullable disable
             namespace RootRemapping;
             public static class Remapper {
                 public static ISymbol Remap(Compilation target, ISymbol symbol) =>
                     RemapToCompilation(target, symbol);
-            """ + string.Join(Environment.NewLine, methods.Select(method => method.ToFullString())) + "\n}";
+            """ + sourceTrees.ToFullString()
+                + string.Join(Environment.NewLine, methods.Select(method => method.ToFullString())) + "\n}";
         MetadataReference[] references = CSharpProjectLoader.RuntimeReferences()
             .Concat(new[] { MetadataReference.CreateFromFile(typeof(Compilation).Assembly.Location) }).ToArray();
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
@@ -117,15 +124,35 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
     {
         const string contract = """
             #nullable enable
-            public sealed class Outer<T> {
+            public sealed partial class Outer<T>(T primary) {
+                public T Primary => primary;
                 public sealed class Rows<U> {
                     public U Read(ref T value) => default!;
                     public V Read<V>(ref U value, V replacement) => replacement;
                 }
             }
+            public sealed record Snapshot(string? Value);
+            public static class SharedLocals {
+                public static string? Run(string? value) {
+                    string? local = value;
+                    T Echo<T>(T item) => item;
+                    return Echo(local);
+                }
+            #if !TARGET
+                public static string? Conditional(string? value) {
+                    string? conditional = value;
+                    return conditional;
+                }
+            #endif
+            }
             public sealed class Consumer { public Outer<string?>.Rows<(string? Value, int Code)> Value; }
             """;
-        LoadedCSharpProject native = CSharpProjectLoader.LoadInMemory(new[] { ("Contracts.cs", contract) },
+        LoadedCSharpProject native = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("NativePart.cs", "public sealed partial class Outer<T> { }"),
+                ("Contracts.cs", contract),
+            },
             CSharpProjectLoader.RuntimeReferences(), "RemappingContracts");
         Assert.True(native.BoundWithoutErrors, string.Join(Environment.NewLine, native.ErrorDiagnostics));
         string image = Path.Combine(directory, "RemappingContracts.dll");
@@ -137,36 +164,148 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             new[] { ("Target.cs", "public sealed class Target { }") },
             CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(image)).ToArray());
         Assert.True(target.BoundWithoutErrors, string.Join(Environment.NewLine, target.ErrorDiagnostics));
+        LoadedCSharpProject linkedTarget = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("LinkedPart.cs", "public sealed partial class Outer<T> { }"),
+                ("Contracts.cs", contract),
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            "LinkedRemappingContracts");
+        Assert.True(linkedTarget.BoundWithoutErrors, string.Join(Environment.NewLine, linkedTarget.ErrorDiagnostics));
         INamedTypeSymbol input = Assert.IsAssignableFrom<INamedTypeSymbol>(
             Assert.Single(native.Compilation.GetTypeByMetadataName("Consumer").GetMembers("Value").OfType<IFieldSymbol>()).Type);
         Type type = remapper.GetType("RootRemapping.Remapper");
         Assert.NotNull(type);
         MethodInfo method = type.GetMethod("Remap");
         Assert.NotNull(method);
-        INamedTypeSymbol mapped = Assert.IsAssignableFrom<INamedTypeSymbol>(
-            method.Invoke(null, new object[] { target.Compilation, input }));
-        Assert.Equal(NullableAnnotation.Annotated, Assert.Single(mapped.ContainingType.TypeArguments).NullableAnnotation);
-        INamedTypeSymbol tuple = Assert.IsAssignableFrom<INamedTypeSymbol>(Assert.Single(mapped.TypeArguments));
-        Assert.True(tuple.IsTupleType);
-        Assert.Equal(NullableAnnotation.Annotated, tuple.TupleElements[0].Type.NullableAnnotation);
-        Assert.Equal(SpecialType.System_Int32, tuple.TupleElements[1].Type.SpecialType);
-        Assert.Equal(native.Compilation.Assembly.Identity, mapped.ContainingAssembly.Identity);
-        IMethodSymbol[] members = input.GetMembers("Read").OfType<IMethodSymbol>().ToArray();
-        Assert.Equal(2, members.Length);
-        foreach (IMethodSymbol member in members)
+        var targets = new[]
         {
-            IMethodSymbol constructed = member.Arity == 0 ? member : member.Construct(
-                native.Compilation.GetSpecialType(SpecialType.System_String).WithNullableAnnotation(NullableAnnotation.Annotated));
-            IMethodSymbol result = Assert.IsAssignableFrom<IMethodSymbol>(
-                method.Invoke(null, new object[] { target.Compilation, constructed }));
-            Assert.Equal(RefKind.Ref, result.Parameters[0].RefKind);
-            Assert.Equal(constructed.OriginalDefinition.GetDocumentationCommentId(), result.OriginalDefinition.GetDocumentationCommentId());
-            if (result.Arity != 0)
+            (Compilation: target.Compilation, ExpectedAssembly: native.Compilation.Assembly.Identity),
+            (Compilation: linkedTarget.Compilation, ExpectedAssembly: linkedTarget.Compilation.Assembly.Identity),
+        };
+        foreach (var remappingTarget in targets)
+        {
+            INamedTypeSymbol mapped = Assert.IsAssignableFrom<INamedTypeSymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, input }));
+            Assert.Equal(NullableAnnotation.Annotated, Assert.Single(mapped.ContainingType.TypeArguments).NullableAnnotation);
+            INamedTypeSymbol tuple = Assert.IsAssignableFrom<INamedTypeSymbol>(Assert.Single(mapped.TypeArguments));
+            Assert.True(tuple.IsTupleType);
+            Assert.Equal(NullableAnnotation.Annotated, tuple.TupleElements[0].Type.NullableAnnotation);
+            Assert.Equal(SpecialType.System_Int32, tuple.TupleElements[1].Type.SpecialType);
+            Assert.Equal(remappingTarget.ExpectedAssembly, mapped.ContainingAssembly.Identity);
+            IMethodSymbol[] members = input.GetMembers("Read").OfType<IMethodSymbol>().ToArray();
+            Assert.Equal(2, members.Length);
+            foreach (IMethodSymbol member in members)
             {
-                Assert.Equal(NullableAnnotation.Annotated, Assert.Single(result.TypeArguments).NullableAnnotation);
-                Assert.Equal(NullableAnnotation.Annotated, result.ReturnType.NullableAnnotation);
+                IMethodSymbol constructed = member.Arity == 0 ? member : member.Construct(
+                    native.Compilation.GetSpecialType(SpecialType.System_String).WithNullableAnnotation(NullableAnnotation.Annotated));
+                IMethodSymbol result = Assert.IsAssignableFrom<IMethodSymbol>(
+                    method.Invoke(null, new object[] { remappingTarget.Compilation, constructed }));
+                Assert.Equal(RefKind.Ref, result.Parameters[0].RefKind);
+                Assert.Equal(constructed.OriginalDefinition.GetDocumentationCommentId(), result.OriginalDefinition.GetDocumentationCommentId());
+                IParameterSymbol parameter = Assert.IsAssignableFrom<IParameterSymbol>(
+                    method.Invoke(null, new object[] { remappingTarget.Compilation, constructed.Parameters[0] }));
+                Assert.True(SymbolEqualityComparer.Default.Equals(result.Parameters[0], parameter));
+                if (result.Arity != 0)
+                {
+                    Assert.Equal(NullableAnnotation.Annotated, Assert.Single(result.TypeArguments).NullableAnnotation);
+                    Assert.Equal(NullableAnnotation.Annotated, result.ReturnType.NullableAnnotation);
+                }
             }
+
+            INamedTypeSymbol outer = native.Compilation.GetTypeByMetadataName("Outer`1");
+            IMethodSymbol primaryConstructor = Assert.Single(
+                outer.InstanceConstructors,
+                constructor => constructor.Parameters.Any(parameter => parameter.Name == "primary"));
+            IMethodSymbol remappedPrimaryConstructor = Assert.IsAssignableFrom<IMethodSymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, primaryConstructor }));
+            Assert.Equal(MethodKind.Constructor, remappedPrimaryConstructor.MethodKind);
+            IParameterSymbol primary = Assert.Single(primaryConstructor.Parameters);
+            IParameterSymbol remappedPrimary = Assert.IsAssignableFrom<IParameterSymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, primary }));
+            Assert.Equal(primary.Name, remappedPrimary.Name);
+
+            INamedTypeSymbol snapshot = native.Compilation.GetTypeByMetadataName("Snapshot");
+            IParameterSymbol positional = Assert.Single(
+                Assert.Single(snapshot.InstanceConstructors,
+                    constructor => constructor.Parameters.Any(parameter => parameter.Name == "Value")).Parameters);
+            IParameterSymbol remappedPositional = Assert.IsAssignableFrom<IParameterSymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, positional }));
+            Assert.Equal(positional.Name, remappedPositional.Name);
+            IPropertySymbol positionalProperty = Assert.Single(
+                snapshot.GetMembers("Value").OfType<IPropertySymbol>());
+            IPropertySymbol remappedPositionalProperty = Assert.IsAssignableFrom<IPropertySymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, positionalProperty }));
+            Assert.Equal(positionalProperty.Name, remappedPositionalProperty.Name);
         }
+
+        LoadedDocument contractDocument = Assert.Single(
+            native.Documents,
+            document => document.FilePath == "Contracts.cs");
+        SyntaxNode contractRoot = contractDocument.SemanticModel.SyntaxTree.GetRoot();
+        ILocalSymbol local = Assert.IsAssignableFrom<ILocalSymbol>(
+            contractDocument.SemanticModel.GetDeclaredSymbol(
+                Assert.Single(contractRoot.DescendantNodes().OfType<VariableDeclaratorSyntax>(),
+                    declaration => declaration.Identifier.ValueText == "local")));
+        IMethodSymbol localFunction = Assert.IsAssignableFrom<IMethodSymbol>(
+            contractDocument.SemanticModel.GetDeclaredSymbol(
+                Assert.Single(contractRoot.DescendantNodes().OfType<LocalFunctionStatementSyntax>())));
+        Assert.IsAssignableFrom<ILocalSymbol>(
+            method.Invoke(null, new object[] { linkedTarget.Compilation, local }));
+        Assert.IsAssignableFrom<IMethodSymbol>(
+            method.Invoke(null, new object[] { linkedTarget.Compilation, localFunction }));
+        IMethodSymbol constructedLocalFunction = localFunction.Construct(
+            native.Compilation.GetSpecialType(SpecialType.System_String)
+                .WithNullableAnnotation(NullableAnnotation.Annotated));
+        IMethodSymbol remappedConstructedLocalFunction = Assert.IsAssignableFrom<IMethodSymbol>(
+            method.Invoke(null, new object[] { linkedTarget.Compilation, constructedLocalFunction }));
+        Assert.Equal(
+            NullableAnnotation.Annotated,
+            Assert.Single(remappedConstructedLocalFunction.TypeArguments).NullableAnnotation);
+
+        ILocalSymbol conditional = Assert.IsAssignableFrom<ILocalSymbol>(
+            contractDocument.SemanticModel.GetDeclaredSymbol(
+                Assert.Single(contractRoot.DescendantNodes().OfType<VariableDeclaratorSyntax>(),
+                    declaration => declaration.Identifier.ValueText == "conditional")));
+        SyntaxTree linkedContractTree = Assert.Single(
+            linkedTarget.Compilation.SyntaxTrees,
+            tree => tree.FilePath == "Contracts.cs");
+        SyntaxTree preprocessedTree = CSharpSyntaxTree.ParseText(
+            contract,
+            new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: new[] { "TARGET" }),
+            path: "Contracts.cs");
+        CSharpCompilation preprocessedTarget = linkedTarget.Compilation.ReplaceSyntaxTree(
+            linkedContractTree,
+            preprocessedTree);
+        Assert.Null(method.Invoke(null, new object[] { preprocessedTarget, conditional }));
+
+        SyntaxTree caseVariantTree = CSharpSyntaxTree.ParseText(
+            contract,
+            new CSharpParseOptions(LanguageVersion.Latest),
+            path: "contracts.cs");
+        CSharpCompilation caseVariantTarget = linkedTarget.Compilation.ReplaceSyntaxTree(
+            linkedContractTree,
+            caseVariantTree);
+        object caseVariantResult = method.Invoke(null, new object[] { caseVariantTarget, input });
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.IsAssignableFrom<INamedTypeSymbol>(caseVariantResult);
+        }
+        else
+        {
+            Assert.Null(caseVariantResult);
+        }
+
+        SyntaxTree duplicatePathTree = CSharpSyntaxTree.ParseText(
+            "public sealed class Collision { }",
+            new CSharpParseOptions(LanguageVersion.Latest),
+            path: "Contracts.cs");
+        CSharpCompilation duplicatePathTarget = linkedTarget.Compilation
+            .RemoveSyntaxTrees(linkedContractTree)
+            .AddSyntaxTrees(duplicatePathTree, linkedContractTree);
+        Assert.IsAssignableFrom<INamedTypeSymbol>(
+            method.Invoke(null, new object[] { duplicatePathTarget, input }));
 
         LoadedCSharpProject unrelated = CSharpProjectLoader.LoadInMemory(new[] { ("Unrelated.cs", "public sealed class Unrelated { }") });
         Assert.Null(method.Invoke(null, new object[] { unrelated.Compilation, input }));
