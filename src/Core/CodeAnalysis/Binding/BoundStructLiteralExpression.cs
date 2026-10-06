@@ -120,10 +120,7 @@ public sealed class BoundStructLiteralExpression : BoundExpression
 
     internal static bool IsStagedConstruction(BoundBlockExpression block)
     {
-        if (block.Expression is not BoundStructLiteralExpression { CopySource: null } literal
-            || literal.StructType.ClrType != null
-            || !literal.StructType.IsData || !literal.StructType.HasPrimaryConstructor
-            || block.Statements.Length != literal.Initializers.Length)
+        if (block.Statements.IsDefaultOrEmpty || block.Expression is not BoundStructLiteralExpression)
         {
             return false;
         }

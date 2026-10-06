@@ -45,7 +45,7 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
             """, "EmptyPrimaryDefaults", true);
         IlVerifier.Verify(dll);
         Assert.Equal("1\n0\n1\n0\n0\n1\n", fixture.Run(dll));
-        var assembly = Assembly.LoadFile(dll);
+        var assembly = EmittedFixture.Load(dll);
         var box = assembly.GetType("EmptyPrimaryDefaults.Box", throwOnError: true);
         Assert.Single(box.GetConstructors());
         var boxHelper = Assert.Single(box.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
@@ -71,7 +71,7 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
             """, "ComputedPrimaryDefaults", true);
         IlVerifier.Verify(dll);
         Assert.Equal("1\n9\n", fixture.Run(dll));
-        var type = Assembly.LoadFile(dll).GetType("ComputedPrimaryDefaults.Item", throwOnError: true);
+        var type = EmittedFixture.Load(dll).GetType("ComputedPrimaryDefaults.Item", throwOnError: true);
         var constructor = Assert.Single(type.GetConstructors(), constructor => constructor.GetParameters().Length == 1);
         Assert.Equal("Value", Assert.Single(constructor.GetParameters()).Name);
         Assert.Empty(type.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
@@ -242,6 +242,30 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
             """.Replace("KIND", kind, StringComparison.Ordinal), "TreeLiteralDefaults", true);
         IlVerifier.Verify(dll);
         Assert.Equal("0\n7\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void ExpressionTree_NestedPositionalDefault_UsesTheZeroHelper()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package TreeNestedZeroDefaults
+            import System
+            import System.Linq.Expressions
+            data struct Inner(Value int32) {
+                public var Items []int32
+                public prop Length int32 { get { return Items.Length } }
+            }
+            data class Box(Item Inner)
+            func Main() {
+                let tree Expression[Func[Box]] = () -> Box{}
+                let box = tree.Compile()()
+                Console.WriteLine(box.Item.Value)
+                Console.WriteLine(box.Item.Length)
+            }
+            """, "TreeNestedZeroDefaults", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("0\n0\n", fixture.Run(dll));
     }
 
     [Fact]

@@ -759,6 +759,12 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                     ImmutableArray.Create(construction, BuildMemberBindingArray(bindings)));
         }
 
+        if ((structLiteral.IsZeroInitialization && structLiteral.StructType.NeedsValueStructZeroHelper)
+            || (!structLiteral.StructType.HasPrimaryConstructor && structLiteral.StructType.NeedsSynthesizedValueStructDefaultCtor))
+        {
+            return this.BuildOwningStructLiteralExpression(structLiteral, parameterMap);
+        }
+
         if (structLiteral.Initializers.IsDefaultOrEmpty || structLiteral.Initializers.Length == 0)
         {
             return new BoundClrStaticCallExpression(
