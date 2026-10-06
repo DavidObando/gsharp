@@ -6166,7 +6166,7 @@ public sealed partial class CSharpToGSharpTranslator
             // for operators such as FirstOrDefault to inspect instead of
             // throwing at the selector boundary.
             SyntaxNode current = lambda;
-            while (current.Parent is ParenthesizedExpressionSyntax)
+            while (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
             {
                 current = current.Parent;
             }
@@ -6289,7 +6289,7 @@ public sealed partial class CSharpToGSharpTranslator
                     .OfType<AnonymousFunctionExpressionSyntax>())
                 {
                     SyntaxNode current = lambda;
-                    while (current.Parent is ParenthesizedExpressionSyntax)
+                    while (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
                     {
                         current = current.Parent;
                     }
@@ -6299,15 +6299,14 @@ public sealed partial class CSharpToGSharpTranslator
                         || !this.IsGenericSelectorResultArgument(argument, lambda)
                         || !SelectorInvocationFlowsDirectlyToArrayReturn(argument, returned)
                         || !GetLambdaResultExpressions(lambda)
-                            .Any(result => this.NullableReferenceValueMayBeNull(
-                                result,
-                                respectDeclaredAnnotations: true)))
+                            .Any(this.NullableSelectorResultMayBeNull))
                     {
                         continue;
                     }
 
                     ITypeSymbol resultType =
-                        (this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol)?.ReturnType;
+                        (this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol)?.ReturnType
+                        ?? this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod?.ReturnType;
                     Microsoft.CodeAnalysis.CSharp.Conversion conversion =
                         this.context.Compilation.ClassifyConversion(
                             resultType,
@@ -6323,6 +6322,23 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        private bool NullableSelectorResultMayBeNull(ExpressionSyntax result) =>
+            result switch
+            {
+                ParenthesizedExpressionSyntax parenthesized =>
+                    this.NullableSelectorResultMayBeNull(parenthesized.Expression),
+                CastExpressionSyntax cast =>
+                    this.NullableSelectorResultMayBeNull(cast.Expression),
+                ConditionalExpressionSyntax conditional =>
+                    this.NullableSelectorResultMayBeNull(conditional.WhenTrue)
+                        || this.NullableSelectorResultMayBeNull(conditional.WhenFalse),
+                SwitchExpressionSyntax switchExpression => switchExpression.Arms.Any(arm =>
+                    this.NullableSelectorResultMayBeNull(arm.Expression)),
+                _ => this.NullableReferenceValueMayBeNull(
+                    result,
+                    respectDeclaredAnnotations: true),
+            };
+
         private bool SelectorInvocationFlowsDirectlyToArrayReturn(
             ArgumentSyntax selectorArgument,
             ExpressionSyntax returned)
@@ -6336,8 +6352,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (current?.Parent is not MemberAccessExpressionSyntax member
                 || member.Expression != current
                 || member.Parent is not InvocationExpressionSyntax materializer
-                || this.context.GetSymbolInfo(materializer).Symbol
-                    is not IMethodSymbol { ReturnType: IArrayTypeSymbol })
+                || !this.IsEnumerableToArray(materializer))
             {
                 return false;
             }
@@ -6349,6 +6364,20 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return current == returned;
+        }
+
+        private bool IsEnumerableToArray(InvocationExpressionSyntax invocation)
+        {
+            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
+                || method.Name != "ToArray")
+            {
+                return false;
+            }
+
+            IMethodSymbol originalMethod = method.ReducedFrom ?? method;
+            return SymbolEqualityComparer.Default.Equals(
+                originalMethod.ContainingType?.OriginalDefinition,
+                this.context.Compilation.GetTypeByMetadataName("System.Linq.Enumerable"));
         }
 
         private bool IsGenericSelectorResultArgument(
@@ -6468,7 +6497,7 @@ public sealed partial class CSharpToGSharpTranslator
             SyntaxNode node = use;
             while (true)
             {
-                if (node.Parent is ParenthesizedExpressionSyntax)
+                if (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
                 {
                     node = node.Parent;
                 }

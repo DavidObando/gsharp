@@ -18,8 +18,15 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
         const string source = """
             #nullable disable
             using System;
+            using System.Collections.Generic;
             using System.Linq;
             using System.Reflection;
+
+            public static class Extensions
+            {
+                public static object[] Ignore<T>(this IEnumerable<T> values) =>
+                    new[] { new object() };
+            }
 
             public static class Probe
             {
@@ -46,6 +53,36 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
                         .Select(type => type.FullName)
                         .Select(_ => new object())
                         .ToArray();
+
+                public static object[] Ignored() =>
+                    new[] { typeof(string) }
+                        .Select(type => type.FullName)
+                        .Ignore();
+
+                public static object[] CastSelectorValues()
+                {
+                    var arguments = new[]
+                    {
+                        new CustomAttributeTypedArgument(typeof(string), null),
+                    };
+                    return arguments
+                        .Select((Func<CustomAttributeTypedArgument, object>)(
+                            argument => argument.Value))
+                        .ToArray();
+                }
+
+                public static object[] CastBranchValues()
+                {
+                    var arguments = new[]
+                    {
+                        new CustomAttributeTypedArgument(typeof(string), null),
+                    };
+                    return arguments
+                        .Select(argument => argument.Value is Type
+                            ? new object()
+                            : (object)argument.Value)
+                        .ToArray();
+                }
             }
             """;
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
@@ -72,9 +109,15 @@ public sealed class Issue4818NullableSelectorArrayReturnTests
         Assert.DoesNotContain("func Names() []string?", printed, StringComparison.Ordinal);
         Assert.Contains("func Reprojected() []object", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("func Reprojected() []object?", printed, StringComparison.Ordinal);
+        Assert.Contains("func Ignored() []object", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("func Ignored() []object?", printed, StringComparison.Ordinal);
+        Assert.Contains("func CastSelectorValues() []object?", printed, StringComparison.Ordinal);
+        Assert.Contains("func CastBranchValues() []object?", printed, StringComparison.Ordinal);
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
-            "Console.WriteLine(\"${Probe.Values()[0] == nil}|${Probe.Names()[0]}\")",
-            "True|String");
+            """
+            Console.WriteLine("${Probe.Values()[0] == nil}|${Probe.Names()[0]}|${Probe.CastSelectorValues()[0] == nil}|${Probe.CastBranchValues()[0] == nil}")
+            """,
+            "True|String|True|True");
     }
 }
