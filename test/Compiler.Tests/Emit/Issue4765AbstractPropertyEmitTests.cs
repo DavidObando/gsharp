@@ -627,6 +627,41 @@ public sealed class Issue4765AbstractPropertyEmitTests
         }
     }
 
+    [Fact]
+    public void AbstractTupleIndexerParameter_EmitsTupleNamesInBothAssemblies()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var reference = Path.Combine(fixture.Directory, "TupleIndexer.ref.dll");
+        var dll = fixture.Compile("""
+            package TupleIndexer
+            public abstract class Base {
+                public abstract prop this[position (row int32, column int32)] int32 { get; set; }
+            }
+            """, "TupleIndexer", false, "/refout:" + reference);
+
+        foreach (var path in new[] { dll, reference })
+        {
+            using var pe = new PEReader(File.OpenRead(path));
+            var metadata = pe.GetMetadataReader();
+            var owner = metadata.GetTypeDefinition(Assert.Single(
+                metadata.TypeDefinitions,
+                handle => metadata.GetString(metadata.GetTypeDefinition(handle).Name) == "Base"));
+            foreach (var accessorName in new[] { "get_Item", "set_Item" })
+            {
+                var accessor = metadata.GetMethodDefinition(Assert.Single(
+                    owner.GetMethods(),
+                    handle => metadata.GetString(metadata.GetMethodDefinition(handle).Name) == accessorName));
+                var parameter = metadata.GetParameter(Assert.Single(
+                    accessor.GetParameters(),
+                    handle => metadata.GetParameter(handle).SequenceNumber == 1));
+                Assert.Contains(
+                    parameter.GetCustomAttributes(),
+                    handle => GetCustomAttributeTypeName(metadata, handle)
+                        == "System.Runtime.CompilerServices.TupleElementNamesAttribute");
+            }
+        }
+    }
+
     private static void AssertAbstractIndexerReflection(Type actual, Type expected)
     {
         Assert.True(actual.IsAbstract);

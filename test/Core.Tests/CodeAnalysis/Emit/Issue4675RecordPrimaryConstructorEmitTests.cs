@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Reflection;
+using System.Reflection.Emit;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -265,6 +266,36 @@ public class Issue4675RecordPrimaryConstructorEmitTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal(123, result.Value);
+    }
+
+    [Fact]
+    public void EmptyPrimaryConstructor_ResetsExistingStructStorage()
+    {
+        var result = EmittedOracle.Evaluate("""
+            data struct Item() {
+                public var Count int32
+            }
+            Item{Count: 42}
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.NotNull(result.Value);
+
+        var item = result.Value;
+        var itemType = item.GetType();
+        var constructor = Assert.Single(itemType.GetConstructors());
+        var invokeConstructor = new DynamicMethod(
+            nameof(EmptyPrimaryConstructor_ResetsExistingStructStorage),
+            typeof(void),
+            new[] { typeof(object) });
+        var il = invokeConstructor.GetILGenerator();
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Unbox, itemType);
+        il.Emit(OpCodes.Call, constructor);
+        il.Emit(OpCodes.Ret);
+        invokeConstructor.Invoke(null, new[] { item });
+
+        Assert.Equal(0, itemType.GetField("Count").GetValue(item));
     }
 
     [Fact]

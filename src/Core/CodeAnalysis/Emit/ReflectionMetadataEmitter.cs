@@ -1265,6 +1265,7 @@ internal sealed class ReflectionMetadataEmitter
             this.customAttrEncoder.EmitNullableAttributeOnProperty,
             this.customAttrEncoder.EmitNullableAttributeOnEvent,
             this.customAttrEncoder.EmitNullableAttributeOnParameter,
+            this.customAttrEncoder.EmitTupleElementNamesAttribute,
             this.customAttrEncoder.EmitUserAttributes);
 
         // PR-E-8: TypeDefEmitter wires up after MemberDefEmitter. It depends

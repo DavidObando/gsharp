@@ -82,6 +82,7 @@ internal sealed class MemberDefEmitter
     private readonly Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty;
     private readonly Action<EventDefinitionHandle, TypeSymbol> emitNullableAttributeOnEvent;
     private readonly Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter;
+    private readonly Action<EntityHandle, TypeSymbol> emitTupleElementNamesAttribute;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
 
     public MemberDefEmitter(
@@ -97,6 +98,7 @@ internal sealed class MemberDefEmitter
         Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty,
         Action<EventDefinitionHandle, TypeSymbol> emitNullableAttributeOnEvent,
         Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter,
+        Action<EntityHandle, TypeSymbol> emitTupleElementNamesAttribute,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
@@ -111,6 +113,7 @@ internal sealed class MemberDefEmitter
         this.emitNullableAttributeOnProperty = emitNullableAttributeOnProperty ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnProperty));
         this.emitNullableAttributeOnEvent = emitNullableAttributeOnEvent ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnEvent));
         this.emitNullableAttributeOnParameter = emitNullableAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnParameter));
+        this.emitTupleElementNamesAttribute = emitTupleElementNamesAttribute ?? throw new ArgumentNullException(nameof(emitTupleElementNamesAttribute));
         this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
     }
 
@@ -653,6 +656,7 @@ internal sealed class MemberDefEmitter
                 this.emitNullableAttributeOnParameter(parameterHandle, nullableFlags);
             }
 
+            this.emitTupleElementNamesAttribute(parameterHandle, prop.Parameters[index].Type);
             this.emitUserAttributes(parameterHandle, prop.Parameters[index], AttributeTargetKind.Param);
         }
 

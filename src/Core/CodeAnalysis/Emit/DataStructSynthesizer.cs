@@ -920,6 +920,9 @@ internal sealed class DataStructSynthesizer
             else
             {
                 var il = new InstructionEncoder(new BlobBuilder());
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Initobj);
+                il.Token(this.resolveUserTypeToken(structSym));
                 for (var i = 0; i < parameters.Length; i++)
                 {
                     if (ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(structSym, parameters[i].Name, out var field))
