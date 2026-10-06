@@ -269,6 +269,68 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
     }
 
     [Fact]
+    public void ExpressionTree_ClosedGenericZero_AssignsRetainedStorageWithoutConstructorLookup()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package TreeClosedGenericZero
+            import System
+            import System.Linq.Expressions
+            struct Payload {
+                private var Items []int32
+                public prop Length int32 { get { return Items.Length } }
+            }
+            data struct Inner[T](Value int32) { public var Child T }
+            data class Box(Item Inner[Payload])
+            func Main() {
+                let tree Expression[Func[Box]] = () -> Box{}
+                let box = tree.Compile()()
+                Console.WriteLine(box.Item.Value)
+                Console.WriteLine(box.Item.Child.Length)
+            }
+            """, "TreeClosedGenericZero", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("0\n0\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void ExpressionTree_ZeroHelper_DoesNotReassignFieldsWrittenByTheHelper()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package TreeZeroHelperStores
+            import System
+            import System.Linq.Expressions
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            struct Inner {
+                private var Items []int32
+                private var Marker int32 = Counter.Next()
+                public func Mark() int32 -> Marker
+            }
+            data struct Outer(Value int32) {
+                public var Child Inner
+            }
+            data class Box(Item Outer)
+            func Main() {
+                let tree Expression[Func[Box]] = () -> Box{}
+                let box = tree.Compile()()
+                Console.WriteLine(box.Item.Child.Mark())
+                Console.WriteLine(Counter.Count)
+            }
+            """, "TreeZeroHelperStores", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("1\n1\n", fixture.Run(dll));
+    }
+
+    [Fact]
     public void ImportedRecordLiteral_KeepsItsExistingBoundDefaultPath()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
