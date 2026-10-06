@@ -2158,6 +2158,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundFieldAssignmentExpressio
   property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol Type { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol Receiver { get; }
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer : System.Object, System.IEquatable`1<GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer>
+  method public Boolean get_IsDeclarationInitializer()
   method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_Value()
   method public GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer <Clone>$()
   method public GSharp.Core.CodeAnalysis.Symbols.FieldSymbol get_Field()
@@ -2167,13 +2168,16 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer : Syste
   method public String get_MemberName()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Symbols.FieldSymbol field, GSharp.Core.CodeAnalysis.Binding.BoundExpression value, GSharp.Core.CodeAnalysis.Symbols.StructSymbol fieldDeclaringType = null)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Symbols.PropertySymbol property, GSharp.Core.CodeAnalysis.Binding.BoundExpression value)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_IsDeclarationInitializer(Boolean value)
+  method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Value(GSharp.Core.CodeAnalysis.Binding.BoundExpression value)
   method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer other)
   method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer left, GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer right)
   method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer left, GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer right)
   method public virtual override Boolean Equals(Object obj)
   method public virtual override Int32 GetHashCode()
   method public virtual override String ToString()
-  property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Value { get; }
+  property public Boolean IsDeclarationInitializer { get; init; }
+  property public GSharp.Core.CodeAnalysis.Binding.BoundExpression Value { get; init; }
   property public GSharp.Core.CodeAnalysis.Symbols.FieldSymbol Field { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.PropertySymbol Property { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.StructSymbol FieldDeclaringType { get; }
@@ -2939,11 +2943,17 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundStateMachineBuilderMoveN
   property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol Type { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.VariableSymbol ThisParameter { get; }
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundStructLiteralExpression : GSharp.Core.CodeAnalysis.Binding.BoundExpression
+  method public Boolean get_IsZeroInitialization()
+  method public GSharp.Core.CodeAnalysis.Binding.BoundExpression get_CopySource()
   method public GSharp.Core.CodeAnalysis.Symbols.StructSymbol get_StructType()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer> get_Initializers()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.StructSymbol structType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer> initializers)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.StructSymbol structType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer> initializers, GSharp.Core.CodeAnalysis.Binding.BoundExpression copySource)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax, GSharp.Core.CodeAnalysis.Symbols.StructSymbol structType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundFieldInitializer> initializers, GSharp.Core.CodeAnalysis.Binding.BoundExpression copySource, Boolean isZeroInitialization)
   method public virtual override GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   method public virtual override GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
+  property public Boolean IsZeroInitialization { get; }
+  property public GSharp.Core.CodeAnalysis.Binding.BoundExpression CopySource { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundNodeKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.StructSymbol StructType { get; }
   property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol Type { get; }
@@ -3492,6 +3502,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportInterpolatedStringHandlerArgument(GSharp.Core.CodeAnalysis.Text.TextLocation location, String reason)
   method public Void ReportInterpolatedStringHandlerUnavailable(GSharp.Core.CodeAnalysis.Text.TextLocation location, String missingMember)
   method public Void ReportIntrinsicArgumentType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
+  method public Void ReportInvalidAbstractProperty(GSharp.Core.CodeAnalysis.Text.TextLocation location, String propertyName)
   method public Void ReportInvalidArrayLength(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)
   method public Void ReportInvalidBreakOrContinue(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)
   method public Void ReportInvalidCharEscape(GSharp.Core.CodeAnalysis.Text.TextLocation location, Char escapeChar)
@@ -3595,6 +3606,8 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportPointerTypeCannotBeFieldType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeName)
   method public Void ReportPointerTypeCannotBeParameterType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String parameterName, String pointeeName)
   method public Void ReportPositionalArgumentAfterNamedArgument(GSharp.Core.CodeAnalysis.Text.TextLocation location)
+  method public Void ReportPositionalInitializerAfterCompositeElement(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName)
+  method public Void ReportPositionalPropertyReplacementRequiresGetter(GSharp.Core.CodeAnalysis.Text.TextLocation location, String propertyName)
   method public Void ReportPrimaryAndExplicitConstructors(GSharp.Core.CodeAnalysis.Text.TextLocation location, String className)
   method public Void ReportPrivateInterfaceMemberKindNotSupported(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberKind, String memberName)
   method public Void ReportPrivateInterfaceMemberNotAccessible(GSharp.Core.CodeAnalysis.Text.TextLocation location, String interfaceName, String methodName)
@@ -3654,6 +3667,9 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportSemicolonBodyRequiresDllImport(GSharp.Core.CodeAnalysis.Text.TextLocation location, String functionName)
   method public Void ReportSendOnReceiveOnlyChannel(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol channelType)
   method public Void ReportSendTargetIsNotChannel(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol actualType)
+  method public Void ReportSharedClassCannotDeclare(GSharp.Core.CodeAnalysis.Text.TextLocation location, String className, String what)
+  method public Void ReportSharedClassCannotHaveBaseTypes(GSharp.Core.CodeAnalysis.Text.TextLocation location, String className)
+  method public Void ReportSharedClassModifierConflict(GSharp.Core.CodeAnalysis.Text.TextLocation location, String modifier)
   method public Void ReportSizeOfRequiresUnmanagedType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeName)
   method public Void ReportStackAllocCountInferredWithoutInitializer(GSharp.Core.CodeAnalysis.Text.TextLocation location)
   method public Void ReportStackAllocElementTypeNotBlittable(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeName)
@@ -6971,6 +6987,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax : GS
   method public Boolean get_IsIndexer()
   method public Boolean get_IsRefReturn()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax> get_Parameters()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_AbstractModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_AccessibilityModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_CloseBraceToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_CloseBracketToken()
@@ -6991,6 +7008,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax : GS
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> get_Annotations()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.PropertyAccessorSyntax> get_Accessors()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessibilityModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken overrideModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken propKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax type, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBraceToken, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.PropertyAccessorSyntax> accessors, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBraceToken)
+  method public Void set_AbstractModifier(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
   method public Void set_ExplicitInterfaceCloseParenthesisToken(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
   method public Void set_ExplicitInterfaceOpenParenthesisToken(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
   method public Void set_ExplicitInterfaceType(GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax value)
@@ -7004,6 +7022,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax : GS
   property public Boolean IsRefReturn { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax> Parameters { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken AbstractModifier { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken AccessibilityModifier { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken CloseBraceToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken CloseBracketToken { get; }
@@ -7244,6 +7263,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   method public Boolean get_HasBaseConstructorArguments()
   method public Boolean get_HasBaseType()
   method public Boolean get_HasPrimaryConstructor()
+  method public Boolean get_IsAbstract()
   method public Boolean get_IsClass()
   method public Boolean get_IsData()
   method public Boolean get_IsInline()
@@ -7251,12 +7271,14 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   method public Boolean get_IsPartial()
   method public Boolean get_IsRef()
   method public Boolean get_IsSealed()
+  method public Boolean get_IsShared()
   method public Boolean get_IsUnsafe()
   method public GSharp.Core.CodeAnalysis.Syntax.DeinitDeclarationSyntax get_Deinitializer()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> get_BaseConstructorArguments()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax> get_PrimaryConstructorParameters()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> get_BaseTypeClauses()
   method public GSharp.Core.CodeAnalysis.Syntax.SharedBlockSyntax get_SharedBlock()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_AbstractModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_AccessibilityModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_BaseColonToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_BaseConstructorCloseParenthesisToken()
@@ -7273,6 +7295,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_PrimaryConstructorOpenParenthesisToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_RefModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_SealedKeyword()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_SharedModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_StructKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_TypeKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_UnsafeModifier()
@@ -7283,6 +7306,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax> get_Methods()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.MemberSyntax> get_NestedTypes()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax> get_Properties()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.StaticInitializerBlockSyntax> get_SharedInitializers()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> get_AdditionalBaseTypeIdentifiers()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextLocation> get_PartialPartLocations()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessibilityModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken dataKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken inlineKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken structKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken primaryConstructorOpenParen, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax> primaryConstructorParameters, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken primaryConstructorCloseParen, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken baseColonToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken baseTypeIdentifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBraceToken, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.FieldDeclarationSyntax> fields, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax> methods, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBraceToken)
@@ -7293,6 +7317,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessibilityModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken dataKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken inlineKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken structKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken primaryConstructorOpenParen, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax> primaryConstructorParameters, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken primaryConstructorCloseParen, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBraceToken, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.FieldDeclarationSyntax> fields, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBraceToken)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessibilityModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken dataKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken inlineKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken structKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken primaryConstructorOpenParen, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax> primaryConstructorParameters, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken primaryConstructorCloseParen, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBraceToken, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.FieldDeclarationSyntax> fields, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax> methods, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBraceToken)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessibilityModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken typeKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken structKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBraceToken, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.FieldDeclarationSyntax> fields, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBraceToken)
+  method public Void set_AbstractModifier(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
   method public Void set_BaseConstructorArguments(GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> value)
   method public Void set_BaseConstructorCloseParenthesisToken(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
   method public Void set_BaseConstructorOpenParenthesisToken(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
@@ -7305,12 +7330,15 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   method public Void set_RefModifier(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
   method public Void set_SealedKeyword(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
   method public Void set_SharedBlock(GSharp.Core.CodeAnalysis.Syntax.SharedBlockSyntax value)
+  method public Void set_SharedInitializers(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.StaticInitializerBlockSyntax> value)
+  method public Void set_SharedModifier(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
   method public Void set_TypeParameterList(GSharp.Core.CodeAnalysis.Syntax.TypeParameterListSyntax value)
   method public Void set_UnsafeModifier(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken value)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public Boolean HasBaseConstructorArguments { get; }
   property public Boolean HasBaseType { get; }
   property public Boolean HasPrimaryConstructor { get; }
+  property public Boolean IsAbstract { get; }
   property public Boolean IsClass { get; }
   property public Boolean IsData { get; }
   property public Boolean IsInline { get; }
@@ -7318,6 +7346,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   property public Boolean IsPartial { get; }
   property public Boolean IsRef { get; }
   property public Boolean IsSealed { get; }
+  property public Boolean IsShared { get; }
   property public Boolean IsUnsafe { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.DeinitDeclarationSyntax Deinitializer { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> BaseConstructorArguments { get; set; }
@@ -7325,6 +7354,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> BaseTypeClauses { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.SharedBlockSyntax SharedBlock { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken AbstractModifier { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken AccessibilityModifier { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken BaseColonToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken BaseConstructorCloseParenthesisToken { get; set; }
@@ -7341,6 +7371,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken PrimaryConstructorOpenParenthesisToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken RefModifier { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken SealedKeyword { get; set; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken SharedModifier { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken StructKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken TypeKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken UnsafeModifier { get; set; }
@@ -7351,6 +7382,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.StructDeclarationSyntax : GSha
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax> Methods { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.MemberSyntax> NestedTypes { get; set; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax> Properties { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.StaticInitializerBlockSyntax> SharedInitializers { get; set; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> AdditionalBaseTypeIdentifiers { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextLocation> PartialPartLocations { get; set; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.StructLiteralContentElementSyntax : GSharp.Core.CodeAnalysis.Syntax.StructLiteralElementSyntax
@@ -8162,6 +8194,7 @@ type static class GSharp.Core.CodeAnalysis.Symbols.TypeMemberModel : System.Obje
   method public static Boolean TryGetPrimaryConstructorParameter(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, String name, out GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol parameter)
   method public static Boolean TryGetProperty(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, String name, out GSharp.Core.CodeAnalysis.Symbols.PropertySymbol property)
   method public static Boolean TryGetProperty(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, String name, out GSharp.Core.CodeAnalysis.Symbols.PropertySymbol property, out GSharp.Core.CodeAnalysis.Symbols.StructSymbol declaringType)
+  method public static Boolean TryGetPropertyWithOwner(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.PropertySymbol boundProperty, out GSharp.Core.CodeAnalysis.Symbols.PropertySymbol property, out GSharp.Core.CodeAnalysis.Symbols.TypeSymbol declaringType)
   method public static Boolean TryGetPropertyWithOwner(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, String name, out GSharp.Core.CodeAnalysis.Symbols.PropertySymbol property, out GSharp.Core.CodeAnalysis.Symbols.TypeSymbol declaringType)
   method public static Boolean TryGetStaticEvent(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, String name, out GSharp.Core.CodeAnalysis.Symbols.EventSymbol event)
   method public static Boolean TryGetStaticEventIncludingInherited(GSharp.Core.CodeAnalysis.Symbols.StructSymbol type, String name, out GSharp.Core.CodeAnalysis.Symbols.EventSymbol event, out GSharp.Core.CodeAnalysis.Symbols.StructSymbol declaringType)
