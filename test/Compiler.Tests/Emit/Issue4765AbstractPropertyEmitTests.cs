@@ -587,6 +587,7 @@ public sealed class Issue4765AbstractPropertyEmitTests
                 public abstract prop this[
                     @System.Runtime.CompilerServices.CallerMemberName key string? = ""
                 ] int32 { get; }
+                public abstract prop Value string? { get; init; }
             }
             """, "NullableIndexer", false, "/refout:" + reference);
 
@@ -609,6 +610,20 @@ public sealed class Issue4765AbstractPropertyEmitTests
             Assert.Contains(
                 parameter.GetCustomAttributes(),
                 handle => GetCustomAttributeTypeName(metadata, handle) == "System.Runtime.CompilerServices.CallerMemberNameAttribute");
+
+            foreach (var accessorName in new[] { "get_Value", "set_Value" })
+            {
+                var accessor = metadata.GetMethodDefinition(Assert.Single(
+                    owner.GetMethods(),
+                    handle => metadata.GetString(metadata.GetMethodDefinition(handle).Name) == accessorName));
+                var contractParameter = metadata.GetParameter(Assert.Single(
+                    accessor.GetParameters(),
+                    handle => metadata.GetParameter(handle).SequenceNumber
+                        == (accessorName == "get_Value" ? 0 : 1)));
+                Assert.Contains(
+                    contractParameter.GetCustomAttributes(),
+                    handle => GetCustomAttributeTypeName(metadata, handle) == "System.Runtime.CompilerServices.NullableAttribute");
+            }
         }
     }
 

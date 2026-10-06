@@ -107,6 +107,23 @@ public class Issue4675RecordReviewRegressionTests
     }
 
     [Fact]
+    public void NestedStructZeroSynthesis_RemainsLinearEnoughForDeepChains()
+    {
+        const int depth = 24;
+        var source = new StringBuilder("import System.Collections.Generic\n");
+        source.AppendLine("struct Node0 {\nprivate var Values List[int32]\n}");
+        for (var index = 1; index <= depth; index++)
+        {
+            source.AppendLine($"struct Node{index} {{\npublic var Child Node{index - 1}\nprivate var Values List[int32]\n}}");
+        }
+
+        source.AppendLine($"var value Node{depth}");
+        var result = EmittedOracle.Evaluate(source.ToString());
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+    }
+
+    [Fact]
     public void SealedIntermediaryDataEqualityOverride_IsRejectedBeforeEmission()
     {
         var result = EmittedOracle.Evaluate("""

@@ -132,6 +132,57 @@ public sealed class Issue4675RecordAbiTranslationTests
             """, "Value", expected);
     }
 
+    [Fact]
+    public void MutableStructFieldPrintMembers_MatchesRoslynReceiverSemantics()
+    {
+        const string source = """
+            namespace PrintMembersMutation {
+                public struct Counter {
+                    public int Count;
+                    public override string ToString() => (++Count).ToString();
+                }
+                public record Item {
+                    public Counter Value;
+                    public static string Run() {
+                        var item = new Item();
+                        var first = new System.Text.StringBuilder();
+                        var second = new System.Text.StringBuilder();
+                        item.PrintMembers(first);
+                        item.PrintMembers(second);
+                        return first.ToString() + "|" + second.ToString() + "|" + item.Value.Count;
+                    }
+                }
+            }
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Item.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        using var baselineImage = new MemoryStream();
+        Assert.True(project.Compilation.WithAssemblyName("PrintMembersMutationBaseline").Emit(baselineImage).Success);
+        var baseline = Assembly.Load(baselineImage.ToArray());
+        var expected = baseline.GetType("PrintMembersMutation.Item", throwOnError: true)
+            .GetMethod("Run").Invoke(null, null);
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        using var translatedImage = new MemoryStream();
+        var compilation = new GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(translated)))
+        {
+            IsLibrary = true,
+        };
+        var emit = compilation.Emit(
+            translatedImage,
+            pdbStream: null,
+            refStream: null,
+            assemblyName: "PrintMembersMutationTranslated");
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+        var actual = Assembly.Load(translatedImage.ToArray())
+            .GetType("PrintMembersMutation.Item", throwOnError: true)
+            .GetMethod("Run").Invoke(null, null);
+        Assert.Equal(expected, actual);
+        Assert.Equal("Value = 1|Value = 2|2", actual);
+    }
+
     [Theory]
     [InlineData("record", "Value", "", false, false, false, 0)]
     [InlineData("record struct", "Value", "", false, false, false, 0)]

@@ -499,7 +499,9 @@ internal static class MagicCollectionZeroValue
                 {
                     var field = Invariant.Required(initializer.Field, "synthesized struct zero entries target fields");
                     var initializedInType = visitKey.ValueStructDefaultCtorIsZeroInitialization
-                        ? TrySynthesizeInTypeZeroField(syntax, structType, field) != null
+                        ? structType.GetDefinitionField(field) is { } definitionField
+                            && (ReferenceEquals(definitionField.Type, field.Type)
+                                || TrySynthesizeEmptyInstanceCore(syntax, definitionField.Type, visiting) != null)
                         : structType.GetDefinitionField(field) is { } declaredField
                             && visitKey.InstanceFieldInitializers.ContainsKey(declaredField);
                     if (!initializedInType)

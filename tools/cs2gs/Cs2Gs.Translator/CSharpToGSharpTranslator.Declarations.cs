@@ -2073,7 +2073,18 @@ public sealed partial class CSharpToGSharpTranslator
                         memberValue);
                 }
 
+                GTypeReference objectType = this.typeMapper.Map(
+                    this.context.Compilation.GetSpecialType(SpecialType.System_Object),
+                    this.context,
+                    node.GetLocation());
+                if (memberType.NullableAnnotation == NullableAnnotation.Annotated)
+                {
+                    objectType = MakeNullable(objectType);
+                }
+
+                var isNullableValueType = memberType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
                 GExpression printableValue = memberType.IsRefLikeType
+                    || (memberType.IsValueType && !isNullableValueType)
                     ? new InvocationExpression(new MemberAccessExpression(memberValue, "ToString"), Array.Empty<GExpression>())
                     : new ConversionExpression(
                         this.typeMapper.Map(this.context.Compilation.GetSpecialType(SpecialType.System_Object), this.context, node.GetLocation()),
