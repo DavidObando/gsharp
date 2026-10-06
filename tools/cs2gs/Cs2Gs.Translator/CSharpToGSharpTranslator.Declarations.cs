@@ -2083,7 +2083,9 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 var isNullableValueType = memberType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+                var isValueTypeParameter = memberType is ITypeParameterSymbol { HasValueTypeConstraint: true };
                 GExpression printableValue = memberType.IsRefLikeType
+                    || isValueTypeParameter
                     || (memberType.IsValueType
                         && !isNullableValueType
                         && HasMutableToStringOverride(memberType))

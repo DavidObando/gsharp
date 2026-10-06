@@ -152,6 +152,20 @@ public sealed class Issue4675RecordAbiTranslationTests
                         return first.ToString() + "|" + second.ToString() + "|" + item.Value.Count;
                     }
                 }
+                public record GenericItem<T> where T : struct {
+                    public T Value;
+                    public static string Run() {
+                        var item = new GenericItem<Counter>();
+                        var first = new System.Text.StringBuilder();
+                        var second = new System.Text.StringBuilder();
+                        item.PrintMembers(first);
+                        item.PrintMembers(second);
+                        return first.ToString() + "|" + second.ToString() + "|" + item.Value.Count;
+                    }
+                }
+                public static class Probe {
+                    public static string Run() => Item.Run() + ";" + GenericItem<Counter>.Run();
+                }
             }
             """;
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Item.cs", source) });
@@ -159,7 +173,7 @@ public sealed class Issue4675RecordAbiTranslationTests
         using var baselineImage = new MemoryStream();
         Assert.True(project.Compilation.WithAssemblyName("PrintMembersMutationBaseline").Emit(baselineImage).Success);
         var baseline = Assembly.Load(baselineImage.ToArray());
-        var expected = baseline.GetType("PrintMembersMutation.Item", throwOnError: true)
+        var expected = baseline.GetType("PrintMembersMutation.Probe", throwOnError: true)
             .GetMethod("Run").Invoke(null, null);
 
         LoadedDocument document = Assert.Single(project.Documents);
@@ -177,10 +191,10 @@ public sealed class Issue4675RecordAbiTranslationTests
             assemblyName: "PrintMembersMutationTranslated");
         Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
         var actual = Assembly.Load(translatedImage.ToArray())
-            .GetType("PrintMembersMutation.Item", throwOnError: true)
+            .GetType("PrintMembersMutation.Probe", throwOnError: true)
             .GetMethod("Run").Invoke(null, null);
         Assert.Equal(expected, actual);
-        Assert.Equal("Value = 1|Value = 2|2", actual);
+        Assert.Equal("Value = 1|Value = 2|2;Value = 1|Value = 2|2", actual);
     }
 
     [Fact]

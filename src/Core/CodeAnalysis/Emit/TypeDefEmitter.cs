@@ -1845,6 +1845,8 @@ internal sealed class TypeDefEmitter
                     this.emitParamCollectionAttributeOnParameter(paramHandle);
                 }
             }
+
+            this.EmitConstructorParameterNullability(paramHandle, p);
         }
 
         paramHandles = handles.MoveToImmutable();
