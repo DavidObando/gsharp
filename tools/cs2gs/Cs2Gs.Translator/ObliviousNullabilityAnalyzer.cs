@@ -1463,16 +1463,25 @@ internal static class ObliviousNullabilityAnalyzer
     /// Remaps a field/property/method/local-owning member symbol (everything
     /// <see cref="RemapToCompilation"/> handles other than parameters
     /// themselves) into <paramref name="targetCompilation"/>'s own symbol
-    /// table by original signature and constructed containing type. Locals have
-    /// no stable cross-compilation identity (they only ever make sense within the one method body/one
-    /// compilation that declares them), so they intentionally fall through to
-    /// <see langword="null"/> here.
+    /// table by identical linked source or by original signature and
+    /// constructed containing type. Locals and local functions have no metadata
+    /// identity, so only the linked-source path can remap them.
     /// </summary>
     private static ISymbol RemapMemberOwner(Compilation targetCompilation, ISymbol symbol)
     {
         if (symbol == null)
         {
             return null;
+        }
+
+        ISymbol sourceDeclaration = RemapSourceDeclaration(targetCompilation, symbol);
+        string declarationId = symbol.OriginalDefinition.GetDocumentationCommentId();
+        if (sourceDeclaration != null
+            && (declarationId == null
+                || symbol is ILocalSymbol
+                || symbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction }))
+        {
+            return sourceDeclaration;
         }
 
         INamedTypeSymbol containingType = symbol.ContainingType;
@@ -1482,13 +1491,11 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         INamedTypeSymbol remappedType = RemapToCompilation(targetCompilation, containingType) as INamedTypeSymbol;
-        string declarationId = symbol.OriginalDefinition.GetDocumentationCommentId();
         if (remappedType == null || declarationId == null)
         {
             return null;
         }
 
-        ISymbol sourceDeclaration = RemapSourceDeclaration(targetCompilation, symbol);
         ISymbol remapped = remappedType.GetMembers(symbol.Name).FirstOrDefault(candidate =>
             sourceDeclaration != null
                 ? SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, sourceDeclaration)

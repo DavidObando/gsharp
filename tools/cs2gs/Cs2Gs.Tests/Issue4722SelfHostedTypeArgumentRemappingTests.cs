@@ -132,6 +132,13 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
                 }
             }
             public sealed record Snapshot(string? Value);
+            public static class SharedLocals {
+                public static string? Run(string? value) {
+                    string? local = value;
+                    string? Echo(string? item) => item;
+                    return Echo(local);
+                }
+            }
             public sealed class Consumer { public Outer<string?>.Rows<(string? Value, int Code)> Value; }
             """;
         LoadedCSharpProject native = CSharpProjectLoader.LoadInMemory(
@@ -217,6 +224,22 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
                 method.Invoke(null, new object[] { remappingTarget.Compilation, positional }));
             Assert.Equal(positional.Name, remappedPositional.Name);
         }
+
+        LoadedDocument contractDocument = Assert.Single(
+            native.Documents,
+            document => document.FilePath == "Contracts.cs");
+        SyntaxNode contractRoot = contractDocument.SemanticModel.SyntaxTree.GetRoot();
+        ILocalSymbol local = Assert.IsAssignableFrom<ILocalSymbol>(
+            contractDocument.SemanticModel.GetDeclaredSymbol(
+                Assert.Single(contractRoot.DescendantNodes().OfType<VariableDeclaratorSyntax>(),
+                    declaration => declaration.Identifier.ValueText == "local")));
+        IMethodSymbol localFunction = Assert.IsAssignableFrom<IMethodSymbol>(
+            contractDocument.SemanticModel.GetDeclaredSymbol(
+                Assert.Single(contractRoot.DescendantNodes().OfType<LocalFunctionStatementSyntax>())));
+        Assert.IsAssignableFrom<ILocalSymbol>(
+            method.Invoke(null, new object[] { linkedTarget.Compilation, local }));
+        Assert.IsAssignableFrom<IMethodSymbol>(
+            method.Invoke(null, new object[] { linkedTarget.Compilation, localFunction }));
 
         LoadedCSharpProject unrelated = CSharpProjectLoader.LoadInMemory(new[] { ("Unrelated.cs", "public sealed class Unrelated { }") });
         Assert.Null(method.Invoke(null, new object[] { unrelated.Compilation, input }));
