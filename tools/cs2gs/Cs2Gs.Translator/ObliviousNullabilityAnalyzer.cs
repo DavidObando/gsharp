@@ -1351,7 +1351,6 @@ internal static class ObliviousNullabilityAnalyzer
     /// </summary>
     private static ISymbol RemapToCompilation(Compilation targetCompilation, ISymbol symbol)
     {
-        ISymbol sourceDeclaration = RemapSourceDeclaration(targetCompilation, symbol);
         if (symbol is ITypeSymbol type)
         {
             if (type is IArrayTypeSymbol array)
@@ -1361,6 +1360,7 @@ internal static class ObliviousNullabilityAnalyzer
                     .WithNullableAnnotation(array.NullableAnnotation);
             }
 
+            ISymbol sourceDeclaration = RemapSourceDeclaration(targetCompilation, symbol);
             ITypeSymbol remapped = sourceDeclaration as ITypeSymbol;
             if (remapped == null)
             {
@@ -1402,6 +1402,7 @@ internal static class ObliviousNullabilityAnalyzer
 
         if (symbol is IParameterSymbol parameter)
         {
+            ISymbol sourceDeclaration = RemapSourceDeclaration(targetCompilation, symbol);
             ISymbol remappedOwner = RemapMemberOwner(targetCompilation, parameter.ContainingSymbol);
 
             // Issue #3804: the ordinal is bounded on BOTH sides, defensively.
@@ -1429,9 +1430,7 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static ISymbol RemapSourceDeclaration(Compilation targetCompilation, ISymbol symbol)
     {
-        StringComparer pathComparer = OperatingSystem.IsWindows()
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
+        StringComparer pathComparer = StringComparer.OrdinalIgnoreCase;
         Dictionary<string, SyntaxTree[]> targetTrees = SourceTrees.GetValue(
             targetCompilation,
             compilation => compilation.SyntaxTrees

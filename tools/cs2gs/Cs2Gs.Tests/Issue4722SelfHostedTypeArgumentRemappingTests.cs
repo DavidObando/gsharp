@@ -280,17 +280,15 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             preprocessedTree);
         Assert.Null(method.Invoke(null, new object[] { preprocessedTarget, conditional }));
 
-        if (!OperatingSystem.IsWindows())
-        {
-            SyntaxTree caseCollisionTree = CSharpSyntaxTree.ParseText(
-                contract,
-                new CSharpParseOptions(LanguageVersion.Latest),
-                path: "contracts.cs");
-            CSharpCompilation caseCollisionTarget = linkedTarget.Compilation.ReplaceSyntaxTree(
-                linkedContractTree,
-                caseCollisionTree);
-            Assert.Null(method.Invoke(null, new object[] { caseCollisionTarget, input }));
-        }
+        SyntaxTree caseVariantTree = CSharpSyntaxTree.ParseText(
+            contract,
+            new CSharpParseOptions(LanguageVersion.Latest),
+            path: "contracts.cs");
+        CSharpCompilation caseVariantTarget = linkedTarget.Compilation.ReplaceSyntaxTree(
+            linkedContractTree,
+            caseVariantTree);
+        Assert.IsAssignableFrom<INamedTypeSymbol>(
+            method.Invoke(null, new object[] { caseVariantTarget, input }));
 
         SyntaxTree duplicatePathTree = CSharpSyntaxTree.ParseText(
             "public sealed class Collision { }",
