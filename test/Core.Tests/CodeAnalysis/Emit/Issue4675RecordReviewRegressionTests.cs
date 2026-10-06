@@ -88,6 +88,24 @@ public class Issue4675RecordReviewRegressionTests
         Assert.True(result.Value.Equals(other));
     }
 
+    [Fact]
+    public void SealedIntermediaryDataEqualityOverride_IsRejectedBeforeEmission()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Base : IEquatable[Base]
+            open class Middle : Base {
+                public override func Equals(other Base?) bool -> false
+            }
+            data class Child : Middle
+            Child()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0184");
+        Assert.Contains("Equals", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Null(result.UnhandledException);
+        Assert.Null(result.Value);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

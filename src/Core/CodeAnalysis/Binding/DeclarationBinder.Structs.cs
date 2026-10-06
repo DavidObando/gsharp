@@ -3930,6 +3930,11 @@ internal sealed partial class DeclarationBinder
         // ADR-0068 / issue #698: bind the optional class destructor (`deinit { … }`).
         BindDeinitDeclaration(syntax, structSymbol, package);
 
+        if (DataEqualityMemberModel.GetSealedIntermediaryOverride(structSymbol) is { } sealedEquality)
+        {
+            Diagnostics.ReportOverrideOfSealedMethod(syntax.Identifier.Location, sealedEquality.Name);
+        }
+
         // Issue #910 / ADR-0110 / issue #1069: bind the BODIES of the nested type
         // declarations declared inside this aggregate's body. Their type-name
         // shells were declared earlier (DeclareNestedTypeShells) so sibling

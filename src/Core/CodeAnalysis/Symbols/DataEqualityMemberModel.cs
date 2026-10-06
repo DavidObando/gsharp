@@ -27,8 +27,16 @@ internal static class DataEqualityMemberModel
 
         if (owner.BaseClass is { IsData: true, ClrType: null } sourceBase)
         {
-            return sourceBase;
-        }
+            var ancestor = hierarchy[level];
+            if (level > 0 && ancestor is { IsData: true, ClrType: null })
+            {
+                if (FindSealedIntermediaryOverride(hierarchy, level, ancestor) != null)
+                {
+                    return null;
+                }
+
+                return ancestor;
+            }
 
         if (owner.ImportedBaseType is not { ClrType: { } clrBase } importedBase)
         {
@@ -54,6 +62,54 @@ internal static class DataEqualityMemberModel
             {
                 importedMethod = method;
                 return importedBase;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Finds a sealed source override that blocks the inherited typed equality slot.</summary>
+    /// <param name="owner">The derived data class.</param>
+    /// <returns>The blocking override, or null when the slot remains overridable.</returns>
+    internal static FunctionSymbol? GetSealedIntermediaryOverride(StructSymbol owner)
+    {
+        if (!owner.IsData || !owner.IsClass)
+        {
+            return null;
+        }
+
+        var hierarchy = owner.GetHierarchy();
+        for (var level = 1; level < hierarchy.Count; level++)
+        {
+            if (hierarchy[level] is { IsData: true, ClrType: null } dataBase)
+            {
+                return FindSealedIntermediaryOverride(hierarchy, level, dataBase);
+            }
+        }
+
+        return null;
+    }
+
+    internal static FunctionSymbol? FindSealedIntermediaryOverride(
+        IReadOnlyList<StructSymbol> hierarchy,
+        int dataBaseLevel,
+        StructSymbol dataBase)
+    {
+        for (var level = 1; level < dataBaseLevel; level++)
+        {
+            foreach (var method in hierarchy[level].Methods)
+            {
+                if (method.Name == "Equals"
+                    && method.IsOverride
+                    && !method.IsOpen
+                    && method.Type == TypeSymbol.Bool
+                    && method.Parameters.Length == 1
+                    && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        method.Parameters[0].Type,
+                        dataBase))
+                {
+                    return method;
+                }
             }
         }
 
