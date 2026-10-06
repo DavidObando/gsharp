@@ -635,9 +635,9 @@ internal sealed class MemberDefEmitter
         var firstParameter = this.nextParameterHandle();
         for (var index = 0; index < prop.Parameters.Length; index++)
         {
-            this.emitCtx.Metadata.AddParameter(
-                ParameterAttributes.None,
-                this.emitCtx.Metadata.GetOrAddString(prop.Parameters[index].Name),
+            ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                prop.Parameters[index],
                 sequenceNumber: index + 1);
         }
 

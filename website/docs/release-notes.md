@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **Explicit abstract properties retain storage-free CLR contracts** (issues #4765 and #4715, ADR-0197). `abstract prop` and `abstract override prop` preserve getter/setter/init requirements, accessor visibility and virtual slots; concrete descendants must implement every required accessor. cs2gs propagates C# abstractness explicitly across ordinary classes and positional, partial and generic records, while initialized get/init overrides retain their backing storage and init accessor. Existing concrete open auto-properties and getter-only contracts are unchanged.
+- **Explicit abstract properties retain storage-free CLR contracts** (issues #4765 and #4715, ADR-0197). `abstract prop` and `abstract override prop` preserve getter/setter/init requirements, accessor visibility and virtual slots; concrete descendants must implement every required accessor. Abstract indexer accessor parameters retain optional/default metadata in implementation and reference assemblies, so CLR callers can omit optional indices. cs2gs propagates C# abstractness explicitly across ordinary classes and positional, partial and generic records, while initialized get/init overrides retain their backing storage and init accessor. Existing concrete open auto-properties and getter-only contracts are unchanged.
 
 - **cs2gs self-hosting guards remapped type arguments before storing them**
   (issue #4722). Failed sibling remapping returns before publishing a nullable

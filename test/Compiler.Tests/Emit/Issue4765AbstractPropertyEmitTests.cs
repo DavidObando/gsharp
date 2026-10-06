@@ -343,6 +343,168 @@ public sealed class Issue4765AbstractPropertyEmitTests
     }
 
     [Theory]
+    [InlineData("get")]
+    [InlineData("set")]
+    [InlineData("init")]
+    public void NativeAbstractIndexerDefaults_MatchRoslynAndDownstreamCalls(string kind)
+    {
+        var accessors = kind == "get" ? "get;" : "get; " + kind + ";";
+        const string contractName = "OptionalAbstractIndexers";
+        var contract = $$"""
+            namespace {{contractName}} {
+                public abstract class Base {
+                    public abstract int this[int row, int column = 1] { {{accessors}} }
+                }
+            }
+            """;
+        var consumer = $$"""
+            namespace {{contractName}} {
+                public sealed class Item : Base {
+                    private int value = 42;
+                    public override int this[int row, int column] {
+                        get { return value + row + column; }
+                        {{(kind == "get" ? "" : kind + " { this.value = value; }")}}
+                    }
+                }
+                public static class Driver {
+                    public static int Run() {
+                        Base item = new Item();
+                        {{(kind == "set" ? "item[4] = 50;" : "")}}
+                        return item[4];
+                    }
+                }
+            }
+            """;
+
+        // The oracle is an untransformed Roslyn contract, not cs2gs output or
+        // another G# product; the real gsc driver emits both implementation/ref PE.
+        using var native = new CSharpFixture(contract + consumer);
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var reference = Path.Combine(fixture.Directory, "OptionalAbstractIndexers.ref.dll");
+        var dll = fixture.Compile($$"""
+            package {{contractName}}
+            public abstract class Base {
+                public abstract prop this[row int32, column int32 = 1] int32 { {{accessors}} }
+            }
+            """, contractName, false, "/refout:" + reference);
+        this.LogProduct(native.AssemblyPath);
+        Verify(native.AssemblyPath);
+        Verify(dll);
+        var expected = RequiredType(native.Load(), contractName + ".Base");
+        AssertAbstractIndexerReflection(RequiredType(EmittedFixture.Load(dll), contractName + ".Base"), expected);
+        foreach (var path in new[] { dll, reference })
+        {
+            this.LogProduct(path);
+            AssertAbstractIndexerMetadata(path, expected);
+        }
+
+        var nativeRun = RequiredType(native.Load(), contractName + ".Driver").GetMethod("Run");
+        var result = kind == "set" ? 55 : 47;
+        Assert.Equal(result, nativeRun.Invoke(null, null));
+        foreach (var path in new[] { dll, reference })
+        {
+            var caller = fixture.CompileCSharp(consumer, path == dll ? "ImplementationCaller" : "ReferenceCaller", path);
+            this.LogProduct(caller);
+            Verify(caller, dll);
+            var actual = EmittedFixture.LoadTogether(dll, caller);
+            var actualRun = RequiredType(actual[1], contractName + ".Driver").GetMethod("Run");
+            Assert.Equal(result, actualRun.Invoke(null, null));
+
+            if (kind is "set" or "init")
+            {
+                var item = Activator.CreateInstance(RequiredType(actual[1], contractName + ".Item"));
+                var property = RequiredProperty(RequiredType(actual[0], contractName + ".Base"), "Item");
+                property.SetMethod.Invoke(item, new object[] { 4, Type.Missing, 60 });
+                Assert.Equal(65, property.GetMethod.Invoke(item, new object[] { 4, Type.Missing }));
+            }
+        }
+    }
+
+    private static void AssertAbstractIndexerReflection(Type actual, Type expected)
+    {
+        Assert.True(actual.IsAbstract);
+        Assert.Empty(actual.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly));
+        var expectedProperty = RequiredProperty(expected, "Item");
+        var property = RequiredProperty(actual, "Item");
+        Assert.Equal(expectedProperty.PropertyType, property.PropertyType);
+        Assert.Equal(expectedProperty.GetIndexParameters().Select(parameter => parameter.Name),
+            property.GetIndexParameters().Select(parameter => parameter.Name));
+        foreach (var expectedAccessor in expectedProperty.GetAccessors())
+        {
+            var accessor = actual.GetMethod(expectedAccessor.Name);
+            AssertAbstractAccessor(accessor, newSlot: true);
+            Assert.Equal(expectedAccessor.ReturnType, accessor.ReturnType);
+            Assert.Equal(expectedAccessor.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName),
+                accessor.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName));
+            Assert.Equal(expectedAccessor.ReturnParameter.GetCustomAttributesData().Select(attribute => attribute.AttributeType.FullName),
+                accessor.ReturnParameter.GetCustomAttributesData().Select(attribute => attribute.AttributeType.FullName));
+            var parameters = accessor.GetParameters();
+            Assert.Equal(expectedAccessor.GetParameters().Length, parameters.Length);
+            foreach (var pair in expectedAccessor.GetParameters().Zip(parameters))
+            {
+                Assert.Equal(pair.First.Name, pair.Second.Name);
+                Assert.Equal(pair.First.ParameterType, pair.Second.ParameterType);
+                Assert.Equal(pair.First.Attributes, pair.Second.Attributes);
+                Assert.Equal(pair.First.RawDefaultValue, pair.Second.RawDefaultValue);
+            }
+
+            Assert.True(parameters[1].IsOptional);
+            Assert.True(parameters[1].HasDefaultValue);
+            Assert.Equal(1, parameters[1].RawDefaultValue);
+        }
+    }
+
+    private static void AssertAbstractIndexerMetadata(string path, Type expected)
+    {
+        using var pe = new PEReader(File.OpenRead(path));
+        var metadata = pe.GetMetadataReader();
+        var owner = metadata.GetTypeDefinition(Assert.Single(metadata.TypeDefinitions,
+            handle => metadata.GetString(metadata.GetTypeDefinition(handle).Name) == "Base"));
+        var indexer = metadata.GetPropertyDefinition(Assert.Single(owner.GetProperties()));
+        var handles = indexer.GetAccessors();
+        foreach (var handle in new[] { handles.Getter, handles.Setter }.Where(handle => !handle.IsNil))
+        {
+            var method = metadata.GetMethodDefinition(handle);
+            Assert.Equal(0, method.RelativeVirtualAddress);
+            var accessor = expected.GetMethod(metadata.GetString(method.Name));
+            Assert.Equal(accessor.Attributes, method.Attributes);
+            var signature = metadata.GetBlobReader(method.Signature);
+            Assert.Equal(0x20, signature.ReadByte());
+            Assert.Equal(accessor.GetParameters().Length, signature.ReadCompressedInteger());
+            if (accessor.ReturnParameter.GetRequiredCustomModifiers().Length != 0)
+            {
+                Assert.Equal(0x1f, signature.ReadByte());
+                var codedType = signature.ReadCompressedInteger();
+                Assert.Equal(1, codedType & 3);
+                var modifier = metadata.GetTypeReference(MetadataTokens.TypeReferenceHandle(codedType >> 2));
+                Assert.Equal("System.Runtime.CompilerServices", metadata.GetString(modifier.Namespace));
+                Assert.Equal("IsExternalInit", metadata.GetString(modifier.Name));
+            }
+
+            Assert.Equal(accessor.ReturnType == typeof(void) ? 0x01 : 0x08, signature.ReadByte());
+            foreach (var parameter in accessor.GetParameters())
+            {
+                Assert.Equal(0x08, signature.ReadByte());
+            }
+
+            Assert.Equal(0, signature.RemainingBytes);
+            var rows = method.GetParameters().Select(metadata.GetParameter).ToArray();
+            Assert.Equal(accessor.GetParameters().Length, rows.Length);
+            Assert.Equal(accessor.GetParameters().Select(parameter => parameter.Position + 1), rows.Select(parameter => parameter.SequenceNumber));
+            Assert.Equal(accessor.GetParameters().Select(parameter => parameter.Name), rows.Select(parameter => metadata.GetString(parameter.Name)));
+            Assert.Equal(accessor.GetParameters().Select(parameter => parameter.Attributes), rows.Select(parameter => parameter.Attributes));
+            var column = metadata.GetParameter(Assert.Single(method.GetParameters(),
+                parameter => metadata.GetParameter(parameter).SequenceNumber == 2));
+            Assert.Equal("column", metadata.GetString(column.Name));
+            Assert.Equal(ParameterAttributes.Optional | ParameterAttributes.HasDefault, column.Attributes);
+            Assert.False(column.GetDefaultValue().IsNil);
+            var constant = metadata.GetConstant(column.GetDefaultValue());
+            Assert.Equal(ConstantTypeCode.Int32, constant.TypeCode);
+            Assert.Equal(1, metadata.GetBlobReader(constant.Value).ReadInt32());
+        }
+    }
+
+    [Theory]
     [InlineData("class Missing : Base { }", "get_Value")]
     [InlineData("open class Missing : Base { }", "get_Value")]
     [InlineData("class Missing : Base { public prop Value int32 { get; set; } }", "get_Value")]
