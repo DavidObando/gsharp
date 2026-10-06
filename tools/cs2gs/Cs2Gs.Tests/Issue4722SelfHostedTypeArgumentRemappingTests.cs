@@ -124,7 +124,7 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
     {
         const string contract = """
             #nullable enable
-            public sealed class Outer<T> {
+            public sealed partial class Outer<T> {
                 public sealed class Rows<U> {
                     public U Read(ref T value) => default!;
                     public V Read<V>(ref U value, V replacement) => replacement;
@@ -132,7 +132,12 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             }
             public sealed class Consumer { public Outer<string?>.Rows<(string? Value, int Code)> Value; }
             """;
-        LoadedCSharpProject native = CSharpProjectLoader.LoadInMemory(new[] { ("Contracts.cs", contract) },
+        LoadedCSharpProject native = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("NativePart.cs", "public sealed partial class Outer<T> { }"),
+                ("Contracts.cs", contract),
+            },
             CSharpProjectLoader.RuntimeReferences(), "RemappingContracts");
         Assert.True(native.BoundWithoutErrors, string.Join(Environment.NewLine, native.ErrorDiagnostics));
         string image = Path.Combine(directory, "RemappingContracts.dll");
@@ -145,7 +150,11 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(image)).ToArray());
         Assert.True(target.BoundWithoutErrors, string.Join(Environment.NewLine, target.ErrorDiagnostics));
         LoadedCSharpProject linkedTarget = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Contracts.cs", contract) },
+            new[]
+            {
+                ("LinkedPart.cs", "public sealed partial class Outer<T> { }"),
+                ("Contracts.cs", contract),
+            },
             CSharpProjectLoader.RuntimeReferences(),
             "LinkedRemappingContracts");
         Assert.True(linkedTarget.BoundWithoutErrors, string.Join(Environment.NewLine, linkedTarget.ErrorDiagnostics));

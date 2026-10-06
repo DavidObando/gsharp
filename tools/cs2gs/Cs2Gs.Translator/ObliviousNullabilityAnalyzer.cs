@@ -1341,10 +1341,12 @@ internal static class ObliviousNullabilityAnalyzer
     /// <see cref="CSharpCompilation"/>. A declaration from an identical linked
     /// source is matched first by path, file content and source span. Other
     /// symbols fall back to stable metadata identity (assembly, constructed
-    /// containing type and original member signature). Neither path uses
-    /// <see cref="SymbolEqualityComparer"/> or CLR object identity, since those
-    /// do not hold across independently bound compilations (see the long
-    /// comment on the calling overload). Returns
+    /// containing type and original member signature). Cross-compilation
+    /// matching never uses <see cref="SymbolEqualityComparer"/> or CLR object
+    /// identity, since those do not hold across independently bound
+    /// compilations; the source path uses the comparer only after both symbols
+    /// belong to <paramref name="targetCompilation"/> (see the long comment on
+    /// the calling overload). Returns
     /// <see langword="null"/> when no matching declaration exists in
     /// <paramref name="targetCompilation"/> (e.g. `symbol` is unrelated to it).
     /// </summary>
@@ -1428,29 +1430,33 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static ISymbol RemapSourceDeclaration(Compilation targetCompilation, ISymbol symbol)
     {
-        SyntaxReference declaration = symbol.OriginalDefinition.DeclaringSyntaxReferences.FirstOrDefault();
-        string path = declaration?.SyntaxTree?.FilePath;
-        if (declaration == null || string.IsNullOrEmpty(path))
-        {
-            return null;
-        }
-
         Dictionary<string, SyntaxTree> targetTrees = SourceTrees.GetValue(
             targetCompilation,
             compilation => compilation.SyntaxTrees
                 .Where(tree => !string.IsNullOrEmpty(tree.FilePath))
                 .GroupBy(tree => tree.FilePath, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase));
-        if (!targetTrees.TryGetValue(path, out SyntaxTree targetTree)
-            || !declaration.SyntaxTree.GetText().ContentEquals(targetTree.GetText()))
+        foreach (SyntaxReference declaration in symbol.OriginalDefinition.DeclaringSyntaxReferences)
         {
-            return null;
+            string path = declaration.SyntaxTree.FilePath;
+            if (string.IsNullOrEmpty(path)
+                || !targetTrees.TryGetValue(path, out SyntaxTree targetTree)
+                || !declaration.SyntaxTree.GetText().ContentEquals(targetTree.GetText()))
+            {
+                continue;
+            }
+
+            SyntaxNode node = targetTree.GetRoot().FindNode(
+                declaration.Span,
+                getInnermostNodeForTie: true);
+            ISymbol remapped = targetCompilation.GetSemanticModel(targetTree).GetDeclaredSymbol(node);
+            if (remapped != null)
+            {
+                return remapped;
+            }
         }
 
-        SyntaxNode node = targetTree.GetRoot().FindNode(
-            declaration.Span,
-            getInnermostNodeForTie: true);
-        return targetCompilation.GetSemanticModel(targetTree).GetDeclaredSymbol(node);
+        return null;
     }
 
     /// <summary>
