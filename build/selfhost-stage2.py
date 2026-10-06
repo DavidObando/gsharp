@@ -135,13 +135,14 @@ def project_sdk_specs(path: Path) -> list[tuple[str, str | None]]:
 
 
 def evaluate_project(path: Path, tree: Path, env: dict, config: str,
-                     global_properties: dict[str, Path] | None = None) -> dict:
+                     global_properties: dict[str, object] | None = None) -> dict:
     property_args = [f"-p:{name}={value}" for name, value in (global_properties or {}).items()]
     result = subprocess.run(
         ["dotnet", "msbuild", str(path.relative_to(tree)), "-nologo",
          "-getProperty:MSBuildAllProjects,GsharpCompilerFullPath,GsharpToolFullPath,"
-         "TargetFrameworks,BuildProjectReferences,TargetPath",
-         "-getItem:ProjectReference,Compile,AdditionalFiles,EmbeddedResource",
+         "TargetFrameworks,BuildProjectReferences,TargetPath,TargetRefPath,MSBuildToolsPath",
+         "-getItem:ProjectReference,Compile,AdditionalFiles,EmbeddedResource,"
+         "IntermediateAssembly,IntermediateRefAssembly",
          f"-p:Configuration={config}", *property_args, "-nodeReuse:false"],
         cwd=tree, env=env, capture_output=True, text=True)
     if result.returncode != 0:
@@ -168,7 +169,8 @@ def evaluate_project(path: Path, tree: Path, env: dict, config: str,
     return evaluation
 
 
-def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
+def inspect_msbuild_files(paths: list[Path], expected_sdk: Path,
+                          msbuild_tools: Path | None = None) -> None:
     immutable = {
         "CustomAfterMicrosoftCommonTargets",
         "GsharpCompilerFullPath",
@@ -196,19 +198,25 @@ def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
             if element.tag.rsplit("}", 1)[-1] != "UsingTask":
                 continue
             task_name = element.attrib.get("TaskName", "").strip()
-            if task_name.rsplit(".", 1)[-1].casefold() != "buildtask":
+            short_name = task_name.rsplit(".", 1)[-1].casefold()
+            if short_name not in {"buildtask", "error", "getfilehash", "writelinestofile"}:
                 continue
-            if not path.resolve().is_relative_to(expected_sdk):
+            allowed = (expected_sdk if short_name == "buildtask" else msbuild_tools)
+            if allowed is None or not path.resolve().is_relative_to(allowed):
                 raise Stage2Error(
                     f"{path} registers {task_name} outside the verified SDK")
 
 
 def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                                     config: str, sdk_version: str,
-                                    global_properties: dict[str, Path] | None = None,
+                                    global_properties: dict[str, object] | None = None,
                                     gsharp_projects_out: set[Path] | None = None,
                                     protected_inputs_out: set[Path] | None = None,
-                                    target_paths_out: dict[Path, Path] | None = None) -> list[str]:
+                                    target_paths_out: dict[Path, Path] | None = None,
+                                    reference_paths_out: dict[Path, Path] | None = None,
+                                    project_references_out: dict[Path, list[Path]] | None = None,
+                                    allow_disabled_references: bool = False
+                                    ) -> list[str]:
     cache = Path(env["NUGET_PACKAGES"])
     expected_sdk = (cache / packer.SDK_ID.lower() / sdk_version.lower()).resolve()
     pending = [tree / root for root in roots]
@@ -236,6 +244,9 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
         target_path = properties.get("TargetPath")
         if target_path and target_paths_out is not None:
             target_paths_out[path] = Path(target_path).resolve()
+        target_ref_path = properties.get("TargetRefPath")
+        if target_ref_path and reference_paths_out is not None:
+            reference_paths_out[path] = Path(target_ref_path).resolve()
         if properties.get("TargetFrameworks"):
             raise Stage2Error(
                 f"{path.relative_to(tree)} is multi-targeted; stage-2 preflight requires "
@@ -265,13 +276,18 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                     raise Stage2Error(
                         f"{path.relative_to(tree)} overrides {property_name}: "
                         f"expected {expected_path}, got {actual!r}")
-            inspect_msbuild_files([path, *imports], expected_sdk)
+            msbuild_tools = properties.get("MSBuildToolsPath")
+            inspect_msbuild_files(
+                [path, *imports], expected_sdk,
+                Path(msbuild_tools).resolve() if msbuild_tools else None)
             gsharp_projects.add(path)
         references = evaluation.get("Items", {}).get("ProjectReference", [])
-        if references and properties.get("BuildProjectReferences", "").strip().casefold() == "false":
+        if (references and not allow_disabled_references
+                and properties.get("BuildProjectReferences", "").strip().casefold() == "false"):
             raise Stage2Error(
                 f"{path.relative_to(tree)} disables ProjectReference builds via "
                 "BuildProjectReferences=false")
+        enabled_references = []
         for reference in references:
             full_path = reference.get("FullPath")
             if not full_path:
@@ -290,7 +306,11 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                 raise Stage2Error(
                     f"{path.relative_to(tree)} changes ProjectReference build context for "
                     f"{full_path}: {details}")
-            pending.append(Path(full_path))
+            reference_path = Path(full_path).resolve()
+            enabled_references.append(reference_path)
+            pending.append(reference_path)
+        if project_references_out is not None:
+            project_references_out[path] = enabled_references
         for item_name in ("Compile", "AdditionalFiles", "EmbeddedResource"):
             for item in evaluation.get("Items", {}).get(item_name, []):
                 item_path = item.get("FullPath") or item.get("Identity")
@@ -466,7 +486,8 @@ def install_sdk_task_guard(expected_sdk: Path,
             target.insert(index + len(holder), child)
             get_output_hash = ET.Element(
                 tag("GetFileHash"),
-                {"Files": "@(IntermediateAssembly)", "Algorithm": "SHA256",
+                {"Files": "@(IntermediateAssembly);@(IntermediateRefAssembly)",
+                 "Algorithm": "SHA256",
                  "Condition": "'$(_Stage2EvidencePath)' != ''"})
             ET.SubElement(
                 get_output_hash, tag("Output"),
@@ -519,21 +540,39 @@ def reject_cleanup_overlap(tree: Path, assemblies: list[str], protected_inputs: 
 
 def verify_compiler_evidence(projects: set[Path],
                              evidence: dict[Path, tuple[Path, str]],
-                             target_paths: dict[Path, Path]) -> dict[Path, str]:
+                             target_paths: dict[Path, Path],
+                             reference_paths: dict[Path, Path] | None = None) -> dict[Path, str]:
     verified = {}
     failures = []
     for project in sorted(projects):
         evidence_path, nonce = evidence[project]
         try:
-            actual_nonce, assembly_text, expected_hash = evidence_path.read_text(
-                encoding="utf-8").strip().split("|", 2)
-            assembly = Path(assembly_text).resolve()
-            target = target_paths[project]
-            actual_hash = hashlib.sha256(assembly.read_bytes()).hexdigest().upper()
-            target_hash = hashlib.sha256(target.read_bytes()).hexdigest().upper()
-            if actual_nonce != nonce or actual_hash != expected_hash.upper() or target_hash != actual_hash:
+            records = [
+                line.split("|", 2)
+                for line in evidence_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            if not records or any(len(record) != 3 or record[0] != nonce for record in records):
                 raise ValueError
-            verified[project] = actual_hash
+            actual_hashes = []
+            for _actual_nonce, assembly_text, expected_hash in records:
+                assembly = Path(assembly_text).resolve()
+                actual_hash = hashlib.sha256(assembly.read_bytes()).hexdigest().upper()
+                if actual_hash != expected_hash.upper():
+                    raise ValueError
+                actual_hashes.append(actual_hash)
+            target = target_paths[project]
+            target_hash = hashlib.sha256(target.read_bytes()).hexdigest().upper()
+            if target_hash != actual_hashes[0]:
+                raise ValueError
+            reference = (reference_paths or {}).get(project)
+            if reference is not None:
+                if len(actual_hashes) < 2:
+                    raise ValueError
+                reference_hash = hashlib.sha256(reference.read_bytes()).hexdigest().upper()
+                if reference_hash != actual_hashes[1]:
+                    raise ValueError
+            verified[project] = target_hash
         except (OSError, KeyError, ValueError):
             failures.append(project)
     if failures:
@@ -549,8 +588,6 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
     version = pin(tree, nupkg)
     env = stage_env(work, stage)
     cache = Path(env["NUGET_PACKAGES"])
-    if cache.exists():
-        shutil.rmtree(cache)
     expected_sdk = cache / packer.SDK_ID.lower() / version.lower()
     compiler = expected_sdk / "tools/compiler/gsc.dll"
     task = expected_sdk / "tools/task/Gsharp.NET.Sdk.dll"
@@ -560,19 +597,62 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         "GsharpCompilerFullPath": compiler,
         "GsharpToolFullPath": task,
     }
+    build_properties = {**global_properties, "BuildProjectReferences": "false"}
+    if validation_projects is not None:
+        preflight_env = dict(env)
+        preflight_cache = work / f"nuget-{stage}-preflight-{secrets.token_hex(16)}"
+        preflight_env["NUGET_PACKAGES"] = str(preflight_cache)
+        preflight_sdk = preflight_cache / packer.SDK_ID.lower() / version.lower()
+        preflight_properties = {
+            "CustomAfterMicrosoftCommonTargets": guard,
+            "GsharpCompilerFullPath": preflight_sdk / "tools/compiler/gsc.dll",
+            "GsharpToolFullPath": preflight_sdk / "tools/task/Gsharp.NET.Sdk.dll",
+        }
+        preflight_inputs: set[Path] = set()
+        validate_participating_projects(
+            tree, validation_projects, preflight_env, config, version, preflight_properties,
+            protected_inputs_out=preflight_inputs)
+        reject_cleanup_overlap(
+            tree, assemblies, preflight_inputs,
+            [*(cleanup_roots or []), preflight_cache.resolve()])
+        shutil.rmtree(preflight_cache, ignore_errors=True)
+    if cache.exists():
+        shutil.rmtree(cache)
+    clean_outputs(tree, assemblies)
+    restore_log = work / f"{stage}.restore.log"
+    replace_text(restore_log, "")
+    for project in dict.fromkeys(validation_projects or []):
+        code, _elapsed = run(
+            ["dotnet", "restore", project, "-nodeReuse:false",
+             f"-p:CustomAfterMicrosoftCommonTargets={guard}",
+             f"-p:GsharpCompilerFullPath={compiler}", f"-p:GsharpToolFullPath={task}"],
+            tree, env, restore_log)
+        if code != 0:
+            raise Stage2Error(
+                f"{stage}: dotnet restore {project} failed (exit {code}); see {restore_log}")
     gsharp_projects: set[Path] = set()
     protected_inputs: set[Path] = set()
     target_paths: dict[Path, Path] = {}
+    reference_paths: dict[Path, Path] = {}
+    project_references: dict[Path, list[Path]] = {}
     participating = (validate_participating_projects(
         tree, validation_projects, env, config, version, global_properties,
-        gsharp_projects, protected_inputs, target_paths) if validation_projects is not None else [])
+        gsharp_projects, protected_inputs, target_paths, reference_paths)
+        if validation_projects is not None else [])
     if validation_projects is not None:
         reject_cleanup_overlap(tree, assemblies, protected_inputs, cleanup_roots)
+        compile_inputs: set[Path] = set()
+        validate_participating_projects(
+            tree, validation_projects, env, config, version, build_properties,
+            gsharp_projects, compile_inputs, target_paths, reference_paths,
+            project_references, allow_disabled_references=True)
+        reject_cleanup_overlap(tree, assemblies, compile_inputs, cleanup_roots)
     validation_closures: dict[str, set[Path]] = {}
     for project in validation_projects or []:
         closure: set[Path] = set()
         validate_participating_projects(
-            tree, [project], env, config, version, global_properties, closure, None, target_paths)
+            tree, [project], env, config, version, build_properties, closure, None,
+            target_paths, reference_paths, allow_disabled_references=True)
         validation_closures[project] = closure
     payload_files = (verify_resolved_sdk_payload(nupkg, expected_sdk)
                      if validation_projects is not None else 0)
@@ -595,30 +675,47 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         guard = toolchain_guard(work, stage, expected_sdk, gsharp_projects)
     else:
         evidence = {}
-    clean_outputs(tree, assemblies)
     log = work / f"{stage}.build.log"
     replace_text(log, "")
     seconds = 0.0
     built_gsharp_projects: set[Path] = set()
-    for project in projects:
-        closure = validation_closures.get(project, set())
+    scheduled: list[Path] = []
+    scheduled_once: set[Path] = set()
+
+    def schedule_dependencies(project_path: Path) -> None:
+        for dependency in project_references.get(project_path, []):
+            schedule_dependencies(dependency)
+            if dependency not in scheduled_once:
+                scheduled.append(dependency)
+                scheduled_once.add(dependency)
+
+    for project in validation_projects or []:
+        schedule_dependencies((tree / project).resolve())
+    scheduled.extend((tree / project).resolve() for project in projects)
+    for project_path in scheduled:
+        project = project_path.relative_to(tree).as_posix()
+        closure = {project_path} if project_path in gsharp_projects else set()
         for evidence_project in closure:
             evidence[evidence_project][0].unlink(missing_ok=True)
         code, elapsed = run(
-            ["dotnet", "build", project, "-c", config, "-t:Rebuild", "-nodeReuse:false",
+            ["dotnet", "build", project, "-c", config, "-t:Rebuild", "--no-restore",
+             "-nodeReuse:false",
+             "-p:BuildProjectReferences=false",
              f"-p:CustomAfterMicrosoftCommonTargets={guard}",
              f"-p:GsharpCompilerFullPath={compiler}", f"-p:GsharpToolFullPath={task}"],
             tree, env, log)
         seconds += elapsed
         if code != 0:
             raise Stage2Error(f"{stage}: dotnet build {project} failed (exit {code}); see {log}")
-        verify_compiler_evidence(closure, evidence, target_paths)
+        verify_compiler_evidence(closure, evidence, target_paths, reference_paths)
         built_gsharp_projects.update(closure)
-    verify_compiler_evidence(built_gsharp_projects, evidence, target_paths)
+    verify_compiler_evidence(
+        built_gsharp_projects, evidence, target_paths, reference_paths)
     target = work / stage
     if target.exists():
         shutil.rmtree(target)
     copied = {}
+    output_hashes = {}
     for index, assembly in enumerate(assemblies):
         source = tree / assembly
         if not source.is_file():
@@ -638,14 +735,18 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         if pdb.is_file():
             shutil.copy2(pdb, destination.with_suffix(".pdb"))
         copied[assembly] = str(destination)
+        output_hashes[str(source.resolve())] = file_sha256(str(destination))
     return {"sdkVersion": version, "sdkPayloadFiles": payload_files,
             "participatingProjects": participating,
             "buildSeconds": round(seconds, 1), "assemblies": copied,
             "compilerEvidence": {
                 str(project): {"path": str(path), "nonce": nonce,
-                               "targetPath": str(target_paths[project])}
+                               "targetPath": str(target_paths[project]),
+                               "referencePath": str(reference_paths[project])
+                               if project in reference_paths else None}
                 for project, (path, nonce) in evidence.items()
             },
+            "comparedOutputHashes": output_hashes,
             "gsharpClosures": {
                 project: [str(path) for path in sorted(closure)]
                 for project, closure in validation_closures.items()
@@ -705,6 +806,15 @@ def run_tests(tree: Path, tests: list[str], work: Path, config: str,
         Path(project): Path(item["targetPath"])
         for project, item in (stage or {}).get("compilerEvidence", {}).items()
     }
+    reference_paths = {
+        Path(project): Path(item["referencePath"])
+        for project, item in (stage or {}).get("compilerEvidence", {}).items()
+        if item.get("referencePath")
+    }
+    compared_output_hashes = {
+        Path(path): digest
+        for path, digest in (stage or {}).get("comparedOutputHashes", {}).items()
+    }
     closures = {
         project: {Path(path) for path in closure}
         for project, closure in (stage or {}).get("gsharpClosures", {}).items()
@@ -717,7 +827,8 @@ def run_tests(tree: Path, tests: list[str], work: Path, config: str,
         results_dir.mkdir()
         log = results_dir / "test.log"
         replace_text(log, "")
-        command = ["dotnet", "test", project, "-c", config, "-nodeReuse:false",
+        command = ["dotnet", "test", project, "-c", config, "--no-restore", "-nodeReuse:false",
+                   "-p:BuildProjectReferences=false",
                    f"-p:CustomAfterMicrosoftCommonTargets={guard}",
                    f"-p:GsharpCompilerFullPath={compiler}", f"-p:GsharpToolFullPath={task}",
                    "--logger", "trx", "--results-directory", str(results_dir)]
@@ -729,7 +840,16 @@ def run_tests(tree: Path, tests: list[str], work: Path, config: str,
             evidence[root][0].unlink(missing_ok=True)
         code, elapsed = run(command, tree, env, log)
         if closure:
-            verify_compiler_evidence(closure, evidence, target_paths)
+            verify_compiler_evidence(
+                closure, evidence, target_paths, reference_paths)
+        changed_outputs = [
+            path for path, digest in compared_output_hashes.items()
+            if not path.is_file() or file_sha256(str(path)) != digest
+        ]
+        if changed_outputs:
+            raise Stage2Error(
+                "test build changed compared stage-2 outputs:\n  "
+                + "\n  ".join(str(path) for path in changed_outputs))
         summary = [line.strip() for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
                    if line.strip().startswith(("Passed!", "Failed!", "Total tests", "Passed:", "Failed:"))]
         executed, evidence_error = test_evidence(results_dir)
