@@ -33,21 +33,28 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
         string path = Path.Combine(GsharpTestProjectRunner.FindRepoRoot(),
             "tools", "cs2gs", "Cs2Gs.Translator", "ObliviousNullabilityAnalyzer.cs");
         string original = File.ReadAllText(path);
-        MethodDeclarationSyntax[] methods = CSharpSyntaxTree.ParseText(original).GetRoot()
-            .DescendantNodes().OfType<MethodDeclarationSyntax>()
-            .Where(method => method.Identifier.ValueText is "RemapToCompilation" or "RemapMemberOwner").ToArray();
-        Assert.Equal(2, methods.Length);
+        SyntaxNode root = CSharpSyntaxTree.ParseText(original).GetRoot();
+        MethodDeclarationSyntax[] methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Where(method => method.Identifier.ValueText
+                is "RemapToCompilation" or "RemapSourceDeclaration" or "RemapMemberOwner").ToArray();
+        Assert.Equal(3, methods.Length);
+        FieldDeclarationSyntax sourceTrees = Assert.Single(
+            root.DescendantNodes().OfType<FieldDeclarationSyntax>(),
+            field => field.Declaration.Variables.Any(variable => variable.Identifier.ValueText == "SourceTrees"));
         string source = """
             using System;
+            using System.Collections.Generic;
             using System.Linq;
             using System.Collections.Immutable;
+            using System.Runtime.CompilerServices;
             using Microsoft.CodeAnalysis;
             #nullable disable
             namespace RootRemapping;
             public static class Remapper {
                 public static ISymbol Remap(Compilation target, ISymbol symbol) =>
                     RemapToCompilation(target, symbol);
-            """ + string.Join(Environment.NewLine, methods.Select(method => method.ToFullString())) + "\n}";
+            """ + sourceTrees.ToFullString()
+                + string.Join(Environment.NewLine, methods.Select(method => method.ToFullString())) + "\n}";
         MetadataReference[] references = CSharpProjectLoader.RuntimeReferences()
             .Concat(new[] { MetadataReference.CreateFromFile(typeof(Compilation).Assembly.Location) }).ToArray();
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

@@ -1338,11 +1338,13 @@ internal static class ObliviousNullabilityAnalyzer
     /// Finds the symbol in <paramref name="targetCompilation"/>'s own symbol
     /// table that is the "same" declaration as <paramref name="symbol"/>,
     /// which may have been resolved through an entirely different
-    /// <see cref="CSharpCompilation"/>. Matching is by stable metadata
-    /// identity (assembly, constructed containing type and original member
-    /// signature), never by <see cref="SymbolEqualityComparer"/> or CLR object
-    /// identity, since those do not hold across independently bound
-    /// compilations (see the long comment on the calling overload). Returns
+    /// <see cref="CSharpCompilation"/>. A declaration from an identical linked
+    /// source is matched first by path, file content and source span. Other
+    /// symbols fall back to stable metadata identity (assembly, constructed
+    /// containing type and original member signature). Neither path uses
+    /// <see cref="SymbolEqualityComparer"/> or CLR object identity, since those
+    /// do not hold across independently bound compilations (see the long
+    /// comment on the calling overload). Returns
     /// <see langword="null"/> when no matching declaration exists in
     /// <paramref name="targetCompilation"/> (e.g. `symbol` is unrelated to it).
     /// </summary>
