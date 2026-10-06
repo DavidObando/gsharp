@@ -31,6 +31,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -139,7 +140,7 @@ def evaluate_project(path: Path, tree: Path, env: dict, config: str,
         ["dotnet", "msbuild", str(path.relative_to(tree)), "-nologo",
          "-getProperty:MSBuildAllProjects,GsharpCompilerFullPath,GsharpToolFullPath,"
          "TargetFrameworks,BuildProjectReferences",
-         "-getItem:ProjectReference",
+         "-getItem:ProjectReference,Compile,AdditionalFiles,EmbeddedResource",
          f"-p:Configuration={config}", *property_args, "-nodeReuse:false"],
         cwd=tree, env=env, capture_output=True, text=True)
     if result.returncode != 0:
@@ -157,6 +158,7 @@ def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
         "GsharpCompilerFullPath",
         "GsharpToolFullPath",
     }
+    immutable_by_case = {name.casefold(): name for name in immutable}
     for path in paths:
         if not path.is_file():
             continue
@@ -164,9 +166,12 @@ def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
             root = ET.parse(path).getroot()
         except (ET.ParseError, OSError) as error:
             raise Stage2Error(f"cannot inspect evaluated MSBuild file {path}: {error}") from error
-        local = {name.strip() for name in root.attrib.get("TreatAsLocalProperty", "").split(";")
-                 if name.strip()}
-        forbidden = sorted(local & immutable)
+        local = {
+            name.strip().casefold(): name.strip()
+            for name in root.attrib.get("TreatAsLocalProperty", "").split(";")
+            if name.strip()
+        }
+        forbidden = sorted(immutable_by_case[name] for name in local.keys() & immutable_by_case.keys())
         if forbidden:
             raise Stage2Error(
                 f"{path} exempts immutable stage-2 properties via TreatAsLocalProperty: "
@@ -185,12 +190,14 @@ def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
 def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                                     config: str, sdk_version: str,
                                     global_properties: dict[str, Path] | None = None,
-                                    gsharp_projects_out: set[Path] | None = None) -> list[str]:
+                                    gsharp_projects_out: set[Path] | None = None,
+                                    protected_inputs_out: set[Path] | None = None) -> list[str]:
     cache = Path(env["NUGET_PACKAGES"])
     expected_sdk = (cache / packer.SDK_ID.lower() / sdk_version.lower()).resolve()
     pending = [tree / root for root in roots]
     seen = set()
     gsharp_projects = set()
+    protected_inputs = set()
     while pending:
         path = pending.pop().resolve()
         if path in seen:
@@ -198,6 +205,7 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
         if not path.is_relative_to(tree) or not path.is_file():
             raise Stage2Error(f"participating project must be an existing file under --tree: {path}")
         seen.add(path)
+        protected_inputs.add(path)
         specs = project_sdk_specs(path)
         for name, version in specs:
             if name.lower() == packer.SDK_ID.lower() and version:
@@ -214,6 +222,7 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                 "a single effective project context")
         imports = [Path(item).resolve()
                    for item in properties.get("MSBuildAllProjects", "").split(";") if item]
+        protected_inputs.update(imports)
         sdk_imports = [item for item in imports
                        if packer.SDK_ID.lower() in item.as_posix().lower().split("/")]
         declares_gsharp = any(name.lower() == packer.SDK_ID.lower() for name, _ in specs)
@@ -258,10 +267,19 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                     f"{path.relative_to(tree)} changes ProjectReference build context for "
                     f"{full_path}: {details}")
             pending.append(Path(full_path))
+        for item_name in ("Compile", "AdditionalFiles", "EmbeddedResource"):
+            for item in evaluation.get("Items", {}).get(item_name, []):
+                item_path = item.get("FullPath") or item.get("Identity")
+                if item_path:
+                    candidate = Path(item_path)
+                    protected_inputs.add(
+                        (candidate if candidate.is_absolute() else path.parent / candidate).resolve())
     if not gsharp_projects:
         raise Stage2Error("participating build closure contains no G# project")
     if gsharp_projects_out is not None:
         gsharp_projects_out.update(gsharp_projects)
+    if protected_inputs_out is not None:
+        protected_inputs_out.update(protected_inputs)
     return sorted(path.relative_to(tree).as_posix() for path in seen)
 
 
@@ -359,7 +377,8 @@ def toolchain_guard(work: Path, stage: str, expected_sdk: Path,
     return path
 
 
-def install_sdk_task_guard(expected_sdk: Path) -> Path:
+def install_sdk_task_guard(expected_sdk: Path,
+                           evidence: dict[Path, tuple[Path, str]] | None = None) -> Path:
     path = expected_sdk / "build/Gsharp.NET.Core.Sdk.targets"
     try:
         document = ET.parse(path)
@@ -390,6 +409,19 @@ def install_sdk_task_guard(expected_sdk: Path) -> Path:
             for offset, validation in enumerate(list(holder)):
                 target.insert(index + offset, validation)
             target.insert(index + len(holder), child)
+            for project_path, (evidence_path, nonce) in sorted((evidence or {}).items()):
+                target.insert(
+                    index + len(holder) + 1,
+                    ET.Element(
+                        tag("WriteLinesToFile"),
+                        {
+                            "Condition": (
+                                "'$([MSBuild]::Escape($(MSBuildProjectFullPath)))' == "
+                                f"'{msbuild_escape(str(project_path.resolve()))}'"),
+                            "File": str(evidence_path),
+                            "Lines": nonce,
+                            "Overwrite": "true",
+                        }))
             replace_xml(document, path)
             return path
     raise Stage2Error(f"{path} has no CoreCompile BuildTask to guard")
@@ -404,6 +436,22 @@ def reject_feed_aliases(tree: Path, packages: set[Path]) -> None:
         if any(destination.samefile(other) for other in packages):
             raise Stage2Error(
                 f"SDK feed destination aliases a supplied package: {destination}")
+
+
+def reject_cleanup_overlap(tree: Path, assemblies: list[str], protected_inputs: set[Path]) -> None:
+    cleanup_root = (tree / "out").resolve()
+    cleanup_files = {
+        path
+        for assembly in assemblies
+        for path in ((tree / assembly).resolve(), (tree / assembly).resolve().with_suffix(".pdb"))
+    }
+    endangered = sorted(
+        path for path in protected_inputs
+        if path.is_relative_to(cleanup_root) or path in cleanup_files)
+    if endangered:
+        raise Stage2Error(
+            "participating build inputs overlap cleaned outputs:\n  "
+            + "\n  ".join(str(path) for path in endangered))
 
 
 def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemblies: list[str],
@@ -423,14 +471,32 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         "GsharpToolFullPath": task,
     }
     gsharp_projects: set[Path] = set()
+    protected_inputs: set[Path] = set()
     participating = (validate_participating_projects(
         tree, validation_projects, env, config, version, global_properties,
-        gsharp_projects) if validation_projects is not None else [])
+        gsharp_projects, protected_inputs) if validation_projects is not None else [])
+    if validation_projects is not None:
+        reject_cleanup_overlap(tree, assemblies, protected_inputs)
+    built_gsharp_projects = gsharp_projects
+    if validation_projects is not None and set(validation_projects) != set(projects):
+        built_gsharp_projects = set()
+        validate_participating_projects(
+            tree, projects, env, config, version, global_properties, built_gsharp_projects)
     payload_files = (verify_resolved_sdk_payload(nupkg, expected_sdk)
                      if validation_projects is not None else 0)
     if validation_projects is not None:
-        install_sdk_task_guard(expected_sdk)
+        evidence_dir = work / f"{stage}.compiler-evidence"
+        if evidence_dir.exists():
+            shutil.rmtree(evidence_dir)
+        evidence_dir.mkdir()
+        evidence = {
+            project: (evidence_dir / f"{index}.txt", secrets.token_hex(32))
+            for index, project in enumerate(sorted(built_gsharp_projects))
+        }
+        install_sdk_task_guard(expected_sdk, evidence)
         guard = toolchain_guard(work, stage, expected_sdk, gsharp_projects)
+    else:
+        evidence = {}
     clean_outputs(tree, assemblies)
     log = work / f"{stage}.build.log"
     replace_text(log, "")
@@ -444,6 +510,14 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
         seconds += elapsed
         if code != 0:
             raise Stage2Error(f"{stage}: dotnet build {project} failed (exit {code}); see {log}")
+    invalid_evidence = [
+        project for project, (path, nonce) in evidence.items()
+        if not path.is_file() or path.read_text(encoding="utf-8").strip() != nonce
+    ]
+    if invalid_evidence:
+        raise Stage2Error(
+            f"{stage}: compiler execution evidence missing for:\n  "
+            + "\n  ".join(str(path.relative_to(tree)) for path in invalid_evidence))
     target = work / stage
     if target.exists():
         shutil.rmtree(target)
