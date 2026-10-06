@@ -55,6 +55,28 @@ class Stage2Error(Exception):
     """A build or tool failure (exit 2)."""
 
 
+def replace_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.staging-{os.getpid()}")
+    try:
+        temporary.unlink(missing_ok=True)
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def replace_xml(document: ET.ElementTree, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.staging-{os.getpid()}")
+    try:
+        temporary.unlink(missing_ok=True)
+        document.write(temporary, encoding="utf-8", xml_declaration=True)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def run(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
     started = time.monotonic()
     with log.open("a", encoding="utf-8") as handle:
@@ -110,12 +132,15 @@ def project_sdk_specs(path: Path) -> list[tuple[str, str | None]]:
     return specs
 
 
-def evaluate_project(path: Path, tree: Path, env: dict, config: str) -> dict:
+def evaluate_project(path: Path, tree: Path, env: dict, config: str,
+                     global_properties: dict[str, Path] | None = None) -> dict:
+    property_args = [f"-p:{name}={value}" for name, value in (global_properties or {}).items()]
     result = subprocess.run(
         ["dotnet", "msbuild", str(path.relative_to(tree)), "-nologo",
-         "-getProperty:MSBuildAllProjects,GsharpCompilerFullPath,GsharpToolFullPath,TargetFrameworks",
+         "-getProperty:MSBuildAllProjects,GsharpCompilerFullPath,GsharpToolFullPath,"
+         "TargetFrameworks,BuildProjectReferences",
          "-getItem:ProjectReference",
-         f"-p:Configuration={config}", "-nodeReuse:false"],
+         f"-p:Configuration={config}", *property_args, "-nodeReuse:false"],
         cwd=tree, env=env, capture_output=True, text=True)
     if result.returncode != 0:
         raise Stage2Error(f"cannot evaluate participating project {path.relative_to(tree)}:\n"
@@ -127,7 +152,11 @@ def evaluate_project(path: Path, tree: Path, env: dict, config: str) -> dict:
 
 
 def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
-    immutable = {"GsharpCompilerFullPath", "GsharpToolFullPath"}
+    immutable = {
+        "CustomAfterMicrosoftCommonTargets",
+        "GsharpCompilerFullPath",
+        "GsharpToolFullPath",
+    }
     for path in paths:
         if not path.is_file():
             continue
@@ -154,7 +183,9 @@ def inspect_msbuild_files(paths: list[Path], expected_sdk: Path) -> None:
 
 
 def validate_participating_projects(tree: Path, roots: list[str], env: dict,
-                                    config: str, sdk_version: str) -> list[str]:
+                                    config: str, sdk_version: str,
+                                    global_properties: dict[str, Path] | None = None,
+                                    gsharp_projects_out: set[Path] | None = None) -> list[str]:
     cache = Path(env["NUGET_PACKAGES"])
     expected_sdk = (cache / packer.SDK_ID.lower() / sdk_version.lower()).resolve()
     pending = [tree / root for root in roots]
@@ -173,7 +204,9 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                 raise Stage2Error(
                     f"{path.relative_to(tree)} explicitly selects {name}/{version}; "
                     "participating projects must use the global.json SDK pin")
-        evaluation = evaluate_project(path, tree, env, config)
+        evaluation = (evaluate_project(path, tree, env, config, global_properties)
+                      if global_properties is not None
+                      else evaluate_project(path, tree, env, config))
         properties = evaluation.get("Properties", {})
         if properties.get("TargetFrameworks"):
             raise Stage2Error(
@@ -201,7 +234,12 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
                         f"expected {expected_path}, got {actual!r}")
             inspect_msbuild_files([path, *imports], expected_sdk)
             gsharp_projects.add(path)
-        for reference in evaluation.get("Items", {}).get("ProjectReference", []):
+        references = evaluation.get("Items", {}).get("ProjectReference", [])
+        if references and properties.get("BuildProjectReferences", "").strip().casefold() == "false":
+            raise Stage2Error(
+                f"{path.relative_to(tree)} disables ProjectReference builds via "
+                "BuildProjectReferences=false")
+        for reference in references:
             full_path = reference.get("FullPath")
             if not full_path:
                 raise Stage2Error(f"{path.relative_to(tree)} has a ProjectReference without FullPath")
@@ -222,6 +260,8 @@ def validate_participating_projects(tree: Path, roots: list[str], env: dict,
             pending.append(Path(full_path))
     if not gsharp_projects:
         raise Stage2Error("participating build closure contains no G# project")
+    if gsharp_projects_out is not None:
+        gsharp_projects_out.update(gsharp_projects)
     return sorted(path.relative_to(tree).as_posix() for path in seen)
 
 
@@ -288,21 +328,34 @@ def toolchain_token(expected_sdk: Path) -> str:
     return hashlib.sha256(str(expected_sdk.resolve()).encode()).hexdigest()
 
 
-def toolchain_guard(work: Path, stage: str, expected_sdk: Path) -> Path:
+def msbuild_escape(value: str) -> str:
+    escaped = value.replace("%", "%25")
+    for character in "$@';()*?":
+        escaped = escaped.replace(character, f"%{ord(character):02X}")
+    return escaped
+
+
+def toolchain_guard(work: Path, stage: str, expected_sdk: Path,
+                    gsharp_projects: set[Path] | None = None) -> Path:
     work.mkdir(parents=True, exist_ok=True)
     path = work / f"{stage}.toolchain-guard.targets"
     project = ET.Element("Project")
     token = toolchain_token(expected_sdk)
+    identities = sorted(path.resolve() for path in (gsharp_projects or set()))
+    applicability = " Or ".join(
+        f"'$([MSBuild]::Escape($(MSBuildProjectFullPath)))' == "
+        f"'{msbuild_escape(str(identity))}'"
+        for identity in identities) or "false"
     target = ET.SubElement(
         project, "Target",
         {"Name": "_Stage2ValidateToolchain", "AfterTargets": "CoreCompile",
-         "Condition": f"'$(_Stage2GuardedSdk)' == '{token}'"})
+         "Condition": applicability})
     add_toolchain_validation(target, expected_sdk)
     ET.SubElement(
         target, "Error",
         {"Condition": f"'$(_Stage2GuardedCoreCompile)' != '{token}'",
          "Text": "stage-2 gate: effective CoreCompile did not invoke the guarded SDK BuildTask"})
-    ET.ElementTree(project).write(path, encoding="utf-8", xml_declaration=True)
+    replace_xml(ET.ElementTree(project), path)
     return path
 
 
@@ -318,9 +371,6 @@ def install_sdk_task_guard(expected_sdk: Path) -> Path:
         ET.register_namespace("", namespace)
     tag = lambda name: f"{{{namespace}}}{name}" if namespace else name
     token = toolchain_token(expected_sdk)
-    properties = ET.Element(tag("PropertyGroup"))
-    ET.SubElement(properties, tag("_Stage2GuardedSdk")).text = token
-    root.insert(0, properties)
     for target in root.iter():
         if target.tag.rsplit("}", 1)[-1] != "Target" or target.attrib.get("Name") != "CoreCompile":
             continue
@@ -330,13 +380,17 @@ def install_sdk_task_guard(expected_sdk: Path) -> Path:
                 continue
             holder = ET.Element(target.tag)
             add_toolchain_validation(holder, expected_sdk)
+            ET.SubElement(
+                holder, tag("Error"),
+                {"Condition": "'$(SkipCompilerExecution)' == 'true'",
+                 "Text": "stage-2 gate: SkipCompilerExecution cannot certify compilation"})
             marker = ET.SubElement(holder, tag("PropertyGroup"))
             ET.SubElement(marker, tag("_Stage2GuardedCoreCompile")).text = token
             target.remove(child)
             for offset, validation in enumerate(list(holder)):
                 target.insert(index + offset, validation)
             target.insert(index + len(holder), child)
-            document.write(path, encoding="utf-8", xml_declaration=True)
+            replace_xml(document, path)
             return path
     raise Stage2Error(f"{path} has no CoreCompile BuildTask to guard")
 
@@ -359,19 +413,27 @@ def build_stage(tree: Path, stage: str, nupkg: Path, projects: list[str], assemb
     cache = Path(env["NUGET_PACKAGES"])
     if cache.exists():
         shutil.rmtree(cache)
-    participating = (validate_participating_projects(
-        tree, validation_projects, env, config, version) if validation_projects is not None else [])
     expected_sdk = cache / packer.SDK_ID.lower() / version.lower()
+    compiler = expected_sdk / "tools/compiler/gsc.dll"
+    task = expected_sdk / "tools/task/Gsharp.NET.Sdk.dll"
+    guard = toolchain_guard(work, stage, expected_sdk)
+    global_properties = {
+        "CustomAfterMicrosoftCommonTargets": guard,
+        "GsharpCompilerFullPath": compiler,
+        "GsharpToolFullPath": task,
+    }
+    gsharp_projects: set[Path] = set()
+    participating = (validate_participating_projects(
+        tree, validation_projects, env, config, version, global_properties,
+        gsharp_projects) if validation_projects is not None else [])
     payload_files = (verify_resolved_sdk_payload(nupkg, expected_sdk)
                      if validation_projects is not None else 0)
     if validation_projects is not None:
         install_sdk_task_guard(expected_sdk)
-    guard = toolchain_guard(work, stage, expected_sdk)
-    compiler = expected_sdk / "tools/compiler/gsc.dll"
-    task = expected_sdk / "tools/task/Gsharp.NET.Sdk.dll"
+        guard = toolchain_guard(work, stage, expected_sdk, gsharp_projects)
     clean_outputs(tree, assemblies)
     log = work / f"{stage}.build.log"
-    log.write_text("", encoding="utf-8")
+    replace_text(log, "")
     seconds = 0.0
     for project in projects:
         code, elapsed = run(
@@ -454,7 +516,7 @@ def run_tests(tree: Path, tests: list[str], work: Path, config: str,
             shutil.rmtree(results_dir)
         results_dir.mkdir()
         log = results_dir / "test.log"
-        log.write_text("", encoding="utf-8")
+        replace_text(log, "")
         command = ["dotnet", "test", project, "-c", config, "-nodeReuse:false",
                    f"-p:CustomAfterMicrosoftCommonTargets={guard}",
                    f"-p:GsharpCompilerFullPath={compiler}", f"-p:GsharpToolFullPath={task}",
@@ -566,14 +628,14 @@ def main(argv: list[str]) -> int:
             tree, args.test, work, args.config, report["stage2Build"]["sdkVersion"])
     except (Stage2Error, packer.SelfHostError, OSError) as error:
         report["error"] = str(error)
-        (work / "stage2-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        replace_text(work / "stage2-report.json", json.dumps(report, indent=2) + "\n")
         print(f"selfhost-stage2: {error}", file=sys.stderr)
         return 2
 
     equivalent, tests_passed = decide(report)
     report["equivalent"] = equivalent
     report["testsPassed"] = tests_passed
-    (work / "stage2-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    replace_text(work / "stage2-report.json", json.dumps(report, indent=2) + "\n")
     for row in report["comparison"]:
         verdict = "EQUAL" if row["contentEqual"] else "DIFFERENT"
         print(f"{verdict:9} {row['assembly']}: stage1 {row['stage1']['content'][:16]} "
