@@ -2304,6 +2304,11 @@ public static class GSharpPrinter
         sb.Append(RenderAttributeBlock(property.Attributes, indent));
         sb.Append(pad);
         sb.Append(RenderVisibility(property.Visibility));
+        if (property.IsAbstract)
+        {
+            sb.Append("abstract ");
+        }
+
         if (property.IsOpen)
         {
             sb.Append("open ");

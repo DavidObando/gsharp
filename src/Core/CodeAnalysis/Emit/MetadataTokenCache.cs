@@ -63,6 +63,11 @@ internal sealed class MetadataTokenCache
     }
 
     /// <summary>
+    /// Gets the planned self-typed equality slots for native data classes.
+    /// </summary>
+    public Dictionary<StructSymbol, MethodDefinitionHandle> DataClassEqualsTypedHandles { get; } = new();
+
+    /// <summary>
     /// Gets the cache mapping a loaded <see cref="Assembly"/> to its
     /// <see cref="AssemblyReferenceHandle"/> in the emitted metadata.
     /// </summary>

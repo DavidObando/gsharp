@@ -359,28 +359,13 @@ public sealed class StructSymbol : TypeSymbol
             // substitution-aware unimplemented-method computation so a class that
             // inherits a constructed generic base (e.g. `Derived : Base[int32]`)
             // and overrides every abstract member is correctly treated as concrete.
-            bool HasUnimplementedAbstractProperties()
-            {
-                var effectiveProperties = new Dictionary<string, PropertySymbol>();
-                foreach (var current in GetHierarchy())
-                {
-                    foreach (var property in current.Properties)
-                    {
-                        var key = property.Name + "|" + string.Join(",", property.Parameters.Select(p => p.Type.ToString()));
-                        effectiveProperties.TryAdd(key, property);
-                    }
-                }
-
-                return effectiveProperties.Values.Any(property => property.IsAbstract);
-            }
-
             // ADR-0195 / issue #4674: an explicitly `abstract` or `shared` class is
             // abstract whatever its members are.
             return IsDeclaredAbstract
                 || IsSharedClass
                 || (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
                 || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
-                || HasUnimplementedAbstractProperties()
+                || !GetUnimplementedAbstractPropertyAccessors().IsDefaultOrEmpty
                 || ExternalClrOverrideResolver.HasUnimplementedAbstractMembers(this);
         }
     }
@@ -684,6 +669,21 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public DeinitSymbol? Deinitializer { get; private set; }
 
+    /// <summary>Gets or sets a value indicating whether the definition's constructor arguments carry anonymous-object property members.</summary>
+    internal bool HasAnonymousConstructorMembers { get; set; }
+
+    /// <summary>Gets a value indicating whether this type declares a primary-constructor parameter list, including an empty list.</summary>
+    internal bool HasDeclaredPrimaryConstructor => Definition != null && !ReferenceEquals(Definition, this)
+        ? Definition.HasDeclaredPrimaryConstructor
+        : HasPrimaryConstructor || (Declaration?.HasPrimaryConstructor ?? false);
+
+    /// <summary>Gets a value indicating whether the compiler-owned value-struct default constructor initializes only sound zero values.</summary>
+    internal bool ValueStructDefaultCtorIsZeroInitialization => !IsClass && IsData && HasDeclaredPrimaryConstructor;
+
+    /// <summary>Gets a value indicating whether a positional data struct needs an in-type collection-zero helper.</summary>
+    internal bool NeedsValueStructZeroHelper => ValueStructDefaultCtorIsZeroInitialization
+        && Fields.Any(member => MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(null, this, member) != null);
+
     /// <summary>Gets imported accessors selected by interface conformance binding.</summary>
     internal List<(InterfaceSymbol Interface, PropertySymbol Property, MethodInfo Accessor, TypeSymbol ContainingType, bool IsSetter)> ImportedInterfaceAccessors { get; } = new();
 
@@ -760,9 +760,11 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     internal int LiteralInitializerMarkerCount => Definition != null && !ReferenceEquals(Definition, this)
         ? Definition.LiteralInitializerMarkerCount
-        : NeedsSynthesizedValueStructDefaultCtor && !HasPrimaryConstructor
-        && ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty)
-        ? ExplicitConstructors.Max(constructor => constructor.Parameters.Length) + 1
+        : NeedsSynthesizedValueStructDefaultCtor
+        && (NeedsValueStructZeroHelper || (!HasPrimaryConstructor && ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty)))
+        ? Math.Max(
+            PrimaryConstructorParameters.Length,
+            ExplicitConstructors.IsDefaultOrEmpty ? 0 : ExplicitConstructors.Max(constructor => constructor.Parameters.Length)) + 1
         : 0;
 
     /// <summary>Gets the definition-owned symbol for the emitted data-class clone slot.</summary>
@@ -1773,6 +1775,55 @@ public sealed class StructSymbol : TypeSymbol
         return builder.MoveToImmutable();
     }
 
+    /// <summary>Gets the abstract source property accessors left unimplemented by actual overrides.</summary>
+    /// <returns>The owning types, properties and required accessor kinds.</returns>
+    internal ImmutableArray<(StructSymbol Owner, PropertySymbol Property, bool IsGetter)> GetUnimplementedAbstractPropertyAccessors()
+    {
+        var result = ImmutableArray.CreateBuilder<(StructSymbol Owner, PropertySymbol Property, bool IsGetter)>();
+        var effectiveAccessors = new Dictionary<(object Slot, bool IsGetter), bool>();
+        var requirements = new HashSet<(object Slot, bool IsGetter)>();
+        foreach (var owner in GetHierarchy())
+        {
+            foreach (var property in owner.Properties)
+            {
+                var slot = property;
+                while (slot.OverriddenProperty is { } overridden)
+                {
+                    slot = overridden;
+                }
+
+                // Constructed projections share the declaring syntax, not the
+                // property object. Hiding declarations start distinct slots.
+                object slotIdentity = slot.Declaration is { } declaration ? declaration : slot;
+                void Check(bool isGetter)
+                {
+                    var key = (slotIdentity, isGetter);
+                    if (property.IsOverride || property.IsAbstract)
+                    {
+                        effectiveAccessors.TryAdd(key, !property.IsAbstract);
+                    }
+
+                    if (property.IsAbstract && requirements.Add(key) && !effectiveAccessors[key])
+                    {
+                        result.Add((owner, property, isGetter));
+                    }
+                }
+
+                if (property.HasGetter)
+                {
+                    Check(isGetter: true);
+                }
+
+                if (property.HasSetter)
+                {
+                    Check(isGetter: false);
+                }
+            }
+        }
+
+        return result.ToImmutable();
+    }
+
     /// <summary>
     /// Gets declared source or imported instance methods, including compiler-owned data slots.
     /// </summary>
@@ -2002,6 +2053,15 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         return SubstituteTypeForConstruction(type, GetSubstitutionMap(), mapClrType);
+    }
+
+    /// <summary>Resolves a bound instance field to its definition-owned identity.</summary>
+    /// <param name="field">The field in this declaring construction.</param>
+    /// <returns>The corresponding declared field, or null for storage outside the field list.</returns>
+    internal FieldSymbol? GetDefinitionField(FieldSymbol field)
+    {
+        var index = Fields.IndexOf(field);
+        return index < 0 ? null : Definition.Fields[index];
     }
 
     /// <summary>

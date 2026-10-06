@@ -40,10 +40,14 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindWithExpression(WithExpressionSyntax syntax)
     {
         var receiver = BindExpression(syntax.Receiver);
-        return LowerCopyOrWith(receiver, syntax.Initializers, syntax.WithToken.Location);
+        return LowerCopyOrWith(receiver, syntax.Initializers, syntax.WithToken.Location, syntax);
     }
 
-    private BoundExpression LowerCopyOrWith(BoundExpression receiver, SeparatedSyntaxList<FieldInitializerSyntax> overrides, TextLocation diagnosticLocation)
+    private BoundExpression LowerCopyOrWith(
+        BoundExpression receiver,
+        SeparatedSyntaxList<FieldInitializerSyntax> overrides,
+        TextLocation diagnosticLocation,
+        SyntaxNode copySyntax)
     {
         if (receiver.Type == TypeSymbol.Error)
         {
@@ -54,8 +58,9 @@ internal sealed partial class ExpressionBinder
         // platform receiver is a coercion to non-null (checked and unwrapped).
         receiver = binderCtx.InsertPlatformCheck(receiver, diagnosticLocation, "a copy/with receiver");
 
-        // Copy existing storage before applying updates; fresh construction
-        // would rerun initializers or lose base/private state.
+        // Native copies preserve the whole value or dispatch through the
+        // record clone; reconstructing visible members loses private state
+        // and incorrectly reruns construction initializers.
         var normalizedReceiverType = ImportedTypeSymbol.NormalizeSemanticAggregate(
             receiver.Type,
             receiver.Type.ClrType,
@@ -98,11 +103,11 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            copy = new BoundImportedInstanceCallExpression(null, captured, cloneMethods[0], structType, ImmutableArray<BoundExpression>.Empty);
+            copy = new BoundImportedInstanceCallExpression(copySyntax, captured, cloneMethods[0], structType, ImmutableArray<BoundExpression>.Empty);
         }
         else
         {
-            copy = new BoundStructLiteralExpression(null, structType, ImmutableArray<BoundFieldInitializer>.Empty, captured);
+            copy = new BoundStructLiteralExpression(copySyntax, structType, ImmutableArray<BoundFieldInitializer>.Empty, captured);
         }
 
         var copiedValue = new LocalVariableSymbol(tempName + "result", isReadOnly: true, structType);
@@ -118,7 +123,18 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (TypeMemberModel.TryGetFieldIncludingInherited(structType, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
+            var hasUpdateProperty = TypeMemberModel.TryGetProperty(
+                structType,
+                memberName,
+                out var updateProperty,
+                out var updatePropertyDeclaringType);
+            if (TypeMemberModel.TryGetFieldIncludingInherited(structType, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType)
+                && (!hasUpdateProperty
+                    || IsFieldAtLeastAsNearAsProperty(
+                        structType,
+                        fieldDeclaringType,
+                        Invariant.Required(updateProperty, "a resolved property has a symbol"),
+                        Invariant.Required(updatePropertyDeclaringType, "a resolved property has a declaring type"))))
             {
                 // Issue #2059: a `with` update is a write to the named field —
                 // enforce the same `protected`/`private` accessibility rule as a
@@ -291,7 +307,7 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            target = new BoundStructLiteralExpression(literal.Syntax, literal.StructType, initializers.ToImmutable());
+            target = new BoundStructLiteralExpression(literal.Syntax, literal.StructType, initializers.ToImmutable(), literal.CopySource, literal.IsZeroInitialization);
         }
 
         var resultType = target.Type;

@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using GSharp.Tests;
 using Xunit;
 
@@ -453,5 +454,88 @@ public class Issue3319StructLocalZeroValueEmitTests
 
         Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
         Assert.Equal(0, result.Value);
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    public void NonMagicExplicitFieldInitializer_StillBypassedForBareDeclaration_PositionalData(bool generic, bool iterator, bool privateCollection)
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            data struct SDECL(Value ELEMENT) {
+                public var Count int32 = 5
+                public var Effect int32 = Counter.Next()
+                VISIBILITY var Items []ELEMENT
+                public func ItemsLength() int32 -> Items.Length
+            }
+            func make() RETURN {
+                var s INSTANCE
+                PRODUCE
+            }
+            GET
+            let values = []int32{s.Value, s.Count, s.Effect, Counter.Count, s.ItemsLength()}
+            values
+            """.Replace("SDECL", generic ? "S[T]" : "S", StringComparison.Ordinal)
+                .Replace("ELEMENT", generic ? "T" : "int32", StringComparison.Ordinal)
+                .Replace("VISIBILITY", privateCollection ? "private" : "public", StringComparison.Ordinal)
+                .Replace("RETURN", iterator ? (generic ? "sequence[S[int32]]" : "sequence[S]") : (generic ? "S[int32]" : "S"), StringComparison.Ordinal)
+                .Replace("PRODUCE", iterator ? "yield s" : "return s", StringComparison.Ordinal)
+                .Replace("GET", iterator ? "var s INSTANCE\nfor item in make() { s = item }" : "let s = make()", StringComparison.Ordinal)
+                .Replace("INSTANCE", generic ? "S[int32]" : "S", StringComparison.Ordinal));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(new[] { 0, 0, 0, 0, 0 }, Assert.IsType<int[]>(result.Value));
+    }
+
+    [Theory]
+    [InlineData("data struct S(Value int32)", "S(7)", false)]
+    [InlineData("data struct S(Value int32)", "S{Value: 7}", false)]
+    [InlineData("struct S", "S{Value: 7}", false)]
+    [InlineData("data struct S(Value int32)", "S(7)", true)]
+    [InlineData("data struct S(Value int32)", "S{Value: 7}", true)]
+    public void ExplicitConstruction_RunsOrdinaryInitializersExactlyOnce(string declaration, string construction, bool privateCollection)
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            DECLARATION {
+                BODY
+                public var Count int32 = 5
+                public var Effect int32 = Counter.Next()
+                VISIBILITY var Items []int32
+                public func ItemsLength() int32 -> Items.Length
+            }
+            let s = CONSTRUCTION
+            let values = []int32{s.Value, s.Count, s.Effect, Counter.Count, s.ItemsLength()}
+            values
+            """.Replace("DECLARATION", declaration, StringComparison.Ordinal)
+                .Replace("BODY", declaration == "struct S" ? "public var Value int32" : string.Empty, StringComparison.Ordinal)
+                .Replace("VISIBILITY", privateCollection ? "private" : "public", StringComparison.Ordinal)
+                .Replace("CONSTRUCTION", construction, StringComparison.Ordinal));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(new[] { 7, 5, 1, 1, 0 }, Assert.IsType<int[]>(result.Value));
     }
 }

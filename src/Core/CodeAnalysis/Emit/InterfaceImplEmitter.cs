@@ -96,6 +96,10 @@ internal sealed class InterfaceImplEmitter
                     property.ExternalOverriddenGetter,
                     property.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Getter.Value, declaration);
+                if (MethodInfoHelpers.IsCovariantPropertyGetter(property))
+                {
+                    this.AddPreserveBaseOverridesAttribute(accessors.Getter.Value);
+                }
             }
 
             if (property.ExternalOverriddenSetter != null && accessors.Setter.HasValue)

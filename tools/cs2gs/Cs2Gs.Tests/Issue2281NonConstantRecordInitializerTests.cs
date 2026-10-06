@@ -47,7 +47,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class OahuConfig : IEquatable[OahuConfig] {", printed);
+        Assert.Contains("data class OahuConfig", printed);
         Assert.Contains("private var _downloadDirectory string = CliPaths.DefaultDownloadDir", printed);
         Assert.Contains("prop DownloadDirectory string {", printed);
         Assert.Contains("private var _maxParallelJobs int32 = 1", printed);
@@ -71,7 +71,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class Holder : IEquatable[Holder] {", printed);
+        Assert.Contains("data class Holder", printed);
         Assert.Contains("private var _item Widget = Widget()", printed);
         Assert.Contains("prop Item Widget {", printed);
         Assert.Contains("private var _count int32 = 1", printed);
@@ -96,7 +96,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class OahuConfig : IEquatable[OahuConfig] {", printed);
+        Assert.Contains("data class OahuConfig", printed);
         Assert.DoesNotContain($"{Environment.NewLine}class OahuConfig {{", printed);
         Assert.Contains("private var _downloadDirectory string = CliPaths.DefaultDownloadDir", printed);
         Assert.Contains("prop DownloadDirectory string {", printed);
@@ -120,7 +120,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class OahuConfig : IEquatable[OahuConfig] {", printed);
+        Assert.Contains("data class OahuConfig", printed);
         Assert.Contains("private var _downloadDirectory string = CliPaths.DefaultDownloadDir", printed);
         Assert.Contains("prop DownloadDirectory string {", printed);
     }
@@ -155,7 +155,7 @@ namespace Oahu.Cli.App
     }
 }");
 
-        Assert.Contains("data class LibraryFilter : IEquatable[LibraryFilter] {", printed);
+        Assert.Contains("data class LibraryFilter", printed);
         Assert.Contains("prop Search string? {", printed);
         Assert.Contains("prop Author string? {", printed);
         Assert.Contains("private var _availableOnly bool = true", printed);

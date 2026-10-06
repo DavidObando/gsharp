@@ -26,6 +26,23 @@ internal sealed partial class DeclarationBinder
     {
         foreach (var (syntax, structSymbol) in pendingAbstractImplementationChecks)
         {
+            if (!structSymbol.IsDeclaredAbstract)
+            {
+                foreach (var requirement in structSymbol.GetUnimplementedAbstractPropertyAccessors())
+                {
+                    // Keep the established open/get-only requirement syntax; explicit
+                    // abstract contracts additionally require abstract derived owners.
+                    if (requirement.Property.Declaration?.AbstractModifier != null)
+                    {
+                        Diagnostics.ReportAbstractMemberNotImplemented(
+                            syntax.Identifier.Location,
+                            structSymbol.Name,
+                            requirement.Owner.Name,
+                            (requirement.IsGetter ? "get_" : "set_") + requirement.Property.Name);
+                    }
+                }
+            }
+
             // An `open` class is permitted to remain abstract — it need not
             // override inherited abstract members.
             if (structSymbol.IsOpen)
@@ -2169,6 +2186,24 @@ internal sealed partial class DeclarationBinder
         foreach (var openMethod in openDefinition.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
         {
             if (openMethod.IsSpecialName)
+            {
+                continue;
+            }
+
+            // C# records implement IEquatable<Self> with the typed Equals
+            // overload synthesized by data-type emission.
+            if (structSymbol.IsData
+                && ClrTypeUtilities.AreSame(openDefinition, typeof(System.IEquatable<>))
+                && symbolicArgs.Length == 1
+                && symbolicArgs[0] is StructSymbol equatableSelf
+                && (equatableSelf.EnclosingTypeArguments.IsDefaultOrEmpty
+                    || equatableSelf.EnclosingTypeArguments.SequenceEqual<TypeSymbol>(
+                        StructSymbol.CollectEnclosingTypeParameters(structSymbol)))
+                && ConformanceSignaturesEquivalent(
+                    equatableSelf,
+                    StructSymbol.Construct(structSymbol, structSymbol.TypeParameters.Cast<TypeSymbol>().ToImmutableArray()))
+                && openMethod.Name == nameof(System.IEquatable<object>.Equals)
+                && openMethod.GetParameters().Length == 1)
             {
                 continue;
             }

@@ -1244,6 +1244,8 @@ internal sealed class ReflectionMetadataEmitter
             this.userTokens.ResolveFieldToken,
             this.customAttrEncoder.EmitNullableAttributeOnProperty,
             this.customAttrEncoder.EmitNullableAttributeOnEvent,
+            this.customAttrEncoder.EmitNullableAttributeOnParameter,
+            this.customAttrEncoder.EmitTupleElementNamesAttribute,
             this.customAttrEncoder.EmitUserAttributes);
 
         // PR-E-8: TypeDefEmitter wires up after MemberDefEmitter. It depends
@@ -1292,10 +1294,12 @@ internal sealed class ReflectionMetadataEmitter
             this.cache,
             this.wellKnown,
             this.conversionEmitter,
+            this.ctorBodies.EmitDataStructPrimaryConstructorBodyBytes,
             this.signatures.EncodeTypeSymbol,
             this.memberRefs.GetElementTypeToken,
             this.memberRefs.GetTypeReference,
             this.customAttrEncoder.NextParameterHandle,
+            this.typeDefEmitter.AddPrimaryCtorParameters,
             this.userTokens.ResolveUserTypeToken,
             this.userTokens.ResolveFieldToken,
             this.userTokens.GetUserStructMethodRef,
@@ -2415,18 +2419,9 @@ internal sealed class ReflectionMetadataEmitter
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(s) ? 1 : 0)
                     - (DataStructSynthesizer.HasUserToStringOverride(s) ? 1 : 0);
 
-                // Rubber-duck follow-up to issue #2224: an anonymous-class
-                // literal's synthesized type has no plain fields (only
-                // get-only auto-properties — see AnonymousTypeCache), so its
-                // primary-ctor "call" sugar can't route through
-                // BoundStructLiteralExpression's field-initializer emission
-                // like an ordinary `data struct Foo(x int32)` does (that one
-                // keeps Fields non-empty and never needs a real .ctor row —
-                // see the OverloadResolver comment near
-                // `!classType.IsClass`). It needs one extra reserved row for
-                // a real newobj-callable instance constructor, emitted by
-                // DataStructSynthesizer.EmitDataStructSynthesizedMembers.
-                if (s.HasPrimaryConstructor)
+                // Native positional data construction invokes a real primary
+                // constructor, including anonymous-class literal backing types.
+                if (s.HasDeclaredPrimaryConstructor)
                 {
                     classPrimaryCtorRows[s] = methodRow++;
                 }
@@ -2521,10 +2516,11 @@ internal sealed class ReflectionMetadataEmitter
             // parameterless .ctor as the struct's last row. ClassCtorHandles
             // doubles as the default-ctor registry ResolveUserCtorTokenForDefault
             // consults for constructed-generic MemberRef parenting.
-            if (needsSynthesizedDefaultCtor && !(s.IsData && s.HasPrimaryConstructor))
+            if (needsSynthesizedDefaultCtor
+                && (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.NeedsValueStructZeroHelper))
             {
                 var initializerCtor = MetadataTokens.MethodDefinitionHandle(methodRow++);
-                if (s.HasPrimaryConstructor)
+                if (s.HasPrimaryConstructor && !s.ValueStructDefaultCtorIsZeroInitialization)
                 {
                     this.cache.ClassPrimaryCtorHandles[s] = initializerCtor;
                 }
@@ -2809,21 +2805,9 @@ internal sealed class ReflectionMetadataEmitter
         // EmitStructMethodBodies — which also runs after interface bodies.
         // Pre-register it from the row structFirstMethodRows reserved for it
         // (PlanStructMethods above): the inline-struct ctor always occupies
-        // the first of its reserved rows. A `data struct` primary-ctor call
-        // is bound as a field-by-field BoundStructLiteralExpression instead
-        // of a ctor call, so it never needs a ClassPrimaryCtorHandles entry —
-        // EXCEPT for a synthesized anonymous-class-literal's backing type
-        // (rubber-duck follow-up to issue #2224), which has no plain fields
-        // and so needs a real newobj-callable ctor (see the comment near
-        // PlanStructMethods' `classPrimaryCtorRows[s] = methodRow++` above and
-        // DataStructSynthesizer.EmitDataStructSynthesizedMembers). That row is
-        // reserved during planning but the handle is normally only cached
-        // inside EmitDataStructSynthesizedMembers, called from
-        // EmitStructMethodBodies for topStructs — which runs AFTER class
-        // method bodies (topClasses), so a class method that constructs an
-        // anonymous-class literal would resolve against an empty cache. Same
-        // fix as the inline-struct case: pre-register it here from
-        // classPrimaryCtorRows.
+        // the first of its reserved rows. Native positional data structs also
+        // invoke their primary constructor. Pre-register their reserved rows
+        // before class/interface bodies can construct a later-declared type.
         foreach (var s in nonSmStructs)
         {
             if (!s.ExplicitConstructors.IsDefaultOrEmpty
@@ -2839,7 +2823,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(inlineCtorRow);
             }
-            else if (s.IsData && s.HasPrimaryConstructor
+            else if (s.IsData && s.HasDeclaredPrimaryConstructor
                 && classPrimaryCtorRows.TryGetValue(s, out var dataPrimaryCtorRow))
             {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(dataPrimaryCtorRow);
@@ -4011,7 +3995,7 @@ internal sealed class ReflectionMetadataEmitter
             // so the early-out below must not skip a struct whose only row is
             // that ctor.
             var emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s)
-                && !(s.IsData && s.HasPrimaryConstructor);
+                && (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.NeedsValueStructZeroHelper);
             if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields) && !s.HasStaticInitializerBlock)
             {
                 if (emitsSynthesizedDefaultCtor)
@@ -5294,11 +5278,14 @@ internal sealed class ReflectionMetadataEmitter
     /// (<see cref="Binding.AnonymousTypeCache"/>) has no plain fields at all —
     /// only get-only auto-properties — so its primary-ctor parameters instead
     /// resolve to the same-named property's <see cref="PropertySymbol.BackingField"/>.
+    /// A data type may replace a positional property with a computed getter;
+    /// only that case intentionally has no parameter store.
     /// </summary>
     /// <param name="type">The declaring type.</param>
     /// <param name="name">The primary-ctor parameter (and target member) name.</param>
     /// <param name="field">The resolved backing field on success.</param>
-    /// <returns><see langword="true"/> if a field or auto-property backing field was found.</returns>
+    /// <returns><see langword="true"/> if storage was found; <see langword="false"/> for a computed positional property.</returns>
+    /// <exception cref="InvalidOperationException">A primary parameter has neither storage nor a computed positional property.</exception>
     internal static bool TryGetPrimaryCtorTargetField(StructSymbol type, string name, [NotNullWhen(true)] out FieldSymbol? field)
     {
         if (type.TryGetField(name, out field))
@@ -5313,7 +5300,13 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         field = null;
-        return false;
+        if (type.IsData
+            && property is { IsAutoProperty: false, HasGetter: true, IsStatic: false })
+        {
+            return false;
+        }
+
+        throw new InvalidOperationException($"Type '{type.Name}' has no field for primary ctor parameter '{name}'.");
     }
 
     /// <summary>

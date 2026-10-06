@@ -1178,9 +1178,19 @@ internal sealed partial class MethodBodyEmitter
         }
     }
 
+    private void EmitStructLiteralPrimaryArguments(BoundStructLiteralExpression literal, HashSet<BoundFieldInitializer> consumed)
+    {
+        foreach (var parameter in literal.StructType.PrimaryConstructorParameters)
+        {
+            var value = Invariant.Required(literal.GetPrimaryArgument(parameter.Name), "primary literal arguments, including defaults, are prepared before planning");
+            consumed.Add(value);
+            this.EmitExpression(value.Value);
+        }
+    }
+
     private void EmitStructLiteral(BoundStructLiteralExpression literal)
     {
-        if (literal.CopySource != null)
+        if (literal.CopySource != null && literal.StructType.IsClass)
         {
             this.EmitExpression(literal.CopySource);
             if (literal.StructType.IsClass)
@@ -1200,6 +1210,9 @@ internal sealed partial class MethodBodyEmitter
         // concrete type at the construction site.
         var typeDef = this.outer.userTokens.ResolveUserTypeToken(literal.StructType);
         bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(literal.StructType);
+        var structDefinition = literal.StructType.Definition ?? literal.StructType;
+        var callsPrimary = literal.CallsPrimaryConstructor;
+        var primaryValues = new HashSet<BoundFieldInitializer>();
 
         // Class literal: newobj <ctor>; (dup; <value>; stfld) per init.
         if (literal.StructType.IsClass)
@@ -1222,38 +1235,68 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            EntityHandle ctorHandle;
-            if (isGeneric)
+            if (literal.CopySource != null)
             {
-                ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType);
-            }
-            else if (this.outer.cache.ClassCtorHandles.TryGetValue(literal.StructType, out var ctorDef))
-            {
-                ctorHandle = ctorDef;
-            }
-            else if (literal.StructType.ClrType != null)
-            {
-                // Issue #2263: an imported `data class` — construct via its real
-                // emitted parameterless `.ctor()` (a `data class` always emits
-                // both a parameterless and a primary constructor), then set each
-                // overridden/copied field below. Mirrors the imported field /
-                // setter resolution branches already gated on ClrType != null.
-                var clrCtor = literal.StructType.ClrType.GetConstructor(Type.EmptyTypes)
-                    ?? throw new InvalidOperationException(
-                        $"Imported data class '{literal.StructType.Name}' has no parameterless constructor.");
-                ctorHandle = this.outer.memberRefs.GetCtorReference(clrCtor);
+                this.EmitExpression(literal.CopySource);
+                var definition = literal.StructType.Definition ?? literal.StructType;
+                var clone = this.outer.cache.DataClassCloneHandles[definition];
+                EntityHandle cloneToken = clone;
+                if (isGeneric)
+                {
+                    var signature = new BlobBuilder();
+                    new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+                        .Parameters(0, result => this.outer.userTokens.EncodeTypeSymbolIntoSignature(result.Type(), definition), _ => { });
+                    cloneToken = this.outer.userTokens.GetUserStructMethodRef(literal.StructType, clone, "<Clone>$", signature);
+                }
+
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(cloneToken);
             }
             else
             {
-                throw new InvalidOperationException(
-                    $"Class '{literal.StructType.Name}' has no emitted default ctor.");
-            }
+                EntityHandle ctorHandle;
+                if (callsPrimary)
+                {
+                    this.EmitStructLiteralPrimaryArguments(literal, primaryValues);
+                    ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType);
+                }
+                else if (isGeneric)
+                {
+                    ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType);
+                }
+                else if (this.outer.cache.ClassCtorHandles.TryGetValue(literal.StructType, out var ctorDef))
+                {
+                    ctorHandle = ctorDef;
+                }
+                else if (literal.StructType.ClrType != null)
+                {
+                    // Issue #2263: an imported `data class` — construct via its real
+                    // emitted parameterless `.ctor()` (a `data class` always emits
+                    // both a parameterless and a primary constructor), then set each
+                    // overridden/copied field below. Mirrors the imported field /
+                    // setter resolution branches already gated on ClrType != null.
+                    var clrCtor = literal.StructType.ClrType.GetConstructor(Type.EmptyTypes)
+                        ?? throw new InvalidOperationException(
+                            $"Imported data class '{literal.StructType.Name}' has no parameterless constructor.");
+                    ctorHandle = this.outer.memberRefs.GetCtorReference(clrCtor);
+                }
+                else
+                {
+                    throw new InvalidOperationException(
+                        $"Class '{literal.StructType.Name}' has no emitted default ctor.");
+                }
 
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(ctorHandle);
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(ctorHandle);
+            }
 
             foreach (var init in literal.Initializers)
             {
+                if (primaryValues.Contains(init))
+                {
+                    continue;
+                }
+
                 // Issue #1211: a `prop` member is set through its setter/init
                 // accessor (`dup; <value>; callvirt set_X`) rather than a stfld.
                 if (init.Property != null)
@@ -1313,33 +1356,65 @@ internal sealed partial class MethodBodyEmitter
         // construct through it and skip the literal's injected
         // declaration-origin entries, whose provenance survives lowering,
         // so initializer side effects run once while authored overrides remain.
-        var structDefinition = literal.StructType.Definition ?? literal.StructType;
         var usesOwningInitializerConstructor = this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
             && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition);
+
+        if (literal.CopySource != null)
+        {
+            this.EmitExpression(literal.CopySource);
+            this.il.StoreLocal(slot);
+        }
+        else if (callsPrimary)
+        {
+            this.il.LoadLocalAddress(slot);
+            this.il.OpCode(ILOpCode.Initobj);
+            this.il.Token(typeDef);
+            this.il.LoadLocalAddress(slot);
+            this.EmitStructLiteralPrimaryArguments(literal, primaryValues);
+
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType));
+        }
 
         // ldloca slot; initobj typedef — zero-initializes the value type —
         // or, for a #3219 struct, ldloca slot; call .ctor() (which zeroes and
         // runs the declared initializers in-type).
-        this.il.LoadLocalAddress(slot);
-        if (usesOwningInitializerConstructor)
+        if (literal.CopySource == null && !callsPrimary)
         {
-            for (var marker = 0; marker < structDefinition.LiteralInitializerMarkerCount; marker++)
+            this.il.LoadLocalAddress(slot);
+            if (usesOwningInitializerConstructor)
             {
-                this.il.LoadConstantI4(0);
-            }
+                for (var marker = 0; marker < structDefinition.LiteralInitializerMarkerCount; marker++)
+                {
+                    this.il.LoadConstantI4(0);
+                }
 
-            this.il.OpCode(ILOpCode.Call);
-            this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType));
-        }
-        else
-        {
-            this.il.OpCode(ILOpCode.Initobj);
-            this.il.Token(typeDef);
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType));
+            }
+            else
+            {
+                this.il.OpCode(ILOpCode.Initobj);
+                this.il.Token(typeDef);
+            }
         }
 
         // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
         foreach (var init in literal.Initializers)
         {
+            if (literal.IsZeroInitialization && structDefinition.ValueStructDefaultCtorIsZeroInitialization
+                && usesOwningInitializerConstructor && init.Field is { } zeroField
+                && MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(literal.Syntax, literal.StructType, zeroField) != null)
+            {
+                // Skip only the definition-owned zero stores that actually ran.
+                continue;
+            }
+
+            if (primaryValues.Contains(init))
+            {
+                continue;
+            }
+
             // Issue #3219: the synthesized ctor already ran this declared
             // initializer in-type.
             if (usesOwningInitializerConstructor && init.IsDeclarationInitializer)

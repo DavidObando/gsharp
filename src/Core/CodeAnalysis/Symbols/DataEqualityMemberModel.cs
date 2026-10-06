@@ -25,39 +25,124 @@ internal static class DataEqualityMemberModel
             return null;
         }
 
-        if (owner.BaseClass is { IsData: true, ClrType: null } sourceBase)
+        var hierarchy = owner.GetHierarchy();
+        for (var level = 0; level < hierarchy.Count; level++)
         {
-            return sourceBase;
-        }
-
-        if (owner.ImportedBaseType is not { ClrType: { } clrBase } importedBase)
-        {
-            return null;
-        }
-
-        if ((!ImportedAssemblySemantics.TryGetTypeSemantics(clrBase, out var semantics)
-             && !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(clrBase, out semantics))
-            || !semantics.IsData)
-        {
-            return null;
-        }
-
-        foreach (var method in ClrTypeUtilities.SafeGetMethods(
-                     clrBase, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-        {
-            var parameters = method.GetParameters();
-            if (method.Name == "Equals"
-                && method.IsVirtual && !method.IsFinal && !method.IsGenericMethod
-                && ClrTypeUtilities.AreSame(method.ReturnType, typeof(bool))
-                && parameters.Length == 1
-                && ClrTypeUtilities.AreSame(parameters[0].ParameterType, clrBase))
+            var ancestor = hierarchy[level];
+            if (level > 0 && ancestor is { IsData: true, ClrType: null })
             {
-                importedMethod = method;
-                return importedBase;
+                if (FindSealedIntermediaryOverride(hierarchy, level, ancestor) != null)
+                {
+                    return null;
+                }
+
+                return ancestor;
+            }
+
+            if (GetImportedDataBase(ancestor) is not { } importedDataBase)
+            {
+                continue;
+            }
+
+            var (importedBase, clrBase) = importedDataBase;
+            if (FindSealedIntermediaryOverride(hierarchy, level + 1, importedBase) != null)
+            {
+                return null;
+            }
+
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(
+                         clrBase, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                var parameters = method.GetParameters();
+                if (method.Name == "Equals"
+                    && method.IsVirtual && !method.IsFinal && !method.IsGenericMethod
+                    && ClrTypeUtilities.AreSame(method.ReturnType, typeof(bool))
+                    && parameters.Length == 1
+                    && ClrTypeUtilities.AreSame(parameters[0].ParameterType, clrBase))
+                {
+                    importedMethod = method;
+                    return importedBase;
+                }
             }
         }
 
         return null;
+    }
+
+    /// <summary>Finds a sealed source override that blocks the inherited typed equality slot.</summary>
+    /// <param name="owner">The derived data class.</param>
+    /// <returns>The blocking override, or null when the slot remains overridable.</returns>
+    internal static FunctionSymbol? GetSealedIntermediaryOverride(StructSymbol owner)
+    {
+        if (!owner.IsData || !owner.IsClass)
+        {
+            return null;
+        }
+
+        var hierarchy = owner.GetHierarchy();
+        for (var level = 1; level < hierarchy.Count; level++)
+        {
+            var ancestor = hierarchy[level];
+            if (ancestor is { IsData: true, ClrType: null } dataBase)
+            {
+                return FindSealedIntermediaryOverride(hierarchy, level, dataBase);
+            }
+
+            if (GetImportedDataBase(ancestor) is { } importedDataBase)
+            {
+                return FindSealedIntermediaryOverride(hierarchy, level + 1, importedDataBase.Symbol);
+            }
+        }
+
+        return null;
+    }
+
+    internal static FunctionSymbol? FindSealedIntermediaryOverride(
+        IReadOnlyList<StructSymbol> hierarchy,
+        int dataBaseLevel,
+        TypeSymbol dataBase)
+    {
+        for (var level = 1; level < dataBaseLevel; level++)
+        {
+            foreach (var method in hierarchy[level].Methods)
+            {
+                if (IsSealedIntermediaryEqualityOverride(method, dataBase, hierarchy[level]))
+                {
+                    return method;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    internal static bool IsSealedIntermediaryEqualityOverride(
+        FunctionSymbol method,
+        TypeSymbol dataBase,
+        StructSymbol? constructedOwner = null)
+        => method.Name == "Equals"
+            && method.IsOverride
+            && method.TypeParameters.IsDefaultOrEmpty
+            && method.Type == TypeSymbol.Bool
+            && method.ReturnRefKind == RefKind.None
+            && method.Parameters.Length == 1
+            && method.Parameters[0].RefKind == RefKind.None
+            && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                constructedOwner?.SubstituteMemberType(method.Parameters[0].Type)
+                    ?? method.Parameters[0].Type,
+                dataBase);
+
+    internal static (TypeSymbol Symbol, Type Clr)? GetImportedDataBase(StructSymbol ancestor)
+    {
+        if (ancestor.ImportedBaseType is not { ClrType: { } clrBase } importedBase
+            || ((!ImportedAssemblySemantics.TryGetTypeSemantics(clrBase, out var semantics)
+                 && !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(clrBase, out semantics))
+                || !semantics.IsData))
+        {
+            return null;
+        }
+
+        return (importedBase, clrBase);
     }
 
     /// <summary>Creates a self or inherited typed-base equality member.</summary>

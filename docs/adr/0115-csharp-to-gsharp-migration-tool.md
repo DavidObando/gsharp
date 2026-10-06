@@ -110,7 +110,92 @@ Since issue #948, the inline field initializers the translator emits here — `p
 
 `data class`/`data struct` synthesize equality and copy/update ergonomics (ADR-0029, ADR-0032). The `record` *keyword* is **not** emitted (removed by ADR-0078); the canonical spelling is `data class`/`data struct`. C# positional records map to the G# primary-constructor form (`data struct Point(X int32, Y int32)`), fields-only records to the body form. A C# `struct` with exactly one field that C# treats as a newtype is *not* auto-promoted to `inline struct` (ADR-0033) — that is a semantic judgment the tool will not make; it emits a plain `struct` and leaves `inline struct` adoption to the human.
 
-**T4 — fieldless record → zero-field `data class`.** A C# **fieldless record** with no positional parameter list — typically the `abstract record Shape;` base of a closed `record` hierarchy — maps to a zero-field `data class` (a zero-field data type is supported by gsc). C# `abstract` is **kept** as G#'s `abstract` class modifier (ADR-0195, issue #4674), so `abstract record Shape;` becomes `abstract data class Shape : IEquatable[Shape] { … }` (`abstract` implies `open`; it was dropped before the modifier existed, leaving an instantiable `open class`). The record-synthesized `IEquatable<Self>` interface is **preserved in the base list**: structural equality alone does not supply the native CLR interface contract (#4675). The case records (`sealed record Circle(double Radius) : Shape`) keep the `data class Circle(Radius float64) : Shape, IEquatable[Circle]` mapping and their self interfaces. *(Superseded: earlier revisions mapped a fieldless record to a plain `open class` because they believed `GS0104` forbade a zero-field data type; that mapping no longer applies.)*
+**T4 — fieldless record → zero-field `data` type.** Zero-field data types are supported (issue #2363), so a C# **fieldless record** with no positional parameter list — typically the `abstract record Shape;` base of a closed `record` hierarchy — maps to a `data class` (or `data struct`). An explicit-but-empty positional list remains a positional data declaration. C# `abstract` is kept as G#'s `abstract` class modifier (ADR-0195, issue #4674), so `abstract record Shape;` becomes `abstract data class Shape : IEquatable[Shape] { … }`; `abstract` implies `open` and preserves non-instantiability. The record-synthesized `IEquatable<Self>` is preserved in the base list for CLR ABI parity and is implemented by the data type's synthesized typed `Equals`. The case records (`sealed record Circle(double Radius) : Shape`) keep the `data class Circle(Radius float64) : Shape, IEquatable[Circle]` mapping and their self interfaces.
+
+**Record ABI (issue #4675).** The `IEquatable<Self>` contract also applies to
+generic records, using the self-instantiation rather than the open definition,
+including enclosing generic arguments.
+Record classes with a protected virtual `PrintMembers` hook retain it once per
+partial type, including sealed derived records; derived hooks call the base hook, including user-authored
+implementations. Generator implementing parts do not introduce C# record hooks
+into an existing G# data type: its inheritance shape belongs to the user part.
+Get-only properties retain both their getter-only metadata and initializer
+values. A computed positional property may consume its constructor parameter
+through field initializers instead of a synthesized positional store; missing
+storage in any other primary-constructor shape is an internal error. Explicit
+native positional data construction always invokes the primary constructor,
+independently of initializer-binding order. Bare positional data-struct declarations remain
+zero initialization (ADR-0159): their synthesized collection zero values do not
+run the primary constructor or ordinary field initializers. This distinction
+is carried on the bound literal through rewriting and emission.
+A redeclared positional property must retain its
+parameter's type, and closed-hierarchy bases retain protected copy constructors.
+An explicitly redeclared auto-property is elided only when its initializer
+references the matching constructor parameter by semantic identity and its
+public accessors and metadata match the synthesized property. Other initializer
+expressions, restricted accessor visibility, and attributes stay on the ordinary
+property/backing-field translation path. With no initializer, that explicit
+storage retains C#'s default value rather than acquiring a positional store.
+Accessor accessibility uses explicit Roslyn enum equality so this decision
+also survives the translator's own-source migration.
+An explicit null initializer likewise retains independent storage. Positional
+identity uses semantic parameter names separately from emitted-name allocator
+reservations, so escaped names do not change this decision. Its primary
+constructor ownership is resolved across the type's declarations, including
+preserved partial parts. Get-only accessor and constructor lowering use the
+same independent backing storage even without an initializer. An explicitly
+redeclared native auto-property keeps its own backing-field visibility and
+readonly flags; primary-constructor storage resolves that final property rather
+than replacing its field with the synthesized positional field.
+Positional literals and structural projections likewise run initializers in the
+primary constructor's parameter scope. Scalar literal inputs are prepared in
+written order; omitted primary arguments are retained as bound default children
+before rewriting and scratch-local planning, including struct-valued and open-generic
+defaults. Emission and expression trees consume those same prepared arguments.
+Staged expression-tree inputs use that local's expected type through the shared
+argument translator, retaining required lambda quotes and delegate adaptation.
+Named data-class and data-struct constructor expression trees use ordinary
+`NewExpression` constructor/argument semantics, without anonymous member metadata
+or inherited property-name lookup. Property-based anonymous literals retain
+their ordered `NewExpression.Members` contract, recorded by their synthesizer.
+Remaining property bindings and reads resolve the bound member's actual
+declaring construction by symbol/accessor identity and use declared-only
+reflection, preserving hidden and truly inherited generic properties.
+Source-constrained receivers resolve through their existing constraint reference
+before that same identity lookup, including inherited interface properties.
+Ordinary interface reads and source-interface-constrained reads share the owner
+binding path, retaining constructed interface owners and substituted signatures.
+Ordered literals pass their original syntax to retained omitted arguments;
+required managed-reference defaults remain source-anchored diagnostics.
+Collection-initializer forms prepare constructor inputs and the
+leading scalar prefix before construction, then retain the order of remaining
+member/collection operations. Native copying is a distinct bound
+operation: value types copy their entire value and classes dispatch through
+`<Clone>$`, preserving private, get-only and inherited state without rerunning
+initializers. The copied receiver is materialized once before any update,
+including awaited updates. Replacement positional getters remain deconstruction
+members in primary-parameter order; virtual getters retain dispatch and
+ref-returning getters retain their CLR return signature before loading the
+referenced value. Derived data classes forward the nearest
+record base's typed `Equals` slot through virtual object equality, so inherited
+`IEquatable<Base>` includes derived state; constructed generic base comparisons
+resolve the base definition's typed method through an instantiated MemberRef.
+Typed equality handles are planned before any class bodies are emitted, so
+forward-declared and indirect data bases participate in equality too.
+Constructor inputs match the positional member's symbol, not an inherited
+member that happens to share its name; other inputs remain member assignments.
+Ordered literal staging uses the same own-member lookup, leaving inherited
+assignments after collection/content operations in their written order.
+Self-typed equality starts a new virtual slot; only the base-typed forwarding
+method overrides an inherited slot. Primary constructors own declared
+initializers: positional literals do not
+inject those entries into later rewriting. Expression-tree construction retains
+scalar preparation in a generated variable/assignment block, then invokes the
+primary constructor in parameter order and binds remaining members; this does
+not enable user-written statement-body expression trees.
+Printing uses object formatting except
+for ref-like values, which call `ToString` without boxing; structural function
+values widen through `System.Delegate` before object formatting.
 
 **T1 — C# tuples → native G# positional tuples.** *Amended by ADR-0172 (2026-08-28): G# now supports named tuple elements (`(name string, price int32)` types, `(name: e)` literal labels), so the name-dropping described below is superseded — cs2gs preserves element names once its ADR-0172 Phase C lands. The remainder of this section records the original positional-only mapping.* A C# value/named tuple (`(string Name, int Price, int Quantity)`) maps to the **native G# positional tuple type** `(string, int32, int32)` (spec §Type syntax), *not* to a synthesized `data struct`. G# tuples were **positional only** — the named-element spelling `(Name string, …)` did not parse — so C# element **names were dropped** at the type, and a named-element **access** `item.Price` lowered to the positional field `item.Item2` (resolved via Roslyn's `IFieldSymbol.CorrespondingTupleField`); positional `item.Item1` passes through. Tuple **construction** `(a, b, c)` maps to the G# tuple literal `(a, b, c)`. The mapping is recorded as an Info diagnostic. This was chosen over synthesizing a `data struct` per tuple shape because a `data struct` element type triggers a real compiler gap (below) and because native tuples are the genuinely canonical, round-trippable G# form.
 
@@ -287,6 +372,13 @@ with a triage note.
 
 #### B.11 Members: fields, properties, constructors, statics, enums, attributes
 
+Issue #4765 / ADR-0197 adds explicit `abstract prop` and `abstract override
+prop` for Roslyn abstract property contracts, including positional record
+declarations. Abstract get/set requirements retain their accessor lists instead
+of being collapsed to the concrete auto-property shorthand. A get/init override
+with an initializer keeps its init accessor and privately initialized storage;
+only a truly getter-only override uses the getter-only backing-field lowering.
+
 - **Fields** require `var`/`let` (ADR-0067, §B.3).
 - **Properties** → `prop Name T` for auto-properties, with `{ get { … } set(v) { … } }` bodies for computed/custom accessors (ADR-0051, `samples/PropertyRef/Lib/Lib.gs`). `open prop`/`override prop` mirror method virtuality. A C# **`init` accessor** maps to the first-class G# `init` accessor (issue #946); an init-only auto-property `{ get; init; }` keeps its explicit accessors (it is *not* collapsed to the read-write `prop Name T` auto form, which would lose the init-only semantics). *(Superseded note: earlier revisions mapped C# `init` to G# `set` with an Info gap diagnostic because G# had no `init` accessor; that gap is now closed.)*
 - **Constructors** → `init(params) { … }`, chaining via `: Base(args)` (ADR-0065). C# primary constructors / positional records map to the G# primary-constructor `Name(params)` head.
@@ -332,9 +424,9 @@ The mapping is recorded as an Info diagnostic. An entry class that declares a ne
 
 Canonical output uses **width-bearing** primitive names (ADR-0049): C# `int`→`int32`, `uint`→`uint32`, `long`→`int64`, `ulong`→`uint64`, `short`→`int16`, `ushort`→`uint16`, `byte`→`uint8`, `sbyte`→`int8`, `float`→`float32`, `double`→`float64`, `bool`→`bool`, `string`→`string`, `char`→`char`, `object`→`object`. The friendly aliases (ADR-0098) parse, but the printer emits the canonical width-bearing form so output is uniform. **Identifier names are preserved verbatim** from C# (PascalCase types/members, camelCase locals) — the tool does not rename to a different casing convention. **Numeric literal spellings are likewise preserved verbatim** (the original token text, not the bound value): a C# `2.0` stays `2.0` and hex such as `0xFF0000` stays `0xFF0000`. This is load-bearing — G# does not implicitly promote across the integer/floating boundary at a binary operator, so collapsing `2.0` to `2` would type it as `int32` and make `int32 * float64` a hard `GS0129` error.
 
-#### B.13 Data-type structural equality and `IEquatable<Self>` — ADR-0078, ADR-0025
+#### B.13 Data-type structural equality and `IEquatable<Self>` — ADR-0078, ADR-0025; amended by issue #4675
 
-A `data class`/`data struct` auto-synthesizes value (structural) equality, `GetHashCode`, and the `with` updater. A C# record keeps its compiler-synthesized `IEquatable<Self>` in the base clause when emitted as a `data` type (#4675); the compiler-owned typed equality member implements that actual CLR contract. Naming the enclosing type as a base-clause type *argument* is legal since issue #949. For inherited data classes, a compiler-owned typed-base override preserves most-derived structural dispatch (#4777), including calls through inherited interfaces. The self comparison's nonvirtual base-field call remains separate from that virtual dispatch (ADR-0029's 2026-10-04 amendment). The structural `==`/`!=` and `with` come from the `data` modifier.
+A `data class`/`data struct` auto-synthesizes value (structural) equality, `GetHashCode`, and the `with` updater. A C# record keeps its compiler-synthesized `IEquatable<Self>` in the base clause so the translated CLR type preserves the C# public ABI; the compiler-owned typed equality member implements the interface. Naming the enclosing type as a base-clause type *argument* is legal since issue #949. For inherited data classes, a compiler-owned typed-base override preserves most-derived structural dispatch (#4777), including calls through inherited interfaces. The self comparison's nonvirtual base-field call remains separate from that virtual dispatch (ADR-0029's 2026-10-04 amendment). The structural `==`/`!=` and `with` come from the `data` modifier.
 
 A **non-`data` `struct`** that *explicitly* implements an interface (`struct Money : IEquatable<Money>` with a hand-written `Equals`) keeps its interface clause: gap #976 — the parser rejecting a `:` after a struct name — is **resolved** (issue #976), so the translator emits `struct Money(Cents int32) : IEquatable[Money]` and the struct's own `Equals`/`GetHashCode` satisfy the interface. A `struct` naming a **class or struct** base (rather than an interface) is now rejected with the dedicated diagnostic `GS0382` rather than the former generic `GS0005`, matching the value-type-has-no-base-class rule. Both data-synthesized and genuinely hand-implemented interfaces are preserved.
 

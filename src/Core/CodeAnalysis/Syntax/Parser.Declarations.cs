@@ -1439,7 +1439,8 @@ public partial class Parser
                 // `open`/`override` and an optional `async` (only meaningful
                 // before `func`), then `func`, `prop`, or `event`.
                 var ahead = 1;
-                while (Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword)
+                while (Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword
+                    || (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "abstract"))
                 {
                     ahead++;
                 }
@@ -1485,7 +1486,9 @@ public partial class Parser
             // modifiers (any order) before the method's `func` keyword.
             SyntaxToken? memberOpenModifier = null;
             SyntaxToken? memberOverrideModifier = null;
-            while (Current.Kind == SyntaxKind.OpenKeyword || Current.Kind == SyntaxKind.OverrideKeyword)
+            SyntaxToken? memberAbstractModifier = null;
+            while (Current.Kind == SyntaxKind.OpenKeyword || Current.Kind == SyntaxKind.OverrideKeyword
+                || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "abstract"))
             {
                 if (Current.Kind == SyntaxKind.OpenKeyword && memberOpenModifier == null)
                 {
@@ -1495,12 +1498,21 @@ public partial class Parser
                 {
                     memberOverrideModifier = NextToken();
                 }
+                else if (Current.Text == "abstract" && memberAbstractModifier == null)
+                {
+                    memberAbstractModifier = NextToken();
+                }
                 else
                 {
                     // Duplicate modifier — diagnose by consuming and reporting.
                     Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.FuncKeyword);
                     NextToken();
                 }
+            }
+
+            if (memberAbstractModifier != null && !(Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop"))
+            {
+                Diagnostics.ReportUnexpectedToken(memberAbstractModifier.Location, memberAbstractModifier.Kind, SyntaxKind.IdentifierToken);
             }
 
             // ADR-0192 / issue #4301: `partial` (ADR-0192), `unsafe` (ADR-0122)
@@ -1677,6 +1689,7 @@ public partial class Parser
                 }
 
                 var property = ParsePropertyDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
+                property.AbstractModifier = memberAbstractModifier;
                 property.WithAnnotations(memberAnnotations);
                 properties.Add(property);
             }

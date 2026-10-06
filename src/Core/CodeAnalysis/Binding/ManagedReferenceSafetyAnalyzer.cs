@@ -15,15 +15,21 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>Checks initialization and segment-local borrowed adapters without changing their ABI.</summary>
 internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 {
+    private const int MaxInitializerDepth = 64;
     private readonly DiagnosticBag diagnostics;
     private readonly Dictionary<TypeSymbol, TypeSymbol?> required = new();
     private readonly HashSet<VariableSymbol> managedLocations = new();
-    private readonly HashSet<(FunctionSymbol Function, StructSymbol? InitializerOwner)> analyzedFunctions = new();
-    private readonly HashSet<StructSymbol> analyzedInitializerConstructions = new();
+    private readonly HashSet<(FunctionSymbol Function, StructSymbol? InitializerOwner, SyntaxNode? InitializerAnchor)> analyzedFunctions = new();
+    private readonly HashSet<(StructSymbol Owner, BoundExpression Initializer)> activeInitializers = new();
+    private readonly HashSet<(StructSymbol Definition, StructSymbol Owner, BoundExpression Initializer, SyntaxNode? Anchor, bool ResultOverwritten, bool StateMachine)> completedInitializers = new();
     private StructSymbol? initializerOwner;
+    private SyntaxNode? initializerAnchor;
+    private BoundExpression? overwrittenInitializerResult;
     private bool analyzingStateMachine;
 
     private ManagedReferenceSafetyAnalyzer(DiagnosticBag diagnostics) => this.diagnostics = diagnostics;
+
+    internal int InitializerVisitCount { get; private set; }
 
     public static void Analyze(
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functions,
@@ -96,13 +102,13 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             case BoundFunctionLiteralExpression literal:
                 this.AnalyzeFunction(literal.Function, literal.Body);
                 return;
-            case BoundDefaultExpression value when this.RequiredHandle(this.initializerOwner?.SubstituteMemberType(value.Type) ?? value.Type) != null:
+            case BoundDefaultExpression value when this.RequiredHandle(this.InitializerType(value.Type)) != null:
                 this.Report(value, "default would synthesize a null non-null managed-reference slot; use a nullable handle or initialize the aggregate");
                 break;
             case BoundStructLiteralExpression literal:
                 if (literal.CopySource == null)
                 {
-                    this.CheckConstruction(literal.StructType, literal, literal.Initializers.Where(i => i.Field != null).Select(i => i.Field), explicitConstructor: false);
+                    this.CheckConstruction(literal.StructType, literal, literal.Initializers.Select(i => i.Field ?? i.Property?.BackingField), explicitConstructor: false);
                 }
 
                 foreach (var initializer in literal.Initializers)
@@ -128,7 +134,8 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 this.CheckConstructorArguments(chaining.Arguments, chaining.SelectedConstructor);
                 break;
             case BoundArrayCreationExpression array:
-                if (this.RequiredHandle(this.initializerOwner?.SubstituteMemberType(array.ElementType) ?? array.ElementType) != null
+                if (this.RequiredHandle(this.InitializerType(array.ElementType)) != null
+                    && !array.DimensionExpressions.Any(dimension => dimension.ConstantValue is { HasValue: true, Value: 0 })
                     && (array.LengthExpression != null || (array.ContainerType is ArrayTypeSymbol fixedArray && fixedArray.Length > array.Elements.Length)))
                 {
                     this.Report(array, "array initialization must supply every non-null managed-reference element");
@@ -277,7 +284,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void AnalyzeFunction(FunctionSymbol function, BoundBlockStatement body)
     {
-        if (!this.analyzedFunctions.Add((function, this.initializerOwner)))
+        if (!this.analyzedFunctions.Add((function, this.initializerOwner, this.initializerAnchor)))
         {
             return;
         }
@@ -397,8 +404,13 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             }
         }
 
+        // A positional value-type default constructor is a zero-storage helper,
+        // not the primary initialization path. Its uses are checked below with
+        // zero provenance, without crediting ordinary declared initializers.
         if ((type.ExplicitConstructors.IsDefaultOrEmpty && type.IsClass)
-            || (type.NeedsSynthesizedValueStructDefaultCtor && type.LiteralInitializerMarkerCount == 0))
+            || (type.NeedsSynthesizedValueStructDefaultCtor
+                && !type.ValueStructDefaultCtorIsZeroInitialization
+                && type.LiteralInitializerMarkerCount == 0))
         {
             this.CheckImplicitConstructorPath(type, fields);
         }
@@ -423,8 +435,64 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             this.diagnostics);
     }
 
-    private void CheckImplicitConstructorPath(StructSymbol type, ImmutableArray<FieldSymbol> fields)
+    private void CheckImplicitConstructorPath(
+        StructSymbol type, ImmutableArray<FieldSymbol> fields, BoundStructLiteralExpression? zeroValue = null, bool requireInitializedResult = true)
     {
+        if (zeroValue != null)
+        {
+            var validatedInitializers = type.NeedsSynthesizedValueStructDefaultCtor && !type.ValueStructDefaultCtorIsZeroInitialization;
+            var declaredStorage = validatedInitializers ? InstanceStorageTypes(type.Definition) : null;
+            var supplied = zeroValue.Initializers.Select(initializer => initializer.Field ?? initializer.Property?.BackingField)
+                .OfType<FieldSymbol>().Select(field => zeroValue.StructType.GetDefinitionField(field) ?? field).ToHashSet();
+            foreach (var storage in InstanceStorageTypes(type))
+            {
+                var writtenField = type.GetDefinitionField(storage.Key);
+                var declaredField = writtenField ?? storage.Key;
+                var resultOverwritten = supplied.Contains(declaredField);
+                var constructorInitialized = validatedInitializers
+                    && this.TryVisitConstructorInitializer(type, storage.Key, zeroValue, resultOverwritten);
+                if (resultOverwritten || constructorInitialized)
+                {
+                    continue;
+                }
+
+                // Arrays have element obligations even when their storage itself
+                // is not a required handle. Check every actual helper value.
+                if (type.ValueStructDefaultCtorIsZeroInitialization
+                    && MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(zeroValue.Syntax, type, storage.Key) is { } helperValue)
+                {
+                    this.VisitExpression(helperValue);
+                    continue;
+                }
+
+                if (this.RequiredHandle(storage.Value) != null)
+                {
+                    // A validated ordinary constructor proves its definition's
+                    // written fields, not unwritten properties or new T slots.
+                    if (writtenField != null && declaredStorage != null && declaredStorage.TryGetValue(declaredField, out var declaredType)
+                        && this.RequiredHandle(declaredType) != null)
+                    {
+                        continue;
+                    }
+
+                    if (requireInitializedResult)
+                    {
+                        this.Report(zeroValue, $"zero initialization would synthesize a null non-null managed-reference field '{storage.Key.Name}'; explicitly construct the aggregate");
+                    }
+                }
+                else if (storage.Key.Accessibility != Accessibility.Public
+                    && MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, storage.Value) != null
+                    && zeroValue.Syntax is { } syntax)
+                {
+                    // No in-type store exists, and an external private-field
+                    // store is not a legal substitute for the missing zero path.
+                    this.diagnostics.ReportMemberInaccessible(syntax.Location, storage.Key.Name, type.Name, storage.Key.Accessibility);
+                }
+            }
+
+            return;
+        }
+
         var initialized = type.InstanceFieldInitializers.Keys.Select(field => field.Name)
             .Concat(type.PrimaryConstructorParameters.Select(parameter => parameter.Name))
             .ToHashSet();
@@ -486,50 +554,102 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void CheckConstruction(StructSymbol type, BoundExpression node, IEnumerable<FieldSymbol?> initialized, bool explicitConstructor)
     {
-        type = this.initializerOwner?.SubstituteMemberType(type) as StructSymbol ?? type;
-
-        // Declaration expressions also execute in authored constructors.
-        // Check their defaults in the actual constructed owning scope first.
-        if (!ReferenceEquals(type, type.Definition) && this.analyzedInitializerConstructions.Add(type))
-        {
-            var previousOwner = this.initializerOwner;
-            this.initializerOwner = type;
-            foreach (var initializer in type.Definition.InstanceFieldInitializers.Values)
-            {
-                this.VisitExpression(initializer);
-            }
-
-            this.initializerOwner = previousOwner;
-        }
-
-        if (explicitConstructor || (type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty)
-            && node is not BoundStructLiteralExpression { StructType.NeedsSynthesizedValueStructDefaultCtor: true }))
-        {
-            return;
-        }
-
-        if (node is BoundStructLiteralExpression literal)
+        var supplied = initialized.OfType<FieldSymbol>().Select(field => type.GetDefinitionField(field) ?? field).ToHashSet();
+        var suppliedNames = supplied.Select(field => field.Name).ToHashSet();
+        var requireInitializedResult = !ReferenceEquals(node, this.overwrittenInitializerResult);
+        type = (StructSymbol)this.InitializerType(type);
+        var defaultedPrimaryFields = new HashSet<FieldSymbol>();
+        if (node is BoundStructLiteralExpression literal
+            && !literal.CallsPrimaryConstructor
+            && type.HasDeclaredPrimaryConstructor)
         {
             foreach (var argument in literal.GetPrimaryConstructorArguments())
             {
                 if (!argument.IsSupplied)
                 {
                     this.VisitExpression(argument.Value);
+                    defaultedPrimaryFields.Add(type.GetDefinitionField(argument.Field) ?? argument.Field);
                 }
             }
         }
 
-        var supplied = initialized.OfType<FieldSymbol>().Select(f => f.Name).ToHashSet();
-        foreach (var field in type.Fields)
+        if (node is BoundStructLiteralExpression { IsZeroInitialization: true } zeroValue)
         {
-            if (this.RequiredHandle(field.Type) != null && !supplied.Contains(field.Name)
-                && !type.InstanceFieldInitializers.ContainsKey(field)
-                && !type.Definition.InstanceFieldInitializers.Keys.Any(declared => declared.Name == field.Name)
-                && !type.PrimaryConstructorParameters.Any(p => p.Name == field.Name))
+            this.CheckImplicitConstructorPath(type, ImmutableArray<FieldSymbol>.Empty, zeroValue, requireInitializedResult);
+            return;
+        }
+
+        var explicitPath = explicitConstructor || (type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty)
+            && node is not BoundStructLiteralExpression { StructType.NeedsSynthesizedValueStructDefaultCtor: true });
+        var callsPrimary = node is BoundStructLiteralExpression { CallsPrimaryConstructor: true }
+            || (node is BoundConstructorCallExpression { SelectedConstructor: null } call && type.HasDeclaredPrimaryConstructor
+                && call.Arguments.Length == type.PrimaryConstructorParameters.Length);
+        var constructorStores = new HashSet<FieldSymbol>(defaultedPrimaryFields);
+        var constructorStoreNames = defaultedPrimaryFields.Select(field => field.Name).ToHashSet();
+        if (callsPrimary)
+        {
+            foreach (var parameter in type.PrimaryConstructorParameters)
             {
-                this.Report(node, $"construction must initialize non-null managed-reference field '{field.Name}'");
+                var field = BoundStructLiteralExpression.GetPrimaryMember(type, parameter.Name) switch
+                {
+                    FieldSymbol primaryField => primaryField,
+                    PropertySymbol property => property.BackingField,
+                    _ => null,
+                };
+                if (field != null)
+                {
+                    var stored = type.GetDefinitionField(field) ?? field;
+                    constructorStores.Add(stored);
+                    constructorStoreNames.Add(stored.Name);
+                }
             }
         }
+
+        if (explicitPath || type.IsClass || callsPrimary
+            || (type.NeedsSynthesizedValueStructDefaultCtor && !type.ValueStructDefaultCtorIsZeroInitialization))
+        {
+            foreach (var field in type.Fields)
+            {
+                var declaredField = type.GetDefinitionField(field);
+                var storage = declaredField ?? field;
+                if (this.TryVisitConstructorInitializer(type, field, node, supplied.Contains(storage) || suppliedNames.Contains(storage.Name)))
+                {
+                    var stored = Invariant.Required(declaredField, "a constructor initializer has definition-owned field storage");
+                    constructorStores.Add(stored);
+                    constructorStoreNames.Add(stored.Name);
+                }
+            }
+        }
+
+        if (explicitPath)
+        {
+            return;
+        }
+
+        foreach (var storage in InstanceStorageTypes(type))
+        {
+            var declaredField = type.GetDefinitionField(storage.Key) ?? storage.Key;
+            if (requireInitializedResult && this.RequiredHandle(storage.Value) != null
+                && !supplied.Contains(declaredField) && !suppliedNames.Contains(declaredField.Name)
+                && !constructorStores.Contains(declaredField) && !constructorStoreNames.Contains(declaredField.Name))
+            {
+                this.Report(node, $"construction must initialize non-null managed-reference field '{storage.Key.Name}'");
+            }
+        }
+    }
+
+    private static Dictionary<FieldSymbol, TypeSymbol> InstanceStorageTypes(StructSymbol type)
+    {
+        var storage = type.Fields.ToDictionary(field => field, field => field.Type);
+        foreach (var property in type.Properties)
+        {
+            if (property.BackingField is { } backingField)
+            {
+                storage[backingField] = property.Type;
+            }
+        }
+
+        return storage;
     }
 
     private TypeSymbol? RequiredHandle(TypeSymbol type)
@@ -549,7 +669,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         IEnumerable<TypeSymbol> fields;
         if (type is StructSymbol { IsClass: false } source)
         {
-            fields = source.Fields.Select(f => f.Type);
+            fields = InstanceStorageTypes(source).Values;
         }
         else if (type is TupleTypeSymbol tuple)
         {
@@ -582,9 +702,69 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void Report(BoundNode node, string reason, BoundNode? fallback = null)
     {
-        if ((node.Syntax ?? fallback?.Syntax) is { } syntax)
+        if ((this.initializerAnchor ?? node.Syntax ?? fallback?.Syntax) is { } syntax)
         {
             this.diagnostics.ReportManagedReference(syntax.Location, reason);
+        }
+    }
+
+    private TypeSymbol InitializerType(TypeSymbol type)
+        => this.initializerOwner?.SubstituteMemberType(type) ?? type;
+
+    private bool TryVisitConstructorInitializer(StructSymbol owner, FieldSymbol field, BoundExpression site, bool resultOverwritten = false)
+    {
+        var writtenField = owner.GetDefinitionField(field);
+        if (writtenField == null || !owner.Definition.InstanceFieldInitializers.TryGetValue(writtenField, out var initializer))
+        {
+            return false;
+        }
+
+        this.VisitConstructedInitializer(owner, site, initializer, resultOverwritten);
+        return true;
+    }
+
+    private void VisitConstructedInitializer(StructSymbol owner, BoundExpression site, BoundExpression initializer, bool resultOverwritten)
+    {
+        var anchor = this.initializerAnchor
+            ?? (owner.IsClass || owner.IsData || site is BoundStructLiteralExpression { IsZeroInitialization: true }
+                ? site.Syntax
+                : null);
+        var completedKey = (owner.Definition, owner, initializer, anchor, resultOverwritten, this.analyzingStateMachine);
+        if (this.completedInitializers.Contains(completedKey) || this.activeInitializers.Contains((owner, initializer)))
+        {
+            return;
+        }
+
+        // Exact-owner cycles terminate above; growing type arguments need a finite bound.
+        if (this.activeInitializers.Count >= MaxInitializerDepth)
+        {
+            this.Report(site, $"constructor initializer validation exceeds the supported recursion depth of {MaxInitializerDepth}; simplify the recursive construction");
+            return;
+        }
+
+        this.activeInitializers.Add((owner, initializer));
+        var previousOwner = this.initializerOwner;
+        var previousAnchor = this.initializerAnchor;
+        var previousOverwrittenResult = this.overwrittenInitializerResult;
+        this.initializerOwner = owner;
+        this.initializerAnchor = anchor;
+
+        // A later store replaces this result, not the expressions executed to obtain it.
+        this.overwrittenInitializerResult = resultOverwritten ? initializer : null;
+        try
+        {
+            this.InitializerVisitCount++;
+            this.VisitExpression(initializer);
+
+            // Diagnostics already belong to this anchor; other sites must validate separately.
+            this.completedInitializers.Add(completedKey);
+        }
+        finally
+        {
+            this.initializerOwner = previousOwner;
+            this.initializerAnchor = previousAnchor;
+            this.overwrittenInitializerResult = previousOverwrittenResult;
+            this.activeInitializers.Remove((owner, initializer));
         }
     }
 

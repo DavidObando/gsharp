@@ -622,8 +622,8 @@ public sealed class Issue4755GenericStructInitializerEmitTests
             IlVerifier.Verify(emitted);
             AssertNativeConsumer(directory, emitted, "Data4755.Api", "7/7;text/text;2");
             var type = EmittedFixture.Load(emitted).GetType("Data4755.Data`1", throwOnError: true);
-            Assert.Single(type.GetConstructors());
             Assert.Single(type.GetConstructors(), constructor => constructor.GetParameters().Length == 1);
+            Assert.Empty(type.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
             var field = type.GetField("Copy", BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.True(field.IsPrivate);
             Assert.True(field.IsInitOnly);
@@ -913,7 +913,7 @@ public sealed class Issue4755GenericStructInitializerEmitTests
             AssertNativeConsumer(directory, emitted, "Authored4755.Api", "7/7/7/7/0/0/IICIIA");
             Assert.Equal("7/7;text/text", Invoke(EmittedFixture.Load(emitted), "Authored4755.Api", "DataRead"));
             var data = EmittedFixture.Load(emitted).GetType("Authored4755.Data`1", throwOnError: true);
-            Assert.Single(data.GetConstructors());
+            Assert.Single(data.GetConstructors(), constructor => constructor.GetParameters().Length == 1);
             Assert.Empty(data.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
             var consumer = EmitCSharp(directory, "DirectAuthored4755", """
                 public static class DirectAuthored4755
@@ -1556,7 +1556,9 @@ public sealed class Issue4755GenericStructInitializerEmitTests
             Assert.Equal(holder.GetGenericArguments()[0], copy.FieldType);
             Assert.True(holder.GetField("Handles", BindingFlags.Instance | BindingFlags.NonPublic).IsPrivate);
             Assert.Single(holder.GetConstructors());
-            Assert.Single(assembly.GetType("PrimaryPrivate4747.Data`1", throwOnError: true).GetConstructors());
+            var data = assembly.GetType("PrimaryPrivate4747.Data`1", throwOnError: true);
+            Assert.Single(data.GetConstructors(), constructor => constructor.GetParameters().Length == 1);
+            Assert.Empty(data.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
         });
     }
 
@@ -1748,6 +1750,38 @@ public sealed class Issue4755GenericStructInitializerEmitTests
             Assert.DoesNotContain("GS9998", result.Output, StringComparison.Ordinal);
             Assert.False(File.Exists(result.AssemblyPath));
             Assert.Single(result.Output.Split('\n'), text => text.Contains("error GS0604:", StringComparison.Ordinal));
+        });
+    }
+
+    [Fact]
+    public void PositionalDataStructZeroHelper_IsHiddenBeyondThePrimaryConstructorArity()
+    {
+        InDirectory(directory =>
+        {
+            var emitted = Compile(directory, """
+                package ZeroHelper4755
+                import System
+                data struct Box(Flag bool) {
+                    private var Items []int32
+                    public prop Length int32 { get { return Items.Length } }
+                }
+                class Api {
+                    shared {
+                        public func Run() string {
+                            return Box{}.Length.ToString() + "/" + Box(true).Flag.ToString()
+                        }
+                    }
+                }
+                """);
+            IlVerifier.Verify(emitted);
+            Assert.Equal("0/True", Invoke(EmittedFixture.Load(emitted), "ZeroHelper4755.Api"));
+            var type = EmittedFixture.Load(emitted).GetType("ZeroHelper4755.Box", throwOnError: true);
+            Assert.Single(type.GetConstructors());
+            Assert.Single(type.GetConstructors(), constructor => constructor.GetParameters().Length == 1);
+            var helper = Assert.Single(type.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
+            Assert.True(helper.IsAssembly);
+            Assert.Equal(2, helper.GetParameters().Length);
+            Assert.All(helper.GetParameters(), parameter => Assert.Equal(typeof(bool), parameter.ParameterType));
         });
     }
 

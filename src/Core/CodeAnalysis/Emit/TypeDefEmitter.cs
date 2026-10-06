@@ -1557,11 +1557,15 @@ internal sealed class TypeDefEmitter
     /// <returns>The emitted constructor's MethodDef handle.</returns>
     public MethodDefinitionHandle EmitValueStructDefaultConstructor(StructSymbol structSym)
     {
-        var parameters = structSym.PrimaryConstructorParameters;
+        var usesPrimarySignature = structSym.HasPrimaryConstructor
+            && !structSym.ValueStructDefaultCtorIsZeroInitialization;
+        var parameters = usesPrimarySignature
+            ? structSym.PrimaryConstructorParameters
+            : ImmutableArray<ParameterSymbol>.Empty;
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {
-            bodyOffset = structSym.HasPrimaryConstructor
+            bodyOffset = usesPrimarySignature
                 ? this.emitClassPrimaryConstructorBodyBytes(structSym, default)
                 : this.emitValueStructDefaultConstructorBodyBytes(structSym);
         }
@@ -1671,7 +1675,7 @@ internal sealed class TypeDefEmitter
                     var param = parameters[i];
                     if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(classSym, param.Name, out var field))
                     {
-                        throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+                        continue;
                     }
 
                     if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
@@ -1845,9 +1849,18 @@ internal sealed class TypeDefEmitter
                     this.emitParamCollectionAttributeOnParameter(paramHandle);
                 }
             }
+
+            this.EmitConstructorParameterNullability(paramHandle, p);
         }
 
         paramHandles = handles.MoveToImmutable();
+        return first;
+    }
+
+    internal ParameterHandle AddPrimaryCtorParameters(ImmutableArray<ParameterSymbol> parameters)
+    {
+        var first = this.AddPrimaryCtorParameterRows(parameters, out var parameterHandles);
+        this.EmitUserAttributesOnParameters(parameterHandles, parameters);
         return first;
     }
 

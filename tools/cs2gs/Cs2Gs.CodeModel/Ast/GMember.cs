@@ -163,6 +163,7 @@ public sealed class PropertyDeclaration : GMember
     /// indexer (issue #3839).
     /// </param>
     /// <param name="isReadOnlyRefReturn">Whether the return reference is readonly.</param>
+    /// <param name="isAbstract">Whether the property explicitly declares abstract accessor slots.</param>
     public PropertyDeclaration(
         string name,
         GTypeReference type,
@@ -175,7 +176,8 @@ public sealed class PropertyDeclaration : GMember
         GStatement expressionBody = null,
         GTypeReference explicitInterfaceType = null,
         bool isRefReturn = false,
-        bool isReadOnlyRefReturn = false)
+        bool isReadOnlyRefReturn = false,
+        bool isAbstract = false)
     {
         Name = name;
         Type = type;
@@ -189,6 +191,7 @@ public sealed class PropertyDeclaration : GMember
         ExplicitInterfaceType = explicitInterfaceType;
         IsRefReturn = isRefReturn;
         IsReadOnlyRefReturn = isReadOnlyRefReturn;
+        IsAbstract = isAbstract;
     }
 
     /// <summary>Gets the property name.</summary>
@@ -208,6 +211,9 @@ public sealed class PropertyDeclaration : GMember
 
     /// <summary>Gets a value indicating whether the property is an <c>override</c>.</summary>
     public bool IsOverride { get; }
+
+    /// <summary>Gets a value indicating whether this property explicitly declares abstract accessor slots.</summary>
+    public bool IsAbstract { get; }
 
     /// <summary>Gets the property attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }

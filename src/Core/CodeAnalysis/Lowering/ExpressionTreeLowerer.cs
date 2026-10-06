@@ -66,6 +66,11 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         nameof(System.Linq.Expressions.Expression.Property),
         typeof(System.Linq.Expressions.Expression),
         typeof(string));
+    private static readonly MethodInfo ExpressionPropertyInfoMethod = GetRequiredMethod(
+        typeof(System.Linq.Expressions.Expression),
+        nameof(System.Linq.Expressions.Expression.Property),
+        typeof(System.Linq.Expressions.Expression),
+        typeof(PropertyInfo));
     private static readonly MethodInfo ExpressionPropertyStaticMethod = GetRequiredMethod(
         typeof(System.Linq.Expressions.Expression),
         nameof(System.Linq.Expressions.Expression.Property),
@@ -463,6 +468,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return BuildRuntimeConstant(nestedDelegateLiteral, nestedDelegateLiteral.Type);
             case BoundStructLiteralExpression structLiteral:
                 return this.BuildStructLiteralExpression(structLiteral, parameterMap);
+            case BoundBlockExpression block when BoundStructLiteralExpression.IsStagedConstruction(block):
+                return this.BuildStagedConstructionExpression(block, parameterMap);
             case BoundBlockExpression block when this.TryBuildObjectInitializerExpression(block, parameterMap, out var objectInitializer):
                 return objectInitializer;
             default:
@@ -527,27 +534,19 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         BoundPropertyAccessExpression property,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
-        if (property.Receiver == null)
-        {
-            return new BoundClrStaticCallExpression(
-                property.Syntax,
-                ExpressionPropertyStaticMethod,
-                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberExpression), NullabilityFreeReason.TypeLiteral),
-                ImmutableArray.Create<BoundExpression>(
-                    new BoundLiteralExpression(null, null, TypeSymbol.Null),
-                    CreateTypeOf(Invariant.Required(
-                        property.StructType,
-                        "this is the receiverless (static) property form; only the interface-receiver form leaves StructType null, and that form carries a receiver")),
-                    new BoundLiteralExpression(null, property.Property.Name, TypeSymbol.String)));
-        }
-
         return new BoundClrStaticCallExpression(
             property.Syntax,
-            ExpressionPropertyInstanceMethod,
+            ExpressionPropertyInfoMethod,
             TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
-                UpcastToExpression(this.TranslateExpression(property.Receiver, parameterMap)),
-                new BoundLiteralExpression(null, property.Property.Name, TypeSymbol.String)));
+                property.Receiver == null
+                    ? new BoundLiteralExpression(null, null, TypeSymbol.Null)
+                    : UpcastToExpression(this.TranslateExpression(property.Receiver, parameterMap)),
+                BuildUserPropertyInfoLookup(
+                    Invariant.Required(
+                        property.InterfaceType as TypeSymbol ?? property.StructType ?? property.Receiver?.Type,
+                        "a bound property read carries its declaring or receiver construction"),
+                    property.Property)));
     }
 
     private BoundExpression BuildClrPropertyAccessExpression(
@@ -712,13 +711,6 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 BuildExpressionArray(elements)));
     }
 
-    // Issue #2224: struct/anonymous-class literals (`Name { X = 1 }` and the
-    // new `object { let Name string = "Foo" }` anonymous-class form) lower to
-    // `Expression.New(ctor, args)` exactly like BuildUserConstructorExpression
-    // does for `Name(1)` calls — the synthesized primary constructor's
-    // parameter order always matches Initializers order (both are built
-    // directly off StructSymbol.Fields), so initializer values can be used
-    // as constructor arguments positionally.
     private BoundExpression BuildStructLiteralExpression(
         BoundStructLiteralExpression structLiteral,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
@@ -741,7 +733,51 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 : this.TranslateExpression(structLiteral.CopySource, parameterMap);
         }
 
-        if (!structLiteral.StructType.HasPrimaryConstructor && structLiteral.StructType.NeedsSynthesizedValueStructDefaultCtor)
+        if (structLiteral.CallsPrimaryConstructor)
+        {
+            var arguments = ImmutableArray.CreateBuilder<BoundExpression>();
+            var consumed = new HashSet<BoundFieldInitializer>();
+            foreach (var parameter in structLiteral.StructType.PrimaryConstructorParameters)
+            {
+                var initializer = Invariant.Required(structLiteral.GetPrimaryArgument(parameter.Name), "primary literal arguments, including defaults, are prepared during binding");
+                consumed.Add(initializer);
+                arguments.Add(initializer.Value);
+            }
+
+            var construction = this.BuildUserConstructorExpression(
+                new BoundConstructorCallExpression(structLiteral.Syntax, structLiteral.StructType, arguments.ToImmutable()),
+                parameterMap);
+            var bindings = ImmutableArray.CreateBuilder<BoundExpression>();
+            foreach (var initializer in structLiteral.Initializers)
+            {
+                if (consumed.Contains(initializer))
+                {
+                    continue;
+                }
+
+                var member = initializer.Property != null
+                    ? BuildUserPropertyInfoLookup(structLiteral.StructType, initializer.Property)
+                    : BuildUserFieldInfoLookup(initializer.FieldDeclaringType ?? structLiteral.StructType, initializer.MemberName);
+                bindings.Add(new BoundClrStaticCallExpression(
+                    structLiteral.Syntax,
+                    ExpressionBindMethod,
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberAssignment), NullabilityFreeReason.TypeLiteral),
+                    ImmutableArray.Create(
+                        member,
+                        UpcastToExpression(this.TranslateExpression(initializer.Value, parameterMap)))));
+            }
+
+            return bindings.Count == 0
+                ? construction
+                : new BoundClrStaticCallExpression(
+                    structLiteral.Syntax,
+                    ExpressionMemberInitMethod,
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberInitExpression), NullabilityFreeReason.TypeLiteral),
+                    ImmutableArray.Create(construction, BuildMemberBindingArray(bindings)));
+        }
+
+        if (structLiteral.IsZeroInitialization
+            || (!structLiteral.StructType.HasPrimaryConstructor && structLiteral.StructType.NeedsSynthesizedValueStructDefaultCtor))
         {
             return this.BuildOwningStructLiteralExpression(structLiteral, parameterMap);
         }
@@ -780,11 +816,62 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 BuildExpressionArray(TranslateArguments(argValuesImmutable, GetArgumentTypes(argValuesImmutable), parameterMap))));
     }
 
+    private BoundExpression BuildStagedConstructionExpression(
+        BoundBlockExpression block,
+        Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
+    {
+        var locals = new Dictionary<VariableSymbol, LocalVariableSymbol>(parameterMap);
+        var factoryStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var variables = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+        var expressions = ImmutableArray.CreateBuilder<BoundExpression>();
+        foreach (BoundVariableDeclaration declaration in block.Statements)
+        {
+            var local = new LocalVariableSymbol($"<>exprLocal{this.counter++}", isReadOnly: true, ParameterExpressionTypeSymbol);
+            factoryStatements.Add(new BoundVariableDeclaration(
+                null,
+                local,
+                new BoundClrStaticCallExpression(
+                    null,
+                    ExpressionParameterMethod,
+                    ParameterExpressionTypeSymbol,
+                    ImmutableArray.Create<BoundExpression>(
+                        CreateTypeOf(declaration.Variable.Type),
+                        new BoundLiteralExpression(null, declaration.Variable.Name, TypeSymbol.String)))));
+            locals.Add(declaration.Variable, local);
+            variables.Add(local);
+            expressions.Add(new BoundClrStaticCallExpression(
+                null,
+                ExpressionAssignMethod,
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.BinaryExpression), NullabilityFreeReason.TypeLiteral),
+                ImmutableArray.Create(
+                    UpcastToExpression(new BoundVariableExpression(null, local)),
+                    UpcastToExpression(this.TranslateArgument(
+                        Invariant.Required(declaration.Initializer, "a staged construction argument has an initializer"),
+                        declaration.Variable.Type,
+                        locals)))));
+        }
+
+        expressions.Add(this.TranslateExpression(block.Expression, locals));
+        var tree = new BoundClrStaticCallExpression(
+            null,
+            ExpressionBlockMethod,
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.BlockExpression), NullabilityFreeReason.TypeLiteral),
+            ImmutableArray.Create(BuildParameterArray(variables), BuildExpressionArray(expressions)));
+        return new BoundBlockExpression(null, factoryStatements.ToImmutable(), tree);
+    }
+
     private BoundExpression BuildOwningStructLiteralExpression(
         BoundStructLiteralExpression literal,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
         var markerCount = literal.StructType.LiteralInitializerMarkerCount;
+        if (literal.IsZeroInitialization
+            && literal.StructType is { IsData: true, IsClass: false, HasDeclaredPrimaryConstructor: true }
+            && markerCount == 0)
+        {
+            return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap);
+        }
+
         BoundExpression construction;
         if (markerCount == 0)
         {
@@ -825,10 +912,19 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         var bindings = ImmutableArray.CreateBuilder<BoundExpression>(literal.Initializers.Length);
         foreach (var initializer in literal.Initializers)
         {
+            if (literal.IsZeroInitialization
+                && literal.StructType.ValueStructDefaultCtorIsZeroInitialization
+                && markerCount > 0
+                && initializer.Field is { } zeroField
+                && MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(literal.Syntax, literal.StructType, zeroField) != null)
+            {
+                continue;
+            }
+
             var member = initializer.Field != null
                 ? BuildUserFieldInfoLookup(literal.StructType, initializer.Field.Name)
                 : BuildUserPropertyInfoLookup(
-                    literal.StructType, Invariant.Required(initializer.Property, "a literal initializer has a field or property").Name);
+                    literal.StructType, Invariant.Required(initializer.Property, "a literal initializer has a field or property"));
             bindings.Add(new BoundClrStaticCallExpression(
                 literal.Syntax,
                 ExpressionBindMethod,
@@ -841,6 +937,79 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ExpressionMemberInitMethod,
             TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberInitExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(construction, BuildMemberBindingArray(bindings)));
+    }
+
+    private BoundExpression BuildZeroStorageStructLiteralExpression(
+        BoundStructLiteralExpression literal,
+        Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
+    {
+        var defaultValue = new BoundClrStaticCallExpression(
+            literal.Syntax,
+            ExpressionDefaultMethod,
+            ExpressionTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(CreateTypeOf(literal.StructType)));
+        if (literal.Initializers.IsDefaultOrEmpty)
+        {
+            return defaultValue;
+        }
+
+        var local = new LocalVariableSymbol($"<>zero{this.counter++}", isReadOnly: true, ParameterExpressionTypeSymbol);
+        var declaration = new BoundVariableDeclaration(
+            literal.Syntax,
+            local,
+            new BoundClrStaticCallExpression(
+                literal.Syntax,
+                ExpressionParameterMethod,
+                ParameterExpressionTypeSymbol,
+                ImmutableArray.Create<BoundExpression>(
+                    CreateTypeOf(literal.StructType),
+                    new BoundLiteralExpression(null, string.Empty, TypeSymbol.String))));
+        var localRead = new BoundVariableExpression(literal.Syntax, local);
+        var expressions = ImmutableArray.CreateBuilder<BoundExpression>(literal.Initializers.Length + 2);
+        expressions.Add(new BoundClrStaticCallExpression(
+            literal.Syntax,
+            ExpressionAssignMethod,
+            ExpressionTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(UpcastToExpression(localRead), defaultValue)));
+        foreach (var initializer in literal.Initializers)
+        {
+            BoundExpression member = initializer.Field != null
+                ? new BoundClrStaticCallExpression(
+                    literal.Syntax,
+                    ExpressionFieldInstanceMethod,
+                    ExpressionTypeSymbol,
+                    ImmutableArray.Create<BoundExpression>(
+                        UpcastToExpression(localRead),
+                        new BoundLiteralExpression(null, initializer.Field.Name, TypeSymbol.String)))
+                : new BoundClrStaticCallExpression(
+                    literal.Syntax,
+                    ExpressionPropertyInfoMethod,
+                    ExpressionTypeSymbol,
+                    ImmutableArray.Create<BoundExpression>(
+                        UpcastToExpression(localRead),
+                        BuildUserPropertyInfoLookup(
+                            literal.StructType,
+                            Invariant.Required(initializer.Property, "a literal initializer has a field or property"))));
+            expressions.Add(new BoundClrStaticCallExpression(
+                literal.Syntax,
+                ExpressionAssignMethod,
+                ExpressionTypeSymbol,
+                ImmutableArray.Create<BoundExpression>(
+                    UpcastToExpression(member),
+                    UpcastToExpression(this.TranslateExpression(initializer.Value, parameterMap)))));
+        }
+
+        expressions.Add(localRead);
+        return new BoundBlockExpression(
+            literal.Syntax,
+            ImmutableArray.Create<BoundStatement>(declaration),
+            new BoundClrStaticCallExpression(
+                literal.Syntax,
+                ExpressionBlockMethod,
+                ExpressionTypeSymbol,
+                ImmutableArray.Create<BoundExpression>(
+                    BuildParameterArray(ImmutableArray.Create(local)),
+                    BuildExpressionArray(expressions))));
     }
 
     private BoundExpression BuildUserConstructorExpression(
@@ -863,17 +1032,10 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ReflectionConstructorInfoTypeSymbol,
             ImmutableArray.Create<BoundExpression>(BuildTypeArray(GetArgumentTypes(constructor.Arguments))));
 
-        // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
-        // synthesized type (Binding.AnonymousTypeCache) has no plain fields —
-        // only get-only auto-properties, one per primary-ctor parameter, in
-        // the same order as constructor.Arguments. Roslyn always emits the
-        // 3-arg `Expression.New(ctor, args, members)` overload for a real C#
-        // anonymous type so consumers like EF Core's model builder
-        // (`NewExpression.Members`) can recognize which member each ctor
-        // argument initializes; mirror that here. Ordinary class/data-struct
-        // constructor calls keep Fields non-empty and are unaffected — they
-        // keep using the 2-arg overload below.
-        if (constructor.StructType.Fields.IsDefaultOrEmpty && !constructor.StructType.Properties.IsDefaultOrEmpty)
+        // Only property-based anonymous objects carry the NewExpression.Members
+        // contract. Named positional data types can also have properties without
+        // fields, including properties that hide inherited members.
+        if (constructor.StructType.Definition.HasAnonymousConstructorMembers)
         {
             var membersArray = BuildMemberInfoArray(constructor.StructType, constructor.StructType.PrimaryConstructorParameters);
             return new BoundClrStaticCallExpression(
@@ -1452,7 +1614,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                             Invariant.Required(
                                 property.StructType ?? property.Receiver?.Type,
                                 "a property assignment has an expression-tree owner type"),
-                            property.Property.Name),
+                            property.Property),
                         UpcastToExpression(this.TranslateExpression(property.Value, parameterMap)))),
             BoundClrPropertyAssignmentExpression clrProperty when ReferencesReceiver(clrProperty.Receiver, receiver) =>
                 new BoundClrStaticCallExpression(
@@ -1609,16 +1771,17 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 BuildBindingFlagsConstant(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)));
     }
 
-    private static BoundExpression BuildUserPropertyInfoLookup(TypeSymbol ownerType, string memberName)
+    private static BoundExpression BuildUserPropertyInfoLookup(TypeSymbol receiverType, PropertySymbol property)
     {
+        TypeMemberModel.TryGetPropertyWithOwner(receiverType, property, out var effectiveProperty, out var ownerType);
         return new BoundImportedInstanceCallExpression(
             null,
-            CreateTypeOf(ownerType),
+            CreateTypeOf(Invariant.Required(ownerType, "the bound property owner was found")),
             TypeGetPropertyMethod,
             ReflectionPropertyInfoTypeSymbol,
             ImmutableArray.Create<BoundExpression>(
-                new BoundLiteralExpression(null, memberName, TypeSymbol.String),
-                BuildBindingFlagsConstant(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)));
+                new BoundLiteralExpression(null, Invariant.Required(effectiveProperty, "the bound property was found").Name, TypeSymbol.String),
+                BuildBindingFlagsConstant(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)));
     }
 
     private static BoundExpression CreateTypeOf(TypeSymbol type)
@@ -1649,7 +1812,13 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         var elements = ImmutableArray.CreateBuilder<BoundExpression>();
         foreach (var parameter in parameters)
         {
-            elements.Add(BuildUserPropertyInfoLookup(ownerType, parameter.Name));
+            elements.Add(BuildUserPropertyInfoLookup(
+                ownerType,
+                Invariant.Required(
+                    BoundStructLiteralExpression.GetPrimaryMember(
+                        Invariant.Required(ownerType as StructSymbol, "anonymous constructor members belong to a source aggregate"),
+                        parameter.Name) as PropertySymbol,
+                    "anonymous constructor members are actual own properties")));
         }
 
         return new BoundArrayCreationExpression(

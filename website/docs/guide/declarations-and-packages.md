@@ -176,6 +176,24 @@ class Counter {
 }
 ```
 
+An abstract class can explicitly require property accessors without storage:
+
+```gsharp
+abstract class RequiredValue {
+    public abstract prop Value int32 { get; init; }
+}
+class Value : RequiredValue {
+    public override prop Value int32 { get; init; }
+    public init(value int32) { this.Value = value }
+}
+```
+
+Every non-abstract descendant must override the required accessors. An abstract
+descendant may inherit them or use `abstract override prop` to reabstract a
+virtual property. A concrete `open prop Value int32 { get; init; }` still
+synthesizes backing storage, including inside an abstract owner. Abstract
+properties cannot have accessor bodies or private required accessors.
+
 Indexers are properties named `this[...]` and lower to CLR `Item` default members:
 
 ```gsharp

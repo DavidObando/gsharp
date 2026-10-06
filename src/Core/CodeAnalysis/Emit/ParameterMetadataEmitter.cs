@@ -9,7 +9,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
 
-/// <summary>Emits metadata shared by user-declared method and constructor parameters.</summary>
+/// <summary>Emits metadata shared by user-declared method, constructor and property parameters.</summary>
 internal static class ParameterMetadataEmitter
 {
     /// <summary>Adds a parameter row, including ref-kind and optional-default metadata.</summary>

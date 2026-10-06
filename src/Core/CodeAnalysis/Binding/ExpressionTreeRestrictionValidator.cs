@@ -409,6 +409,15 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundImportedInstanceCallExpression importedInstanceCall:
+                if (importedInstanceCall.Method.Name == "<Clone>$"
+                    && importedInstanceCall.Syntax is WithExpressionSyntax)
+                {
+                    diagnostics.ReportExpressionTreeUnsupported(
+                        LocationOf(importedInstanceCall.Syntax),
+                        "an imported data copy");
+                    return;
+                }
+
                 ValidateReceiver(importedInstanceCall.Receiver, diagnostics);
                 ValidateClrArguments(importedInstanceCall.Arguments, importedInstanceCall.ArgumentRefKinds, importedInstanceCall.Method, diagnostics);
                 return;
@@ -501,6 +510,12 @@ internal static class ExpressionTreeRestrictionValidator
             case BoundStructLiteralExpression structLiteral:
                 if (structLiteral.CopySource != null)
                 {
+                    if (structLiteral.StructType.ClrType != null)
+                    {
+                        diagnostics.ReportExpressionTreeUnsupported(LocationOf(expression.Syntax), "an imported data copy");
+                        return;
+                    }
+
                     ValidateExpression(structLiteral.CopySource, diagnostics);
                 }
 
@@ -521,6 +536,17 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundBlockExpression block:
+                if (BoundStructLiteralExpression.IsStagedConstruction(block))
+                {
+                    foreach (BoundVariableDeclaration declaration in block.Statements)
+                    {
+                        ValidateExpression(declaration.Initializer, diagnostics);
+                    }
+
+                    ValidateExpression(block.Expression, diagnostics);
+                    return;
+                }
+
                 if (TryValidateObjectInitializer(block, diagnostics))
                 {
                     return;

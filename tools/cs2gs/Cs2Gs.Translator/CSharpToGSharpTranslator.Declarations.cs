@@ -501,8 +501,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || property.GetMethod == null
                 || property.IsAbstract
                 || property.IsIndexer
-                || property.ContainingType?.TypeKind == TypeKind.Interface
-                || !(property.IsStatic || property.IsVirtual || property.IsOverride))
+                || property.ContainingType?.TypeKind == TypeKind.Interface)
             {
                 return false;
             }
@@ -510,7 +509,10 @@ public sealed partial class CSharpToGSharpTranslator
             return property.DeclaringSyntaxReferences
                 .Select(reference => reference.GetSyntax())
                 .OfType<PropertyDeclarationSyntax>()
-                .Any(IsGetOnlyAutoProperty);
+                .Any(syntax => IsGetOnlyAutoProperty(syntax)
+                    && (property.IsStatic || property.IsVirtual || property.IsOverride
+                        || (property.ContainingType?.IsRecord == true && syntax.Initializer != null)
+                        || IsExplicitPositionalAutoProperty(syntax, property)));
         }
 
         // Issue #2382: whether `localFunction` — declared among the top-level
@@ -962,11 +964,9 @@ public sealed partial class CSharpToGSharpTranslator
 
         /// <summary>
         /// Determines whether a C# property is a plain auto-property whose value
-        /// is set once at construction — a get-only auto-property (<c>{ get; }</c>)
-        /// or a get+init auto-property (<c>{ get; init; }</c>), body-less, no
-        /// <c>set</c> accessor. Both shapes have a backing field settable only in
-        /// the declaring type's constructor; they map to an init-only G#
-        /// auto-property (OD-T1; issue #946 for the init-accessor case).
+        /// is set only during construction — bodyless <c>{ get; }</c> or
+        /// <c>{ get; init; }</c>. Consumers requiring a truly getter-only
+        /// contract must also require the Roslyn property's SetMethod to be absent.
         /// </summary>
         private static bool IsGetOnlyAutoProperty(PropertyDeclarationSyntax prop)
         {
@@ -1453,7 +1453,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // an explicit parameter-copy constructor. This keeps value
                 // equality / `with` support instead of downgrading to a plain
                 // class/struct (which a `with` expression then cannot target).
-                if (hasAutoPropData && !hasExplicitInstanceCtor && record.ParameterList == null)
+                if (hasAutoPropData && !hasExplicitInstanceCtor && GetPrimaryConstructorParameterList(symbol) == null)
                 {
                     autoPropertyLift = this.AnalyzeAutoPropertyLift(record, symbol, kind.Value);
                 }
@@ -1845,6 +1845,16 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            if (symbol?.IsRecord == true
+                && kind == TypeDeclarationKind.DataClass
+                && !this.emitGeneratedImplementingParts
+                && (!symbol.IsSealed || symbol.BaseType?.IsRecord == true)
+                && this.ShouldAttachOwnedExtensions(node, symbol)
+                && !HasExplicitRecordPrintMembers(symbol))
+            {
+                members.Add(this.CreateRecordPrintMembers(symbol, node));
+            }
+
             // Issue #1729 (mode 4): remove only the entries this invocation added
             // (see snapshot above), not the whole shared dictionary — an enclosing
             // type may still have not-yet-consumed folded fields pending.
@@ -1996,6 +2006,143 @@ public sealed partial class CSharpToGSharpTranslator
                 isShared: isStaticClass);
         }
 
+        private MethodDeclaration CreateRecordPrintMembers(INamedTypeSymbol symbol, TypeDeclarationSyntax node)
+        {
+            INamedTypeSymbol stringBuilderType = this.context.Compilation.GetTypeByMetadataName("System.Text.StringBuilder");
+            var statements = new List<GStatement>();
+            bool first = true;
+            bool overridesRecordBase = symbol.BaseType?.IsRecord == true;
+            if (overridesRecordBase)
+            {
+                statements.Add(new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    "basePrinted",
+                    initializer: new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression("base"), "PrintMembers"),
+                        new GExpression[] { new IdentifierExpression("builder") })));
+            }
+
+            foreach (ISymbol member in symbol.GetMembers())
+            {
+                string memberName = member switch
+                {
+                    IPropertySymbol property when !property.IsStatic && !property.IsIndexer
+                        && property.GetMethod?.DeclaredAccessibility == Accessibility.Public => property.Name,
+                    IFieldSymbol field when !field.IsStatic && !field.IsImplicitlyDeclared => field.Name,
+                    _ => null,
+                };
+                if (memberName == null || member.DeclaredAccessibility != Accessibility.Public)
+                {
+                    continue;
+                }
+
+                if (first && overridesRecordBase)
+                {
+                    statements.Add(new IfStatement(
+                        new IdentifierExpression("basePrinted"),
+                        new BlockStatement(new GStatement[]
+                        {
+                            new ExpressionStatement(new InvocationExpression(
+                                new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
+                                new GExpression[] { LiteralExpression.String(", ") })),
+                        })));
+                }
+
+                statements.Add(new ExpressionStatement(
+                    new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
+                        new GExpression[] { LiteralExpression.String((first ? string.Empty : ", ") + memberName + " = ") })));
+                GExpression memberValue = new MemberAccessExpression(
+                    new ThisExpression(), this.EmittedName(member, memberName));
+                ITypeSymbol memberType = member is IPropertySymbol propertyMember
+                    ? propertyMember.Type
+                    : ((IFieldSymbol)member).Type;
+                if (memberType.TypeKind == TypeKind.Delegate)
+                {
+                    GTypeReference delegateType = this.typeMapper.Map(
+                        this.context.Compilation.GetTypeByMetadataName("System.Delegate"),
+                        this.context,
+                        node.GetLocation());
+                    if (memberType.NullableAnnotation == NullableAnnotation.Annotated)
+                    {
+                        delegateType = MakeNullable(delegateType);
+                    }
+
+                    memberValue = new ConversionExpression(
+                        delegateType,
+                        memberValue);
+                }
+
+                GTypeReference objectType = this.typeMapper.Map(
+                    this.context.Compilation.GetSpecialType(SpecialType.System_Object),
+                    this.context,
+                    node.GetLocation());
+                if (memberType.NullableAnnotation == NullableAnnotation.Annotated)
+                {
+                    objectType = MakeNullable(objectType);
+                }
+
+                var isNullableValueType = memberType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+                var isValueTypeParameter = memberType is ITypeParameterSymbol { HasValueTypeConstraint: true };
+                GExpression printableValue = memberType.IsRefLikeType
+                    || isValueTypeParameter
+                    || (memberType.IsValueType
+                        && !isNullableValueType
+                        && HasMutableToStringOverride(memberType))
+                    ? new InvocationExpression(new MemberAccessExpression(memberValue, "ToString"), Array.Empty<GExpression>())
+                    : new ConversionExpression(objectType, memberValue);
+                statements.Add(new ExpressionStatement(
+                    new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression("builder"), "Append"),
+                        new GExpression[]
+                        {
+                            printableValue,
+                        })));
+                first = false;
+            }
+
+            GExpression result = first && overridesRecordBase
+                ? new IdentifierExpression("basePrinted")
+                : LiteralExpression.Bool(!first);
+            statements.Add(new ReturnStatement(result));
+            return new MethodDeclaration(
+                "PrintMembers",
+                new[]
+                {
+                    new Parameter(
+                        "builder",
+                        this.typeMapper.Map(stringBuilderType, this.context, node.GetLocation())),
+                },
+                this.typeMapper.Map(this.context.Compilation.GetSpecialType(SpecialType.System_Boolean), this.context, node.GetLocation()),
+                new BlockStatement(statements),
+                visibility: Visibility.Protected,
+                isOpen: true,
+                isOverride: overridesRecordBase);
+        }
+
+        private static bool HasMutableToStringOverride(ITypeSymbol type) =>
+            type is not INamedTypeSymbol { IsTupleType: true }
+            && type.GetMembers("ToString").OfType<IMethodSymbol>().Any(method =>
+                method.Parameters.Length == 0
+                && method.IsOverride
+                && !method.IsReadOnly);
+
+        private bool HasExplicitRecordPrintMembers(INamedTypeSymbol symbol)
+        {
+            INamedTypeSymbol stringBuilderType = this.context.Compilation.GetTypeByMetadataName("System.Text.StringBuilder");
+            return symbol.GetMembers("PrintMembers").OfType<IMethodSymbol>().Any(method =>
+                !method.IsImplicitlyDeclared
+                && method.MethodKind == MethodKind.Ordinary
+                && !method.IsStatic
+                && method.DeclaredAccessibility == Accessibility.Protected
+                && (method.IsVirtual || method.IsOverride || method.IsAbstract)
+                && method.Arity == 0
+                && method.ReturnType.SpecialType == SpecialType.System_Boolean
+                && method.Parameters.Length == 1
+                && method.Parameters[0].RefKind == Microsoft.CodeAnalysis.RefKind.None
+                && SymbolEqualityComparer.Default.Equals(method.Parameters[0].Type, stringBuilderType));
+        }
+
         private static bool IsExtensionMethodDeclaration(MemberDeclarationSyntax member) =>
             member is MethodDeclarationSyntax method
             && method.ParameterList.Parameters.Count > 0
@@ -2075,6 +2222,11 @@ public sealed partial class CSharpToGSharpTranslator
                     IsContractProperty(propSymbol))
                 {
                     return ConstructorLift.None;
+                }
+
+                if (propSymbol.SetMethod == null)
+                {
+                    continue;
                 }
 
                 if (propSymbol.IsRequired || propSymbol.SetMethod?.IsInitOnly == true)

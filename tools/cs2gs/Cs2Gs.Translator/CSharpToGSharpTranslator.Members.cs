@@ -135,13 +135,22 @@ public sealed partial class CSharpToGSharpTranslator
 
                     List<AttributeUse> propertyAttributes = this.MapPropertyAttributes(property);
                     if (ownerKind is TypeDeclarationKind.DataClass or TypeDeclarationKind.DataStruct
-                        && primaryCtorParamNames?.Contains(
-                            property.Identifier.Text,
-                            StringComparer.Ordinal) == true
-                        && propertySymbol is { IsStatic: false }
+                        && IsExplicitPositionalAutoProperty(property, propertySymbol)
+                        && propertyAttributes.Count == 0
+                        && propertySymbol is { IsStatic: false, IsVirtual: false, IsOverride: false }
+                        && propertySymbol.DeclaredAccessibility == Accessibility.Public
+                        && propertySymbol.GetMethod?.DeclaredAccessibility == Accessibility.Public
+                        && propertySymbol.SetMethod is { IsInitOnly: true }
+                        && propertySymbol.SetMethod.DeclaredAccessibility == Accessibility.Public
+                        && property.Initializer?.Value is { } primaryValue
+                        && this.context.GetSymbolInfo(primaryValue).Symbol is IParameterSymbol primaryParameter
+                        && primaryParameter.Name == propertySymbol.Name
+                        && SymbolEqualityComparer.IncludeNullability.Equals(primaryParameter.Type, propertySymbol.Type)
+                        && SymbolEqualityComparer.Default.Equals(primaryParameter.ContainingSymbol.ContainingType, propertySymbol.ContainingType)
                         && property.AccessorList?.Accessors.All(accessor =>
                             accessor.Body == null
-                            && accessor.ExpressionBody == null) == true)
+                            && accessor.ExpressionBody == null
+                            && accessor.AttributeLists.Count == 0) == true)
                     {
                         break;
                     }
@@ -2900,6 +2909,7 @@ public sealed partial class CSharpToGSharpTranslator
             IReadOnlyCollection<string> primaryCtorParamNames = null)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
+            bool isExplicitPositionalAutoProperty = IsExplicitPositionalAutoProperty(node, symbol);
 
             // Issue #3879 (ADR-0060 amendment): a C# `ref` PROPERTY now HAS a
             // canonical G# form — `prop P ref T { get { return ref lvalue } }`
@@ -3027,7 +3037,8 @@ public sealed partial class CSharpToGSharpTranslator
             // TranslateExpression's FieldExpressionSyntax case) resolves to it.
             string fieldKeywordBackingName = this.TryRegisterFieldKeywordBackingField(
                 node, symbol, primaryCtorParamNames, out IFieldSymbol fieldKeywordBackingSymbol);
-            bool lowersToBackingField = symbol != null && this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol);
+            bool lowersToBackingField = symbol != null
+                && this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol);
             if (fieldKeywordBackingName == null && lowersToBackingField)
             {
                 fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(
@@ -3036,11 +3047,11 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else if (fieldKeywordBackingName == null
                 && !isStatic
-                && node.Initializer != null
+                && (node.Initializer != null || isExplicitPositionalAutoProperty)
                 && (!IsGetOnlyAutoProperty(node)
                     || symbol?.ContainingType?.IsRecord == true
                     || symbol?.IsOverride == true)
-                && !IsNullOrSuppressedNull(node.Initializer.Value))
+                && (isExplicitPositionalAutoProperty || node.Initializer == null || !IsNullOrSuppressedNull(node.Initializer.Value)))
             {
                 fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(
                     symbol,
@@ -3108,7 +3119,7 @@ public sealed partial class CSharpToGSharpTranslator
             // private backing field (seeded with the initializer above) plus a
             // computed arrow reading it.
             if ((lowersToBackingField
-                    || (isOverride && !isStatic && node.Initializer != null && IsGetOnlyAutoProperty(node)))
+                    || (isOverride && !isStatic && node.Initializer != null && symbol?.SetMethod == null && IsGetOnlyAutoProperty(node)))
                 && fieldKeywordBackingName != null)
             {
                 arrowBody = new ReturnStatement(new IdentifierExpression(fieldKeywordBackingName));
@@ -3117,7 +3128,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             // Interface members are implicitly abstract; canonical G# interface
             // members carry no `open` modifier (ADR-0115 §B.6).
-            bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
+            bool isAbstract = symbol?.IsAbstract == true && symbol.ContainingType.TypeKind != TypeKind.Interface;
+            bool isOpen = !isAbstract && this.IsMemberEmittedOpen(symbol, isOverride);
 
             // Issue #2362, ADR-0149: see the matching visibility comment in
             // TranslateMethod for the full rationale — a G# user-interface
@@ -3140,10 +3152,26 @@ public sealed partial class CSharpToGSharpTranslator
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfacePropertyType,
                 isRefReturn: isRefReturnProperty,
-                isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true);
+                isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true,
+                isAbstract: isAbstract);
 
             return (property, isStatic, backingField);
         }
+
+        private static bool IsExplicitPositionalAutoProperty(
+            PropertyDeclarationSyntax node,
+            IPropertySymbol symbol)
+            => symbol is { IsStatic: false, IsAbstract: false, ContainingType.IsRecord: true }
+                && GetPrimaryConstructorParameterList(symbol.ContainingType)?.Parameters
+                    .Any(parameter => parameter.Identifier.ValueText == symbol.Name) == true
+                && node.AccessorList?.Accessors.All(accessor => accessor.Body == null && accessor.ExpressionBody == null) == true;
+
+        private static ParameterListSyntax GetPrimaryConstructorParameterList(INamedTypeSymbol symbol)
+            => symbol?.DeclaringSyntaxReferences
+                .Select(reference => reference.GetSyntax())
+                .OfType<TypeDeclarationSyntax>()
+                .Select(declaration => declaration.ParameterList)
+                .FirstOrDefault(parameters => parameters != null);
 
         // Issue #1907: a property using the C#14 `field` keyword in any accessor
         // shares ONE compiler-synthesized backing field across all its accessors.

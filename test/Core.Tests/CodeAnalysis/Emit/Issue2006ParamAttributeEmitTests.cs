@@ -98,6 +98,32 @@ class Dog(@Note(""derived"") Name string) : Animal(Name) {
     }
 
     [Fact]
+    public void DataStructPrimaryCtorParameters_NullabilityAndTupleNames_RoundTripThroughReflection()
+    {
+        const string Source = """
+            package Issue4675DataStructCtorMetadata
+            data struct Item(Maybe string?, Pair (Name string, Count int32)) {
+            }
+            """;
+        var asm = CompileToAssembly(Source, nameof(DataStructPrimaryCtorParameters_NullabilityAndTupleNames_RoundTripThroughReflection));
+        var item = asm.GetTypes().Single(t => t.Name == "Item");
+        var parameters = Assert.Single(item.GetConstructors()).GetParameters();
+        Assert.Equal(new[] { "Maybe", "Pair" }, parameters.Select(parameter => parameter.Name));
+
+        var nullability = new NullabilityInfoContext().Create(parameters[0]);
+        Assert.Equal(NullabilityState.Nullable, nullability.ReadState);
+
+        var tupleNames = Assert.Single(
+            parameters[1].GetCustomAttributesData(),
+            attribute => attribute.AttributeType.FullName == "System.Runtime.CompilerServices.TupleElementNamesAttribute");
+        var names = ((System.Collections.ObjectModel.ReadOnlyCollection<CustomAttributeTypedArgument>)
+            Assert.Single(tupleNames.ConstructorArguments).Value)
+            .Select(argument => (string)argument.Value)
+            .ToArray();
+        Assert.Equal(new[] { "Name", "Count" }, names);
+    }
+
+    [Fact]
     public void DelegateInvokeParameter_UserAttribute_RoundTripsThroughReflection()
     {
         // Named delegates are bound before user struct/class declarations in

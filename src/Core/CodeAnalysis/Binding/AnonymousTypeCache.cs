@@ -139,6 +139,7 @@ internal sealed class AnonymousTypeCache
             isInline: false,
             isClass: false,
             primaryConstructorParameters: ctorParams.MoveToImmutable());
+        symbol.HasAnonymousConstructorMembers = true;
         symbol.SetProperties(properties.MoveToImmutable());
 
         byShape[key] = symbol;

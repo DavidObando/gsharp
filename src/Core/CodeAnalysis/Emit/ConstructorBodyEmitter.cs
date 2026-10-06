@@ -409,7 +409,7 @@ internal sealed class ConstructorBodyEmitter
             var param = parameters[i];
             if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(classSym, param.Name, out var field))
             {
-                throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+                continue;
             }
 
             var fieldHandle = this.outer.userTokens.ResolveFieldToken(classSym, field);
@@ -479,7 +479,9 @@ internal sealed class ConstructorBodyEmitter
     /// <returns>The method-body stream offset.</returns>
     internal int EmitValueStructDefaultConstructorBodyBytes(StructSymbol structSym)
     {
-        if (TryEmitInitialization(structSym, false, default, default, out var planned))
+        var initializersRunInPrimaryConstructor = structSym.ValueStructDefaultCtorIsZeroInitialization;
+        if (!initializersRunInPrimaryConstructor
+            && TryEmitInitialization(structSym, false, default, default, out var planned))
         {
             return planned;
         }
@@ -487,8 +489,10 @@ internal sealed class ConstructorBodyEmitter
         // Synthesize a `this` parameter for the field-initializer receiver.
         var thisParam = new ParameterSymbol("this", structSym);
 
-        // Synthesize field-initializer assignment statements.
-        var statements = BuildInstanceFieldInitializerStatements(structSym, thisParam);
+        // A data primary-constructor struct's ordinary initializers can read
+        // parameters and run only in the primary constructor. Its zero-value
+        // constructor still initializes collection fields, including private ones.
+        var statements = BuildInstanceFieldInitializerStatements(structSym, thisParam, zeroInitialize: initializersRunInPrimaryConstructor);
         var body = new BoundBlockStatement(null, statements);
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
@@ -530,16 +534,83 @@ internal sealed class ConstructorBodyEmitter
     }
 
     /// <summary>
+    /// Emits a data struct's primary constructor, including primary-parameter
+    /// field stores and instance field initializers.
+    /// </summary>
+    /// <param name="structSym">The data struct whose primary constructor is being emitted.</param>
+    /// <returns>The resulting method-body stream offset.</returns>
+    internal int EmitDataStructPrimaryConstructorBodyBytes(StructSymbol structSym)
+    {
+        if (TryEmitInitialization(structSym, false, default, default, out var planned))
+        {
+            return planned;
+        }
+
+        var parameters = structSym.PrimaryConstructorParameters;
+        var thisParam = new ParameterSymbol("this", structSym);
+        var body = Lowerer.Lower(
+            new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(structSym, thisParam)),
+            structSym);
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var session = new ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il);
+        session.Plan(body);
+
+        var parameterSlots = new Dictionary<ParameterSymbol, int>
+        {
+            [thisParam] = 0,
+        };
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            parameterSlots[parameters[i]] = i + 1;
+        }
+
+        var localsSignature = session.BuildLocalsSignature();
+        var emitter = session.CreateEmitter(parameterSlots, structThisParameter: thisParam);
+
+        il.LoadArgument(0);
+        il.OpCode(ILOpCode.Initobj);
+        il.Token(this.outer.userTokens.ResolveUserTypeToken(structSym));
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var parameter = parameters[i];
+            if (ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(structSym, parameter.Name, out var field))
+            {
+                il.LoadArgument(0);
+                il.LoadArgument(i + 1);
+                il.OpCode(ILOpCode.Stfld);
+                il.Token(this.outer.userTokens.ResolveFieldToken(structSym, field));
+            }
+        }
+
+        try
+        {
+            emitter.EmitBlock(body);
+        }
+        catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+        {
+            var anchor = emitter.CurrentAnchor ?? structSym.Declaration;
+            EmitDiagnosticException.Wrap(anchor, ex);
+        }
+
+        return this.AddCompletedMethodBody(il, emitter, localsSignature);
+    }
+
+    /// <summary>
     /// Issue #640: builds the bound assignment statements for all instance
     /// field initializers in declaration order. Used by the default, primary,
     /// forwarding, and explicit constructor body emitters.
     /// </summary>
-    private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol? thisParam = null)
+    private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol? thisParam = null, bool zeroInitialize = false)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         foreach (var field in classSym.Fields)
         {
-            if (classSym.InstanceFieldInitializers.TryGetValue(field, out var initExpr))
+            var initExpr = zeroInitialize
+                ? MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(null, classSym, field)
+                : classSym.InstanceFieldInitializers.GetValueOrDefault(field);
+            if (initExpr != null)
             {
                 var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, field, initExpr);
                 statements.Add(new BoundExpressionStatement(null, assignment));
@@ -629,7 +700,7 @@ internal sealed class ConstructorBodyEmitter
             var param = parameters[i];
             if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(classSym, param.Name, out var field))
             {
-                throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+                continue;
             }
 
             var fieldHandle = this.outer.userTokens.ResolveFieldToken(classSym, field);

@@ -441,7 +441,8 @@ internal sealed partial class OverloadResolver
                 return new BoundErrorExpression(syntax);
             }
 
-            if (classType.IsInline)
+            if (classType.IsInline
+                || (classType.IsData && classType.ClrType == null && classType.HasDeclaredPrimaryConstructor))
             {
                 return new BoundConstructorCallExpression(syntax, classType, packedArgs);
             }
@@ -752,7 +753,8 @@ internal sealed partial class OverloadResolver
             boundArguments.ToImmutable(),
             parameterNameAt);
 
-        if (classType.IsInline)
+        if (classType.IsInline
+            || (classType.IsData && classType.ClrType == null && classType.HasDeclaredPrimaryConstructor))
         {
             return new BoundConstructorCallExpression(syntax, classType, finalArguments);
         }

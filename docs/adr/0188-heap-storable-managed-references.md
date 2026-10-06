@@ -349,6 +349,48 @@ throws `NullReferenceException`; it never treats null as a zero-valued target.
 Generic and foreign initialization do not prove non-nullness automatically.
 An implementation must reject a compiler-owned aggregate initialization that
 would silently synthesize a null non-null-handle field.
+Positional data-struct collection-zero helpers do not run ordinary primary
+initializers. Their actual zero-valued uses are checked without crediting those
+initializers, including nested/generic storage and auto-property backing fields.
+Explicit primary construction still runs its initializers once; ordinary
+structs retain their validated in-type initializer constructors. Recursive
+supplied zero children are checked by their own actual construction path.
+When private collection storage routes through an in-type zero helper, its
+recursively synthesized values are checked even when the literal omits all
+field entries. A nested ordinary initializer is credited only when that actual
+helper value invokes its validated constructor, not merely because an initializer
+was declared.
+Storage checks retain backing-field identity but classify a constructed
+auto-property using its substituted property type, not its definition's open
+backing-field type. The same storage reader is used for direct zero construction
+and recursive aggregate required-handle detection.
+The in-type zero-field provider is shared with emission and first checks the
+definition-owned field assignment. Property backing storage and a closed generic
+argument cannot invent a store absent from that constructor. Ordinary constructed
+structs retain their definition's validated initializer constructor, but its
+validation does not credit newly required slots introduced by a type argument.
+Synthesized nested ordinary-constructor values are checked recursively at their
+constructed member types. An existing initialized handle in an open aggregate
+does not prove that a newly required generic sibling is initialized.
+This check visits the actual definition-owned initializer expression under its
+constructed owner's existing member-type substitution. Array elements and
+explicit default expressions are retained, not replaced by hypothetical zero
+values. Failures are anchored at the construction that closes the type argument.
+An allocation with a bound constant zero dimension has no required elements;
+positive or unknown dimensions still require complete non-null initialization.
+Selecting an in-type helper removes only literal values whose actual storage
+that constructor writes. Closed-generic public field values remain bound and
+planned when the definition has no store, even with a private collection sibling;
+emission and safety consume those retained children normally.
+Every actual in-type zero-helper value is visited before filtering storage for
+required handles. Fixed-array element obligations therefore remain checked when
+the literal omits a private array; an ordinary primary initializer cannot prove
+that the zero-only helper supplies its elements.
+If a closed generic private field needs a collection zero but neither a retained
+value nor an actual in-type assignment exists, bare construction fails with the
+existing inaccessible-member diagnostic (GS0472), rather than silently leaving
+null storage or generating an illegal external private-field store. A concrete
+definition-owned field with a real helper assignment remains supported.
 
 Handle assignment copies the handle value; it does not copy the referent.
 `var copy = *p` copies `T` normally. Promoting `copy` later identifies that

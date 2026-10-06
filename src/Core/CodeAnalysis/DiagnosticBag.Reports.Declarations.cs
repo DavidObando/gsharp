@@ -1099,6 +1099,24 @@ public sealed partial class DiagnosticBag
         string className)
     => Report(location, DiagnosticDescriptors.AbstractMethodRequiresOpenClass, methodName, className);
 
+    /// <summary>Reports an invalid explicit abstract property declaration.</summary>
+    /// <param name="location">The declaration location.</param>
+    /// <param name="propertyName">The property name.</param>
+    public void ReportInvalidAbstractProperty(TextLocation location, string propertyName)
+        => Report(location, DiagnosticDescriptors.InvalidAbstractProperty, propertyName);
+
+    /// <summary>Reports an unreadable replacement for a positional data property.</summary>
+    /// <param name="location">The property identifier location.</param>
+    /// <param name="propertyName">The positional property name.</param>
+    public void ReportPositionalPropertyReplacementRequiresGetter(TextLocation location, string propertyName)
+        => Report(location, DiagnosticDescriptors.PositionalPropertyReplacementRequiresGetter, propertyName);
+
+    /// <summary>Reports a positional constructor argument after a composite literal element.</summary>
+    /// <param name="location">The positional member location.</param>
+    /// <param name="memberName">The positional member name.</param>
+    public void ReportPositionalInitializerAfterCompositeElement(TextLocation location, string memberName)
+        => Report(location, DiagnosticDescriptors.PositionalInitializerAfterCompositeElement, memberName);
+
     /// <summary>
     /// Reports GS0370 — ADR-0118 / issue #944: an indexer member
     /// (<c>prop this[…] T { … }</c>) was declared with no index parameters.

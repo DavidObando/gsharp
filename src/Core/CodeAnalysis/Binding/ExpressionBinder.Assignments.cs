@@ -762,8 +762,28 @@ internal sealed partial class ExpressionBinder
 
         if (receiverType is StructSymbol structSymbol)
         {
-            if (TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, propertyName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
+            var hasNearestProperty = TypeMemberModel.TryGetProperty(
+                structSymbol,
+                propertyName,
+                out var nearestProperty,
+                out var nearestPropertyDeclaringType);
+            var hasInitializerField = TypeMemberModel.TryGetFieldIncludingInherited(
+                structSymbol,
+                propertyName,
+                MemberQuery.Instance(MemberKinds.Field),
+                out var field,
+                out var fieldDeclaringType);
+            if (hasInitializerField
+                && (!hasNearestProperty
+                    || IsFieldAtLeastAsNearAsProperty(
+                        structSymbol,
+                        Invariant.Required(fieldDeclaringType, "a resolved field has a declaring type"),
+                        Invariant.Required(nearestProperty, "a resolved property has a symbol"),
+                        Invariant.Required(nearestPropertyDeclaringType, "a resolved property has a declaring type"))))
             {
+                field = Invariant.Required(field, "a resolved initializer field has a symbol");
+                fieldDeclaringType = Invariant.Required(fieldDeclaringType, "a resolved initializer field has a declaring type");
+
                 // Issue #2059: an object-initializer-suffix (`T(){ Field = v }`)
                 // member write is subject to the same `protected`/`private`
                 // accessibility rule as a plain assignment (issue #950 / #2044).
@@ -783,8 +803,10 @@ internal sealed partial class ExpressionBinder
                 return new BoundFieldAssignmentExpression(anchor, receiverLocal, fieldDeclaringType, field, converted);
             }
 
-            if (TypeMemberModel.TryGetProperty(structSymbol, propertyName, out var prop, out var propDeclaringType))
+            if (hasNearestProperty)
             {
+                var prop = Invariant.Required(nearestProperty, "a resolved initializer property has a symbol");
+                var propDeclaringType = nearestPropertyDeclaringType;
                 propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
@@ -1312,7 +1334,24 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, syntax.FieldIdentifier.ValueText, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
+        var hasNearestProperty = TypeMemberModel.TryGetProperty(
+            structSymbol,
+            syntax.FieldIdentifier.ValueText,
+            out var nearestProperty,
+            out var nearestPropertyDeclaringType);
+        var hasAssignmentField = TypeMemberModel.TryGetFieldIncludingInherited(
+            structSymbol,
+            syntax.FieldIdentifier.ValueText,
+            MemberQuery.Instance(MemberKinds.Field),
+            out var field,
+            out var fieldDeclaringType);
+        if (!hasAssignmentField
+            || (hasNearestProperty
+                && !IsFieldAtLeastAsNearAsProperty(
+                    structSymbol,
+                    Invariant.Required(fieldDeclaringType, "a resolved field has a declaring type"),
+                    Invariant.Required(nearestProperty, "a resolved property has a symbol"),
+                    Invariant.Required(nearestPropertyDeclaringType, "a resolved property has a declaring type"))))
         {
             // ADR-0051: check if it's a property.
             if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.ValueText, out var prop, out var propDeclaringType))
@@ -1411,6 +1450,8 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        field = Invariant.Required(field, "a resolved assignment field has a symbol");
+        fieldDeclaringType = Invariant.Required(fieldDeclaringType, "a resolved assignment field has a declaring type");
         assignmentReceiver = RecoverDeclaredMemberWriteReceiver(
             assignmentReceiver,
             syntax.FieldIdentifier.Location,
@@ -2364,7 +2405,18 @@ internal sealed partial class ExpressionBinder
 
         // ADR-0112 A3: this-first base-chain instance field walk, using the
         // declaring struct as the owner for both the read access and assignment.
-        if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
+        var hasCompoundProperty = TypeMemberModel.TryGetProperty(
+            structSym,
+            memberName,
+            out var compoundProperty,
+            out var compoundPropertyDeclaringType);
+        if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType)
+            && (!hasCompoundProperty
+                || IsFieldAtLeastAsNearAsProperty(
+                    structSym,
+                    declaringType,
+                    Invariant.Required(compoundProperty, "a resolved property has a symbol"),
+                    Invariant.Required(compoundPropertyDeclaringType, "a resolved property has a declaring type"))))
         {
             var boundRhs = BindExpression(syntax.Value);
             if (field.IsReadOnly
@@ -3864,10 +3916,30 @@ internal sealed partial class ExpressionBinder
         // User-defined struct/class receiver → field or property write.
         if (receiverType is StructSymbol structSym)
         {
+            var hasNearestProperty = TypeMemberModel.TryGetProperty(
+                structSym,
+                fieldName,
+                out var nearestProperty,
+                out var nearestPropertyDeclaringType);
+            var hasAssignmentField = TypeMemberModel.TryGetFieldIncludingInherited(
+                structSym,
+                fieldName,
+                MemberQuery.Instance(MemberKinds.Field),
+                out var field,
+                out var declaringType);
+
             // ADR-0112 A3: this-first base-chain instance field walk, using the
             // declaring struct as the owner for the emitted assignment.
-            if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
+            if (hasAssignmentField
+                && (!hasNearestProperty
+                    || IsFieldAtLeastAsNearAsProperty(
+                        structSym,
+                        Invariant.Required(declaringType, "a resolved field has a declaring type"),
+                        Invariant.Required(nearestProperty, "a resolved property has a symbol"),
+                        Invariant.Required(nearestPropertyDeclaringType, "a resolved property has a declaring type"))))
             {
+                field = Invariant.Required(field, "a resolved member field has a symbol");
+                declaringType = Invariant.Required(declaringType, "a resolved member field has a declaring type");
                 if (field.IsReadOnly
                     && !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(receiver)))
                 {
@@ -3907,8 +3979,10 @@ internal sealed partial class ExpressionBinder
             }
 
             // ADR-0051: check properties before reporting "unable to find member".
-            if (TypeMemberModel.TryGetProperty(structSym, fieldName, out var prop, out var propDeclaringType))
+            if (hasNearestProperty)
             {
+                var prop = Invariant.Required(nearestProperty, "a resolved member property has a symbol");
+                var propDeclaringType = nearestPropertyDeclaringType;
                 propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter && !IsGetOnlyAutoPropertyConstructorWrite(prop, propDeclaringType, receiver))
                 {

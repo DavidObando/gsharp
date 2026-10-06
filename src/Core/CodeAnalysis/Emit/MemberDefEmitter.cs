@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -80,6 +81,8 @@ internal sealed class MemberDefEmitter
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken;
     private readonly Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty;
     private readonly Action<EventDefinitionHandle, TypeSymbol> emitNullableAttributeOnEvent;
+    private readonly Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter;
+    private readonly Action<EntityHandle, TypeSymbol> emitTupleElementNamesAttribute;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
 
     public MemberDefEmitter(
@@ -94,6 +97,8 @@ internal sealed class MemberDefEmitter
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken,
         Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty,
         Action<EventDefinitionHandle, TypeSymbol> emitNullableAttributeOnEvent,
+        Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter,
+        Action<EntityHandle, TypeSymbol> emitTupleElementNamesAttribute,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
@@ -107,6 +112,8 @@ internal sealed class MemberDefEmitter
         this.resolveFieldToken = resolveFieldToken ?? throw new ArgumentNullException(nameof(resolveFieldToken));
         this.emitNullableAttributeOnProperty = emitNullableAttributeOnProperty ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnProperty));
         this.emitNullableAttributeOnEvent = emitNullableAttributeOnEvent ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnEvent));
+        this.emitNullableAttributeOnParameter = emitNullableAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnParameter));
+        this.emitTupleElementNamesAttribute = emitTupleElementNamesAttribute ?? throw new ArgumentNullException(nameof(emitTupleElementNamesAttribute));
         this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
     }
 
@@ -415,13 +422,7 @@ internal sealed class MemberDefEmitter
         if (prop.IsOverride)
         {
             methodAttrs |= MethodAttributes.Virtual;
-            if (prop.OverriddenProperty is { } baseProperty
-                && DeclarationBinder.IsCovariantPropertyOverride(
-                    baseProperty,
-                    prop.Type,
-                    prop.HasGetter,
-                    prop.HasSetter,
-                    prop.ReturnRefKind))
+            if (MethodInfoHelpers.IsCovariantPropertyGetter(prop))
             {
                 methodAttrs |= MethodAttributes.NewSlot;
             }
@@ -606,6 +607,15 @@ internal sealed class MemberDefEmitter
                     }
                     else
                     {
+                        if (prop.IsInitOnly)
+                        {
+                            var isExternalInit = this.wellKnown.GetIsExternalInitTypeRef();
+                            if (!isExternalInit.IsNil)
+                            {
+                                r.CustomModifiers().AddModifier(isExternalInit, isOptional: false);
+                            }
+                        }
+
                         r.Void();
                     }
                 },
@@ -623,18 +633,70 @@ internal sealed class MemberDefEmitter
                 });
 
         var accessibility = isGetter ? prop.GetterAccessibility : prop.SetterAccessibility;
+        var firstParameter = this.nextParameterHandle();
+        var propertyNullableFlags = NullableFlagsBuilder.Build(prop.Type);
+        var propertyTupleNames = TupleElementNamesBuilder.Build(prop.Type);
+        if (isGetter && (!propertyNullableFlags.IsDefaultOrEmpty || !propertyTupleNames.IsDefaultOrEmpty))
+        {
+            var returnParameter = this.emitCtx.Metadata.AddParameter(
+                ParameterAttributes.None,
+                default,
+                sequenceNumber: 0);
+            if (!propertyNullableFlags.IsDefaultOrEmpty)
+            {
+                this.emitNullableAttributeOnParameter(returnParameter, propertyNullableFlags);
+            }
+
+            this.emitTupleElementNamesAttribute(returnParameter, prop.Type);
+        }
+
+        for (var index = 0; index < prop.Parameters.Length; index++)
+        {
+            var parameterHandle = ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                prop.Parameters[index],
+                sequenceNumber: index + 1);
+            var nullableFlags = NullableFlagsBuilder.Build(prop.Parameters[index].Type);
+            if (!nullableFlags.IsDefaultOrEmpty)
+            {
+                this.emitNullableAttributeOnParameter(parameterHandle, nullableFlags);
+            }
+
+            this.emitTupleElementNamesAttribute(parameterHandle, prop.Parameters[index].Type);
+            this.emitUserAttributes(parameterHandle, prop.Parameters[index], AttributeTargetKind.Param);
+        }
+
+        if (!isGetter)
+        {
+            var valueParameter = this.emitCtx.Metadata.AddParameter(
+                ParameterAttributes.None,
+                this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName),
+                sequenceNumber: prop.Parameters.Length + 1);
+            if (!propertyNullableFlags.IsDefaultOrEmpty)
+            {
+                this.emitNullableAttributeOnParameter(valueParameter, propertyNullableFlags);
+            }
+
+            this.emitTupleElementNamesAttribute(valueParameter, prop.Type);
+        }
+
+        var methodAttrs = AccessibilityMap.ToMethodVisibility(accessibility)
+            | MethodAttributes.SpecialName
+            | MethodAttributes.HideBySig
+            | MethodAttributes.Virtual
+            | MethodAttributes.Abstract;
+        if (!prop.IsOverride || (isGetter && MethodInfoHelpers.IsCovariantPropertyGetter(prop)))
+        {
+            methodAttrs |= MethodAttributes.NewSlot;
+        }
+
         return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: AccessibilityMap.ToMethodVisibility(accessibility)
-                | MethodAttributes.SpecialName
-                | MethodAttributes.HideBySig
-                | MethodAttributes.Virtual
-                | MethodAttributes.Abstract
-                | MethodAttributes.NewSlot,
+            attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString($"{(isGetter ? "get" : "set")}_{prop.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: -1,
-            parameterList: this.nextParameterHandle());
+            parameterList: firstParameter);
     }
 
     /// <summary>

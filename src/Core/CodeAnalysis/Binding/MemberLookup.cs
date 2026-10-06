@@ -7954,6 +7954,19 @@ internal sealed class MemberLookup
                 return false;
             }
 
+            if (sa.EnclosingTypeArguments.Length != sb.EnclosingTypeArguments.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < sa.EnclosingTypeArguments.Length; i++)
+            {
+                if (!SameTypeSymbol(sa.EnclosingTypeArguments[i], sb.EnclosingTypeArguments[i]))
+                {
+                    return false;
+                }
+            }
+
             if (sa.TypeArguments.Length != sb.TypeArguments.Length)
             {
                 return false;

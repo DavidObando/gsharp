@@ -148,6 +148,12 @@ class Derived : Base {
 
 ### 4. Accessibility
 
+Explicit abstract class properties use `abstract prop`, optionally
+`abstract override prop` to reabstract a base slot (ADR-0197, issue #4765).
+They have a bodyless accessor list and no storage. `open prop` get/init
+auto-properties remain concrete even in abstract owners; the established
+bodyless open getter-only requirement remains supported.
+
 Properties inherit the accessibility of their enclosing type by default (`public` for types, `internal` for non-exported). An explicit accessibility modifier on the `prop` declaration applies to the property and both accessors uniformly:
 
 ```gs

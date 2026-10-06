@@ -47,7 +47,7 @@ public static class TypeMemberModel
             {
                 foreach (var property in type.Properties)
                 {
-                    if (property.Name == parameter.Name && property.Declaration == null)
+                    if (property.Name == parameter.Name && property.HasGetter && !property.IsStatic && !property.IsIndexer)
                     {
                         members.Add(property);
                         break;
@@ -420,6 +420,71 @@ public static class TypeMemberModel
                         declaringType = iface;
                         return true;
                     }
+                }
+            }
+        }
+
+        property = null;
+        declaringType = null;
+        return false;
+    }
+
+    /// <summary>Finds the effective declaring construction of an already-bound property by member/accessor identity.</summary>
+    /// <param name="type">The receiver or declaring construction.</param>
+    /// <param name="boundProperty">The selected property, not another member with the same name.</param>
+    /// <param name="property">The property in the effective construction.</param>
+    /// <param name="declaringType">The effective declaring construction.</param>
+    /// <returns>Whether the bound property was found.</returns>
+    public static bool TryGetPropertyWithOwner(
+        TypeSymbol type,
+        PropertySymbol boundProperty,
+        [NotNullWhen(true)] out PropertySymbol? property,
+        [NotNullWhen(true)] out TypeSymbol? declaringType)
+    {
+        HashSet<TypeParameterSymbol>? visited = null;
+        while (type is TypeParameterSymbol parameter && parameter.ConstraintReferenceType is { } constraint)
+        {
+            visited ??= new HashSet<TypeParameterSymbol>();
+            if (!visited.Add(parameter))
+            {
+                break;
+            }
+
+            type = constraint;
+        }
+
+        IEnumerable<TypeSymbol> owners = type switch
+        {
+            StructSymbol aggregate => aggregate.GetHierarchy(),
+            InterfaceSymbol contract => contract.SelfAndAllBaseInterfaces(),
+            _ => ImmutableArray<TypeSymbol>.Empty,
+        };
+        foreach (var owner in owners)
+        {
+            IEnumerable<PropertySymbol> candidates;
+            if (owner is StructSymbol aggregate)
+            {
+                candidates = boundProperty.IsStatic ? aggregate.StaticProperties : aggregate.Properties;
+            }
+            else if (owner is InterfaceSymbol contract)
+            {
+                contract.EnsureMembersResolved();
+                candidates = (contract.Definition ?? contract).Properties;
+            }
+            else
+            {
+                continue;
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (ReferenceEquals(candidate, boundProperty)
+                    || (boundProperty.GetterSymbol != null && ReferenceEquals(candidate.GetterSymbol, boundProperty.GetterSymbol))
+                    || (boundProperty.SetterSymbol != null && ReferenceEquals(candidate.SetterSymbol, boundProperty.SetterSymbol)))
+                {
+                    property = candidate;
+                    declaringType = owner;
+                    return true;
                 }
             }
         }

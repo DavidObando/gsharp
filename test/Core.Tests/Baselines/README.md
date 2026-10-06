@@ -79,6 +79,19 @@ equivalent duplicate constructor row; its declaring scope, name, signature,
 and attribute payload are unchanged. These are reviewed metadata changes,
 not a reason to exclude attributes or normalize additional tokens in this gate.
 
+The composition of PR #4715's explicit abstract-property and record repairs
+with main at `6296ff2c` derives all 160 entries from the combined compiler's
+actual emitted PEs, retaining the same five `null` entries. Fresh builds of both
+parents establish 48 hierarchy-transport-only differences from the #4715
+producer, with identical methods, slots, fields and resources. Against main,
+the existing #4715 record repair changes typed `Equals` flags in 11 samples
+and preserves whole-value data-struct copy bodies in two of those samples.
+The fresh #4715 parent also exposes four stale pre-composition hashes; the
+combined baseline records the actual preserved behavior instead of selecting
+either parent's snapshot. Nonempty public/private resource controls retain
+their payloads and runtime result. No additional token normalization, compile
+exceptions or production behavior change is part of this composition.
+
 The ADR-0190 native-slice implementation adds `samples/NativeSlices.gs` with a
 non-null baseline. Its reviewed diff adds only that sample; every pre-existing
 hash remains unchanged. The emitted stereo witness also independently verifies
