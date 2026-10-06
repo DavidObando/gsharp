@@ -2665,6 +2665,11 @@ internal sealed partial class ExpressionBinder
                     {
                         continue;
                     }
+
+                    Diagnostics.ReportPositionalInitializerAfterCompositeElement(
+                        member.FieldIdentifier.Location,
+                        member.FieldIdentifier.ValueText);
+                    continue;
                 }
 
                 var expression = BindExpression(member.Value, Invariant.Required(step.MemberType, "a positional member has a type"));

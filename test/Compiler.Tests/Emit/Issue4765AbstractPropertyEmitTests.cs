@@ -532,6 +532,37 @@ public sealed class Issue4765AbstractPropertyEmitTests
         }
     }
 
+    [Fact]
+    public void AbstractNullableIndexerParameter_EmitsNullableAttributeInBothAssemblies()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var reference = Path.Combine(fixture.Directory, "NullableIndexer.ref.dll");
+        var dll = fixture.Compile("""
+            package NullableIndexer
+            public abstract class Base {
+                public abstract prop this[key string?] int32 { get; }
+            }
+            """, "NullableIndexer", false, "/refout:" + reference);
+
+        foreach (var path in new[] { dll, reference })
+        {
+            using var pe = new PEReader(File.OpenRead(path));
+            var metadata = pe.GetMetadataReader();
+            var owner = metadata.GetTypeDefinition(Assert.Single(
+                metadata.TypeDefinitions,
+                handle => metadata.GetString(metadata.GetTypeDefinition(handle).Name) == "Base"));
+            var getter = metadata.GetMethodDefinition(Assert.Single(
+                owner.GetMethods(),
+                handle => metadata.GetString(metadata.GetMethodDefinition(handle).Name) == "get_Item"));
+            var parameter = metadata.GetParameter(Assert.Single(
+                getter.GetParameters(),
+                handle => metadata.GetString(metadata.GetParameter(handle).Name) == "key"));
+            Assert.Contains(
+                parameter.GetCustomAttributes(),
+                handle => GetCustomAttributeTypeName(metadata, handle) == "System.Runtime.CompilerServices.NullableAttribute");
+        }
+    }
+
     private static void AssertAbstractIndexerReflection(Type actual, Type expected)
     {
         Assert.True(actual.IsAbstract);
@@ -744,6 +775,25 @@ public sealed class Issue4765AbstractPropertyEmitTests
         Assert.Equal(expected.Attributes, actual.Attributes);
         Assert.Equal(expected.MethodImplCount, actual.MethodImplCount);
         Assert.Equal(expected.DeclarationName, actual.DeclarationName);
+    }
+
+    private static string GetCustomAttributeTypeName(MetadataReader metadata, CustomAttributeHandle handle)
+    {
+        var constructor = metadata.GetCustomAttribute(handle).Constructor;
+        EntityHandle owner = constructor.Kind switch
+        {
+            HandleKind.MemberReference => metadata.GetMemberReference((MemberReferenceHandle)constructor).Parent,
+            HandleKind.MethodDefinition => metadata.GetMethodDefinition((MethodDefinitionHandle)constructor).GetDeclaringType(),
+            _ => default,
+        };
+        return owner.Kind switch
+        {
+            HandleKind.TypeReference => metadata.GetString(metadata.GetTypeReference((TypeReferenceHandle)owner).Namespace)
+                + "." + metadata.GetString(metadata.GetTypeReference((TypeReferenceHandle)owner).Name),
+            HandleKind.TypeDefinition => metadata.GetString(metadata.GetTypeDefinition((TypeDefinitionHandle)owner).Namespace)
+                + "." + metadata.GetString(metadata.GetTypeDefinition((TypeDefinitionHandle)owner).Name),
+            _ => string.Empty,
+        };
     }
 
     private static void Verify(string dll, params string[] references)

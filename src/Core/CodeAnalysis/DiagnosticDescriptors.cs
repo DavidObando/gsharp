@@ -616,6 +616,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor SharedClassCannotHaveBaseTypes = new("GS0619", DiagnosticSeverity.Error, "Shared class '{0}' cannot declare a base class or implement interfaces (ADR-0195).");
     internal static readonly DiagnosticDescriptor InvalidAbstractProperty = new("GS0620", DiagnosticSeverity.Error, "Abstract property '{0}' requires an abstract class, a non-private bodyless accessor list, and no 'open' or explicit-interface modifier.");
     internal static readonly DiagnosticDescriptor PositionalPropertyReplacementRequiresGetter = new("GS0621", DiagnosticSeverity.Error, "Property '{0}' replaces a positional data member and must have a getter so the positional value remains readable.");
+    internal static readonly DiagnosticDescriptor PositionalInitializerAfterCompositeElement = new("GS0622", DiagnosticSeverity.Error, "Positional member '{0}' cannot follow a braced or content initializer because its constructor argument would be evaluated out of source order. Move positional members before composite elements.");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

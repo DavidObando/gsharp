@@ -30,6 +30,22 @@ public sealed class Issue4675RecordSafetyAndPropertyEmitTests
         Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BarePositionalReplacementTypeMismatch_ReportsConversionDiagnostic()
+    {
+        const string source = """
+            package PositionalReplacement
+            data struct Item(Value int32) {
+                public prop Value string
+            }
+            """;
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = fixture.TryCompile(source, "PositionalReplacement", true);
+        Assert.NotEqual(0, code);
+        Assert.Contains("error GS0155:", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("data struct", false)]
     [InlineData("data class", false)]

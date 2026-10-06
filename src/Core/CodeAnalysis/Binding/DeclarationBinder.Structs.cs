@@ -1965,28 +1965,6 @@ internal sealed partial class DeclarationBinder
                                   && (writeAccessor == null || writeAccessor.Body == null)
                                   && propSyntax.Accessors.All(a => a.Body == null);
 
-                    if (replacesPositionalProperty && !hasGetter)
-                    {
-                        Diagnostics.ReportPositionalPropertyReplacementRequiresGetter(
-                            propSyntax.Identifier.Location,
-                            propName);
-                        continue;
-                    }
-
-                    if (replacesPositionalProperty
-                        && propType != propertiesBuilder[positionalPropertyIndex].Type
-                        && (isAutoProperty
-                            || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                                propType,
-                                propertiesBuilder[positionalPropertyIndex].Type)))
-                    {
-                        Diagnostics.ReportCannotConvert(
-                            propSyntax.Identifier.Location,
-                            propertiesBuilder[positionalPropertyIndex].Type,
-                            propType);
-                        continue;
-                    }
-
                     // A bodyless accessor list on an open property declares an
                     // abstract slot; it must not acquire an auto-property field.
                     if (propSyntax.OpenModifier != null
@@ -1996,6 +1974,28 @@ internal sealed partial class DeclarationBinder
                     {
                         isAutoProperty = false;
                     }
+                }
+
+                if (replacesPositionalProperty && !hasGetter)
+                {
+                    Diagnostics.ReportPositionalPropertyReplacementRequiresGetter(
+                        propSyntax.Identifier.Location,
+                        propName);
+                    continue;
+                }
+
+                if (replacesPositionalProperty
+                    && propType != propertiesBuilder[positionalPropertyIndex].Type
+                    && (isAutoProperty
+                        || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                            propType,
+                            propertiesBuilder[positionalPropertyIndex].Type)))
+                {
+                    Diagnostics.ReportCannotConvert(
+                        propSyntax.Identifier.Location,
+                        propertiesBuilder[positionalPropertyIndex].Type,
+                        propType);
+                    continue;
                 }
 
                 var isExplicitAbstract = propSyntax.AbstractModifier != null;

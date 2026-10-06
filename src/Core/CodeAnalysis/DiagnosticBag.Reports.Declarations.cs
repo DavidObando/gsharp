@@ -1111,6 +1111,12 @@ public sealed partial class DiagnosticBag
     public void ReportPositionalPropertyReplacementRequiresGetter(TextLocation location, string propertyName)
         => Report(location, DiagnosticDescriptors.PositionalPropertyReplacementRequiresGetter, propertyName);
 
+    /// <summary>Reports a positional constructor argument after a composite literal element.</summary>
+    /// <param name="location">The positional member location.</param>
+    /// <param name="memberName">The positional member name.</param>
+    public void ReportPositionalInitializerAfterCompositeElement(TextLocation location, string memberName)
+        => Report(location, DiagnosticDescriptors.PositionalInitializerAfterCompositeElement, memberName);
+
     /// <summary>
     /// Reports GS0370 — ADR-0118 / issue #944: an indexer member
     /// (<c>prop this[…] T { … }</c>) was declared with no index parameters.

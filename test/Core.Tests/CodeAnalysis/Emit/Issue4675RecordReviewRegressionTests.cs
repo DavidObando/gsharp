@@ -88,6 +88,24 @@ public class Issue4675RecordReviewRegressionTests
         Assert.True(result.Value.Equals(other));
     }
 
+    [Theory]
+    [InlineData("data struct")]
+    [InlineData("data class")]
+    public void CompositeBeforePositionalMember_ReportsEvaluationOrderDiagnostic(string kind)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            import System.Collections.Generic
+            {{kind}} Pair(A int32) {
+                public var Items List[int32] = List[int32]()
+                public func Add(value int32) { Items.Add(value) }
+            }
+            Pair{Items: {1}, A: 2}
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0622");
+        Assert.Null(result.UnhandledException);
+    }
+
     [Fact]
     public void SealedIntermediaryDataEqualityOverride_IsRejectedBeforeEmission()
     {

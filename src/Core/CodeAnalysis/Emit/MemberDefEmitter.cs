@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -80,6 +81,7 @@ internal sealed class MemberDefEmitter
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken;
     private readonly Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty;
     private readonly Action<EventDefinitionHandle, TypeSymbol> emitNullableAttributeOnEvent;
+    private readonly Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
 
     public MemberDefEmitter(
@@ -94,6 +96,7 @@ internal sealed class MemberDefEmitter
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken,
         Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty,
         Action<EventDefinitionHandle, TypeSymbol> emitNullableAttributeOnEvent,
+        Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
@@ -107,6 +110,7 @@ internal sealed class MemberDefEmitter
         this.resolveFieldToken = resolveFieldToken ?? throw new ArgumentNullException(nameof(resolveFieldToken));
         this.emitNullableAttributeOnProperty = emitNullableAttributeOnProperty ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnProperty));
         this.emitNullableAttributeOnEvent = emitNullableAttributeOnEvent ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnEvent));
+        this.emitNullableAttributeOnParameter = emitNullableAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnParameter));
         this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
     }
 
@@ -629,10 +633,15 @@ internal sealed class MemberDefEmitter
         var firstParameter = this.nextParameterHandle();
         for (var index = 0; index < prop.Parameters.Length; index++)
         {
-            ParameterMetadataEmitter.AddParameter(
+            var parameterHandle = ParameterMetadataEmitter.AddParameter(
                 this.emitCtx,
                 prop.Parameters[index],
                 sequenceNumber: index + 1);
+            var nullableFlags = NullableFlagsBuilder.Build(prop.Parameters[index].Type);
+            if (!nullableFlags.IsDefaultOrEmpty)
+            {
+                this.emitNullableAttributeOnParameter(parameterHandle, nullableFlags);
+            }
         }
 
         if (!isGetter)
