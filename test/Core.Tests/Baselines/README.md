@@ -43,7 +43,7 @@ extractions preserve emitted IL — if the gate fires, find the divergence
 in the extraction, do not regenerate.
 
 You should only regenerate when a PR has **explicitly and intentionally**
-changed emitted IL (e.g. a Wave-3 bug fix that lands after the
+changed emitted metadata or IL (e.g. a Wave-3 bug fix that lands after the
 decomposition is complete). In that case:
 
 1. Run the gate normally and inspect
@@ -66,6 +66,18 @@ decomposition is complete). In that case:
 If you also added new samples, they will appear in the regenerated JSON
 automatically — both `samples/*.gs` and `samples/refactoring-baseline/*.gs`
 are scanned.
+
+The hierarchy-mode transport in PR #4808 intentionally changes 48 of the
+160 existing hashes. All 107 other emitted hashes and five existing `null`
+entries remain unchanged. A complete comparison against the genuine previous
+compiler establishes that the changes are class semantics markers (including
+synthesized capture cells), appended attribute-constructor references, and
+inheritance-mode extensions to existing markers. Method contracts and bodies,
+fields, slots, locals, exception regions, and existing reference rows are
+unchanged. Some unrelated assembly metadata attributes now reference an
+equivalent duplicate constructor row; its declaring scope, name, signature,
+and attribute payload are unchanged. These are reviewed metadata changes,
+not a reason to exclude attributes or normalize additional tokens in this gate.
 
 The ADR-0190 native-slice implementation adds `samples/NativeSlices.gs` with a
 non-null baseline. Its reviewed diff adds only that sample; every pre-existing
@@ -98,3 +110,14 @@ The unchanged test DLL fails precisely on the extra constructions with the
 pre-copy-fix compiler and passes after restoration. All other 158 entries,
 including the five existing null entries, and the hashing policy remain
 unchanged.
+
+The bounded composition of #4776 with the reviewed #4808 hierarchy metadata
+derives the complete 160-entry map from newly built genuine parent and combined
+compilers. The combined map differs from the value-copy parent in its 48
+hierarchy-metadata hashes and from the hierarchy parent only in
+`DataStructErgonomics` and `WebsiteSwift`; these two combined hashes match
+neither parent's standalone output. All 155 emitted samples retain the
+value-copy parent's method contracts and bodies, locals, exception regions,
+field/type layout and managed resources. Only the intended hierarchy markers
+and their attribute-constructor references compose with the two existing
+storage-copy entry points. The five null entries and hash policy are unchanged.

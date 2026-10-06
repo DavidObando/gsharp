@@ -19,6 +19,10 @@ The published **0.4.591** release is the version used by the website's installat
 - **Copies retain construction provenance** (issues #4755 and #4796). Data-struct `with` and `.copy(...)` copy existing storage without rerunning primary constructors or declaration initializers. Expression-tree source data-class copies use the exact virtual clone before ordered updates, retaining private/base state and invocation-time, once-only evaluation rather than constructing a fresh object.
   - The emitted-PE baseline now records the intentional storage-copy IL in `DataStructErgonomics` and `WebsiteSwift`; real gsc/native C# oracles pin fresh-construction counts, strict IL, output and original/copy state. The other 158 sample entries and hash policy are unchanged.
 
+- **Hierarchy-policy metadata has reviewed emitted-PE baselines** (PR #4808). The 48 affected sample hashes now include the intentional inheritance-mode transport; all other sample hashes and existing compile exceptions are preserved. Method bodies, fields, and CLR slots are unchanged. Generated-source replay checks producer configuration by its unique metadata key, without excluding hierarchy records.
+
+- **Imported G# sealed hierarchies retain their declaring-assembly restriction** (issue #4807, PR #4808). Class semantics metadata now records inheritance mode, so foreign plain/data subclasses cannot treat a sealed hierarchy's intentionally non-sealed CLR image as open, including closed and symbolic generics and reference assemblies. Native non-sealed records and same-compilation sealed hierarchies remain legal. Legacy marked G# producers must be rebuilt to establish external inheritance permission.
+
 - **cs2gs self-hosting guards remapped type arguments before storing them**
   (issue #4722). Failed sibling remapping returns before publishing a nullable
   result into a fixed non-null Roslyn type-argument array; constructed and
@@ -46,9 +50,13 @@ The published **0.4.591** release is the version used by the website's installat
   - Expression-tree lambdas retain supplied primary inputs as invocation-time tree locals, preserving lexical evaluation order and once-only capture before constructor-owned declaration initialization, including reordered inputs and later member writes.
 - **Data-class copy constructors initialize imported record bases correctly** (issue #4789). The shared copy emitter now calls the accessible copy constructor on the actual direct CLR base, retaining symbolic generic arguments and base state before copying derived members. Object-root and source-base copying are unchanged; an imported non-object base without an accessible copy contract fails emission instead of producing invalid IL.
 
+- **Native non-sealed record bases use CLR inheritance eligibility** (issue #4807). Ordinary and closed-generic imported records now follow the same imported-base constructor and copy paths as symbolic generic records, instead of being rejected by G# source-only `open` policy. Real CLR sealed bases and closed G# source bases remain rejected; imported equality dispatch is a separate concern.
+
 - **Inherited generic CLR method returns preserve source owner arguments** (issue #4785). Generic calls through a source-derived receiver now project the return from the actual declaring owner's symbolic arguments, including multilevel, reordered and nested bases, while keeping the method's own argument order and physical tuple types.
 
 - **Qualified nested constructor calls retain their generic enclosing owner** (issue #4803). Calls such as `Outer[int32].User()` now use the existing receiver-aware nested-type resolution instead of looking for a shared method named `User`, including inside expression-tree lambdas. Authored overload selection, enclosing/own parameter projection and constructor-reference generic slots share the existing construction machinery; no syntax or field-initializer semantics change.
+
+- **Qualified source-enum conversions retain their enclosing owner** (self-migration #3501). `Outer.Kind(value)` now uses the enum resolved by the shared nested-type reader instead of looking for a shared method named `Kind`. Attribute constants, generic and inherited owners, and once-only operand evaluation retain the existing conversion contract; unrelated same-named enums do not replace the nested type.
 
 - **Cross-assembly language-server navigation tests retain native C# provenance** (issue #4666). Both portable-PDB and G# Go-to-Definition tests now import a dedicated Roslyn-emitted assembly, require its portable sidecar PDB, and assert the exact `.cs` source path and span. Missing-PDB and same-named `.gs` fixtures must fail those same navigation oracles; migrated Core is no longer used as an assumed C# sibling.
 
