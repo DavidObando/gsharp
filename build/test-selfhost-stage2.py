@@ -218,6 +218,41 @@ class RunTests(unittest.TestCase):
             self.assertEqual(0, result["exitCode"])
             self.assertEqual(1, result["executedTests"])
 
+    def test_test_only_gsharp_project_requires_fresh_compiler_receipt(self) -> None:
+        with work_directory() as directory:
+            tree = Path(directory)
+            work = tree / "gate"
+            guard = test_toolchain_guard(work)
+            project = (tree / "Tests.gsproj").resolve()
+            supplied = tree / "Tests.dll"
+            supplied.write_bytes(b"supplied test assembly")
+            evidence = work / "stage2.compiler-evidence/0.txt"
+            evidence.parent.mkdir(parents=True)
+            digest = stage2.file_sha256(str(supplied))
+            evidence.write_text(
+                f"nonce|{supplied}|{digest}", encoding="utf-8")
+            stage = {
+                "compilerEvidence": {
+                    str(project): {
+                        "path": str(evidence), "nonce": "nonce",
+                        "targetPath": str(supplied),
+                    }
+                },
+                "gsharpClosures": {"Tests.gsproj": [str(project)]},
+            }
+
+            def copied_test(_command: list[str], _cwd: Path, _env: dict,
+                            _log: Path) -> tuple[int, float]:
+                write_trx(work / "test-0/results.trx")
+                return 0, 0.0
+
+            with patch.object(stage2, "run", side_effect=copied_test), \
+                    self.assertRaisesRegex(
+                        stage2.Stage2Error, "compiler execution/output evidence invalid"):
+                stage2.run_tests(
+                    tree, ["Tests.gsproj"], work, "Release", "1.0-stage1", stage)
+            self.assertEqual(b"supplied test assembly", supplied.read_bytes())
+
 
 class MainTests(unittest.TestCase):
     @staticmethod
@@ -330,6 +365,8 @@ class MainTests(unittest.TestCase):
             ("stage1", []),
             ("nuget-stage2", []),
             ("test-0", ["--test", "Tests.gsproj"]),
+            ("stage1.compiler-evidence", []),
+            ("stage2.compiler-evidence", []),
         ):
             with self.subTest(relative=relative), work_directory() as directory:
                 root = Path(directory)
@@ -446,6 +483,40 @@ class MainTests(unittest.TestCase):
                 if not fail:
                     self.assertFalse((work / "stage2.toolchain-guard.targets").is_symlink())
                     self.assertFalse((work / "stage2.build.log").is_symlink())
+
+    def test_stage1_preflight_includes_test_only_inputs_before_cleanup(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree, work = root / "tree", root / "gate"
+            project = tree / "out/generated/Tests.gsproj"
+            source = tree / "out/generated/Tests.gs"
+            imported = tree / "out/generated/Generated.targets"
+            project.parent.mkdir(parents=True)
+            project.write_text(
+                '<Project Sdk="Gsharp.NET.Sdk">'
+                '<Import Project="Generated.targets"/></Project>', encoding="utf-8")
+            source.write_text("package Tests\n", encoding="utf-8")
+            imported.write_text("<Project/>\n", encoding="utf-8")
+            bootstrap = self.package(root, "1.0.0", "cs")
+            stage1 = self.package(root, "1.0.0-stage1", "gs")
+
+            def build(_tree: Path, stage_name: str, _package: Path, _projects: list[str],
+                      _assemblies: list[str], _work: Path, _config: str,
+                      validation: list[str]) -> dict:
+                self.assertEqual("stage1", stage_name)
+                self.assertIn("out/generated/Tests.gsproj", validation)
+                raise stage2.Stage2Error("test input overlaps cleanup")
+
+            with patch.object(stage2, "build_stage", side_effect=build):
+                code = stage2.main(
+                    ["--tree", str(tree), "--work", str(work),
+                     "--bootstrap", str(bootstrap), "--stage1", str(stage1),
+                     "--test", "out/generated/Tests.gsproj"])
+
+            self.assertEqual(2, code)
+            self.assertTrue(project.is_file())
+            self.assertTrue(source.is_file())
+            self.assertTrue(imported.is_file())
 
 
 class ParticipatingProjectTests(unittest.TestCase):
@@ -713,7 +784,7 @@ class ParticipatingProjectTests(unittest.TestCase):
             names = [element.tag for element in target]
             build = names.index("BuildTask")
             self.assertEqual(
-                ["PropertyGroup", "Error", "Error", "Error", "PropertyGroup"],
+                ["ItemGroup", "GetFileHash", "Error", "Error", "PropertyGroup"],
                 names[build - 5:build])
 
     def test_toolchain_guard_supports_special_character_paths(self) -> None:
@@ -809,21 +880,34 @@ class CleanOutputsTests(unittest.TestCase):
 
             def validate(_tree: Path, _roots: list[str], env: dict,
                          _config: str, _version: str, _properties: dict,
-                         gsharp_projects: set[Path], _protected_inputs: set[Path]) -> list[str]:
+                         gsharp_projects: set[Path], _protected_inputs: set[Path],
+                         target_paths: dict[Path, Path]) -> list[str]:
                 nonlocal seen_env
                 seen_env = env
                 self.assertFalse(stale.exists())
-                gsharp_projects.add(tree / "a.gsproj")
+                project = tree / "a.gsproj"
+                output = tree / "a.dll"
+                expected = Path(env["NUGET_PACKAGES"]) / "gsharp.net.sdk/1.0-stage1"
+                for path in (expected / "tools/compiler/gsc.dll",
+                             expected / "tools/task/Gsharp.NET.Sdk.dll"):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"tool")
+                gsharp_projects.add(project)
+                target_paths[project] = output
                 return ["a.gsproj"]
 
-            def install(_expected: Path, evidence: dict[Path, tuple[Path, str]]) -> None:
-                for path, nonce in evidence.values():
-                    path.write_text(nonce, encoding="utf-8")
+            def install(_expected: Path, evidence: dict[Path, tuple[Path, str]],
+                        _payload_hashes: dict[Path, str]) -> None:
+                install.evidence = evidence
 
             def rebuild(command: list[str], cwd: Path, env: dict, log: Path) -> tuple[int, float]:
                 self.assertIs(seen_env, env)
                 self.assertEqual(str(work / "nuget-stage2"), env["NUGET_PACKAGES"])
-                (tree / "a.dll").write_bytes(b"rebuilt")
+                output = tree / "a.dll"
+                output.write_bytes(b"rebuilt")
+                digest = stage2.file_sha256(str(output))
+                for path, nonce in install.evidence.values():
+                    path.write_text(f"{nonce}|{output}|{digest}", encoding="utf-8")
                 return 0, 0.0
 
             with patch.object(stage2, "pin", return_value="1.0-stage1"), \
@@ -1053,7 +1137,7 @@ class CompareTests(unittest.TestCase):
                     '</packageSources></configuration>', encoding="utf-8")
 
                 with self.assertRaisesRegex(
-                        stage2.Stage2Error, "compiler execution evidence missing"):
+                        stage2.Stage2Error, "compiler execution/output evidence invalid"):
                     stage2.build_stage(
                         tree, "stage1", package, ["Root.gsproj"], ["out/Root.dll"],
                         work, "Release", ["Root.gsproj"])
@@ -1086,6 +1170,137 @@ class CompareTests(unittest.TestCase):
                 ["artifacts/Root.dll"], work, "Release", ["out/generated/Root.gsproj"])
         self.assertTrue(project.is_file())
         self.assertTrue(source.is_file())
+
+    def test_invocation_rejects_build_time_compiler_payload_replacement(self) -> None:
+        packages = sorted(
+            (REPO / "out/bin/Release/nupkgs").glob("Gsharp.NET.Sdk.*.nupkg"),
+            key=lambda path: path.stat().st_mtime)
+        self.assertTrue(packages, "Release build did not produce Gsharp.NET.Sdk")
+        package = packages[-1]
+        tree, work = self.work / "payload-replace-tree", self.work / "payload-replace-gate"
+        tree.mkdir()
+        (tree / "Directory.Build.props").write_text("<Project/>\n", encoding="utf-8")
+        (tree / "Directory.Build.targets").write_text("<Project/>\n", encoding="utf-8")
+        shutil.copy2(CORE, tree / "replacement.dll")
+        (tree / "Root.gsproj").write_text(
+            '<Project Sdk="Gsharp.NET.Sdk">'
+            '<PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>'
+            '<Target Name="ReplaceCompiler" BeforeTargets="CoreCompile">'
+            '<Copy SourceFiles="replacement.dll" DestinationFiles="$(GsharpCompilerFullPath)"/>'
+            '</Target></Project>', encoding="utf-8")
+        (tree / "Program.gs").write_text(
+            "package Smoke\n\npublic class Marker { }\n", encoding="utf-8")
+        (tree / "nuget.config").write_text(
+            '<configuration><packageSources><clear/>'
+            '<add key="local" value=".nugs"/>'
+            '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
+            '</packageSources></configuration>', encoding="utf-8")
+
+        with self.assertRaises(stage2.Stage2Error):
+            stage2.build_stage(
+                tree, "stage1", package, ["Root.gsproj"], ["bin/Release/net10.0/Root.dll"],
+                work, "Release", ["Root.gsproj"])
+        self.assertIn(
+            "verified SDK payload changed before compiler invocation",
+            (work / "stage1.build.log").read_text(encoding="utf-8"))
+
+    def test_after_compile_output_replacement_invalidates_bound_receipt(self) -> None:
+        packages = sorted(
+            (REPO / "out/bin/Release/nupkgs").glob("Gsharp.NET.Sdk.*.nupkg"),
+            key=lambda path: path.stat().st_mtime)
+        self.assertTrue(packages, "Release build did not produce Gsharp.NET.Sdk")
+        package = packages[-1]
+        tree, work = self.work / "output-replace-tree", self.work / "output-replace-gate"
+        tree.mkdir()
+        (tree / "Directory.Build.props").write_text("<Project/>\n", encoding="utf-8")
+        (tree / "Directory.Build.targets").write_text("<Project/>\n", encoding="utf-8")
+        shutil.copy2(CORE, tree / "replacement.dll")
+        (tree / "Root.gsproj").write_text(
+            '<Project Sdk="Gsharp.NET.Sdk">'
+            '<PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>'
+            '<Target Name="ReplaceOutput" AfterTargets="CoreCompile">'
+            '<Copy SourceFiles="replacement.dll" DestinationFiles="@(IntermediateAssembly)"/>'
+            '</Target></Project>', encoding="utf-8")
+        (tree / "Program.gs").write_text(
+            "package Smoke\n\npublic class Marker { }\n", encoding="utf-8")
+        (tree / "nuget.config").write_text(
+            '<configuration><packageSources><clear/>'
+            '<add key="local" value=".nugs"/>'
+            '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
+            '</packageSources></configuration>', encoding="utf-8")
+
+        with self.assertRaisesRegex(
+                stage2.Stage2Error, "compiler execution/output evidence invalid"):
+            stage2.build_stage(
+                tree, "stage1", package, ["Root.gsproj"], ["bin/Release/net10.0/Root.dll"],
+                work, "Release", ["Root.gsproj"])
+
+    def test_cleanup_checks_unresolved_pdb_alias_path(self) -> None:
+        with work_directory() as directory:
+            tree = Path(directory)
+            real = tree / "other/Real.dll"
+            real.parent.mkdir()
+            real.write_bytes(b"assembly")
+            alias = tree / "Alias.dll"
+            alias.symlink_to(real)
+            resource = tree / "Alias.pdb"
+            resource.write_bytes(b"input")
+
+            with self.assertRaisesRegex(stage2.Stage2Error, "inputs overlap cleaned outputs"):
+                stage2.reject_cleanup_overlap(tree, ["Alias.dll"], {resource.resolve()})
+            self.assertTrue(resource.is_file())
+
+    def test_repeated_build_command_requires_fresh_receipt(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree, work = root / "tree", root / "gate"
+            tree.mkdir()
+            project, output = tree / "Root.gsproj", tree / "Root.dll"
+            project.write_text("<Project/>", encoding="utf-8")
+            output.write_bytes(b"compiled")
+            calls = 0
+
+            def validate(_tree: Path, _roots: list[str], env: dict,
+                         _config: str, _version: str, _properties: dict,
+                         gsharp_projects: set[Path], _inputs: set[Path],
+                         target_paths: dict[Path, Path]) -> list[str]:
+                expected = Path(env["NUGET_PACKAGES"]) / "gsharp.net.sdk/1.0"
+                for path in (expected / "tools/compiler/gsc.dll",
+                             expected / "tools/task/Gsharp.NET.Sdk.dll"):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"tool")
+                gsharp_projects.add(project)
+                target_paths[project] = output
+                return ["Root.gsproj"]
+
+            def install(_expected: Path, evidence: dict[Path, tuple[Path, str]],
+                        _payload_hashes: dict[Path, str]) -> None:
+                nonlocal calls
+                calls = 0
+                install.evidence = evidence
+
+            def rebuild(_command: list[str], _cwd: Path, _env: dict,
+                        _log: Path) -> tuple[int, float]:
+                nonlocal calls
+                calls += 1
+                output.write_bytes(b"compiled")
+                if calls == 1:
+                    path, nonce = install.evidence[project]
+                    digest = stage2.file_sha256(str(output))
+                    path.write_text(f"{nonce}|{output}|{digest}", encoding="utf-8")
+                return 0, 0.0
+
+            with patch.object(stage2, "pin", return_value="1.0"), \
+                    patch.object(stage2, "validate_participating_projects", side_effect=validate), \
+                    patch.object(stage2, "verify_resolved_sdk_payload", return_value=1), \
+                    patch.object(stage2, "install_sdk_task_guard", side_effect=install), \
+                    patch.object(stage2, "run", side_effect=rebuild), \
+                    self.assertRaisesRegex(
+                        stage2.Stage2Error, "compiler execution/output evidence invalid"):
+                stage2.build_stage(
+                    tree, "stage1", Path("unused.nupkg"),
+                    ["Root.gsproj", "Root.gsproj"], ["Root.dll"],
+                    work, "Release", ["Root.gsproj"])
 
     def test_override_then_clear_restore_cannot_hide_bootstrap_compilation(self) -> None:
         packages = sorted(
