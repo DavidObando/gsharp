@@ -1429,12 +1429,15 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static ISymbol RemapSourceDeclaration(Compilation targetCompilation, ISymbol symbol)
     {
+        StringComparer pathComparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
         Dictionary<string, SyntaxTree> targetTrees = SourceTrees.GetValue(
             targetCompilation,
             compilation => compilation.SyntaxTrees
                 .Where(tree => !string.IsNullOrEmpty(tree.FilePath))
-                .GroupBy(tree => tree.FilePath, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase));
+                .GroupBy(tree => tree.FilePath, pathComparer)
+                .ToDictionary(group => group.Key, group => group.First(), pathComparer));
         foreach (SyntaxReference declaration in symbol.OriginalDefinition.DeclaringSyntaxReferences)
         {
             string path = declaration.SyntaxTree.FilePath;

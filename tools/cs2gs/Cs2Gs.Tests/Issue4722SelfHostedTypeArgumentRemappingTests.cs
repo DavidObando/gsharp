@@ -272,6 +272,18 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             preprocessedTree);
         Assert.Null(method.Invoke(null, new object[] { preprocessedTarget, conditional }));
 
+        if (!OperatingSystem.IsWindows())
+        {
+            SyntaxTree caseCollisionTree = CSharpSyntaxTree.ParseText(
+                contract,
+                new CSharpParseOptions(LanguageVersion.Latest),
+                path: "contracts.cs");
+            CSharpCompilation caseCollisionTarget = linkedTarget.Compilation.ReplaceSyntaxTree(
+                linkedContractTree,
+                caseCollisionTree);
+            Assert.Null(method.Invoke(null, new object[] { caseCollisionTarget, input }));
+        }
+
         LoadedCSharpProject unrelated = CSharpProjectLoader.LoadInMemory(new[] { ("Unrelated.cs", "public sealed class Unrelated { }") });
         Assert.Null(method.Invoke(null, new object[] { unrelated.Compilation, input }));
     }
