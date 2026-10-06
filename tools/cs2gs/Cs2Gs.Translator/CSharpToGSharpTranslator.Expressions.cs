@@ -2953,6 +2953,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            if (this.LambdaResultFlowsToNullableSink(lambda))
+            {
+                return true;
+            }
+
             SyntaxNode node = lambda;
             while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
             {
@@ -6161,7 +6166,7 @@ public sealed partial class CSharpToGSharpTranslator
             // for operators such as FirstOrDefault to inspect instead of
             // throwing at the selector boundary.
             SyntaxNode current = lambda;
-            while (current.Parent is ParenthesizedExpressionSyntax)
+            while (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
             {
                 current = current.Parent;
             }
@@ -6177,9 +6182,9 @@ public sealed partial class CSharpToGSharpTranslator
             current = invocation;
             while (true)
             {
-                if (current.Parent is ParenthesizedExpressionSyntax parenthesized)
+                if (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
                 {
-                    current = parenthesized;
+                    current = current.Parent;
                     continue;
                 }
 
@@ -6188,6 +6193,15 @@ public sealed partial class CSharpToGSharpTranslator
                     && member.Parent is InvocationExpressionSyntax outerInvocation)
                 {
                     current = outerInvocation;
+                    continue;
+                }
+
+                if (current.Parent is ArgumentSyntax materializerArgument
+                    && materializerArgument.Expression == current
+                    && materializerArgument.Parent?.Parent is InvocationExpressionSyntax staticMaterializer
+                    && this.IsEnumerableToArray(staticMaterializer))
+                {
+                    current = staticMaterializer;
                     continue;
                 }
 
@@ -6222,6 +6236,13 @@ public sealed partial class CSharpToGSharpTranslator
                 // The #4046 shape: the chain collapses back to the SAME scalar
                 // type as the selector's own result (`.Select(...).FirstOrDefault()`).
                 return !this.TargetWillRemainNonNullableReference(sinkType, sink);
+            }
+
+            if (sink is IMethodSymbol sinkMethod
+                && sinkType is IArrayTypeSymbol
+                && this.ArrayReturnElementAcceptsNullableSelectorResult(sinkMethod))
+            {
+                return true;
             }
 
             // Issue #4180: `current` never left the Select-shaped invocation itself
@@ -6259,6 +6280,145 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.Compilation.ClassifyConversion(resultType, sinkElementType);
             return elementConversion.IsImplicit
                 && (elementConversion.IsReference || elementConversion.IsIdentity);
+        }
+
+        private bool ArrayReturnElementAcceptsNullableSelectorResult(IMethodSymbol method)
+        {
+            if (method?.ReturnType is not IArrayTypeSymbol returnArray
+                || returnArray.ElementType is not { IsReferenceType: true } element
+                || element.NullableAnnotation != NullableAnnotation.None
+                || ObliviousNullabilityAnalyzer.IsReturnSignatureFixedByAnotherDeclaration(method))
+            {
+                return false;
+            }
+
+            foreach (ExpressionSyntax returned in this.GetSourceCallableReturnExpressions(method))
+            {
+                foreach (AnonymousFunctionExpressionSyntax lambda in returned
+                    .DescendantNodesAndSelf()
+                    .OfType<AnonymousFunctionExpressionSyntax>())
+                {
+                    SyntaxNode current = lambda;
+                    while (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+                    {
+                        current = current.Parent;
+                    }
+
+                    if (current.Parent is not ArgumentSyntax argument
+                        || argument.Expression != current
+                        || !this.IsGenericSelectorResultArgument(argument, lambda)
+                        || !this.TryGetDirectArrayMaterializerElementType(
+                            argument,
+                            returned,
+                            out ITypeSymbol materializedElement)
+                        || !GetLambdaResultExpressions(lambda)
+                            .Any(this.NullableSelectorResultMayBeNull))
+                    {
+                        continue;
+                    }
+
+                    ITypeSymbol resultType =
+                        (this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol)?.ReturnType
+                        ?? this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod?.ReturnType;
+                    Microsoft.CodeAnalysis.CSharp.Conversion conversion =
+                        this.context.Compilation.ClassifyConversion(
+                            resultType,
+                            element.WithNullableAnnotation(NullableAnnotation.None));
+                    Microsoft.CodeAnalysis.CSharp.Conversion materializedConversion =
+                        this.context.Compilation.ClassifyConversion(
+                            resultType,
+                            materializedElement.WithNullableAnnotation(NullableAnnotation.None));
+                    if (materializedConversion.IsImplicit
+                        && (materializedConversion.IsReference || materializedConversion.IsIdentity)
+                        && conversion.IsImplicit
+                        && (conversion.IsReference || conversion.IsIdentity))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool NullableSelectorResultMayBeNull(ExpressionSyntax result) =>
+            result switch
+            {
+                ParenthesizedExpressionSyntax parenthesized =>
+                    this.NullableSelectorResultMayBeNull(parenthesized.Expression),
+                CastExpressionSyntax cast =>
+                    this.NullableSelectorResultMayBeNull(cast.Expression),
+                ConditionalExpressionSyntax conditional =>
+                    this.NullableSelectorResultMayBeNull(conditional.WhenTrue)
+                        || this.NullableSelectorResultMayBeNull(conditional.WhenFalse),
+                SwitchExpressionSyntax switchExpression => switchExpression.Arms.Any(arm =>
+                    this.NullableSelectorResultMayBeNull(arm.Expression)),
+                _ => this.NullableReferenceValueMayBeNull(
+                    result,
+                    respectDeclaredAnnotations: true),
+            };
+
+        private bool TryGetDirectArrayMaterializerElementType(
+            ArgumentSyntax selectorArgument,
+            ExpressionSyntax returned,
+            out ITypeSymbol elementType)
+        {
+            elementType = null;
+            SyntaxNode current = selectorArgument.Parent?.Parent;
+            while (current?.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                current = current.Parent;
+            }
+
+            InvocationExpressionSyntax materializer = current?.Parent switch
+            {
+                MemberAccessExpressionSyntax member
+                    when member.Expression == current
+                        && member.Parent is InvocationExpressionSyntax invocation =>
+                    invocation,
+                ArgumentSyntax argument
+                    when argument.Expression == current
+                        && argument.Parent?.Parent is InvocationExpressionSyntax invocation =>
+                    invocation,
+                _ => null,
+            };
+            if (materializer == null
+                || !this.IsEnumerableToArray(materializer))
+            {
+                return false;
+            }
+
+            elementType =
+                (this.context.GetSymbolInfo(materializer).Symbol as IMethodSymbol)?.ReturnType
+                    is IArrayTypeSymbol array
+                        ? array.ElementType
+                        : null;
+            if (elementType == null)
+            {
+                return false;
+            }
+
+            current = materializer;
+            while (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                current = current.Parent;
+            }
+
+            return current == returned;
+        }
+
+        private bool IsEnumerableToArray(InvocationExpressionSyntax invocation)
+        {
+            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
+                || method.Name != "ToArray")
+            {
+                return false;
+            }
+
+            IMethodSymbol originalMethod = method.ReducedFrom ?? method;
+            return SymbolEqualityComparer.Default.Equals(
+                originalMethod.ContainingType?.OriginalDefinition,
+                this.context.Compilation.GetTypeByMetadataName("System.Linq.Enumerable"));
         }
 
         private bool IsGenericSelectorResultArgument(
@@ -6376,9 +6536,27 @@ public sealed partial class CSharpToGSharpTranslator
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)
         {
             SyntaxNode node = use;
-            while (node.Parent is ParenthesizedExpressionSyntax)
+            while (true)
             {
-                node = node.Parent;
+                if (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+                {
+                    node = node.Parent;
+                }
+                else if (node.Parent is ConditionalExpressionSyntax conditional
+                    && (conditional.WhenTrue == node || conditional.WhenFalse == node))
+                {
+                    node = conditional;
+                }
+                else if (node.Parent is SwitchExpressionArmSyntax arm
+                    && arm.Expression == node
+                    && arm.Parent is SwitchExpressionSyntax switchExpression)
+                {
+                    node = switchExpression;
+                }
+                else
+                {
+                    break;
+                }
             }
 
             if (node.Parent is AnonymousFunctionExpressionSyntax expressionLambda

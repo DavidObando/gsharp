@@ -527,9 +527,31 @@ public sealed partial class CSharpToGSharpTranslator
                 return type;
             }
 
+            type = this.PromoteArrayReturnElementForNullableSelector(type, symbol);
             return this.ShouldPromoteToNullableReference(symbol)
                 ? MakeNullable(type)
                 : type;
+        }
+
+        private GTypeReference PromoteArrayReturnElementForNullableSelector(
+            GTypeReference type,
+            IMethodSymbol symbol)
+        {
+            // Issue #4818: the selector's nullable result is the array element
+            // contract. Widen that slot instead of asserting each result.
+            if (type is not ArrayTypeReference { ElementType: { IsNullable: false } element } array
+                || symbol.ReturnType is not IArrayTypeSymbol returnArray
+                || returnArray.ElementType is not { IsReferenceType: true } returnElement
+                || returnElement.NullableAnnotation != NullableAnnotation.None
+                || !this.ArrayReturnElementAcceptsNullableSelectorResult(symbol))
+            {
+                return type;
+            }
+
+            return new ArrayTypeReference(MakeNullable(element), array.Rank)
+            {
+                IsNullable = array.IsNullable,
+            };
         }
 
         // Issue #2421: mirrors PromoteReturnIfTainted's decision for an `async
