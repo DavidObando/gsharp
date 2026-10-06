@@ -135,7 +135,7 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             public static class SharedLocals {
                 public static string? Run(string? value) {
                     string? local = value;
-                    string? Echo(string? item) => item;
+                    T Echo<T>(T item) => item;
                     return Echo(local);
                 }
             #if !TARGET
@@ -255,6 +255,14 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             method.Invoke(null, new object[] { linkedTarget.Compilation, local }));
         Assert.IsAssignableFrom<IMethodSymbol>(
             method.Invoke(null, new object[] { linkedTarget.Compilation, localFunction }));
+        IMethodSymbol constructedLocalFunction = localFunction.Construct(
+            native.Compilation.GetSpecialType(SpecialType.System_String)
+                .WithNullableAnnotation(NullableAnnotation.Annotated));
+        IMethodSymbol remappedConstructedLocalFunction = Assert.IsAssignableFrom<IMethodSymbol>(
+            method.Invoke(null, new object[] { linkedTarget.Compilation, constructedLocalFunction }));
+        Assert.Equal(
+            NullableAnnotation.Annotated,
+            Assert.Single(remappedConstructedLocalFunction.TypeArguments).NullableAnnotation);
 
         ILocalSymbol conditional = Assert.IsAssignableFrom<ILocalSymbol>(
             contractDocument.SemanticModel.GetDeclaredSymbol(
@@ -283,6 +291,16 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
                 caseCollisionTree);
             Assert.Null(method.Invoke(null, new object[] { caseCollisionTarget, input }));
         }
+
+        SyntaxTree duplicatePathTree = CSharpSyntaxTree.ParseText(
+            "public sealed class Collision { }",
+            new CSharpParseOptions(LanguageVersion.Latest),
+            path: "Contracts.cs");
+        CSharpCompilation duplicatePathTarget = linkedTarget.Compilation
+            .RemoveSyntaxTrees(linkedContractTree)
+            .AddSyntaxTrees(duplicatePathTree, linkedContractTree);
+        Assert.IsAssignableFrom<INamedTypeSymbol>(
+            method.Invoke(null, new object[] { duplicatePathTarget, input }));
 
         LoadedCSharpProject unrelated = CSharpProjectLoader.LoadInMemory(new[] { ("Unrelated.cs", "public sealed class Unrelated { }") });
         Assert.Null(method.Invoke(null, new object[] { unrelated.Compilation, input }));
