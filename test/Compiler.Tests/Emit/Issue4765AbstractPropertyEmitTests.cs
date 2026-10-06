@@ -292,6 +292,50 @@ public sealed class Issue4765AbstractPropertyEmitTests
     }
 
     [Fact]
+    public void ImportedCovariantGetter_PreservesOriginalSlotThroughFurtherOverride()
+    {
+        using var contract = new CSharpFixture("""
+            namespace ImportedCovariantChain {
+                public abstract class Base { public abstract object Item { get; } }
+            }
+            """);
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var reference = Path.Combine(fixture.Directory, "ImportedCovariantChain.ref.dll");
+        var dll = fixture.Compile("""
+            package ImportedCovariantChain
+            public open class Middle : Base {
+                public open override prop Item string -> "middle"
+            }
+            public class Leaf : Middle {
+                public override prop Item string -> "leaf"
+            }
+            """, "ImportedCovariantChain", false, "/r:" + contract.AssemblyPath, "/refout:" + reference);
+        const string consumer = """
+            namespace ImportedCovariantChain {
+                public static class Driver {
+                    public static string Run() {
+                        Base throughBase = new Leaf();
+                        Middle throughMiddle = (Middle)throughBase;
+                        return (string)throughBase.Item + ":" + throughMiddle.Item;
+                    }
+                }
+            }
+            """;
+
+        foreach (var path in new[] { dll, reference })
+        {
+            var caller = fixture.CompileCSharp(
+                consumer,
+                path == dll ? "ImplementationCaller" : "ReferenceCaller",
+                path,
+                contract.AssemblyPath);
+            var assemblies = EmittedFixture.LoadTogether(contract.AssemblyPath, dll, caller);
+            var run = RequiredType(assemblies[2], "ImportedCovariantChain.Driver").GetMethod("Run");
+            Assert.Equal("leaf:leaf", run.Invoke(null, null));
+        }
+    }
+
+    [Fact]
     public void InheritedGenericOverrideDischargesTheOriginalAccessorSlots()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

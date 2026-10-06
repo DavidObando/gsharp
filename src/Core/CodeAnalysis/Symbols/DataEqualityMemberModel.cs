@@ -104,7 +104,7 @@ internal static class DataEqualityMemberModel
         {
             foreach (var method in hierarchy[level].Methods)
             {
-                if (IsSealedIntermediaryEqualityOverride(method, dataBase))
+                if (IsSealedIntermediaryEqualityOverride(method, dataBase, hierarchy[level]))
                 {
                     return method;
                 }
@@ -114,7 +114,10 @@ internal static class DataEqualityMemberModel
         return null;
     }
 
-    internal static bool IsSealedIntermediaryEqualityOverride(FunctionSymbol method, TypeSymbol dataBase)
+    internal static bool IsSealedIntermediaryEqualityOverride(
+        FunctionSymbol method,
+        TypeSymbol dataBase,
+        StructSymbol? constructedOwner = null)
         => method.Name == "Equals"
             && method.IsOverride
             && !method.IsOpen
@@ -124,7 +127,8 @@ internal static class DataEqualityMemberModel
             && method.Parameters.Length == 1
             && method.Parameters[0].RefKind == RefKind.None
             && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                method.Parameters[0].Type,
+                constructedOwner?.SubstituteMemberType(method.Parameters[0].Type)
+                    ?? method.Parameters[0].Type,
                 dataBase);
 
     internal static (TypeSymbol Symbol, Type Clr)? GetImportedDataBase(StructSymbol ancestor)

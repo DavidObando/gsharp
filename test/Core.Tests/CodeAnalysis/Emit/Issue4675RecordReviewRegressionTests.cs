@@ -146,6 +146,24 @@ public class Issue4675RecordReviewRegressionTests
     }
 
     [Fact]
+    public void SealedConstructedGenericEqualityOverride_IsRejectedBeforeEmission()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Base[T] : IEquatable[Base[T]]
+            open class Middle[T] : Base[T] {
+                public override func Equals(other Base[T]?) bool -> false
+            }
+            data class Child : Middle[int32]
+            Child()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0184");
+        Assert.Contains("Equals", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Null(result.UnhandledException);
+        Assert.Null(result.Value);
+    }
+
+    [Fact]
     public void SealedByRefEqualityOverload_DoesNotBlockDataEquality()
     {
         var result = EmittedOracle.Evaluate("""
