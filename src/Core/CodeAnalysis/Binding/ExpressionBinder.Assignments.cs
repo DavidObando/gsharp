@@ -1315,7 +1315,7 @@ internal sealed partial class ExpressionBinder
         var hasNearestProperty = TypeMemberModel.TryGetProperty(
             structSymbol,
             syntax.FieldIdentifier.ValueText,
-            out _,
+            out var nearestProperty,
             out var nearestPropertyDeclaringType);
         var hasAssignmentField = TypeMemberModel.TryGetFieldIncludingInherited(
             structSymbol,
@@ -1325,9 +1325,10 @@ internal sealed partial class ExpressionBinder
             out var fieldDeclaringType);
         if (!hasAssignmentField
             || (hasNearestProperty
-                && !IsAtLeastAsNearInHierarchy(
+                && !IsFieldAtLeastAsNearAsProperty(
                     structSymbol,
                     Invariant.Required(fieldDeclaringType, "a resolved field has a declaring type"),
+                    Invariant.Required(nearestProperty, "a resolved property has a symbol"),
                     Invariant.Required(nearestPropertyDeclaringType, "a resolved property has a declaring type"))))
         {
             // ADR-0051: check if it's a property.
@@ -2385,13 +2386,14 @@ internal sealed partial class ExpressionBinder
         var hasCompoundProperty = TypeMemberModel.TryGetProperty(
             structSym,
             memberName,
-            out _,
+            out var compoundProperty,
             out var compoundPropertyDeclaringType);
         if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType)
             && (!hasCompoundProperty
-                || IsAtLeastAsNearInHierarchy(
+                || IsFieldAtLeastAsNearAsProperty(
                     structSym,
                     declaringType,
+                    Invariant.Required(compoundProperty, "a resolved property has a symbol"),
                     Invariant.Required(compoundPropertyDeclaringType, "a resolved property has a declaring type"))))
         {
             var boundRhs = BindExpression(syntax.Value);

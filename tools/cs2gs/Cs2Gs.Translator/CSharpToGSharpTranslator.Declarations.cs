@@ -2084,7 +2084,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                 var isNullableValueType = memberType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
                 GExpression printableValue = memberType.IsRefLikeType
-                    || (memberType.IsValueType && !isNullableValueType)
+                    || (memberType.IsValueType
+                        && !isNullableValueType
+                        && HasMutableToStringOverride(memberType))
                     ? new InvocationExpression(new MemberAccessExpression(memberValue, "ToString"), Array.Empty<GExpression>())
                     : new ConversionExpression(
                         this.typeMapper.Map(this.context.Compilation.GetSpecialType(SpecialType.System_Object), this.context, node.GetLocation()),
@@ -2117,6 +2119,13 @@ public sealed partial class CSharpToGSharpTranslator
                 isOpen: true,
                 isOverride: overridesRecordBase);
         }
+
+        private static bool HasMutableToStringOverride(ITypeSymbol type) =>
+            type is not INamedTypeSymbol { IsTupleType: true }
+            && type.GetMembers("ToString").OfType<IMethodSymbol>().Any(method =>
+                method.Parameters.Length == 0
+                && method.IsOverride
+                && !method.IsReadOnly);
 
         private bool HasExplicitRecordPrintMembers(INamedTypeSymbol symbol)
         {

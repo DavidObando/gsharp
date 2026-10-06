@@ -123,13 +123,14 @@ internal sealed partial class ExpressionBinder
             var hasUpdateProperty = TypeMemberModel.TryGetProperty(
                 structType,
                 memberName,
-                out _,
+                out var updateProperty,
                 out var updatePropertyDeclaringType);
             if (TypeMemberModel.TryGetFieldIncludingInherited(structType, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType)
                 && (!hasUpdateProperty
-                    || IsAtLeastAsNearInHierarchy(
+                    || IsFieldAtLeastAsNearAsProperty(
                         structType,
                         fieldDeclaringType,
+                        Invariant.Required(updateProperty, "a resolved property has a symbol"),
                         Invariant.Required(updatePropertyDeclaringType, "a resolved property has a declaring type"))))
             {
                 // Issue #2059: a `with` update is a write to the named field —

@@ -365,21 +365,36 @@ internal sealed partial class ExpressionBinder
         return expression;
     }
 
-    private static bool IsAtLeastAsNearInHierarchy(
+    private static bool IsFieldAtLeastAsNearAsProperty(
         StructSymbol receiver,
-        StructSymbol left,
-        StructSymbol right)
+        StructSymbol fieldOwner,
+        PropertySymbol property,
+        StructSymbol propertyOwner)
     {
+        // Interface-field adapters are emitted on the implementing type but
+        // represent the backing field's declaration for source lookup.
+        if (property.Declaration == null && property.BackingField is { } backingField)
+        {
+            foreach (var candidate in receiver.GetHierarchy())
+            {
+                if (candidate.Fields.Any(field => ReferenceEquals(field, backingField)))
+                {
+                    propertyOwner = candidate;
+                    break;
+                }
+            }
+        }
+
         foreach (var candidate in receiver.GetHierarchy())
         {
-            if (ReferenceEquals(candidate, left)
-                || ReferenceEquals(candidate.Definition, left.Definition ?? left))
+            if (ReferenceEquals(candidate, fieldOwner)
+                || ReferenceEquals(candidate.Definition, fieldOwner.Definition ?? fieldOwner))
             {
                 return true;
             }
 
-            if (ReferenceEquals(candidate, right)
-                || ReferenceEquals(candidate.Definition, right.Definition ?? right))
+            if (ReferenceEquals(candidate, propertyOwner)
+                || ReferenceEquals(candidate.Definition, propertyOwner.Definition ?? propertyOwner))
             {
                 return false;
             }
@@ -1388,9 +1403,10 @@ internal sealed partial class ExpressionBinder
                         out var declaringType);
                     if (hasField
                         && (!hasProperty
-                            || IsAtLeastAsNearInHierarchy(
+                            || IsFieldAtLeastAsNearAsProperty(
                                 structSym,
                                 Invariant.Required(declaringType, "a resolved field has a declaring type"),
+                                Invariant.Required(nearestProperty, "a resolved property has a symbol"),
                                 Invariant.Required(nearestPropertyDeclaringType, "a resolved property has a declaring type"))))
                     {
                         field = Invariant.Required(field, "a resolved field has a symbol");
