@@ -196,6 +196,52 @@ public class Issue4675RecordReviewRegressionTests
     }
 
     [Fact]
+    public void NearestPropertyWinsForEffectfulMemberAssignment()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter { shared { public var Count int32 } }
+            open class Base { public var Value int32 = 1 }
+            class Derived : Base {
+                private var current int32
+                public prop Value int32 {
+                    get { return current }
+                    set { current = value }
+                }
+                public func ReadBase() int32 -> base.Value
+            }
+            func GetItem() Derived {
+                Counter.Count += 1
+                return item
+            }
+            let item = Derived()
+            GetItem().Value = 7
+            Counter.Count * 100 + item.Value * 10 + item.ReadBase()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(171, result.Value);
+    }
+
+    [Fact]
+    public void NearestInitPropertyWinsForInitializerSuffix()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base { public var Value int32 = 1 }
+            class Derived : Base {
+                public prop Value int32 { get; init; }
+                public func ReadBase() int32 -> base.Value
+            }
+            let item = Derived(){ Value = 7 }
+            item.Value * 10 + item.ReadBase()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(71, result.Value);
+    }
+
+    [Fact]
     public void ConstructedGenericZeroSynthesis_RemainsLinearEnoughForDeepChains()
     {
         const int depth = 24;

@@ -848,6 +848,11 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
         var markerCount = literal.StructType.LiteralInitializerMarkerCount;
+        if (literal.IsZeroInitialization && literal.StructType is { IsData: true, IsClass: false } && markerCount == 0)
+        {
+            return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap);
+        }
+
         BoundExpression construction;
         if (markerCount == 0)
         {
@@ -910,6 +915,79 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ExpressionMemberInitMethod,
             TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberInitExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(construction, BuildMemberBindingArray(bindings)));
+    }
+
+    private BoundExpression BuildZeroStorageStructLiteralExpression(
+        BoundStructLiteralExpression literal,
+        Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
+    {
+        var defaultValue = new BoundClrStaticCallExpression(
+            literal.Syntax,
+            ExpressionDefaultMethod,
+            ExpressionTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(CreateTypeOf(literal.StructType)));
+        if (literal.Initializers.IsDefaultOrEmpty)
+        {
+            return defaultValue;
+        }
+
+        var local = new LocalVariableSymbol($"<>zero{this.counter++}", isReadOnly: true, ParameterExpressionTypeSymbol);
+        var declaration = new BoundVariableDeclaration(
+            literal.Syntax,
+            local,
+            new BoundClrStaticCallExpression(
+                literal.Syntax,
+                ExpressionParameterMethod,
+                ParameterExpressionTypeSymbol,
+                ImmutableArray.Create<BoundExpression>(
+                    CreateTypeOf(literal.StructType),
+                    new BoundLiteralExpression(null, string.Empty, TypeSymbol.String))));
+        var localRead = new BoundVariableExpression(literal.Syntax, local);
+        var expressions = ImmutableArray.CreateBuilder<BoundExpression>(literal.Initializers.Length + 2);
+        expressions.Add(new BoundClrStaticCallExpression(
+            literal.Syntax,
+            ExpressionAssignMethod,
+            ExpressionTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(UpcastToExpression(localRead), defaultValue)));
+        foreach (var initializer in literal.Initializers)
+        {
+            BoundExpression member = initializer.Field != null
+                ? new BoundClrStaticCallExpression(
+                    literal.Syntax,
+                    ExpressionFieldInstanceMethod,
+                    ExpressionTypeSymbol,
+                    ImmutableArray.Create<BoundExpression>(
+                        UpcastToExpression(localRead),
+                        new BoundLiteralExpression(null, initializer.Field.Name, TypeSymbol.String)))
+                : new BoundClrStaticCallExpression(
+                    literal.Syntax,
+                    ExpressionPropertyInfoMethod,
+                    ExpressionTypeSymbol,
+                    ImmutableArray.Create<BoundExpression>(
+                        UpcastToExpression(localRead),
+                        BuildUserPropertyInfoLookup(
+                            literal.StructType,
+                            Invariant.Required(initializer.Property, "a literal initializer has a field or property"))));
+            expressions.Add(new BoundClrStaticCallExpression(
+                literal.Syntax,
+                ExpressionAssignMethod,
+                ExpressionTypeSymbol,
+                ImmutableArray.Create<BoundExpression>(
+                    UpcastToExpression(member),
+                    UpcastToExpression(this.TranslateExpression(initializer.Value, parameterMap)))));
+        }
+
+        expressions.Add(localRead);
+        return new BoundBlockExpression(
+            literal.Syntax,
+            ImmutableArray.Create<BoundStatement>(declaration),
+            new BoundClrStaticCallExpression(
+                literal.Syntax,
+                ExpressionBlockMethod,
+                ExpressionTypeSymbol,
+                ImmutableArray.Create<BoundExpression>(
+                    BuildParameterArray(ImmutableArray.Create(local)),
+                    BuildExpressionArray(expressions))));
     }
 
     private BoundExpression BuildUserConstructorExpression(

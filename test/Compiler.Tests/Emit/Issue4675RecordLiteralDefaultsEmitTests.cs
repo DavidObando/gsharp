@@ -354,6 +354,43 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
     }
 
     [Fact]
+    public void ExpressionTree_EmptyPrimaryZero_DoesNotInvokePrimaryConstructor()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package TreeEmptyPrimaryZero
+            import System
+            import System.Linq.Expressions
+            class Counter {
+                shared {
+                    public var Count int32
+                    public func Next() int32 {
+                        Count += 1
+                        return Count
+                    }
+                }
+            }
+            data struct Inner() {
+                public var Items []int32
+                public var Marker int32 = Counter.Next()
+            }
+            data class Box(Item Inner)
+            func Main() {
+                let direct = Box{}
+                let tree Expression[Func[Box]] = () -> Box{}
+                let compiled = tree.Compile()()
+                Console.WriteLine(direct.Item.Marker)
+                Console.WriteLine(compiled.Item.Marker)
+                Console.WriteLine(Counter.Count)
+                Console.WriteLine(direct.Item.Items.Length)
+                Console.WriteLine(compiled.Item.Items.Length)
+            }
+            """, "TreeEmptyPrimaryZero", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("0\n0\n0\n0\n0\n", fixture.Run(dll));
+    }
+
+    [Fact]
     public void ImportedRecordLiteral_KeepsItsExistingBoundDefaultPath()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
