@@ -106,6 +106,47 @@ public class Issue4675RecordReviewRegressionTests
         Assert.Null(result.Value);
     }
 
+    [Fact]
+    public void SealedImportedRecordEqualityOverride_IsRejectedBeforeEmission()
+    {
+        using var fixture = new CSharpFixture("""
+            namespace ImportedEquality;
+            public record Root;
+            """);
+        using var references = fixture.RuntimeReferences();
+        var compilation = new Compilation(references, SyntaxTree.Parse("""
+            package ImportedEquality
+            open class Middle : Root {
+                public override func Equals(other Root?) bool -> false
+            }
+            data class Child : Middle
+            """)) { IsLibrary = true };
+
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "GS0184");
+        Assert.Contains("Equals", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SealedByRefEqualityOverload_DoesNotBlockDataEquality()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Base : IEquatable[Base]
+            open class OverloadOwner : Base {
+                open func Equals(ref other Base?) bool -> true
+            }
+            open class Middle : OverloadOwner {
+                public override func Equals(ref other Base?) bool -> false
+            }
+            data class Child : Middle
+            Child()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.NotNull(result.Value);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

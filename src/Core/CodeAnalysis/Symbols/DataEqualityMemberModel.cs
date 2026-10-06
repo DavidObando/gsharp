@@ -38,17 +38,16 @@ internal static class DataEqualityMemberModel
                 return ancestor;
             }
 
-        if (owner.ImportedBaseType is not { ClrType: { } clrBase } importedBase)
-        {
-            return null;
-        }
+            if (GetImportedDataBase(ancestor) is not { } importedDataBase)
+            {
+                continue;
+            }
 
-        if ((!ImportedAssemblySemantics.TryGetTypeSemantics(clrBase, out var semantics)
-             && !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(clrBase, out semantics))
-            || !semantics.IsData)
-        {
-            return null;
-        }
+            var (importedBase, clrBase) = importedDataBase;
+            if (FindSealedIntermediaryOverride(hierarchy, level + 1, importedBase) != null)
+            {
+                return null;
+            }
 
         foreach (var method in ClrTypeUtilities.SafeGetMethods(
                      clrBase, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
@@ -81,9 +80,15 @@ internal static class DataEqualityMemberModel
         var hierarchy = owner.GetHierarchy();
         for (var level = 1; level < hierarchy.Count; level++)
         {
-            if (hierarchy[level] is { IsData: true, ClrType: null } dataBase)
+            var ancestor = hierarchy[level];
+            if (ancestor is { IsData: true, ClrType: null } dataBase)
             {
                 return FindSealedIntermediaryOverride(hierarchy, level, dataBase);
+            }
+
+            if (GetImportedDataBase(ancestor) is { } importedDataBase)
+            {
+                return FindSealedIntermediaryOverride(hierarchy, level + 1, importedDataBase.Symbol);
             }
         }
 
@@ -93,7 +98,7 @@ internal static class DataEqualityMemberModel
     internal static FunctionSymbol? FindSealedIntermediaryOverride(
         IReadOnlyList<StructSymbol> hierarchy,
         int dataBaseLevel,
-        StructSymbol dataBase)
+        TypeSymbol dataBase)
     {
         for (var level = 1; level < dataBaseLevel; level++)
         {
@@ -104,6 +109,7 @@ internal static class DataEqualityMemberModel
                     && !method.IsOpen
                     && method.Type == TypeSymbol.Bool
                     && method.Parameters.Length == 1
+                    && method.Parameters[0].RefKind == RefKind.None
                     && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                         method.Parameters[0].Type,
                         dataBase))
@@ -114,6 +120,19 @@ internal static class DataEqualityMemberModel
         }
 
         return null;
+    }
+
+    internal static (TypeSymbol Symbol, Type Clr)? GetImportedDataBase(StructSymbol ancestor)
+    {
+        if (ancestor.ImportedBaseType is not { ClrType: { } clrBase } importedBase
+            || ((!ImportedAssemblySemantics.TryGetTypeSemantics(clrBase, out var semantics)
+                 && !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(clrBase, out semantics))
+                || !semantics.IsData))
+        {
+            return null;
+        }
+
+        return (importedBase, clrBase);
     }
 
     /// <summary>Creates a self or inherited typed-base equality member.</summary>
