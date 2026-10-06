@@ -79,6 +79,18 @@ public sealed class ManagedReferenceInitializationPlanReviewTests
         }
         """;
 
+    private const string ValuePrimarySource = """
+        package MixedConstructorInitializers
+        struct Holder[T](Value T) {
+            public let Copy T = Value
+        }
+        class Probe {
+            shared {
+                func Run() int32 { return Holder[int32](42).Copy }
+            }
+        }
+        """;
+
     [Fact]
     public void PlannedPrimaryExplicitAndConvenienceConstructorsDiscoverGoStatements()
     {
@@ -94,6 +106,7 @@ public sealed class ManagedReferenceInitializationPlanReviewTests
     [Theory]
     [InlineData(GoSource, 0, false)]
     [InlineData(LambdaSource, 42, true)]
+    [InlineData(ValuePrimarySource, 42, true)]
     public void InitializationPlansRemainCompleteAcrossRepeatedEmitAndRefout(string source, int expected, bool execute)
     {
         using var references = ReferenceResolver.WithRuntimeReferences(new[]

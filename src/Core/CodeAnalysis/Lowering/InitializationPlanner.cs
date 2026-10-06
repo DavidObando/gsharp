@@ -2,10 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Emit;
+using GSharp.Core.CodeAnalysis.Lowering.Iterators;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Lowering;
@@ -26,7 +28,7 @@ internal static class InitializationPlanner
             var fields = type.InstanceFieldInitializers.Values;
             var primary = type.BaseConstructorInitializer?.Arguments ?? ImmutableArray<BoundExpression>.Empty;
             if ((type.ExplicitConstructor == null || type.HasPrimaryConstructor || type.NeedsSynthesizedValueStructDefaultCtor)
-                && HasRequest(fields.Concat(primary)))
+                && (type.NeedsSynthesizedValueStructDefaultCtor || HasRequest(fields.Concat(primary))))
             {
                 var function = OwnerFunction(program, type, type.PrimaryConstructorParameters, isStatic: false);
                 plans[(type, false)] = InstancePlan(type, function, primary, Empty(), primaryStores: true);
@@ -40,7 +42,7 @@ internal static class InitializationPlanner
                 }
 
                 var arguments = constructor.BaseInitializer?.Arguments ?? ImmutableArray<BoundExpression>.Empty;
-                if (!HasRequest(fields.Concat(arguments)) && !HasRequest(body))
+                if (!type.HasPrimaryConstructor && !HasRequest(fields.Concat(arguments)) && !HasRequest(body))
                 {
                     continue;
                 }
@@ -129,6 +131,18 @@ internal static class InitializationPlanner
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var receiver = Invariant.Required(function.ThisParameter, "instance initialization has its constructor receiver");
+
+        // Authored constructors have their own parameter scope; declaration
+        // initializers read primary inputs from the already-owned storage.
+        var storedPrimaryInputs = !primaryStores && owner.HasPrimaryConstructor
+            ? new PrimaryStorageRewriter(owner, receiver, owner.PrimaryConstructorParameters.ToDictionary(
+                parameter => (VariableSymbol)parameter,
+                parameter =>
+                {
+                    ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(owner, parameter.Name, out var field);
+                    return Invariant.Required(field, "primary constructor parameters have corresponding fields");
+                }))
+            : null;
         if (primaryStores)
         {
             foreach (var parameter in function.Parameters)
@@ -147,9 +161,10 @@ internal static class InitializationPlanner
         {
             if (owner.InstanceFieldInitializers.TryGetValue(field, out var expression))
             {
-                statements.Add(new BoundExpressionStatement(
+                var assignment = new BoundExpressionStatement(
                     expression.Syntax,
-                    new BoundFieldAssignmentExpression(expression.Syntax, receiver, owner, field, expression)));
+                    new BoundFieldAssignmentExpression(expression.Syntax, receiver, owner, field, expression));
+                statements.Add(storedPrimaryInputs?.RewriteStatement(assignment) ?? assignment);
             }
         }
 
@@ -192,13 +207,42 @@ internal static class InitializationPlanner
         return finder.Found;
     }
 
+    private sealed class PrimaryStorageRewriter : HoistedFieldRewriter
+    {
+        internal PrimaryStorageRewriter(StructSymbol owner, ParameterSymbol receiver, Dictionary<VariableSymbol, FieldSymbol> fields)
+            : base(owner, receiver, fields)
+        {
+        }
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            var body = (BoundBlockStatement)this.RewriteStatement(node.Body);
+            var captures = node.CapturedVariables.Where(variable => !this.fieldMap.ContainsKey(variable)).ToImmutableArray().ToBuilder();
+            if (node.CapturedVariables.Any(variable => this.fieldMap.ContainsKey(variable)) && !captures.Contains(this.thisParameter))
+            {
+                captures.Add(this.thisParameter);
+            }
+
+            return ReferenceEquals(body, node.Body) && captures.SequenceEqual(node.CapturedVariables)
+                ? node
+                : new BoundFunctionLiteralExpression(node.Syntax, node.Function, node.FunctionType, body, captures.ToImmutable());
+        }
+
+        protected override BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+        {
+            var literal = (BoundFunctionLiteralExpression)this.RewriteFunctionLiteralExpression(node.Literal);
+            return ReferenceEquals(literal, node.Literal) ? node : new BoundLocalFunctionDeclaration(node.Syntax, literal);
+        }
+    }
+
     private sealed class RequestFinder : BoundTreeWalker
     {
         internal bool Found { get; private set; }
 
         public override void VisitExpression(BoundExpression? node)
         {
-            Found |= node is BoundManagedReferenceExpression;
+            Found |= node is BoundManagedReferenceExpression
+                || node is BoundStructLiteralExpression { StructType.HasPrimaryConstructor: true, StructType.NeedsSynthesizedValueStructDefaultCtor: true };
             if (node is BoundFunctionLiteralExpression literal)
             {
                 Visit(literal.Body);

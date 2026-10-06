@@ -5191,7 +5191,7 @@ internal sealed class ConversionClassifier
                     field,
                     out var initializer))
                 {
-                    initializers.Add(new BoundFieldInitializer(field, initializer));
+                    initializers.Add(new BoundFieldInitializer(field, initializer) { IsDeclarationInitializer = true });
                 }
                 else if (field.Type == TypeSymbol.String)
                 {

@@ -2549,6 +2549,14 @@ internal sealed partial class ExpressionBinder
 
             if (orderedInitializers != null)
             {
+                if (!structSymbol.IsClass && structSymbol.PrimaryConstructorParameters.Any(parameter => parameter.Name == fieldName))
+                {
+                    inits.Add(hasField
+                        ? new BoundFieldInitializer(Invariant.Required(field, "a primary input targets its field"), BindExpression(initSyntax.Value, memberType))
+                        : new BoundFieldInitializer(Invariant.Required(property, "a primary input targets its property"), BindExpression(initSyntax.Value, memberType)));
+                    continue;
+                }
+
                 orderedInitializers.Add(StructLiteralOrderedStep.ForMember(
                     initSyntax,
                     memberType,
@@ -2601,13 +2609,13 @@ internal sealed partial class ExpressionBinder
 
                 if (structSymbol.InstanceFieldInitializers.TryGetValue(field, out var initExpr))
                 {
-                    inits.Add(new BoundFieldInitializer(field, initExpr));
+                    inits.Add(new BoundFieldInitializer(field, initExpr) { IsDeclarationInitializer = true });
                     seenFieldNames.Add(field.Name);
                 }
             }
         }
 
-        var structLiteral = new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
+        var structLiteral = new BoundStructLiteralExpression(syntax, structSymbol, inits.ToImmutable());
         if (orderedInitializers == null)
         {
             return structLiteral;
@@ -2616,7 +2624,7 @@ internal sealed partial class ExpressionBinder
         // A braced member, or an ADR-0180 content element/spread, forces
         // statement lowering for every explicit initializer so scalar
         // assignments and Add(...) calls stay interleaved in lexical
-        // (source) order.
+        // (source) order after the primary inputs construct the receiver.
         var litTempName = "$implit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         // ADR-0180: a content spread lowers through BindCollectionSpreadStatements,

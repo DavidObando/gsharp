@@ -1183,8 +1183,12 @@ internal sealed partial class MethodBodyEmitter
         if (literal.CopySource != null)
         {
             this.EmitExpression(literal.CopySource);
-            this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.userTokens.ResolveDataClassCloneToken(literal.StructType));
+            if (literal.StructType.IsClass)
+            {
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(this.outer.userTokens.ResolveDataClassCloneToken(literal.StructType));
+            }
+
             return;
         }
 
@@ -1307,32 +1311,23 @@ internal sealed partial class MethodBodyEmitter
         // ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor) that
         // zero-initializes and runs ALL declared initializers in-type;
         // construct through it and skip the literal's injected
-        // declared-initializer entries (identified below by reference to the
-        // symbol's InstanceFieldInitializers expressions — the binder injects
-        // exactly those instances), so initializer side effects run once.
+        // declaration-origin entries, whose provenance survives lowering,
+        // so initializer side effects run once while authored overrides remain.
         var structDefinition = literal.StructType.Definition ?? literal.StructType;
-        HashSet<BoundExpression>? declaredInitializerValues = null;
-        if (this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
-            && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition))
-        {
-            declaredInitializerValues = new HashSet<BoundExpression>(ReferenceEqualityComparer.Instance);
-            foreach (var declared in literal.StructType.InstanceFieldInitializers)
-            {
-                declaredInitializerValues.Add(declared.Value);
-            }
-
-            foreach (var declared in structDefinition.InstanceFieldInitializers)
-            {
-                declaredInitializerValues.Add(declared.Value);
-            }
-        }
+        var usesOwningInitializerConstructor = this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
+            && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition);
 
         // ldloca slot; initobj typedef — zero-initializes the value type —
         // or, for a #3219 struct, ldloca slot; call .ctor() (which zeroes and
         // runs the declared initializers in-type).
         this.il.LoadLocalAddress(slot);
-        if (declaredInitializerValues != null)
+        if (usesOwningInitializerConstructor)
         {
+            for (var marker = 0; marker < structDefinition.LiteralInitializerMarkerCount; marker++)
+            {
+                this.il.LoadConstantI4(0);
+            }
+
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType));
         }
@@ -1347,9 +1342,7 @@ internal sealed partial class MethodBodyEmitter
         {
             // Issue #3219: the synthesized ctor already ran this declared
             // initializer in-type.
-            if (declaredInitializerValues != null
-                && init.Field != null
-                && declaredInitializerValues.Contains(init.Value))
+            if (usesOwningInitializerConstructor && init.IsDeclarationInitializer)
             {
                 continue;
             }

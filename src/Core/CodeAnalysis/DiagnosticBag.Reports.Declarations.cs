@@ -614,11 +614,11 @@ public sealed partial class DiagnosticBag
 
     /// <summary>
     /// ADR-0065 §5: GS0284 — a user-declared <c>init(...)</c> overload has the
-    /// same signature as the constructor synthesized from the class's primary
+    /// same signature as the constructor synthesized from the type's primary
     /// constructor parameter list.
     /// </summary>
     /// <param name="location">The source location of the offending <c>init</c> declaration.</param>
-    /// <param name="className">The owning class.</param>
+    /// <param name="className">The owning type.</param>
     /// <param name="signature">The signature description.</param>
     public void ReportInitDuplicatesPrimaryCtor(TextLocation location, string className, string signature)
     => Report(location, DiagnosticDescriptors.InitDuplicatesPrimaryCtor, signature, className);

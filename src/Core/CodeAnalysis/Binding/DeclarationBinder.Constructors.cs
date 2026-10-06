@@ -1300,9 +1300,10 @@ internal sealed partial class DeclarationBinder
         // becomes a synthesized designated initializer that participates in
         // the overload set alongside the explicit bodies. Duplicate signatures
         // are diagnosed below by the same overload-equality check that catches
-        // collisions between two user-declared init overloads.
+        // collisions between two user-declared init overloads. Value structs
+        // reuse that signature validation without adding a source overload.
         ConstructorSymbol? synthesizedPrimary = null;
-        if (structSymbol.IsClass && structSymbol.HasPrimaryConstructor)
+        if (structSymbol.HasPrimaryConstructor)
         {
             synthesizedPrimary = SynthesizePrimaryConstructor(structSymbol, package);
         }
@@ -1312,7 +1313,7 @@ internal sealed partial class DeclarationBinder
         // overloads, so each surviving ConstructorSymbol carries a unique
         // signature within the overload family.
         var ctorBuilder = ImmutableArray.CreateBuilder<ConstructorSymbol>();
-        if (synthesizedPrimary != null)
+        if (structSymbol.IsClass && synthesizedPrimary != null)
         {
             ctorBuilder.Add(synthesizedPrimary);
         }
@@ -1336,7 +1337,10 @@ internal sealed partial class DeclarationBinder
                     structSymbol.Name);
             }
 
-            var duplicate = false;
+            // Value structs also own a primary signature, even though their
+            // constructor overload set does not contain a synthesized symbol.
+            var duplicate = synthesizedPrimary != null
+                && BoundScope.FunctionSignaturesEqual(synthesizedPrimary.Function, ctor.Function);
             foreach (var existing in ctorBuilder)
             {
                 if (BoundScope.FunctionSignaturesEqual(existing.Function, ctor.Function))
@@ -1446,7 +1450,7 @@ internal sealed partial class DeclarationBinder
 
     /// <summary>
     /// ADR-0065 §5: synthesizes a designated <see cref="ConstructorSymbol"/>
-    /// whose signature matches the class's primary-constructor parameter list.
+    /// whose signature matches the type's primary-constructor parameter list.
     /// The emitter produces its body (field assignments per parameter) directly
     /// rather than reading from <c>BoundProgram.Functions</c>; we leave the
     /// function's body unbound here. The synthesized ctor is marked with

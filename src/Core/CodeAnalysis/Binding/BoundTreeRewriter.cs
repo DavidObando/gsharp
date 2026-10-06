@@ -1441,8 +1441,12 @@ public abstract class BoundTreeRewriter
         for (var i = 0; i < node.Initializers.Length; i++)
         {
             var init = node.Initializers[i];
-            var newValue = RewriteExpression(init.Value);
-            if (newValue != init.Value && builder == null)
+
+            // Discard constructor-owned copies before a rewrite can extract
+            // their evaluation into side effects outside the constructor.
+            var constructorOwnsValue = init.IsDeclarationInitializer && node.StructType.NeedsSynthesizedValueStructDefaultCtor;
+            var newValue = constructorOwnsValue ? init.Value : RewriteExpression(init.Value);
+            if ((constructorOwnsValue || newValue != init.Value) && builder == null)
             {
                 builder = ImmutableArray.CreateBuilder<BoundFieldInitializer>(node.Initializers.Length);
                 for (var j = 0; j < i; j++)
@@ -1451,13 +1455,11 @@ public abstract class BoundTreeRewriter
                 }
             }
 
-            if (builder != null)
+            if (builder != null && !constructorOwnsValue)
             {
                 builder.Add(newValue == init.Value
                     ? init
-                    : (init.Field != null
-                        ? new BoundFieldInitializer(init.Field, newValue, init.FieldDeclaringType)
-                        : new BoundFieldInitializer(Invariant.Required(init.Property, "a field initializer has a field or property"), newValue)));
+                    : init with { Value = newValue });
             }
         }
 

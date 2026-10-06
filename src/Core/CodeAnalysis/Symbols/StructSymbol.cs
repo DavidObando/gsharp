@@ -100,6 +100,7 @@ public sealed class StructSymbol : TypeSymbol
     private InterfaceArraySnapshot? substitutedInterfaces;
     private TypeArraySnapshot? substitutedImplementedClrInterfaces;
     private TypeSnapshot? substitutedImportedBaseType;
+    private FunctionSymbol? dataClassCloneMethod;
     private FunctionSymbol? dataEqualsSelf;
     private FunctionSymbol? dataEqualsObject;
     private FunctionSymbol? dataEqualsBase;
@@ -733,15 +734,65 @@ public sealed class StructSymbol : TypeSymbol
     internal bool IsSharedClass => IsClass && (Declaration?.IsShared ?? false);
 
     /// <summary>
-    /// Gets a value indicating whether non-public value-struct field initializers require an
-    /// in-type default constructor rather than call-site field stores.
+    /// Gets a value indicating whether value-struct field initializers require an
+    /// in-type constructor for accessibility, generic ownership, or primary
+    /// parameter scope. A primary type uses its parameterized constructor.
+    /// Definition-bound expressions must execute in their owning generic
+    /// context, not in a literal site's unrelated VAR/MVAR scope (#4755).
+    /// Imported collection defaults retain their existing CLR literal path;
+    /// their owning constructor cannot be synthesized in this compilation.
     /// </summary>
-    internal bool NeedsSynthesizedValueStructDefaultCtor =>
-        !IsClass
+    internal bool NeedsSynthesizedValueStructDefaultCtor => Definition != null && !ReferenceEquals(Definition, this)
+        ? Definition.NeedsSynthesizedValueStructDefaultCtor
+        : ClrType == null
+        && !IsClass
         && !IsInline
         && !InstanceFieldInitializers.IsEmpty
-        && (ExplicitConstructors.IsDefaultOrEmpty || !ExplicitConstructors.Any(ctor => ctor.Parameters.Length == 0))
-        && InstanceFieldInitializers.Keys.Any(member => member.Accessibility != Accessibility.Public);
+        && (IsGenericDefinition
+            || HasPrimaryConstructor
+            || !CollectEnclosingTypeParameters(this).IsDefaultOrEmpty
+            || InstanceFieldInitializers.Keys.Any(member => member.Accessibility != Accessibility.Public));
+
+    /// <summary>
+    /// Gets the hidden literal initializer's marker count when an authored
+    /// parameterless constructor must remain distinct. Its total arity exceeds
+    /// every authored signature, avoiding a collision without a source overload.
+    /// </summary>
+    internal int LiteralInitializerMarkerCount => Definition != null && !ReferenceEquals(Definition, this)
+        ? Definition.LiteralInitializerMarkerCount
+        : NeedsSynthesizedValueStructDefaultCtor && !HasPrimaryConstructor
+        && ExplicitConstructors.Any(constructor => constructor.Parameters.IsEmpty)
+        ? ExplicitConstructors.Max(constructor => constructor.Parameters.Length) + 1
+        : 0;
+
+    /// <summary>Gets the definition-owned symbol for the emitted data-class clone slot.</summary>
+    internal FunctionSymbol DataClassCloneMethod
+    {
+        get
+        {
+            if (Definition != null && !ReferenceEquals(Definition, this))
+            {
+                return Definition.DataClassCloneMethod;
+            }
+
+            if (dataClassCloneMethod != null)
+            {
+                return dataClassCloneMethod;
+            }
+
+            var clone = new FunctionSymbol(
+                "<Clone>$",
+                ImmutableArray<ParameterSymbol>.Empty,
+                this,
+                declaration: null,
+                package: null,
+                accessibility: Accessibility.Public,
+                receiverType: this,
+                isOpen: true,
+                isOverride: false);
+            return Interlocked.CompareExchange(ref dataClassCloneMethod, clone, null) ?? clone;
+        }
+    }
 
     /// <summary>Sets <see cref="Symbol.ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>

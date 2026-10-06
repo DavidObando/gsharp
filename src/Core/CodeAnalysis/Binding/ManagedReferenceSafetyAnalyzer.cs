@@ -18,7 +18,9 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     private readonly DiagnosticBag diagnostics;
     private readonly Dictionary<TypeSymbol, TypeSymbol?> required = new();
     private readonly HashSet<VariableSymbol> managedLocations = new();
-    private readonly HashSet<FunctionSymbol> analyzedFunctions = new();
+    private readonly HashSet<(FunctionSymbol Function, StructSymbol? InitializerOwner)> analyzedFunctions = new();
+    private readonly HashSet<StructSymbol> analyzedInitializerConstructions = new();
+    private StructSymbol? initializerOwner;
     private bool analyzingStateMachine;
 
     private ManagedReferenceSafetyAnalyzer(DiagnosticBag diagnostics) => this.diagnostics = diagnostics;
@@ -94,7 +96,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             case BoundFunctionLiteralExpression literal:
                 this.AnalyzeFunction(literal.Function, literal.Body);
                 return;
-            case BoundDefaultExpression value when this.RequiredHandle(value.Type) != null:
+            case BoundDefaultExpression value when this.RequiredHandle(this.initializerOwner?.SubstituteMemberType(value.Type) ?? value.Type) != null:
                 this.Report(value, "default would synthesize a null non-null managed-reference slot; use a nullable handle or initialize the aggregate");
                 break;
             case BoundStructLiteralExpression literal:
@@ -126,7 +128,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 this.CheckConstructorArguments(chaining.Arguments, chaining.SelectedConstructor);
                 break;
             case BoundArrayCreationExpression array:
-                if (this.RequiredHandle(array.ElementType) != null
+                if (this.RequiredHandle(this.initializerOwner?.SubstituteMemberType(array.ElementType) ?? array.ElementType) != null
                     && (array.LengthExpression != null || (array.ContainerType is ArrayTypeSymbol fixedArray && fixedArray.Length > array.Elements.Length)))
                 {
                     this.Report(array, "array initialization must supply every non-null managed-reference element");
@@ -275,7 +277,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void AnalyzeFunction(FunctionSymbol function, BoundBlockStatement body)
     {
-        if (!this.analyzedFunctions.Add(function))
+        if (!this.analyzedFunctions.Add((function, this.initializerOwner)))
         {
             return;
         }
@@ -396,7 +398,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         }
 
         if ((type.ExplicitConstructors.IsDefaultOrEmpty && type.IsClass)
-            || type.NeedsSynthesizedValueStructDefaultCtor)
+            || (type.NeedsSynthesizedValueStructDefaultCtor && type.LiteralInitializerMarkerCount == 0))
         {
             this.CheckImplicitConstructorPath(type, fields);
         }
@@ -484,9 +486,37 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     private void CheckConstruction(StructSymbol type, BoundExpression node, IEnumerable<FieldSymbol?> initialized, bool explicitConstructor)
     {
-        if (explicitConstructor || type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty))
+        type = this.initializerOwner?.SubstituteMemberType(type) as StructSymbol ?? type;
+
+        // Declaration expressions also execute in authored constructors.
+        // Check their defaults in the actual constructed owning scope first.
+        if (!ReferenceEquals(type, type.Definition) && this.analyzedInitializerConstructions.Add(type))
+        {
+            var previousOwner = this.initializerOwner;
+            this.initializerOwner = type;
+            foreach (var initializer in type.Definition.InstanceFieldInitializers.Values)
+            {
+                this.VisitExpression(initializer);
+            }
+
+            this.initializerOwner = previousOwner;
+        }
+
+        if (explicitConstructor || (type.ExplicitConstructors.Any(c => c.Parameters.IsEmpty)
+            && node is not BoundStructLiteralExpression { StructType.NeedsSynthesizedValueStructDefaultCtor: true }))
         {
             return;
+        }
+
+        if (node is BoundStructLiteralExpression literal)
+        {
+            foreach (var argument in literal.GetPrimaryConstructorArguments())
+            {
+                if (!argument.IsSupplied)
+                {
+                    this.VisitExpression(argument.Value);
+                }
+            }
         }
 
         var supplied = initialized.OfType<FieldSymbol>().Select(f => f.Name).ToHashSet();
@@ -524,6 +554,10 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         else if (type is TupleTypeSymbol tuple)
         {
             fields = tuple.ElementTypes;
+        }
+        else if (type is ArrayTypeSymbol { Length: > 0 } array)
+        {
+            fields = new[] { array.ElementType };
         }
         else if (type is not NullableTypeSymbol and not TypeParameterSymbol && type.ClrType is { IsValueType: true, IsPrimitive: false, IsEnum: false, IsGenericParameter: false } clr)
         {
