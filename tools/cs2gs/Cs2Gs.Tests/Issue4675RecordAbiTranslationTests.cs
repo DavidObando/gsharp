@@ -84,6 +84,37 @@ public sealed class Issue4675RecordAbiTranslationTests
     private static void VerifyExplicitPositionalProperty(string source, string name, int expected)
         => VerifyExplicitPositionalProperty(new[] { ("Item.cs", source) }, name, expected);
 
+    [Fact]
+    public void NullableNormalizingPositionalGetter_MatchesRoslyn()
+    {
+        VerifyExplicitPositionalProperty("""
+            #nullable enable
+            namespace PositionalProperty {
+                public record Item(string? Value) {
+                    public string Value { get; } = Value ?? "";
+                    public static int Run() => new Item((string?)null).Value.Length;
+                }
+            }
+            """, "Value", 0);
+    }
+
+    [Theory]
+    [InlineData(" = 42", 42)]
+    [InlineData(" = Seed()", 7)]
+    [InlineData("", 0)]
+    public void NonPositionalGetterOnlyProperty_PreservesRoslynAbi(string initializer, int expected)
+    {
+        VerifyExplicitPositionalProperty($$"""
+            namespace PositionalProperty {
+                public record Item {
+                    private static int Seed() => 7;
+                    public int Value { get; }{{initializer}}{{(initializer.Length == 0 ? "" : ";")}}
+                    public static int Run() => new Item().Value;
+                }
+            }
+            """, "Value", expected);
+    }
+
     [Theory]
     [InlineData("record", "Value", "", false, false, false, 0)]
     [InlineData("record struct", "Value", "", false, false, false, 0)]

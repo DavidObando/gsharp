@@ -2199,6 +2199,11 @@ public sealed partial class CSharpToGSharpTranslator
                     return ConstructorLift.None;
                 }
 
+                if (propSymbol.SetMethod == null)
+                {
+                    continue;
+                }
+
                 if (propSymbol.IsRequired || propSymbol.SetMethod?.IsInitOnly == true)
                 {
                     continue;

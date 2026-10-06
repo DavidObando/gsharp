@@ -1909,15 +1909,6 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                if (replacesPositionalProperty && propType != propertiesBuilder[positionalPropertyIndex].Type)
-                {
-                    Diagnostics.ReportCannotConvert(
-                        propSyntax.Identifier.Location,
-                        propertiesBuilder[positionalPropertyIndex].Type,
-                        propType);
-                    continue;
-                }
-
                 var propAccessibility = resolveAccessibility(propSyntax.AccessibilityModifier);
 
                 // Determine accessor presence
@@ -1979,6 +1970,20 @@ internal sealed partial class DeclarationBinder
                         Diagnostics.ReportPositionalPropertyReplacementRequiresGetter(
                             propSyntax.Identifier.Location,
                             propName);
+                        continue;
+                    }
+
+                    if (replacesPositionalProperty
+                        && propType != propertiesBuilder[positionalPropertyIndex].Type
+                        && (isAutoProperty
+                            || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                                propType,
+                                propertiesBuilder[positionalPropertyIndex].Type)))
+                    {
+                        Diagnostics.ReportCannotConvert(
+                            propSyntax.Identifier.Location,
+                            propertiesBuilder[positionalPropertyIndex].Type,
+                            propType);
                         continue;
                     }
 
