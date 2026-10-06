@@ -403,12 +403,12 @@ namespace Demo
 
     /// <summary>
     /// ADR-0115 §B.4: a fieldless C# record with no positional parameters
-    /// maps to a zero-field <c>data class</c> and is marked <c>open</c> when
-    /// subclassed. The C# <c>abstract</c> modifier is dropped; the generated
+    /// maps to a zero-field <c>abstract data class</c>. The C# abstractness is
+    /// preserved and suppresses <c>open</c>; the generated
     /// <c>IEquatable&lt;Self&gt;</c> interface is preserved for ABI parity.
     /// </summary>
     [Fact]
-    public void FieldlessRecord_MapsToOpenDataClass()
+    public void FieldlessRecord_MapsToAbstractDataClass()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -417,8 +417,8 @@ namespace Demo
     public sealed record Dot(double X) : ShapeBase;
 }");
 
-        Assert.Contains("open data class ShapeBase", printed);
-        Assert.DoesNotContain("abstract", printed);
+        Assert.Contains("abstract data class ShapeBase", printed);
+        Assert.DoesNotContain("open data class ShapeBase", printed);
         Assert.Contains("IEquatable[ShapeBase]", printed);
         Assert.Contains("IEquatable[Dot]", printed);
         Assert.Contains("data class Dot(X float64) : ShapeBase", printed);
