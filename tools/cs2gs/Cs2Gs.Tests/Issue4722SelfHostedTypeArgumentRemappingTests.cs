@@ -144,34 +144,50 @@ public sealed class Issue4722SelfHostedTypeArgumentRemappingTests
             new[] { ("Target.cs", "public sealed class Target { }") },
             CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(image)).ToArray());
         Assert.True(target.BoundWithoutErrors, string.Join(Environment.NewLine, target.ErrorDiagnostics));
+        LoadedCSharpProject linkedTarget = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Contracts.cs", contract) },
+            CSharpProjectLoader.RuntimeReferences(),
+            "LinkedRemappingContracts");
+        Assert.True(linkedTarget.BoundWithoutErrors, string.Join(Environment.NewLine, linkedTarget.ErrorDiagnostics));
         INamedTypeSymbol input = Assert.IsAssignableFrom<INamedTypeSymbol>(
             Assert.Single(native.Compilation.GetTypeByMetadataName("Consumer").GetMembers("Value").OfType<IFieldSymbol>()).Type);
         Type type = remapper.GetType("RootRemapping.Remapper");
         Assert.NotNull(type);
         MethodInfo method = type.GetMethod("Remap");
         Assert.NotNull(method);
-        INamedTypeSymbol mapped = Assert.IsAssignableFrom<INamedTypeSymbol>(
-            method.Invoke(null, new object[] { target.Compilation, input }));
-        Assert.Equal(NullableAnnotation.Annotated, Assert.Single(mapped.ContainingType.TypeArguments).NullableAnnotation);
-        INamedTypeSymbol tuple = Assert.IsAssignableFrom<INamedTypeSymbol>(Assert.Single(mapped.TypeArguments));
-        Assert.True(tuple.IsTupleType);
-        Assert.Equal(NullableAnnotation.Annotated, tuple.TupleElements[0].Type.NullableAnnotation);
-        Assert.Equal(SpecialType.System_Int32, tuple.TupleElements[1].Type.SpecialType);
-        Assert.Equal(native.Compilation.Assembly.Identity, mapped.ContainingAssembly.Identity);
-        IMethodSymbol[] members = input.GetMembers("Read").OfType<IMethodSymbol>().ToArray();
-        Assert.Equal(2, members.Length);
-        foreach (IMethodSymbol member in members)
+        var targets = new[]
         {
-            IMethodSymbol constructed = member.Arity == 0 ? member : member.Construct(
-                native.Compilation.GetSpecialType(SpecialType.System_String).WithNullableAnnotation(NullableAnnotation.Annotated));
-            IMethodSymbol result = Assert.IsAssignableFrom<IMethodSymbol>(
-                method.Invoke(null, new object[] { target.Compilation, constructed }));
-            Assert.Equal(RefKind.Ref, result.Parameters[0].RefKind);
-            Assert.Equal(constructed.OriginalDefinition.GetDocumentationCommentId(), result.OriginalDefinition.GetDocumentationCommentId());
-            if (result.Arity != 0)
+            (Compilation: target.Compilation, ExpectedAssembly: native.Compilation.Assembly.Identity),
+            (Compilation: linkedTarget.Compilation, ExpectedAssembly: linkedTarget.Compilation.Assembly.Identity),
+        };
+        foreach (var remappingTarget in targets)
+        {
+            INamedTypeSymbol mapped = Assert.IsAssignableFrom<INamedTypeSymbol>(
+                method.Invoke(null, new object[] { remappingTarget.Compilation, input }));
+            Assert.Equal(NullableAnnotation.Annotated, Assert.Single(mapped.ContainingType.TypeArguments).NullableAnnotation);
+            INamedTypeSymbol tuple = Assert.IsAssignableFrom<INamedTypeSymbol>(Assert.Single(mapped.TypeArguments));
+            Assert.True(tuple.IsTupleType);
+            Assert.Equal(NullableAnnotation.Annotated, tuple.TupleElements[0].Type.NullableAnnotation);
+            Assert.Equal(SpecialType.System_Int32, tuple.TupleElements[1].Type.SpecialType);
+            Assert.Equal(remappingTarget.ExpectedAssembly, mapped.ContainingAssembly.Identity);
+            IMethodSymbol[] members = input.GetMembers("Read").OfType<IMethodSymbol>().ToArray();
+            Assert.Equal(2, members.Length);
+            foreach (IMethodSymbol member in members)
             {
-                Assert.Equal(NullableAnnotation.Annotated, Assert.Single(result.TypeArguments).NullableAnnotation);
-                Assert.Equal(NullableAnnotation.Annotated, result.ReturnType.NullableAnnotation);
+                IMethodSymbol constructed = member.Arity == 0 ? member : member.Construct(
+                    native.Compilation.GetSpecialType(SpecialType.System_String).WithNullableAnnotation(NullableAnnotation.Annotated));
+                IMethodSymbol result = Assert.IsAssignableFrom<IMethodSymbol>(
+                    method.Invoke(null, new object[] { remappingTarget.Compilation, constructed }));
+                Assert.Equal(RefKind.Ref, result.Parameters[0].RefKind);
+                Assert.Equal(constructed.OriginalDefinition.GetDocumentationCommentId(), result.OriginalDefinition.GetDocumentationCommentId());
+                IParameterSymbol parameter = Assert.IsAssignableFrom<IParameterSymbol>(
+                    method.Invoke(null, new object[] { remappingTarget.Compilation, constructed.Parameters[0] }));
+                Assert.True(SymbolEqualityComparer.Default.Equals(result.Parameters[0], parameter));
+                if (result.Arity != 0)
+                {
+                    Assert.Equal(NullableAnnotation.Annotated, Assert.Single(result.TypeArguments).NullableAnnotation);
+                    Assert.Equal(NullableAnnotation.Annotated, result.ReturnType.NullableAnnotation);
+                }
             }
         }
 

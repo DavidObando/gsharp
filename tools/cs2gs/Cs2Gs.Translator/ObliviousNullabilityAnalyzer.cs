@@ -1351,11 +1351,6 @@ internal static class ObliviousNullabilityAnalyzer
     private static ISymbol RemapToCompilation(Compilation targetCompilation, ISymbol symbol)
     {
         ISymbol sourceDeclaration = RemapSourceDeclaration(targetCompilation, symbol);
-        if (sourceDeclaration != null)
-        {
-            return sourceDeclaration;
-        }
-
         if (symbol is ITypeSymbol type)
         {
             if (type is IArrayTypeSymbol array)
@@ -1365,13 +1360,18 @@ internal static class ObliviousNullabilityAnalyzer
                     .WithNullableAnnotation(array.NullableAnnotation);
             }
 
-            string reference = DocumentationCommentId.CreateReferenceId(symbol);
-            ITypeSymbol remapped = reference == null
-                ? null
-                : DocumentationCommentId.GetSymbolsForReferenceId(reference, targetCompilation)
-                    .OfType<ITypeSymbol>()
-                    .FirstOrDefault(candidate =>
-                        Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity));
+            ITypeSymbol remapped = sourceDeclaration as ITypeSymbol;
+            if (remapped == null)
+            {
+                string reference = DocumentationCommentId.CreateReferenceId(symbol);
+                remapped = reference == null
+                    ? null
+                    : DocumentationCommentId.GetSymbolsForReferenceId(reference, targetCompilation)
+                        .OfType<ITypeSymbol>()
+                        .FirstOrDefault(candidate =>
+                            Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity));
+            }
+
             if (type is INamedTypeSymbol nested && nested.ContainingType is { IsDefinition: false } containing)
             {
                 INamedTypeSymbol mappedOwner = RemapToCompilation(targetCompilation, containing) as INamedTypeSymbol;
@@ -1428,12 +1428,7 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static ISymbol RemapSourceDeclaration(Compilation targetCompilation, ISymbol symbol)
     {
-        if (symbol is INamedTypeSymbol { IsDefinition: false })
-        {
-            return null;
-        }
-
-        SyntaxReference declaration = symbol.DeclaringSyntaxReferences.FirstOrDefault();
+        SyntaxReference declaration = symbol.OriginalDefinition.DeclaringSyntaxReferences.FirstOrDefault();
         string path = declaration?.SyntaxTree?.FilePath;
         if (declaration == null || string.IsNullOrEmpty(path))
         {
@@ -1487,11 +1482,14 @@ internal static class ObliviousNullabilityAnalyzer
             return null;
         }
 
+        ISymbol sourceDeclaration = RemapSourceDeclaration(targetCompilation, symbol);
         ISymbol remapped = remappedType.GetMembers(symbol.Name).FirstOrDefault(candidate =>
-            candidate.Kind == symbol.Kind
-            && Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity)
-            && string.Equals(
-                candidate.OriginalDefinition.GetDocumentationCommentId(), declarationId, StringComparison.Ordinal));
+            sourceDeclaration != null
+                ? SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, sourceDeclaration)
+                : candidate.Kind == symbol.Kind
+                    && Equals(candidate.ContainingAssembly?.Identity, symbol.ContainingAssembly?.Identity)
+                    && string.Equals(
+                        candidate.OriginalDefinition.GetDocumentationCommentId(), declarationId, StringComparison.Ordinal));
         if (remapped is IMethodSymbol remappedMethod
             && symbol is IMethodSymbol method
             && !SymbolEqualityComparer.Default.Equals(method, method.ConstructedFrom))
