@@ -677,6 +677,9 @@ class ParticipatingProjectTests(unittest.TestCase):
 
     def test_toolchain_properties_cannot_be_local_exemptions(self) -> None:
         for property_name in (
+            "BuildProjectReferences",
+            "buildprojectreferences",
+            "BUILDPROJECTREFERENCES",
             "GsharpCompilerFullPath",
             "customaftermicrosoftcommontargets",
             "CUSTOMAFTERMICROSOFTCOMMONTARGETS",
@@ -701,6 +704,26 @@ class ParticipatingProjectTests(unittest.TestCase):
                         self.assertRaises(stage2.Stage2Error):
                     stage2.validate_participating_projects(
                         tree, ["Root.gsproj"], self.env(work), "Release", "1.0.0-stage1")
+
+    def test_csharp_wrapper_cannot_locally_override_build_project_references(self) -> None:
+        with work_directory() as directory:
+            root = Path(directory)
+            tree, work = root / "tree", root / "gate"
+            tree.mkdir()
+            wrapper = tree / "Wrapper.csproj"
+            wrapper.write_text(
+                '<Project Sdk="Microsoft.NET.Sdk" '
+                'TreatAsLocalProperty="bUiLdPrOjEcTrEfErEnCeS"/>',
+                encoding="utf-8")
+            evaluation = {
+                "Properties": {"MSBuildAllProjects": str(wrapper), "TargetFrameworks": ""},
+                "Items": {"ProjectReference": []},
+            }
+            with patch.object(stage2, "evaluate_project", return_value=evaluation), \
+                    self.assertRaisesRegex(
+                        stage2.Stage2Error, "BuildProjectReferences"):
+                stage2.validate_participating_projects(
+                    tree, ["Wrapper.csproj"], self.env(work), "Release", "1.0.0-stage1")
 
     def test_multi_targeted_project_is_rejected(self) -> None:
         with work_directory() as directory:
@@ -983,6 +1006,7 @@ class CleanOutputsTests(unittest.TestCase):
                 self.assertEqual(str(work / "nuget-stage2"), env["NUGET_PACKAGES"])
                 self.assertFalse(stale.exists())
                 if command[1] == "restore":
+                    self.assertIn("-p:Configuration=Release", command)
                     return 0, 0.0
                 self.assertIs(seen_env, env)
                 output = tree / "a.dll"
@@ -1096,7 +1120,7 @@ class CompareTests(unittest.TestCase):
                     '</packageSources></configuration>', encoding="utf-8")
 
                 with self.assertRaisesRegex(
-                        stage2.Stage2Error, f"registers {task_name} outside"):
+                        stage2.Stage2Error, f"registers untrusted MSBuild task {task_name}"):
                     stage2.build_stage(
                         tree, "stage1", packages[-1], ["Root.gsproj"],
                         ["bin/Release/net10.0/Root.dll"], work, "Release", ["Root.gsproj"])
@@ -1157,7 +1181,7 @@ class CompareTests(unittest.TestCase):
             '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
             '</packageSources></configuration>', encoding="utf-8")
 
-        with self.assertRaisesRegex(stage2.Stage2Error, "registers BuildTask outside"):
+        with self.assertRaisesRegex(stage2.Stage2Error, "registers untrusted MSBuild task BuildTask"):
             stage2.build_stage(
                 tree, "stage1", packages[-1], ["Root.gsproj"],
                 ["bin/Release/net10.0/Root.dll"], work, "Release", ["Root.gsproj"])
@@ -1257,7 +1281,7 @@ class CompareTests(unittest.TestCase):
             '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
             '</packageSources></configuration>', encoding="utf-8")
 
-        with self.assertRaisesRegex(stage2.Stage2Error, "registers BuildTask outside"):
+        with self.assertRaisesRegex(stage2.Stage2Error, "registers untrusted MSBuild task BuildTask"):
             stage2.build_stage(
                 tree, "stage1", packages[-1], ["Root.gsproj"],
                 ["bin/Release/net10.0/Root.dll"], work, "Release", ["Root.gsproj"])
@@ -1296,7 +1320,7 @@ class CompareTests(unittest.TestCase):
             '</packageSources></configuration>', encoding="utf-8")
 
         with self.assertRaisesRegex(
-                stage2.Stage2Error, "compiler execution/output evidence invalid"):
+                stage2.Stage2Error, "defines untrusted MSBuild target"):
             stage2.build_stage(
                 tree, "stage1", package, ["App.gsproj"],
                 ["bin/Release/net10.0/App.dll"], work, "Release", ["App.gsproj"])
@@ -1328,13 +1352,10 @@ class CompareTests(unittest.TestCase):
             '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
             '</packageSources></configuration>', encoding="utf-8")
 
-        with self.assertRaises(stage2.Stage2Error):
+        with self.assertRaisesRegex(stage2.Stage2Error, "defines untrusted MSBuild target"):
             stage2.build_stage(
                 tree, "stage1", package, ["Root.gsproj"],
                 ["bin/Release/net10.0/Root.dll"], work, "Release", ["Root.gsproj"])
-        self.assertIn(
-            "verified SDK payload changed before compiler invocation",
-            (work / "stage1.build.log").read_text(encoding="utf-8"))
 
     def test_later_root_cannot_replace_an_earlier_root_output(self) -> None:
         packages = sorted(
@@ -1366,7 +1387,7 @@ class CompareTests(unittest.TestCase):
             '</packageSources></configuration>', encoding="utf-8")
 
         with self.assertRaisesRegex(
-                stage2.Stage2Error, "compiler execution/output evidence invalid"):
+                stage2.Stage2Error, "defines untrusted MSBuild target"):
             stage2.build_stage(
                 tree, "stage1", package, ["A.gsproj", "B.gsproj"],
                 ["bin/Release/net10.0/A.dll"], work, "Release",
@@ -1398,13 +1419,10 @@ class CompareTests(unittest.TestCase):
             '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
             '</packageSources></configuration>', encoding="utf-8")
 
-        with self.assertRaises(stage2.Stage2Error):
+        with self.assertRaisesRegex(stage2.Stage2Error, "defines untrusted MSBuild target"):
             stage2.build_stage(
                 tree, "stage1", package, ["Root.gsproj"], ["out/net10.0/Root.dll"],
                 work, "Release", ["Root.gsproj"])
-        self.assertIn(
-            "effective CoreCompile did not invoke the guarded SDK BuildTask",
-            (work / "stage1.build.log").read_text(encoding="utf-8"))
 
     def test_skip_compiler_execution_cannot_accept_supplied_output(self) -> None:
         packages = sorted(
@@ -1431,13 +1449,10 @@ class CompareTests(unittest.TestCase):
             '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
             '</packageSources></configuration>', encoding="utf-8")
 
-        with self.assertRaises(stage2.Stage2Error):
+        with self.assertRaisesRegex(stage2.Stage2Error, "defines untrusted MSBuild target"):
             stage2.build_stage(
                 tree, "stage1", packages[-1], ["Root.gsproj"], ["out/net10.0/Root.dll"],
                 work, "Release", ["Root.gsproj"])
-        self.assertIn(
-            "SkipCompilerExecution cannot certify compilation",
-            (work / "stage1.build.log").read_text(encoding="utf-8"))
 
     def test_compiler_evidence_rejects_target_replacement_bypasses(self) -> None:
         packages = sorted(
@@ -1446,7 +1461,8 @@ class CompareTests(unittest.TestCase):
         self.assertTrue(packages, "Release build did not produce Gsharp.NET.Sdk")
         package = packages[-1]
         version = stage2.packer.package_version(package)
-        for index, shape in enumerate(("rebuild", "fabricated-marker", "redefined-validator")):
+        for index, shape in enumerate(
+                ("rebuild", "fabricated-marker", "redefined-validator", "forged-receipt")):
             with self.subTest(shape=shape):
                 tree = self.work / f"evidence-{index}-tree"
                 work = self.work / f"evidence-{index}-gate"
@@ -1467,10 +1483,22 @@ class CompareTests(unittest.TestCase):
                         '</PropertyGroup><Copy SourceFiles="supplied.dll" '
                         'DestinationFiles="@(IntermediateAssembly)"/></Target>')
                 else:
-                    replacement = (
-                        '<Target Name="_Stage2ValidateToolchain"/>'
-                        '<Target Name="CoreCompile"><Copy SourceFiles="supplied.dll" '
-                        'DestinationFiles="@(IntermediateAssembly)"/></Target>')
+                    if shape == "redefined-validator":
+                        replacement = (
+                            '<Target Name="_Stage2ValidateToolchain"/>'
+                            '<Target Name="CoreCompile"><Copy SourceFiles="supplied.dll" '
+                            'DestinationFiles="@(IntermediateAssembly)"/></Target>')
+                    else:
+                        replacement = (
+                            '<Target Name="Rebuild">'
+                            '<Copy SourceFiles="supplied.dll" DestinationFiles="$(OutputPath)Root.dll"/>'
+                            '<GetFileHash Files="$(OutputPath)Root.dll">'
+                            '<Output TaskParameter="Items" ItemName="_ForgedOutput"/>'
+                            '</GetFileHash>'
+                            '<WriteLinesToFile File="$(_Stage2EvidencePath)" '
+                            'Lines="$(_Stage2EvidenceNonce)|$(OutputPath)Root.dll|'
+                            '%(_ForgedOutput.FileHash)" Overwrite="true"/>'
+                            '</Target>')
                 (tree / "Root.gsproj").write_text(
                     '<Project>'
                     '<Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk"/>'
@@ -1490,7 +1518,7 @@ class CompareTests(unittest.TestCase):
                     '</packageSources></configuration>', encoding="utf-8")
 
                 with self.assertRaisesRegex(
-                        stage2.Stage2Error, "compiler execution/output evidence invalid"):
+                        stage2.Stage2Error, "defines untrusted MSBuild target"):
                     stage2.build_stage(
                         tree, "stage1", package, ["Root.gsproj"], ["out/Root.dll"],
                         work, "Release", ["Root.gsproj"])
@@ -1524,6 +1552,67 @@ class CompareTests(unittest.TestCase):
         self.assertTrue(project.is_file())
         self.assertTrue(source.is_file())
 
+    def test_driver_write_collision_is_rejected_before_mutation(self) -> None:
+        packages = sorted(
+            (REPO / "out/bin/Release/nupkgs").glob("Gsharp.NET.Sdk.*.nupkg"),
+            key=lambda path: path.stat().st_mtime)
+        self.assertTrue(packages, "Release build did not produce Gsharp.NET.Sdk")
+        tree, work = self.work / "driver-collision-tree", self.work / "driver-collision-gate"
+        tree.mkdir()
+        work.mkdir()
+        collision = work / "stage1.toolchain-guard.targets"
+        original = b"<Project/>\n"
+        collision.write_bytes(original)
+        (tree / "Directory.Build.props").write_text("<Project/>\n", encoding="utf-8")
+        (tree / "Directory.Build.targets").write_text("<Project/>\n", encoding="utf-8")
+        (tree / "Root.gsproj").write_text(
+            '<Project Sdk="Gsharp.NET.Sdk">'
+            '<PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>'
+            f'<Import Project="{collision}"/></Project>', encoding="utf-8")
+        (tree / "Program.gs").write_text(
+            "package Smoke\n\npublic class Marker { }\n", encoding="utf-8")
+        (tree / "nuget.config").write_text(
+            '<configuration><packageSources><clear/>'
+            '<add key="local" value=".nugs"/>'
+            '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
+            '</packageSources></configuration>', encoding="utf-8")
+
+        with self.assertRaisesRegex(stage2.Stage2Error, "inputs overlap cleaned outputs"):
+            stage2.build_stage(
+                tree, "stage1", packages[-1], ["Root.gsproj"],
+                ["bin/Release/net10.0/Root.dll"], work, "Release", ["Root.gsproj"])
+        self.assertEqual(original, collision.read_bytes())
+
+    def test_isolated_context_input_is_preserved_before_cleanup(self) -> None:
+        packages = sorted(
+            (REPO / "out/bin/Release/nupkgs").glob("Gsharp.NET.Sdk.*.nupkg"),
+            key=lambda path: path.stat().st_mtime)
+        self.assertTrue(packages, "Release build did not produce Gsharp.NET.Sdk")
+        tree, work = self.work / "isolated-input-tree", self.work / "isolated-input-gate"
+        source = tree / "out/Conditional.gs"
+        source.parent.mkdir(parents=True)
+        original = b"package Smoke\n\npublic class Conditional { }\n"
+        source.write_bytes(original)
+        (tree / "Directory.Build.props").write_text("<Project/>\n", encoding="utf-8")
+        (tree / "Directory.Build.targets").write_text("<Project/>\n", encoding="utf-8")
+        (tree / "Root.gsproj").write_text(
+            '<Project Sdk="Gsharp.NET.Sdk">'
+            '<PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>'
+            '<ItemGroup><Compile Include="out/Conditional.gs" '
+            'Condition="\'$(BuildProjectReferences)\' == \'false\'"/></ItemGroup>'
+            '</Project>', encoding="utf-8")
+        (tree / "nuget.config").write_text(
+            '<configuration><packageSources><clear/>'
+            '<add key="local" value=".nugs"/>'
+            '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
+            '</packageSources></configuration>', encoding="utf-8")
+
+        with self.assertRaisesRegex(stage2.Stage2Error, "inputs overlap cleaned outputs"):
+            stage2.build_stage(
+                tree, "stage1", packages[-1], ["Root.gsproj"],
+                ["bin/Release/net10.0/Root.dll"], work, "Release", ["Root.gsproj"])
+        self.assertEqual(original, source.read_bytes())
+
     def test_invocation_rejects_build_time_compiler_payload_replacement(self) -> None:
         packages = sorted(
             (REPO / "out/bin/Release/nupkgs").glob("Gsharp.NET.Sdk.*.nupkg"),
@@ -1549,13 +1638,10 @@ class CompareTests(unittest.TestCase):
             '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
             '</packageSources></configuration>', encoding="utf-8")
 
-        with self.assertRaises(stage2.Stage2Error):
+        with self.assertRaisesRegex(stage2.Stage2Error, "defines untrusted MSBuild target"):
             stage2.build_stage(
                 tree, "stage1", package, ["Root.gsproj"], ["bin/Release/net10.0/Root.dll"],
                 work, "Release", ["Root.gsproj"])
-        self.assertIn(
-            "verified SDK payload changed before compiler invocation",
-            (work / "stage1.build.log").read_text(encoding="utf-8"))
 
     def test_after_compile_output_replacement_invalidates_bound_receipt(self) -> None:
         packages = sorted(
@@ -1583,7 +1669,7 @@ class CompareTests(unittest.TestCase):
             '</packageSources></configuration>', encoding="utf-8")
 
         with self.assertRaisesRegex(
-                stage2.Stage2Error, "compiler execution/output evidence invalid"):
+                stage2.Stage2Error, "defines untrusted MSBuild target"):
             stage2.build_stage(
                 tree, "stage1", package, ["Root.gsproj"], ["bin/Release/net10.0/Root.dll"],
                 work, "Release", ["Root.gsproj"])
@@ -1697,13 +1783,10 @@ class CompareTests(unittest.TestCase):
             '<add key="local" value=".nugs"/>'
             '<add key="nuget" value="https://api.nuget.org/v3/index.json"/>'
             '</packageSources></configuration>', encoding="utf-8")
-        with self.assertRaises(stage2.Stage2Error):
+        with self.assertRaisesRegex(stage2.Stage2Error, "defines untrusted MSBuild target"):
             stage2.build_stage(
                 tree, "stage1", package, ["Root.gsproj"], ["out/net10.0/Root.dll"],
                 work, "Release", ["Root.gsproj"])
-        self.assertIn(
-            "CoreCompile used unexpected GsharpCompilerFullPath",
-            (work / "stage1.build.log").read_text(encoding="utf-8"))
 
     def test_a_different_assembly_is_not_equal(self) -> None:
         # The deliberately broken input: stage 2 produced different code.
