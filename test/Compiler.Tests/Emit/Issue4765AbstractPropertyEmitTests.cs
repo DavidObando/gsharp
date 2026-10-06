@@ -635,7 +635,7 @@ public sealed class Issue4765AbstractPropertyEmitTests
         var dll = fixture.Compile("""
             package TupleIndexer
             public abstract class Base {
-                public abstract prop this[position (row int32, column int32)] int32 { get; set; }
+                public abstract prop this[position (row int32, column int32)] (value int32, valid bool) { get; set; }
             }
             """, "TupleIndexer", false, "/refout:" + reference);
 
@@ -656,6 +656,15 @@ public sealed class Issue4765AbstractPropertyEmitTests
                     handle => metadata.GetParameter(handle).SequenceNumber == 1));
                 Assert.Contains(
                     parameter.GetCustomAttributes(),
+                    handle => GetCustomAttributeTypeName(metadata, handle)
+                        == "System.Runtime.CompilerServices.TupleElementNamesAttribute");
+
+                var contractParameter = metadata.GetParameter(Assert.Single(
+                    accessor.GetParameters(),
+                    handle => metadata.GetParameter(handle).SequenceNumber
+                        == (accessorName == "get_Item" ? 0 : 2)));
+                Assert.Contains(
+                    contractParameter.GetCustomAttributes(),
                     handle => GetCustomAttributeTypeName(metadata, handle)
                         == "System.Runtime.CompilerServices.TupleElementNamesAttribute");
             }

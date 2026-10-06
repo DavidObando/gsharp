@@ -635,13 +635,19 @@ internal sealed class MemberDefEmitter
         var accessibility = isGetter ? prop.GetterAccessibility : prop.SetterAccessibility;
         var firstParameter = this.nextParameterHandle();
         var propertyNullableFlags = NullableFlagsBuilder.Build(prop.Type);
-        if (isGetter && !propertyNullableFlags.IsDefaultOrEmpty)
+        var propertyTupleNames = TupleElementNamesBuilder.Build(prop.Type);
+        if (isGetter && (!propertyNullableFlags.IsDefaultOrEmpty || !propertyTupleNames.IsDefaultOrEmpty))
         {
             var returnParameter = this.emitCtx.Metadata.AddParameter(
                 ParameterAttributes.None,
                 default,
                 sequenceNumber: 0);
-            this.emitNullableAttributeOnParameter(returnParameter, propertyNullableFlags);
+            if (!propertyNullableFlags.IsDefaultOrEmpty)
+            {
+                this.emitNullableAttributeOnParameter(returnParameter, propertyNullableFlags);
+            }
+
+            this.emitTupleElementNamesAttribute(returnParameter, prop.Type);
         }
 
         for (var index = 0; index < prop.Parameters.Length; index++)
@@ -670,6 +676,8 @@ internal sealed class MemberDefEmitter
             {
                 this.emitNullableAttributeOnParameter(valueParameter, propertyNullableFlags);
             }
+
+            this.emitTupleElementNamesAttribute(valueParameter, prop.Type);
         }
 
         var methodAttrs = AccessibilityMap.ToMethodVisibility(accessibility)

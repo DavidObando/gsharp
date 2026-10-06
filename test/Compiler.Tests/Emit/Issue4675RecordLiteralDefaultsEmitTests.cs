@@ -391,6 +391,28 @@ public sealed class Issue4675RecordLiteralDefaultsEmitTests
     }
 
     [Fact]
+    public void ExpressionTree_NonPositionalDataStructZero_UsesOwningConstructor()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile("""
+            package TreeNonPositionalDataZero
+            import System
+            import System.Linq.Expressions
+            data struct Inner {
+                private var Items []int32
+                public prop Length int32 -> Items.Length
+            }
+            data class Box(Item Inner)
+            func Main() {
+                let tree Expression[Func[Box]] = () -> Box{}
+                Console.WriteLine(tree.Compile()().Item.Length)
+            }
+            """, "TreeNonPositionalDataZero", true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("0\n", fixture.Run(dll));
+    }
+
+    [Fact]
     public void EmptyPrimarySpread_EvaluatesDeclarationInitializersOnce()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

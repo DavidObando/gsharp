@@ -848,7 +848,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
         var markerCount = literal.StructType.LiteralInitializerMarkerCount;
-        if (literal.IsZeroInitialization && literal.StructType is { IsData: true, IsClass: false } && markerCount == 0)
+        if (literal.IsZeroInitialization
+            && literal.StructType is { IsData: true, IsClass: false, HasDeclaredPrimaryConstructor: true }
+            && markerCount == 0)
         {
             return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap);
         }
