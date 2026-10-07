@@ -1599,7 +1599,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 membersToTranslate.AddRange(
                     ownedExtensionMethods
-                        .Where(this.CanLowerOwnedExtension)
+                        .Where(method => this.CanLowerOwnedExtension(method)
+                            && !this.IsPreservedOwnedExtension(
+                                this.context.Compilation.GetSemanticModel(method.SyntaxTree)
+                                    .GetDeclaredSymbol(method) as IMethodSymbol))
                         .Select(method => (
                             Member: (MemberDeclarationSyntax)method,
                             OwnedExtensionTarget: symbol)));

@@ -620,12 +620,8 @@ internal sealed class DataStructSynthesizer
         if (structSym.BaseClass?.IsData == true)
         {
             attributes |= MethodAttributes.Family | MethodAttributes.Virtual;
-            if (IsDataObjectOverrideFinal(structSym))
-            {
-                attributes |= MethodAttributes.Final;
-            }
         }
-        else if (IsDataObjectOverrideFinal(structSym))
+        else if (IsDataTypeSealed(structSym))
         {
             attributes |= MethodAttributes.Private;
         }
@@ -689,14 +685,19 @@ internal sealed class DataStructSynthesizer
         var signature = new BlobBuilder();
         new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
-        var visibility = IsDataObjectOverrideFinal(structSym) ? MethodAttributes.Private : MethodAttributes.Family;
+        var visibility = IsDataTypeSealed(structSym) ? MethodAttributes.Private : MethodAttributes.Family;
+        var firstParameter = this.nextParameterHandle();
+        ParameterMetadataEmitter.AddParameter(
+            this.emitCtx,
+            new ParameterSymbol("original", structSym),
+            sequenceNumber: 1);
         var copyConstructor = this.emitCtx.Metadata.AddMethodDefinition(
             visibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
             MethodImplAttributes.IL | MethodImplAttributes.Managed,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(signature),
             bodyOffset,
-            this.nextParameterHandle());
+            firstParameter);
 
         if (this.cache.DataClassCopyConstructorHandles.TryGetValue(structSym, out var plannedCopyConstructor)
             && copyConstructor != plannedCopyConstructor)
@@ -727,7 +728,7 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => this.encodeTypeSymbol(r.Type(), structSym), _ => { });
         var attributes = MethodAttributes.Public | MethodAttributes.HideBySig;
-        if (structSym.IsAbstract || hasBaseClone || !IsDataObjectOverrideFinal(structSym))
+        if (structSym.IsAbstract || hasBaseClone || !IsDataTypeSealed(structSym))
         {
             // Covariant returns differ at the CLR-signature level. Match
             // Roslyn: emit a new virtual slot, then bind it explicitly to the
@@ -960,24 +961,11 @@ internal sealed class DataStructSynthesizer
     }
 
     /// <summary>
-    /// Issue #2338 follow-up: returns the <see cref="MethodAttributes"/> for a
-    /// synthesized <c>Object</c>-virtual override (<c>Equals(object)</c>,
-    /// <c>GetHashCode()</c>, <c>ToString()</c>) on a data type. A data STRUCT's
-    /// override is always <c>final</c> (structs can't be subclassed anyway,
-    /// and the parser rejects <c>open data struct</c> outright — ADR-0078 /
-    /// GS0309). A data CLASS's override is only <c>final</c> when the class
-    /// itself cannot be further subclassed — mirroring the exact
-    /// <c>!structSym.IsOpen &amp;&amp; !structSym.IsSealedHierarchy</c> condition
-    /// <see cref="TypeDefEmitter"/> uses to decide the TypeDef's own
-    /// <c>TypeAttributes.Sealed</c> flag. An <c>open</c> (or ADR-0078
-    /// <c>sealed class</c> discriminated-union) data class must leave these
-    /// overrides non-final so a further-derived data class can re-override
-    /// them with its own combined field set; marking them unconditionally
-    /// final made loading ANY data-class-extends-data-class hierarchy throw
-    /// <c>TypeLoadException: Declaration referenced in a method
-    /// implementation cannot be a final method</c> the moment the subclass
-    /// tried to override the base's already-final <c>Equals</c>/
-    /// <c>GetHashCode</c>/<c>ToString</c>.
+    /// Returns the <see cref="MethodAttributes"/> for a synthesized
+    /// <c>Object</c>-virtual override (<c>Equals(object)</c>,
+    /// <c>GetHashCode()</c>, <c>ToString()</c>) on a data type. The containing
+    /// TypeDef already prevents further overrides when it is sealed, so these
+    /// slots remain non-final, matching Roslyn record metadata.
     /// </summary>
     private static MethodAttributes DataObjectOverrideAttributes(StructSymbol structSym)
     {
@@ -1001,22 +989,21 @@ internal sealed class DataStructSynthesizer
     /// <see cref="DataObjectOverrideAttributes"/> for the full rationale.
     /// </summary>
     /// <param name="structSym">The data class/struct symbol to check.</param>
-    /// <returns><see langword="true"/> when the slot must be <c>final</c>.</returns>
+    /// <returns><see langword="false"/>; object overrides do not need a redundant final flag.</returns>
     public static bool IsDataObjectOverrideFinal(StructSymbol? structSym)
     {
-        return structSym is not null
-            && (!structSym.IsClass || (!structSym.IsOpen && !structSym.IsSealedHierarchy));
+        return false;
     }
+
+    private static bool IsDataTypeSealed(StructSymbol structSym) =>
+        !structSym.IsClass || (!structSym.IsOpen && !structSym.IsSealedHierarchy);
 
     /// <summary>
     /// Issue #410 / ADR-0029: emits
-    /// <c>public sealed override bool Equals(object other)</c> that performs
-    /// <c>other is Name p &amp;&amp; this.Equals(p)</c>. Sealed because struct
-    /// methods cannot be overridden in user code anyway, but the metadata
-    /// flag communicates intent. Issue #2338 follow-up: for an <c>open</c>
-    /// (or ADR-0078 sealed-hierarchy) data CLASS the override is instead left
-    /// non-final via <see cref="DataObjectOverrideAttributes"/> so a further
-    /// derived data class can re-override it.
+    /// <c>public override bool Equals(object other)</c> that performs
+    /// <c>other is Name p &amp;&amp; this.Equals(p)</c>. The override remains
+    /// non-final: sealed owners already prevent derivation, while open data
+    /// classes must allow a derived record to re-override it.
     /// </summary>
     private void EmitDataStructEqualsObject(StructSymbol structSym, EntityHandle typeDef, MethodDefinitionHandle equalsTypedHandle)
     {
@@ -1142,7 +1129,7 @@ internal sealed class DataStructSynthesizer
             .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
 
         var attributes = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot;
-        if (IsDataObjectOverrideFinal(structSym))
+        if (IsDataTypeSealed(structSym))
         {
             attributes |= MethodAttributes.Final;
         }
@@ -1313,7 +1300,7 @@ internal sealed class DataStructSynthesizer
 
     /// <summary>
     /// Issue #410 / ADR-0029: emits
-    /// <c>public sealed override string ToString()</c> rendering
+    /// <c>public override string ToString()</c> rendering
     /// <c>Name(F1=v1, F2=v2, …)</c>. Field values are converted via
     /// <c>Convert.ToString(object, IFormatProvider)</c> with
     /// <see cref="System.Globalization.CultureInfo.InvariantCulture"/> so
@@ -1500,13 +1487,22 @@ internal sealed class DataStructSynthesizer
                     this.encodeTypeSymbol(ps.AddParameter().Type(), structSym);
                 });
 
+        var firstParameter = this.nextParameterHandle();
+        ParameterMetadataEmitter.AddParameter(
+            this.emitCtx,
+            new ParameterSymbol("left", structSym),
+            sequenceNumber: 1);
+        ParameterMetadataEmitter.AddParameter(
+            this.emitCtx,
+            new ParameterSymbol("right", structSym),
+            sequenceNumber: 2);
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.nextParameterHandle());
+            parameterList: firstParameter);
     }
 
     private void EmitDataStructDeconstruct(StructSymbol structSym)

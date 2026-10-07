@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
@@ -27,9 +28,10 @@ public static class TypeMemberModel
 {
     /// <summary>
     /// Returns the ordered members used by synthesized and bound data-type
-    /// deconstruction. Positional data types deconstruct their primary-
-    /// constructor properties; non-positional data types retain their
-    /// field/auto-property behavior.
+    /// deconstruction. Primary-constructor parameters are positional. Native
+    /// body-form data types retain field/property deconstruction, while a
+    /// body-form type carrying the explicit C# record <c>IEquatable&lt;Self&gt;</c>
+    /// contract has no positional components.
     /// </summary>
     /// <param name="type">The data class or data struct.</param>
     /// <returns>The logical deconstruction members in declaration order.</returns>
@@ -56,6 +58,11 @@ public static class TypeMemberModel
             }
 
             return members.ToImmutable();
+        }
+
+        if (HasDeclaredSelfEquatableContract(type))
+        {
+            return ImmutableArray<Symbol>.Empty;
         }
 
         foreach (var field in type.Fields)
@@ -1249,6 +1256,22 @@ public static class TypeMemberModel
             builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
             builder.Add(m);
         }
+    }
+
+    private static bool HasDeclaredSelfEquatableContract(StructSymbol type)
+    {
+        foreach (var implemented in type.ImplementedClrInterfaces)
+        {
+            if (implemented.ClrType is { IsGenericType: true } clrType
+                && ClrTypeUtilities.AreSame(clrType.GetGenericTypeDefinition(), typeof(IEquatable<>))
+                && implemented.ConstructedTypeArguments is [{ } argument]
+                && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(argument, type))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

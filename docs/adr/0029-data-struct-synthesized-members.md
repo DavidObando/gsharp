@@ -64,6 +64,23 @@ Neutral:
 - ADR-0026 (Phase 7) will add `let p2 = p.copy(x = 10)`. The lowering is `let p2 = data struct.copy(p, x = 10)` or equivalent — the synthesized contract here does **not** include a `copy` method, so ADR-0026 is free to pick either a synthesized instance method, a static helper, or pure syntactic sugar that constructs a new value via the existing composite literal.
 - Frozen until ADR-0017 reopens for the question of *which* members are sealed-overridable. Data-struct members are intentionally sealed; that rule sticks.
 
+## Amendment 2026-10-07: CLR record ABI convergence (#4828)
+
+The translated C# record contract now distinguishes positional components from
+ordinary body members. A body-only translated record does not gain a synthesized
+`Deconstruct`; its fields and auto-properties still participate in structural
+equality and printing. Native G# body-form data types retain their existing
+field/property deconstruction. A data class with a non-empty primary constructor
+emits that constructor only, not an additional public parameterless constructor.
+
+Synthesized equality operators name their parameters `left` and `right`, and a
+data-class copy constructor names its parameter `original`. Object overrides
+(`Equals(object)`, `GetHashCode`, and `ToString`) and derived
+`EqualityContract` getters omit a redundant CLR `final` bit when the containing
+TypeDef is already sealed. Typed `Equals(Self)` and clone-slot finality remain
+unchanged. These rules match Roslyn's record metadata while preserving G#
+runtime behavior and the open data-class inheritance contract.
+
 ## Alternatives considered
 
 - **C# records (`Name { F1 = v1, F2 = v2 }` format, `EqualityContract` property, `Equals(Name)` virtual)**: rejected. The C# record runtime contract is intricate (`<>RawContract` virtual property, `protected virtual Equals`) so that inheritance works; data structs don't inherit, so the simpler Kotlin-flavor contract is enough.

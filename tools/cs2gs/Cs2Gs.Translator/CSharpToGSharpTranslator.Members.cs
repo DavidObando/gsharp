@@ -1891,7 +1891,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.IsPreservedOwnedExtension(method)
                 && (method?.ReducedFrom ?? method).DeclaredAccessibility != Accessibility.Private)
             {
-                return true;
+                return false;
             }
 
             if (!this.ownedExtensions.HasReceiverCompanion(method))

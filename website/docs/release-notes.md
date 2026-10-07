@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Self-migrated Core now has exact native public ABI parity** (issue #4828, parent #3501). Record synthesis matches Roslyn constructor, deconstruction, parameter-name and override-finality metadata; ordinary overrides omit redundant `final` flags on sealed owners; and preserved owned extensions keep only their native static-holder MethodDef while translated receiver calls route through it. The strict #4654 renderer remains unchanged.
+
 - **Explicit abstract properties retain storage-free CLR contracts** (issues #4765 and #4715, ADR-0197). `abstract prop` and `abstract override prop` preserve getter/setter/init requirements, accessor visibility and virtual slots; concrete descendants must implement every required accessor. Abstract indexer accessor parameters retain optional/default metadata in implementation and reference assemblies, so CLR callers can omit optional indices. cs2gs propagates C# abstractness explicitly across ordinary classes and positional, partial and generic records, while initialized get/init overrides retain their backing storage and init accessor. Existing concrete open auto-properties and getter-only contracts are unchanged.
 
 - **cs2gs preserves nullable inferred locals inside lambdas** (issue #4826). Local nullability scans now stay in the declaring lambda block, so a `Record.Exception` result observed by `Assert.Null` remains nullable instead of gaining a checked `!!` assertion.
