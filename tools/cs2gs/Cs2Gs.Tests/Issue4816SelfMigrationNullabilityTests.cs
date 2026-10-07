@@ -41,6 +41,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         var projected = Values();
                         _ = Accept(projected[0]);
                         _ = Accept(projected.Single());
+                        _ = Accept(Enumerable.Single(projected));
                         _ = Accept(projected.ToString());
                         _ = Accept(projected.Aggregate("seed", (acc, _) => acc));
                         string[] explicitProjected = Values();
@@ -66,6 +67,9 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                 {
                     public class Inner
                     {
+                        private readonly T value;
+                        public Inner(T value) => this.value = value;
+                        public T Get() => value;
                     }
                 }
 
@@ -94,14 +98,14 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         nullableShape = nonNullableShape;
                         return nullableShape;
                     }
-                    public static object MergedContainingContract(
+                    public static int MergedContainingContract(
                         Outer<string>.Inner nonNullable,
                         Outer<string?>.Inner nullable)
                     {
                         var nonNullableShape = new { Value = nonNullable };
                         var nullableShape = new { Value = nullable };
                         nonNullableShape = nullableShape;
-                        return nonNullableShape;
+                        return nonNullableShape.Value.Get().Length;
                     }
                     public static int MergedArrayElementRead(
                         string[] nonNullable,

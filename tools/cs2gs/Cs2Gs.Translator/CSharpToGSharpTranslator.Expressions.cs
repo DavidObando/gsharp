@@ -1318,25 +1318,46 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 IMethodSymbol invokedMethod =
                     this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
-                if (invocation.Expression is MemberAccessExpressionSyntax memberAccess
-                    && invokedMethod?.ReducedFrom is
-                        { IsGenericMethod: true } reducedMethod
-                    && reducedMethod.ContainingType.ToDisplayString()
+                IMethodSymbol sourceMethod =
+                    invokedMethod?.ReducedFrom ?? invokedMethod?.OriginalDefinition;
+                ExpressionSyntax sourceExpression =
+                    invokedMethod?.ReducedFrom != null
+                        && invocation.Expression is MemberAccessExpressionSyntax memberAccess
+                            ? memberAccess.Expression
+                            : invokedMethod?.IsExtensionMethod == true
+                                && invocation.ArgumentList.Arguments.Count > 0
+                                    ? invocation.ArgumentList.Arguments[0].Expression
+                                    : null;
+                if (sourceMethod is { IsGenericMethod: true }
+                    && sourceMethod.ContainingType.ToDisplayString()
                         is "System.Linq.Enumerable" or "System.Linq.Queryable"
-                    && reducedMethod.ReturnType is ITypeParameterSymbol returnTypeParameter
-                    && reducedMethod.Parameters[0].Type is INamedTypeSymbol sourceParameter
+                    && sourceMethod.ReturnType is ITypeParameterSymbol returnTypeParameter
+                    && sourceMethod.Parameters[0].Type is INamedTypeSymbol sourceParameter
                     && sourceParameter.TypeArguments.Any(argument =>
                         SymbolEqualityComparer.Default.Equals(argument, returnTypeParameter))
                     && invokedMethod?.ReturnType is { } invocationReturn
-                    && this.context.GetTypeInfo(memberAccess.Expression).Type
+                    && sourceExpression != null
+                    && this.context.GetTypeInfo(sourceExpression).Type
                         is IArrayTypeSymbol receiverArray
                     && SymbolEqualityComparer.Default.Equals(
                         invocationReturn,
                         receiverArray.ElementType)
                     && this.GetManagedReferenceArrayProjectedExpressionType(
-                        memberAccess.Expression) is IArrayTypeSymbol projectedReceiver)
+                        sourceExpression) is IArrayTypeSymbol projectedReceiver)
                 {
                     return projectedReceiver.ElementType;
+                }
+
+                if (invokedMethod != null
+                    && invocation.Expression is MemberAccessExpressionSyntax calledMember
+                    && this.GetManagedReferenceArrayProjectedExpressionType(
+                        calledMember.Expression) is INamedTypeSymbol projectedOwner
+                    && this.GetProjectedMember(projectedOwner, invokedMethod)
+                        is IMethodSymbol projectedCalledMethod)
+                {
+                    return SubstituteProjectedContainingTypeParameter(
+                        projectedOwner,
+                        projectedCalledMethod.ReturnType);
                 }
 
                 invokedMethod = invokedMethod?.ReducedFrom ?? invokedMethod?.OriginalDefinition;
@@ -1412,13 +1433,44 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
-            return this.GetProjectedMember(receiverType, memberSymbol) switch
+            ITypeSymbol projectedMemberType = this.GetProjectedMember(
+                receiverType,
+                memberSymbol) switch
             {
                 IFieldSymbol field => field.Type,
                 IPropertySymbol property => property.Type,
                 IMethodSymbol method => method.ReturnType,
                 _ => null,
             };
+            return SubstituteProjectedContainingTypeParameter(
+                receiverType,
+                projectedMemberType);
+        }
+
+        private static ITypeSymbol SubstituteProjectedContainingTypeParameter(
+            INamedTypeSymbol receiverType,
+            ITypeSymbol memberType)
+        {
+            if (memberType is not ITypeParameterSymbol parameter
+                || parameter.TypeParameterKind != TypeParameterKind.Type)
+            {
+                return memberType;
+            }
+
+            for (INamedTypeSymbol current = receiverType;
+                current != null;
+                current = current.ContainingType)
+            {
+                if (SymbolEqualityComparer.Default.Equals(
+                    current.OriginalDefinition,
+                    parameter.ContainingSymbol)
+                    && parameter.Ordinal < current.TypeArguments.Length)
+                {
+                    return current.TypeArguments[parameter.Ordinal];
+                }
+            }
+
+            return memberType;
         }
 
         private ITypeSymbol GetManagedReferenceArrayProjectedCompositeType(

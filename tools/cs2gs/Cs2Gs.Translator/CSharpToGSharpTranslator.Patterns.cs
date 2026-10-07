@@ -3288,7 +3288,6 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (source is INamedTypeSymbol named
                 && mapped is NamedTypeReference mappedNamed
-                && named.Arity > 0
                 && named.TypeArguments.Length == mappedNamed.TypeArguments.Count)
             {
                 ImmutableArray<ITypeSymbol> arguments = named.TypeArguments
@@ -3299,7 +3298,24 @@ public sealed partial class CSharpToGSharpTranslator
                 ImmutableArray<NullableAnnotation> annotations = arguments
                     .Select(argument => argument.NullableAnnotation)
                     .ToImmutableArray();
-                return named.ConstructedFrom.Construct(arguments, annotations)
+                INamedTypeSymbol definition = named.ConstructedFrom;
+                if (named.ContainingType != null
+                    && mappedNamed.ContainingType != null
+                    && this.ApplyMappedArrayElementShape(
+                        named.ContainingType,
+                        mappedNamed.ContainingType) is INamedTypeSymbol containingType)
+                {
+                    definition = containingType
+                        .GetTypeMembers(named.Name, named.Arity)
+                        .FirstOrDefault(candidate =>
+                            candidate.MetadataName == named.MetadataName)
+                        ?? definition;
+                }
+
+                INamedTypeSymbol projected = named.Arity == 0
+                    ? definition
+                    : definition.Construct(arguments, annotations);
+                return projected
                     .WithNullableAnnotation(
                         mapped.IsNullable
                             ? NullableAnnotation.Annotated
