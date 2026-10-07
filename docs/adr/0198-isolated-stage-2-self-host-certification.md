@@ -65,8 +65,10 @@ or an evidence destination.
 The controller MUST create receipts, reports, logs, comparison snapshots, and
 test-result destinations. A project MUST NOT select or own those paths.
 
-Each restore, build, and test command MUST run in an OS-enforced sandbox or
-under a separate restricted identity. The sandbox MUST:
+Each graph discovery, graph revalidation, restore, build, and test command MUST
+run in an OS-enforced sandbox or under a separate restricted identity. This
+includes MSBuild evaluation and SDK resolution before the controller can reject
+an unsupported target, task, import, or graph. The sandbox MUST:
 
 - allow reads only from the applicable immutable inputs and trusted toolchain;
 - allow writes only to the command's declared cache, intermediate, output, and
@@ -102,8 +104,10 @@ run starts. The controller MUST reject the run before mutation when:
   `Reference`, `HintPath`, analyzer, `AdditionalFiles`, resource, import, or
   other build input.
 
-The controller MUST create output files by writing a new sibling and using an
-atomic replace. It MUST NOT follow an existing destination link.
+The controller MUST create controller-authored destination files, including
+evidence, receipts, reports, logs, and comparison snapshots, by writing a new
+sibling and using an atomic replace. It MUST NOT follow an existing destination
+link.
 
 ### 3. Participating closure
 
@@ -189,7 +193,9 @@ in only one context MUST reject the plan.
 ### 4. Required graph revalidation
 
 The controller MUST evaluate and compare a fresh graph snapshot at these
-boundaries:
+boundaries. Each evaluation MUST use the restricted command boundary in
+section 1 and return its snapshot through a one-command authenticated channel
+to the controller:
 
 1. before any mutation, when the controller creates the common source manifest
    and stage-1 producer plan in the ordinary and isolated compilation contexts;
@@ -209,8 +215,10 @@ accepted upstream output evidence. Expected generated restore files MAY appear
 only when that plan names their controller-owned location and the post-restore
 snapshot records their hashes.
 
-Any other graph change MUST fail the run. The controller MUST NOT repair,
-ignore, or learn a new graph after execution starts.
+Any other graph change MUST fail the run. After a frozen plan begins execution,
+the controller MUST NOT repair, ignore, or relearn that plan. This prohibition
+does not prevent freezing a declared downstream plan from accepted producer
+evidence before that downstream plan begins execution.
 
 ### 5. Effective compiler and SDK selection
 
@@ -354,6 +362,9 @@ boundary is under test. The suite MUST include:
   `AdditionalFiles`, and resource inputs under a cleanup or destination root;
 - inputs visible only under the actual compiler paths and
   `BuildProjectReferences=false` context;
+- graph evaluation or SDK resolver code that attempts to read the caller tree
+  or controller-owned evidence, proving that discovery and revalidation use the
+  restricted command boundary;
 - a graph that changes after restore or after a dependency build;
 - a test graph that changes after result-directory setup or receipt deletion;
 - report, log, receipt, and error-path collisions with project inputs;
@@ -381,8 +392,9 @@ boundary is under test. The suite MUST include:
   them.
 
 Each rejection test MUST also prove that caller inputs remain byte-for-byte
-unchanged. Error tests MUST prove that two independent failures cannot overwrite
-or misattribute each other's reports.
+unchanged. The successful certification control MUST perform the same caller
+manifest comparison. Error tests MUST prove that two independent failures
+cannot overwrite or misattribute each other's reports.
 
 ### 11. Rollout and landing order
 
