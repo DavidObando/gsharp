@@ -771,10 +771,15 @@ public sealed partial class CSharpToGSharpTranslator
         private bool AnonymousInitializerAcceptsNil(ExpressionSyntax value)
         {
             value = Unparenthesize(value);
+            if (value.IsKind(SyntaxKind.DefaultLiteralExpression)
+                || value is DefaultExpressionSyntax)
+            {
+                return this.DefaultExpressionAcceptsNil(value);
+            }
+
             return IsNullOrSuppressedNull(value)
-                || ((value.IsKind(SyntaxKind.DefaultLiteralExpression)
-                        || value is DefaultExpressionSyntax)
-                    && this.DefaultExpressionAcceptsNil(value))
+                || value is ConditionalAccessExpressionSyntax
+                || value.IsKind(SyntaxKind.AsExpression)
                 || (value is ConditionalExpressionSyntax conditional
                     && (this.AnonymousInitializerAcceptsNil(conditional.WhenTrue)
                         || this.AnonymousInitializerAcceptsNil(conditional.WhenFalse)))
@@ -1270,6 +1275,10 @@ public sealed partial class CSharpToGSharpTranslator
                 IMethodSymbol invokedMethod =
                     this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
                 if (invocation.Expression is MemberAccessExpressionSyntax memberAccess
+                    && invokedMethod?.ReducedFrom is
+                        { IsGenericMethod: true } reducedMethod
+                    && reducedMethod.ContainingType.ToDisplayString()
+                        is "System.Linq.Enumerable" or "System.Linq.Queryable"
                     && invokedMethod?.ReturnType is { } invocationReturn
                     && this.context.GetTypeInfo(memberAccess.Expression).Type
                         is IArrayTypeSymbol receiverArray

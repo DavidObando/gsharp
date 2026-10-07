@@ -35,6 +35,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         var projected = Values();
                         _ = Accept(projected[0]);
                         _ = Accept(projected.Single());
+                        _ = Accept(projected.ToString());
                         string[] explicitProjected = Values();
                         _ = Accept(explicitProjected[0]);
                         _ = methods[0].Select(method => method.Name).ToArray();
@@ -42,6 +43,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         _ = Convert.ToString(1);
                         _ = new { Name = "fixed" };
                         _ = new { Name = typeof(string).FullName };
+                        _ = new { Cast = (object)"fixed" as string };
                         string path = typeof(string).FullName;
                         _ = new { Path = path };
                         _ = new { Emitted = include ? new { Path = "fixed" } : null };
@@ -75,6 +77,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
         Assert.Contains("""typeof(string).FullName!!""", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("""Convert!!""", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("""projected.ToString()!!""", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 }
