@@ -62,7 +62,7 @@ Negative:
 Neutral:
 
 - ADR-0026 (Phase 7) will add `let p2 = p.copy(x = 10)`. The lowering is `let p2 = data struct.copy(p, x = 10)` or equivalent — the synthesized contract here does **not** include a `copy` method, so ADR-0026 is free to pick either a synthesized instance method, a static helper, or pure syntactic sugar that constructs a new value via the existing composite literal.
-- Frozen until ADR-0017 reopens for the question of *which* members are sealed-overridable. Data-struct members are intentionally sealed; that rule sticks.
+- Frozen until ADR-0017 reopens for the question of *which* members are sealed-overridable. The typed `Equals(Self)` slot remains final; object overrides omit redundant method-level finality when the containing TypeDef is already sealed.
 
 ## Amendment 2026-10-07: CLR record ABI convergence (#4828)
 
@@ -102,7 +102,7 @@ When a compatible user `ToString` is present:
 
 - The synthesizer skips emitting `EmitDataStructToString`; the emitter's row planner (`PlanClassMethods`/`PlanStructMethods`) reserves 6 `MethodDef` rows instead of 7 to keep row-count planning in lockstep.
 - The user's `ToString` reuses the same vtable slot the synthesized version would have used (`ReuseSlot`, not `NewSlot`) — for both `data class` and `data struct` — so polymorphic dispatch through a base-typed reference still resolves to the most-derived override, exactly as if the compiler had synthesized it. `MethodInfoHelpers.RequiresVirtualOnValueType` is bypassed for this case so a `data struct`'s user `ToString` is still marked `Virtual` (data structs' synthesized members are already virtual-callable via `Equals`/`GetHashCode`, so this is consistent).
-- `Final`-ness follows the same rule as the synthesized members (`DataStructSynthesizer.IsDataObjectOverrideFinal`): non-`open` data classes and all data structs still get `Final`; `open` data classes do not, allowing a derived data class to declare its own compatible `ToString` and call `base.ToString()`.
+- `Final`-ness follows the same rule as the synthesized object overrides: the slot remains non-final because sealed data classes and value types already prevent derivation, while open data classes must allow a derived data class to re-override it and call `base.ToString()`.
 
 **Deferred/out of scope, not fixed by this amendment:**
 

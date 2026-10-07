@@ -29,9 +29,8 @@ namespace GSharp.Compiler.Tests.Emit;
 /// CLR attribute treatment as the other synthesized members — no NewSlot
 /// (so it reuses/participates in the correct vtable slot for TRUE
 /// polymorphic override dispatch through a base-typed reference,
-/// unlike a plain non-data class's hand-written ToString), and Final
-/// driven by the data type's open/sealed-hierarchy status exactly like
-/// <c>DataStructSynthesizer.IsDataObjectOverrideFinal</c>.</description></item>
+/// unlike a plain non-data class's hand-written ToString), and no redundant
+/// Final bit when the containing TypeDef already prevents derivation.</description></item>
 /// </list>
 /// These tests exercise the real-world <c>Oahu.Core.ProfileKey</c> /
 /// <c>Oahu.Core.ProfileKeyEx</c> (open data class, derived class chaining

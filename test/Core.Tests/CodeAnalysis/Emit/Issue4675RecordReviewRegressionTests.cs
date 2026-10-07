@@ -58,6 +58,35 @@ public class Issue4675RecordReviewRegressionTests
     }
 
     [Fact]
+    public void PrimaryOnlyDataBase_ExplicitDerivedInitMaterializesOptionalDefault()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Base(Value int32 = 7) {
+                public func GetValue() int32 -> Value
+            }
+            class Derived : Base {
+                init() { }
+            }
+            Derived().GetValue()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void PrimaryOnlyDataBase_ExplicitDerivedInitDiagnosesMissingRequiredArgument()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Base(Value int32)
+            class Derived : Base {
+                init() { }
+            }
+            Derived()
+            """);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0214");
+    }
+
+    [Fact]
     public void OrdinaryPrimaryClass_RetainsDefaultAndPrimaryConstructors()
     {
         var result = EmittedOracle.Evaluate("""
