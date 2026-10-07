@@ -976,12 +976,22 @@ internal static class ObliviousNullabilityAnalyzer
         IParameterSymbol parameter,
         out INamedTypeSymbol tupleType,
         out IReadOnlyList<int> tuplePath)
+        => TryGetGenericReceiverTuplePath(
+            receiverType,
+            parameter?.OriginalDefinition.Type,
+            out tupleType,
+            out tuplePath);
+
+    internal static bool TryGetGenericReceiverTuplePath(
+        INamedTypeSymbol receiverType,
+        ITypeSymbol contractType,
+        out INamedTypeSymbol tupleType,
+        out IReadOnlyList<int> tuplePath)
     {
         tupleType = null;
         tuplePath = null;
-        ITypeSymbol parameterType = parameter?.OriginalDefinition.Type;
         if (receiverType == null
-            || parameterType is not ITypeParameterSymbol typeParameter
+            || contractType is not ITypeParameterSymbol typeParameter
             || typeParameter.TypeParameterKind != TypeParameterKind.Type
             || typeParameter.ContainingType is not INamedTypeSymbol declaringType)
         {
@@ -2900,6 +2910,12 @@ internal static class ObliviousNullabilityAnalyzer
 
                 case AssignmentExpressionSyntax assignment
                     when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
+                    CollectGenericReceiverTupleValueFlow(
+                        assignment,
+                        model,
+                        tupleTainted,
+                        tupleEdges,
+                        tupleScalarEdges);
                     ISymbol target = ResolveAssignable(assignment.Left, model);
                     if (target != null && SymbolValueType(target) is ITypeSymbol assignedType)
                     {
@@ -2939,6 +2955,40 @@ internal static class ObliviousNullabilityAnalyzer
                     break;
             }
         }
+    }
+
+    // Dictionary-style indexer assignment sends the RHS through the receiver's
+    // generic value slot, which is not one of the indexer's ordinary arguments.
+    private static void CollectGenericReceiverTupleValueFlow(
+        AssignmentExpressionSyntax assignment,
+        SemanticModel model,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+    {
+        if (assignment.Left is not ElementAccessExpressionSyntax elementAccess
+            || model.GetSymbolInfo(elementAccess.Expression).Symbol is not ISymbol target
+            || target is not (IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol)
+            || SymbolValueType(target) is not INamedTypeSymbol receiverType
+            || model.GetSymbolInfo(elementAccess).Symbol is not IPropertySymbol indexer
+            || !TryGetGenericReceiverTuplePath(
+                receiverType,
+                indexer.OriginalDefinition.Type,
+                out INamedTypeSymbol tupleType,
+                out IReadOnlyList<int> tuplePath))
+        {
+            return;
+        }
+
+        CollectTupleValueFlow(
+            Canonical(target),
+            tupleType,
+            assignment.Right,
+            model,
+            EncodeTuplePath(tuplePath),
+            tupleTainted,
+            tupleEdges,
+            tupleScalarEdges);
     }
 
     private static void CollectTupleReturnFlows(
