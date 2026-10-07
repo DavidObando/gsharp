@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **cs2gs preserves nullable tuple values stored through generic indexers** (issue #4833, parent #3501). Assigning a tuple containing an oblivious nullable return into a dictionary-style value slot now promotes the matching tuple element on the receiver declaration, avoiding a later GS0155 when an absent value is represented by `nil`.
+
 - **cs2gs preserves nullable elements in bare array initializers** (issue #4831, parent #3501). Initializers such as `object[] arguments = { null };` now use the same nullable-element projection as explicit and implicit array creations, so migrated code emits `[]object?{nil}` instead of failing with GS0155.
 - **cs2gs preserves implicit value conversions on switch-expression arms** (issue #4832, parent #3501). Arms now use their Roslyn-converted non-nullable value type, including user-defined conversions such as `TypeDefinitionHandle` to `EntityHandle`, so migrated switches retain one result type instead of failing with GS0179. Existing numeric widening and reference-arm projection are unchanged.
 
