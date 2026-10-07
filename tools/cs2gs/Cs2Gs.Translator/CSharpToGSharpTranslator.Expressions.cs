@@ -1353,15 +1353,23 @@ public sealed partial class CSharpToGSharpTranslator
                 if (invokedMethod?.ReturnType is IArrayTypeSymbol
                         { ElementType: { IsReferenceType: true } returnElement } returnArray
                     && invokedMethod.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                        is MethodDeclarationSyntax declaration
-                    && this.MapReturnType(invokedMethod, declaration)
-                        is ArrayTypeReference { ElementType.IsNullable: true })
+                        is MethodDeclarationSyntax declaration)
                 {
-                    return this.context.Compilation.CreateArrayTypeSymbol(
-                        returnElement,
-                        returnArray.Rank,
-                        NullableAnnotation.Annotated)
-                    .WithNullableAnnotation(returnArray.NullableAnnotation);
+                    GTypeReference mappedReturn;
+                    using (this.context.UseSemanticModelFor(declaration.SyntaxTree))
+                    {
+                        mappedReturn = this.MapReturnType(invokedMethod, declaration);
+                    }
+
+                    if (mappedReturn
+                        is ArrayTypeReference { ElementType.IsNullable: true })
+                    {
+                        return this.context.Compilation.CreateArrayTypeSymbol(
+                            returnElement,
+                            returnArray.Rank,
+                            NullableAnnotation.Annotated)
+                        .WithNullableAnnotation(returnArray.NullableAnnotation);
+                    }
                 }
 
                 if (this.TryGetManagedReferenceArrayProjectedMethod(
@@ -2609,14 +2617,8 @@ public sealed partial class CSharpToGSharpTranslator
             // `[]string`, while `File.ReadAllLines(path)!!` does (the
             // netstandard2.0 Gsharp.NET.Sdk, #4449). Only a value whose type
             // has no nested reference position is left bare.
-            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
-            ITypeSymbol type = typeInfo.Type;
-            if (ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
-                    this.context.GetSymbolInfo(expression).Symbol,
-                    this.context.Compilation)
-                || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated
-                || type?.NullableAnnotation == NullableAnnotation.Annotated
-                || HasNestedReferencePosition(type))
+            ITypeSymbol type = this.context.GetTypeInfo(expression).Type;
+            if (HasNestedReferencePosition(type))
             {
                 return false;
             }
@@ -4298,10 +4300,7 @@ public sealed partial class CSharpToGSharpTranslator
             // reports that metadata as Annotation.None, so its flow state cannot
             // drive the target-aware receiver/value bridges below.
             ISymbol valueSymbol = this.context.GetSymbolInfo(value).Symbol;
-            if (ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
-                    valueSymbol,
-                    this.context.Compilation)
-                || this.IsImportedObliviousNullableMember(valueSymbol))
+            if (this.IsImportedObliviousNullableMember(valueSymbol))
             {
                 return true;
             }

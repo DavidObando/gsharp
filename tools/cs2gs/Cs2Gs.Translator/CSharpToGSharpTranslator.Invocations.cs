@@ -5253,7 +5253,8 @@ public sealed partial class CSharpToGSharpTranslator
                 ITypeSymbol argumentType,
                 bool apply,
                 bool nullableArrayArgument = false,
-                bool requiresExactMatch = false)
+                bool requiresExactMatch = false,
+                bool observedValueWins = false)
             {
                 bool needsProjection = false;
                 for (int i = 0; i < projectedArguments.Length; i++)
@@ -5319,6 +5320,11 @@ public sealed partial class CSharpToGSharpTranslator
                                 effectiveProjectedArgument,
                                 observedArguments.GetValue(i))))
                     {
+                        if (observedValueWins)
+                        {
+                            continue;
+                        }
+
                         conflictingParameter ??= typeParameters[i];
                         conflictInvolvesManagedReference |=
                             TypeContainsRecognizedManagedReferenceConsumer(
@@ -5662,7 +5668,8 @@ public sealed partial class CSharpToGSharpTranslator
                     method.OriginalDefinition.ReturnType,
                     method.ReturnType,
                     apply: true,
-                    nullableArrayArgument: true);
+                    nullableArrayArgument: true,
+                    observedValueWins: true);
             }
 
             if (method.ContainingType != null

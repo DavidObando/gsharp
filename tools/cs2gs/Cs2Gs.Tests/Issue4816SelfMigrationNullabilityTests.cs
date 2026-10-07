@@ -17,6 +17,74 @@ namespace Cs2Gs.Tests;
 
 public sealed class Issue4816SelfMigrationNullabilityTests
 {
+    [Theory]
+    [InlineData(NullableContextOptions.Disable)]
+    public void NullableLocals_PreserveMaybeNullRuntimeValues(
+        NullableContextOptions nullableContext)
+    {
+        SyntaxTree tree = CSharpSyntaxTree.ParseText("""
+            using System;
+            using System.IO;
+
+            #nullable disable
+            public static class Fixture
+            {
+                private static string ReadMaybeNull() => null;
+
+                public static void Run()
+                {
+                    string evidence = Environment.GetEnvironmentVariable("GSHARP_EVIDENCE");
+                    if (!string.IsNullOrEmpty(evidence))
+                    {
+                        _ = Path.Combine(evidence, "result");
+                    }
+
+                    string current = "/";
+                    string parent = Path.GetDirectoryName(current);
+                    if (string.IsNullOrEmpty(parent))
+                    {
+                        _ = parent;
+                    }
+
+                    string promoted = ReadMaybeNull();
+                    if (string.IsNullOrEmpty(promoted))
+                    {
+                        _ = promoted;
+                    }
+                }
+            }
+            """, path: "Fixture.cs");
+        var compilation = CSharpCompilation.Create(
+            "Issue4816.NullableLocals",
+            new[] { tree },
+            CSharpProjectLoader.RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithNullableContextOptions(nullableContext));
+        Assert.DoesNotContain(
+            compilation.GetDiagnostics(),
+            diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+
+        SemanticModel model = compilation.GetSemanticModel(tree);
+        var document = new LoadedDocument(tree.FilePath, tree, model);
+        var context = new TranslationContext(compilation, model, document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains(
+            """let evidence string? = Environment.GetEnvironmentVariable("GSHARP_EVIDENCE")""",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            """let parent string? = Path.GetDirectoryName(current)""",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            """let promoted string? = ReadMaybeNull()""",
+            rendered,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
     [Fact]
     public void ObliviousReads_KeepTheirNonNullUseSitesWhenSelfMigrated()
     {
@@ -26,12 +94,18 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                 #nullable disable
                 using System;
                 using System.Collections.Generic;
+                using System.IO;
                 using System.Linq;
                 using System.Reflection;
 
                 public static class Fixture
                 {
                     private static string Accept(string value) => value;
+                    private static Node Merge(Node left, Node right) => left;
+                    private static Node MergeParents(Node left, Node right) =>
+                        left.Parent != null && right.Parent != null
+                            ? Merge(left.Parent, right.Parent)
+                            : left.Parent;
                     private static string[] Values() =>
                         new[] { typeof(string) }.Select(type => type.FullName).ToArray();
 
@@ -61,6 +135,22 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         string path = typeof(string).FullName;
                         _ = new { Path = path };
                         _ = new { Emitted = include ? new { Path = "fixed" } : null };
+                        string evidence = Environment.GetEnvironmentVariable("GSHARP_EVIDENCE");
+                        if (!string.IsNullOrEmpty(evidence))
+                        {
+                            _ = Path.Combine(evidence, "result");
+                        }
+                        string current = "/";
+                        string parent = Path.GetDirectoryName(current);
+                        if (string.IsNullOrEmpty(parent))
+                        {
+                            _ = parent;
+                        }
+                    }
+
+                    private sealed class Node
+                    {
+                        public Node Parent { get; }
                     }
                 }
 
@@ -154,8 +244,130 @@ public sealed class Issue4816SelfMigrationNullabilityTests
         Assert.DoesNotContain("""Convert!!""", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("""projected.ToString()!!""", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("""projected.Aggregate("seed", (acc, _) -> acc)!!""", rendered, StringComparison.Ordinal);
+        Assert.Contains("""let evidence string? = Environment.GetEnvironmentVariable("GSHARP_EVIDENCE")""", rendered, StringComparison.Ordinal);
+        Assert.Contains("""let parent string? = Path.GetDirectoryName(current)""", rendered, StringComparison.Ordinal);
+        Assert.Equal(
+            """private func Merge(left Node, right Node) Node -> left""",
+            rendered.Split('\n').Single(line => line.Contains("func Merge(", StringComparison.Ordinal)).Trim());
+        Assert.DoesNotContain("""Merge(left Node?, right Node?)""", rendered, StringComparison.Ordinal);
         Assert.Contains("""nonNullableShape.Value!!.Length""", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void ProjectedArrayReturn_UsesTheCallingDocumentLocation()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Producer.cs", "#nullable disable\n" + new string(' ', 500) + """
+                using System;
+                using System.Linq;
+                public static class Producer
+                {
+                    public static string[] Values() =>
+                        new[] { typeof(string) }.Select(type => type.FullName).ToArray();
+                }
+                """),
+            ("Consumer.cs", """
+                #nullable disable
+                public static class Consumer
+                {
+                    public static int Read() => Producer.Values()[0].Length;
+                }
+                """),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+
+        LoadedDocument producer = project.Documents.Single(
+            candidate => candidate.FilePath.EndsWith("Producer.cs", StringComparison.Ordinal));
+        var producerContext = new TranslationContext(
+            project.Compilation,
+            producer.SemanticModel,
+            producer.FilePath);
+        string producerRendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(producer, producerContext));
+        LoadedDocument document = project.Documents.Single(
+            candidate => candidate.FilePath.EndsWith("Consumer.cs", StringComparison.Ordinal));
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("""Producer.Values()[0]!!.Length""", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(producerRendered, rendered);
+    }
+
+    [Fact]
+    public void NullableRecordEnvelope_DoesNotWidenStoredMembers()
+    {
+        var library = CSharpCompilation.Create(
+            "Issue4816.Options",
+            new[]
+            {
+                CSharpSyntaxTree.ParseText("""
+                    #nullable disable
+                    public sealed class Options
+                    {
+                        public string SourceRoot { get; set; }
+                        public string OutputRoot { get; set; }
+                    }
+                    """),
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        using var image = new MemoryStream();
+        var emit = library.Emit(image);
+        Assert.True(emit.Success, string.Join("\n", emit.Diagnostics));
+
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromImage(image.ToArray()))
+            .ToList();
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Fixture.cs", """
+                #nullable disable
+                public readonly record struct Arguments(Options Options, string Path);
+
+                public static class Fixture
+                {
+                    private static Arguments? Parse()
+                    {
+                        var options = new Options();
+                        _ = options == null;
+                        return new(options, null);
+                    }
+
+                    public static void Run()
+                    {
+                        Arguments? parsed = Parse();
+                        if (parsed == null)
+                        {
+                            return;
+                        }
+
+                        var (options, _) = parsed.Value;
+                        options.SourceRoot = "source";
+                    }
+                }
+                """),
+        }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            new[] { project.Compilation, library },
+            new[] { project.Compilation, library });
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("""Options Options""", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("""Options Options?""", rendered, StringComparison.Ordinal);
     }
 
     [Fact]

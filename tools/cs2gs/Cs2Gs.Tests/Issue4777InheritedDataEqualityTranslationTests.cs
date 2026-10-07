@@ -42,8 +42,8 @@ public sealed class Issue4777InheritedDataEqualityTranslationTests
         Assert.NotNull(repo);
         Assert.NotEqual("1", Environment.GetEnvironmentVariable(IlVerifyRunner.SkipEnvVar));
         string fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "issue4777");
-        string source = File.ReadAllText(Path.Combine(fixture, "Models.cs"));
-        string callerSource = File.ReadAllText(Path.Combine(fixture, "Consumer.cs"));
+        string source = File.ReadAllText(Path.Combine(fixture, "Models.cs.txt"));
+        string callerSource = File.ReadAllText(Path.Combine(fixture, "Consumer.cs.txt"));
         string directory = Path.Combine(AppContext.BaseDirectory, "pipeline-tests", "issue4777", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try

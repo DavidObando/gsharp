@@ -1724,6 +1724,7 @@ public sealed class CSharpTypeMapper
         };
     }
 
+    [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(reference))]
     private static GTypeReference WithNullable(GTypeReference reference, bool isNullable)
     {
         switch (reference)

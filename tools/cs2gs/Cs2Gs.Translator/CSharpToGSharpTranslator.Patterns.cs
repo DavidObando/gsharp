@@ -3131,9 +3131,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            return (this.GetManagedReferenceArrayProjectedExpressionType(
-                    elementAccess.Expression) as IArrayTypeSymbol)?.ElementType
-                is { NullableAnnotation: NullableAnnotation.Annotated } projectedElement
+            ITypeSymbol projectedElement =
+                (this.GetManagedReferenceArrayProjectedExpressionType(
+                    elementAccess.Expression) as IArrayTypeSymbol)?.ElementType;
+            return projectedElement != null
+                && projectedElement.NullableAnnotation == NullableAnnotation.Annotated
                 && this.IsReferenceLikeOrManagedReference(projectedElement);
         }
 
@@ -3362,11 +3364,14 @@ public sealed partial class CSharpToGSharpTranslator
 
                 ImmutableArray<ITypeSymbol> immutableArguments =
                     arguments.ToImmutableArray();
-                return delegateType.ConstructedFrom.Construct(
-                    immutableArguments,
-                    immutableArguments
-                        .Select(argument => argument.NullableAnnotation)
-                        .ToImmutableArray())
+                INamedTypeSymbol projected = delegateType.Arity == 0
+                    ? delegateType
+                    : delegateType.ConstructedFrom.Construct(
+                        immutableArguments,
+                        immutableArguments
+                            .Select(argument => argument.NullableAnnotation)
+                            .ToImmutableArray());
+                return projected
                     .WithNullableAnnotation(
                         mapped.IsNullable
                             ? NullableAnnotation.Annotated
