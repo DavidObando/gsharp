@@ -797,8 +797,10 @@ public sealed partial class CSharpToGSharpTranslator
                     expression.GetLocation());
             }
 
-            if (info.Type is { TypeKind: not TypeKind.Error } valueArmType
-                && info.ConvertedType is { TypeKind: not TypeKind.Error } valueTarget
+            if (info.Type is { } valueArmType
+                && valueArmType.TypeKind != TypeKind.Error
+                && info.ConvertedType is { } valueTarget
+                && valueTarget.TypeKind != TypeKind.Error
                 && IsNonNullableValueType(valueTarget)
                 && !SymbolEqualityComparer.Default.Equals(valueArmType, valueTarget)
                 && this.GetUserDefinedConversionInputOperator(
