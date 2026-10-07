@@ -29,9 +29,9 @@ public static class TypeMemberModel
     /// <summary>
     /// Returns the ordered members used by synthesized and bound data-type
     /// deconstruction. Primary-constructor parameters are positional. Native
-    /// body-form data types retain field/property deconstruction, while a
-    /// body-form type carrying the explicit C# record <c>IEquatable&lt;Self&gt;</c>
-    /// contract has no positional components.
+    /// body-form data types retain field/property deconstruction. A body-form
+    /// type carrying cs2gs's compiler-intrinsic <c>@CSharpRecord</c> provenance
+    /// marker has no positional components.
     /// </summary>
     /// <param name="type">The data class or data struct.</param>
     /// <returns>The logical deconstruction members in declaration order.</returns>

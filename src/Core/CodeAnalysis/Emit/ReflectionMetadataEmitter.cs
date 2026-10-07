@@ -3818,7 +3818,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.cache.ClassCtorHandles[c] = ctorHandle;
                     if (c.HasPrimaryConstructor)
                     {
-                        this.cache.ClassPrimaryCtorHandles[c] = ctorHandle;
+                        this.cache.ClassPrimaryCtorHandles[c] = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
                     }
                 }
             }

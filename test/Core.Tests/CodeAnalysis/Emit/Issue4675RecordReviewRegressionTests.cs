@@ -57,6 +57,20 @@ public class Issue4675RecordReviewRegressionTests
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0214");
     }
 
+    [Fact]
+    public void OrdinaryPrimaryClass_RetainsDefaultAndPrimaryConstructors()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base(Value int32) {
+                public func GetValue() int32 -> Value
+            }
+            class Derived : Base
+            Base(42).GetValue() + Derived().GetValue()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
     [Theory]
     [InlineData(4)]
     [InlineData(8)]
