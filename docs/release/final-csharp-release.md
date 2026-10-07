@@ -25,6 +25,25 @@ commit.
 | `publish` waits for `build, tests, test-partition, e2e, ilverify, cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix, visual-studio-extension`. `nullable-hygiene` and the hot-core guard are not in the list; the hot-core guard only runs on PRs. | `build.yml:716`, `build.yml:567` |
 | No job declares an `environment:`, so publishing has no approval gate: pushing the tag is the approval. Repository environments are only `copilot` and `github-pages` (`gh api repos/DavidObando/gsharp/environments`, read 2026-10-02). | `build.yml` (no `environment:` key) |
 
+### Stage-2 publication gate
+
+The table above describes the final 0.4 C# release. It is not sufficient for a
+0.5 release built by the stage-2 compiler.
+
+Before any 0.5 tag can publish packages or extensions:
+
+- ADR-0198 MUST be accepted and its replacement gate MUST be on `main`;
+- the exact tagged commit MUST have successful controller-owned stage-1/stage-2
+  certification evidence and the required fresh-clone cutover dry run;
+- the `publish` job MUST depend on the replacement certification job and verify
+  the evidence commit and run identity;
+- `publish-visual-studio-extension` MUST remain downstream of that gated
+  `publish` job.
+
+A self-migration nightly, a proof from another commit, or a manually copied
+report MUST NOT satisfy this gate. Until the workflow enforces these checks, a
+0.5 tag is prohibited.
+
 ### Publish order (one tag run)
 
 Rows marked "build" produce artifacts before anything is published; publishing is steps 1-4.

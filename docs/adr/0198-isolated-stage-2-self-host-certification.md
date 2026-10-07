@@ -43,8 +43,8 @@ The controller MUST create and own these disjoint roots:
 | --- | --- |
 | caller tree | Caller-owned input. The controller MUST NOT change it. |
 | source snapshot | Controller-owned, immutable copy of the caller tree. It is the source of both stages. |
-| stage-1 build tree | Controller-owned writable copy derived from the source snapshot. Only stage 0 may build it. |
-| stage-2 build tree | Controller-owned writable copy derived from the same source snapshot. Only stage 1 may build it. |
+| stage-1 build tree | Controller-owned copy derived from the source snapshot. Stage 0 receives read-only project inputs and separate writable output roots. |
+| stage-2 build tree | Controller-owned copy derived from the same source snapshot. Stage 1 receives read-only project inputs and separate writable output roots. |
 | package feed and caches | Controller-owned. Stage 0, stage 1, restore, and test caches MUST be separate when their contents or compiler selection differ. |
 | evidence root | Controller-owned. It contains receipts, process records, graph snapshots, hashes, and comparison inputs. |
 | report root | Controller-owned. Reports are derived from accepted evidence. |
@@ -54,12 +54,34 @@ build, or test action. Freezing MUST record every file identity, length, and
 SHA-256 digest. The controller MUST verify this manifest before certification.
 Read-only permissions are defense in depth. The manifest is authoritative.
 
-Build trees MAY contain generated files, restored assets, and build outputs.
-They MUST NOT share writable files with each other, the caller tree, the source
+After stage-specific setup, project files, sources, imports, references,
+analyzers, SDK payloads, and other command inputs MUST be read-only to the
+command. Generated files, restored assets, intermediates, final outputs, and
+test files MUST use explicit controller-owned writable roots. The two stages
+MUST NOT share writable files with each other, the caller tree, the source
 snapshot, or an evidence destination.
 
 The controller MUST create receipts, reports, logs, comparison snapshots, and
 test-result destinations. A project MUST NOT select or own those paths.
+
+Each restore, build, and test command MUST run in an OS-enforced sandbox or
+under a separate restricted identity. The sandbox MUST:
+
+- allow reads only from the applicable immutable inputs and trusted toolchain;
+- allow writes only to the command's declared cache, intermediate, output, and
+  test-result roots;
+- deny access to the caller tree, the other stage, controller state, evidence
+  root, comparison snapshots, and report root;
+- disable network access after restore;
+- terminate descendant processes when the command ends.
+
+File permissions alone under the controller's identity are not sufficient.
+Analyzers, generators, build tasks, and tests execute as untrusted project code.
+They MUST NOT be able to read, write, replace, or restore authoritative
+evidence. A supervisor outside the sandbox MUST record process identity,
+arguments, start, exit, and output hashes. If compiler-invocation evidence uses
+a channel, it MUST be a pre-opened, one-command authenticated channel to that
+supervisor. It MUST NOT be a project-visible file path or reusable nonce.
 
 ### 2. Path and alias rules
 
@@ -134,6 +156,18 @@ toolchain-path projections MUST differ as the plan declares.
 
 A plan is frozen when every node and edge has one supported meaning and all
 input hashes are recorded. A path-only graph is not a frozen graph.
+
+For each plan:
+
+- the **ordinary context** uses the plan's stage pin and properties with normal
+  project-reference discovery enabled. It defines the complete logical closure;
+- the **isolated context** uses the same inputs and properties, but sets
+  `BuildProjectReferences=false`. It defines each manually scheduled command.
+
+The contexts MUST contain the same participating nodes and edges. The only
+permitted difference is that the isolated context does not schedule implicit
+reference builds. An input, import, reference, target, task, or output visible
+in only one context MUST reject the plan.
 
 ### 4. Required graph revalidation
 
@@ -336,6 +370,11 @@ The work lands in this order:
    new controller-owned evidence contract and MUST NOT depend on #4693.
 5. Run the full stage-1/stage-2 proof on the cutover closure.
 6. Complete the fresh-clone cutover dry run required by #3501.
+7. Before any 0.5 package or extension can publish, make the release workflow
+   require successful replacement-gate certification for the exact release
+   commit. The publish jobs MUST consume and verify that run's controller-owned
+   evidence identity. A missing, rejected, stale, or different-commit proof
+   MUST block publication.
 
 The replacement MUST NOT claim that a normal self-migration nightly proves
 stage-2 equivalence. The nightly is a separate source-translation and behavior
