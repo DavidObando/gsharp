@@ -711,8 +711,12 @@ public sealed partial class CSharpToGSharpTranslator
                 anonymousType?.GetMembers().OfType<IPropertySymbol>().ToList()
                 ?? new List<IPropertySymbol>();
             List<GTypeReference> mappedPropertyTypes = anonymousProperties
-                .Select(property => this.typeMapper.Map(
-                    property.Type,
+                .Select((property, index) => this.typeMapper.Map(
+                    index < anonymous.Initializers.Count
+                        ? this.GetManagedReferenceArrayProjectedExpressionType(
+                            anonymous.Initializers[index].Expression)
+                            ?? property.Type
+                        : property.Type,
                     this.context,
                     anonymous.GetLocation()))
                 .ToList();
@@ -1447,27 +1451,73 @@ public sealed partial class CSharpToGSharpTranslator
                 projectedMemberType);
         }
 
-        private static ITypeSymbol SubstituteProjectedContainingTypeParameter(
+        private ITypeSymbol SubstituteProjectedContainingTypeParameter(
             INamedTypeSymbol receiverType,
             ITypeSymbol memberType)
         {
-            if (memberType is not ITypeParameterSymbol parameter
-                || parameter.TypeParameterKind != TypeParameterKind.Type)
+            if (memberType is ITypeParameterSymbol parameter
+                && parameter.TypeParameterKind == TypeParameterKind.Type)
             {
+                for (INamedTypeSymbol current = receiverType;
+                    current != null;
+                    current = current.ContainingType)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(
+                        current.OriginalDefinition,
+                        parameter.ContainingSymbol)
+                        && parameter.Ordinal < current.TypeArguments.Length)
+                    {
+                        return current.TypeArguments[parameter.Ordinal];
+                    }
+                }
+
                 return memberType;
             }
 
-            for (INamedTypeSymbol current = receiverType;
-                current != null;
-                current = current.ContainingType)
+            if (memberType is IArrayTypeSymbol array)
             {
-                if (SymbolEqualityComparer.Default.Equals(
-                    current.OriginalDefinition,
-                    parameter.ContainingSymbol)
-                    && parameter.Ordinal < current.TypeArguments.Length)
-                {
-                    return current.TypeArguments[parameter.Ordinal];
-                }
+                ITypeSymbol element = this.SubstituteProjectedContainingTypeParameter(
+                    receiverType,
+                    array.ElementType);
+                return this.context.Compilation.CreateArrayTypeSymbol(
+                    element,
+                    array.Rank,
+                    element.NullableAnnotation)
+                    .WithNullableAnnotation(array.NullableAnnotation);
+            }
+
+            if (memberType is INamedTypeSymbol { IsTupleType: true } tuple)
+            {
+                ImmutableArray<ITypeSymbol> elements = tuple.TupleElements
+                    .Select(element => this.SubstituteProjectedContainingTypeParameter(
+                        receiverType,
+                        element.Type))
+                    .ToImmutableArray();
+                return this.context.Compilation.CreateTupleTypeSymbol(
+                    elements,
+                    tuple.TupleElements
+                        .Select(element =>
+                            element.IsImplicitlyDeclared ? null : element.Name)
+                        .ToImmutableArray(),
+                    default,
+                    elements
+                        .Select(element => element.NullableAnnotation)
+                        .ToImmutableArray());
+            }
+
+            if (memberType is INamedTypeSymbol named && named.Arity > 0)
+            {
+                ImmutableArray<ITypeSymbol> arguments = named.TypeArguments
+                    .Select(argument => this.SubstituteProjectedContainingTypeParameter(
+                        receiverType,
+                        argument))
+                    .ToImmutableArray();
+                return named.ConstructedFrom.Construct(
+                    arguments,
+                    arguments
+                        .Select(argument => argument.NullableAnnotation)
+                        .ToImmutableArray())
+                    .WithNullableAnnotation(named.NullableAnnotation);
             }
 
             return memberType;

@@ -51,6 +51,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         _ = Convert.ToString(1);
                         _ = new { Name = "fixed" };
                         _ = new { Name = typeof(string).FullName };
+                        _ = new { Values = Values() };
                         _ = new { Cast = (object)"fixed" as string };
                         _ = new { Cast = (string)null };
                         string maybe = null;
@@ -70,6 +71,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         private readonly T value;
                         public Inner(T value) => this.value = value;
                         public T Get() => value;
+                        public T[] GetValues() => new[] { value };
                     }
                 }
 
@@ -105,7 +107,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         var nonNullableShape = new { Value = nonNullable };
                         var nullableShape = new { Value = nullable };
                         nonNullableShape = nullableShape;
-                        return nonNullableShape.Value.Get().Length;
+                        return nonNullableShape.Value.GetValues()[0].Length;
                     }
                     public static int MergedArrayElementRead(
                         string[] nonNullable,
