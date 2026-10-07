@@ -3760,6 +3760,8 @@ public sealed partial class CSharpToGSharpTranslator
                     rank: arrayType.Rank,
                     dims,
                     leaves);
+                rectangularElementType = this.PromoteElementTypeForNullElements(
+                    rectangularElementType, arrayType.ElementType, leaves, initializer);
                 return new ArrayAllocationExpression(
                     rectangularElementType,
                     dims.Select(d => (GExpression)LiteralExpression.Int(
@@ -3779,6 +3781,8 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol elementTypeSymbol = GetCollectionElementTypeSymbol(
                 this.context.GetTypeInfo(initializer).ConvertedType ??
                 this.context.GetTypeInfo(initializer).Type);
+            elementType = this.PromoteElementTypeForNullElements(
+                elementType, elementTypeSymbol, initializer.Expressions, initializer);
             return new ArrayLiteralExpression(
                 elementType,
                 initializer.Expressions

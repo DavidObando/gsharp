@@ -67,6 +67,25 @@ namespace Demo
     }
 
     [Fact]
+    public void BareObjectArrayInitializerWithNullElement_RendersNullableElementType()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public object[] F()
+        {
+            object[] arguments = { null };
+            return arguments;
+        }
+    }
+}");
+
+        Assert.Contains("[]object?{nil}", printed);
+    }
+
+    [Fact]
     public void ImplicitlyTypedArrayWithNullElements_RendersNullableElementType()
     {
         string printed = TranslateUnit(@"
