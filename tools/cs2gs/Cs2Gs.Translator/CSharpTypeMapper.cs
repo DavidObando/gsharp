@@ -3537,24 +3537,87 @@ public sealed class CSharpTypeMapper
         ITypeSymbol symbol,
         GTypeReference mapped)
     {
-        if (symbol is not IArrayTypeSymbol arraySymbol
-            || mapped is not ArrayTypeReference array)
+        if (symbol is IArrayTypeSymbol arraySymbol
+            && mapped is ArrayTypeReference array)
         {
-            return mapped;
+            GTypeReference element = NormalizeAnonymousProjectedStorage(
+                arraySymbol.ElementType,
+                array.ElementType);
+            if (arraySymbol.ElementType.IsReferenceType)
+            {
+                element = WithNullable(element, true);
+            }
+
+            return new ArrayTypeReference(element, array.Rank)
+            {
+                IsNullable = array.IsNullable,
+            };
         }
 
-        GTypeReference element = NormalizeAnonymousProjectedStorage(
-            arraySymbol.ElementType,
-            array.ElementType);
-        if (arraySymbol.ElementType.IsReferenceType)
+        if (symbol is INamedTypeSymbol { IsTupleType: true } tupleSymbol
+            && mapped is TupleTypeReference tuple
+            && tupleSymbol.TupleElements.Length == tuple.ElementTypes.Count)
         {
-            element = WithNullable(element, true);
+            return new TupleTypeReference(
+                tupleSymbol.TupleElements
+                    .Select((element, index) =>
+                    {
+                        GTypeReference normalized =
+                            NormalizeAnonymousProjectedStorage(
+                                element.Type,
+                                tuple.ElementTypes[index]);
+                        return element.Type.IsReferenceType
+                            ? WithNullable(normalized, true)
+                            : normalized;
+                    })
+                    .ToList(),
+                tuple.ElementNames)
+            {
+                IsNullable = tuple.IsNullable,
+            };
         }
 
-        return new ArrayTypeReference(element, array.Rank)
+        if (symbol is INamedTypeSymbol namedSymbol
+            && mapped is NamedTypeReference named
+            && namedSymbol.TypeArguments.Length == named.TypeArguments.Count)
         {
-            IsNullable = array.IsNullable,
-        };
+            GTypeReference containingType =
+                namedSymbol.ContainingType != null && named.ContainingType != null
+                    ? NormalizeAnonymousProjectedStorage(
+                        namedSymbol.ContainingType,
+                        named.ContainingType)
+                    : named.ContainingType;
+            return new NamedTypeReference(
+                named.Name,
+                namedSymbol.TypeArguments
+                    .Select((argument, index) =>
+                    {
+                        GTypeReference normalized =
+                            NormalizeAnonymousProjectedStorage(
+                                argument,
+                                named.TypeArguments[index]);
+                        return argument.IsReferenceType
+                            ? WithNullable(normalized, true)
+                            : normalized;
+                    })
+                    .ToList(),
+                containingType)
+            {
+                IsNullable = named.IsNullable,
+            };
+        }
+
+        if (symbol is INamedTypeSymbol { DelegateInvokeMethod: { } invoke }
+            && mapped is ArrowTypeReference arrow
+            && invoke.Parameters.Length == arrow.ParameterTypes.Count
+            && (invoke.ReturnsVoid
+                ? arrow.ReturnTypes.Count == 0
+                : arrow.ReturnTypes.Count == 1))
+        {
+            return MergeAnonymousDelegateNullability(arrow, invoke);
+        }
+
+        return mapped;
     }
 
     private static string AnonymousShapeKey(IReadOnlyList<IPropertySymbol> properties) =>
