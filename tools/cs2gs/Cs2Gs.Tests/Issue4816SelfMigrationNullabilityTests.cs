@@ -65,6 +65,22 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         new { Name = value, Values = values };
                     public static object DefaultValue(bool include) =>
                         new { Count = include ? default : 1 };
+                    public static int MergedContractRead(string? maybe)
+                    {
+                        var nullableShape = new { Value = maybe };
+                        var nonNullableShape = new { Value = "fixed" };
+                        nullableShape = nonNullableShape;
+                        return nonNullableShape.Value.Length;
+                    }
+                    public static object MergedDelegateContract(
+                        Func<string?> nullableFactory,
+                        Func<string> nonNullableFactory)
+                    {
+                        var nullableShape = new { Factory = nullableFactory };
+                        var nonNullableShape = new { Factory = nonNullableFactory };
+                        nullableShape = nonNullableShape;
+                        return nullableShape;
+                    }
                 }
                 """),
         });
@@ -85,6 +101,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
         Assert.DoesNotContain("""Convert!!""", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("""projected.ToString()!!""", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("""projected.Aggregate("seed", (acc, _) -> acc)!!""", rendered, StringComparison.Ordinal);
+        Assert.Contains("""nonNullableShape.Value!!.Length""", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 }

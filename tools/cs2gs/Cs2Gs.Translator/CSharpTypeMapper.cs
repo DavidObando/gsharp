@@ -1235,7 +1235,10 @@ public sealed class CSharpTypeMapper
         return alias;
     }
 
-    internal (NamedTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) GetOrCreateAnonymousDataClassShape(
+    internal (
+        NamedTypeReference Type,
+        IReadOnlyList<IPropertySymbol> Properties,
+        IReadOnlyList<GTypeReference> PropertyTypes) GetOrCreateAnonymousDataClassShape(
         INamedTypeSymbol anonymousType,
         TranslationContext context,
         Location location,
@@ -1263,7 +1266,7 @@ public sealed class CSharpTypeMapper
             && (!this.anonymousTypeRegistry.IsOwnedBy(shapeKey, context.FilePath)
                 || this.declaredAnonymousShapes.Contains(shapeKey)))
         {
-            return (existing, properties);
+            return (existing, properties, mappedPropertyTypes);
         }
 
         string syntheticName = AnonymousTypeRegistry.SyntheticName(shapeKey, properties.Count);
@@ -1291,7 +1294,23 @@ public sealed class CSharpTypeMapper
         this.anonymousTypeRegistry.Register(shapeKey, reference, context.FilePath);
         this.declaredAnonymousShapes.Add(shapeKey);
         this.pendingAnonymousDataClasses.Add(declaration);
-        return (reference, properties);
+        return (reference, properties, mappedPropertyTypes);
+    }
+
+    internal GTypeReference GetAnonymousPropertyType(
+        IPropertySymbol property,
+        TranslationContext context,
+        Location location)
+    {
+        var shape = this.GetOrCreateAnonymousDataClassShape(
+            property.ContainingType,
+            context,
+            location);
+        int index = shape.Properties
+            .Select((candidate, candidateIndex) => (candidate, candidateIndex))
+            .First(pair => pair.candidate.Name == property.Name)
+            .candidateIndex;
+        return shape.PropertyTypes[index];
     }
 
     /// <summary>
@@ -3539,6 +3558,12 @@ public sealed class CSharpTypeMapper
                                 element.Type))
                         .ToList(),
                     tuple.ElementNames),
+            (INamedTypeSymbol { DelegateInvokeMethod: { } invoke }, ArrowTypeReference arrow)
+                when invoke.Parameters.Length == arrow.ParameterTypes.Count
+                    && (invoke.ReturnsVoid
+                        ? arrow.ReturnTypes.Count == 0
+                        : arrow.ReturnTypes.Count == 1) =>
+                MergeAnonymousDelegateNullability(arrow, invoke),
             (INamedTypeSymbol namedSymbol, NamedTypeReference named)
                 when namedSymbol.TypeArguments.Length == named.TypeArguments.Count =>
                 new NamedTypeReference(
@@ -3553,6 +3578,29 @@ public sealed class CSharpTypeMapper
             _ => mapped,
         };
         return WithNullable(merged, nullable);
+    }
+
+    private static ArrowTypeReference MergeAnonymousDelegateNullability(
+        ArrowTypeReference arrow,
+        IMethodSymbol invoke)
+    {
+        IReadOnlyList<GTypeReference> returnTypes = invoke.ReturnsVoid
+            ? arrow.ReturnTypes
+            : new[]
+            {
+                MergeAnonymousNullability(
+                    arrow.ReturnTypes[0],
+                    invoke.ReturnType),
+            };
+        return new ArrowTypeReference(
+            invoke.Parameters
+                .Select((parameter, index) =>
+                    MergeAnonymousNullability(
+                        arrow.ParameterTypes[index],
+                        parameter.Type))
+                .ToList(),
+            returnTypes,
+            arrow.IsAsync);
     }
 
     private static bool AnonymousInitializerAcceptsNil(

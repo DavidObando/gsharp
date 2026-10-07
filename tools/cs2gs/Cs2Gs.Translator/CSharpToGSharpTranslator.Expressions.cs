@@ -727,14 +727,24 @@ public sealed partial class CSharpToGSharpTranslator
                 .Select((propertyType, index) =>
                     nullablePropertyFlags[index] ? MakeNullable(propertyType) : propertyType)
                 .ToList();
-            (GTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) shape =
+            (
+                GTypeReference Type,
+                IReadOnlyList<IPropertySymbol> Properties,
+                IReadOnlyList<GTypeReference> PropertyTypes) shape =
                 anonymousType != null
                     ? this.typeMapper.GetOrCreateAnonymousDataClassShape(
                         anonymousType,
                         this.context,
                         anonymous.GetLocation(),
                         mappedPropertyTypes)
-                    : (new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType), Array.Empty<IPropertySymbol>());
+                    : (
+                        new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType),
+                        Array.Empty<IPropertySymbol>(),
+                        Array.Empty<GTypeReference>());
+            mappedPropertyTypes = shape.PropertyTypes.ToList();
+            nullablePropertyFlags = mappedPropertyTypes
+                .Select(propertyType => propertyType.IsNullable)
+                .ToList();
 
             // Roslyn exposes anonymous properties in constructor order. Drive
             // construction from that same registered order rather than an
@@ -1075,7 +1085,23 @@ public sealed partial class CSharpToGSharpTranslator
             string emittedMemberName = this.InAnalyzerApiMode
                 ? this.nameAllocator.GetName(memberName)
                 : this.EmittedName(memberSymbol, memberName);
-            return new MemberAccessExpression(target, emittedMemberName, isArrow);
+            GExpression translatedMember =
+                new MemberAccessExpression(target, emittedMemberName, isArrow);
+
+            if (memberSymbol is IPropertySymbol anonymousProperty
+                && anonymousProperty.ContainingType.IsAnonymousType
+                && anonymousProperty.Type.IsReferenceType
+                && this.typeMapper.GetAnonymousPropertyType(
+                    anonymousProperty,
+                    this.context,
+                    member.GetLocation()).IsNullable
+                && this.context.GetTypeInfo(member).Nullability.FlowState
+                    == NullableFlowState.NotNull)
+            {
+                return EnsureNonNullAssertion(translatedMember);
+            }
+
+            return translatedMember;
         }
 
         /// <summary>
