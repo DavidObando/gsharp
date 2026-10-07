@@ -36,6 +36,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         _ = Accept(projected[0]);
                         _ = Accept(projected.Single());
                         _ = Accept(projected.ToString());
+                        _ = Accept(projected.Aggregate("seed", (acc, _) => acc));
                         string[] explicitProjected = Values();
                         _ = Accept(explicitProjected[0]);
                         _ = methods[0].Select(method => method.Name).ToArray();
@@ -78,6 +79,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
         Assert.Contains("""typeof(string).FullName!!""", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("""Convert!!""", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("""projected.ToString()!!""", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("""projected.Aggregate("seed", (acc, _) -> acc)!!""", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 }

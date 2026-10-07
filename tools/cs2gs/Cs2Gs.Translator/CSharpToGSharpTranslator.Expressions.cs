@@ -1279,6 +1279,10 @@ public sealed partial class CSharpToGSharpTranslator
                         { IsGenericMethod: true } reducedMethod
                     && reducedMethod.ContainingType.ToDisplayString()
                         is "System.Linq.Enumerable" or "System.Linq.Queryable"
+                    && reducedMethod.ReturnType is ITypeParameterSymbol returnTypeParameter
+                    && reducedMethod.Parameters[0].Type is INamedTypeSymbol sourceParameter
+                    && sourceParameter.TypeArguments.Any(argument =>
+                        SymbolEqualityComparer.Default.Equals(argument, returnTypeParameter))
                     && invokedMethod?.ReturnType is { } invocationReturn
                     && this.context.GetTypeInfo(memberAccess.Expression).Type
                         is IArrayTypeSymbol receiverArray
