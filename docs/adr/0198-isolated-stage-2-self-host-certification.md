@@ -119,31 +119,43 @@ Stage-2 v1 supports one evaluated context for each project. It MUST REJECT:
 - multitargeted projects;
 - a reference that changes configuration, platform, target framework, global
   properties, targets, or other evaluation context;
-- `BuildReference=false`, effective `BuildProjectReferences=false` where the
-  reference is expected to participate, or another build-disabled reference;
+- project-authored reference metadata that removes an expected participating
+  edge, such as `BuildReference=false`, or another build-disabled reference;
 - an outside-snapshot project, import, source, analyzer, or reference;
 - an ambiguous SDK, import, package, target, task, or output owner.
 
-The closure is frozen when every node and edge has one supported meaning and
-all input hashes are recorded. A path-only graph is not a frozen graph.
+The controller MUST derive separate immutable execution plans for the stage-1
+build, stage-2 build, and each test command. It MUST do this before mutation by
+evaluating controller-owned projections of the source snapshot with the exact
+stage pin, roots, caches, properties, and toolchain paths that the command will
+use. The common source manifest and participating logical closure MUST match
+across the plans. Controller-owned pin, cache, build-root, evidence-root, and
+toolchain-path projections MUST differ as the plan declares.
+
+A plan is frozen when every node and edge has one supported meaning and all
+input hashes are recorded. A path-only graph is not a frozen graph.
 
 ### 4. Required graph revalidation
 
 The controller MUST evaluate and compare a fresh graph snapshot at these
 boundaries:
 
-1. before any mutation, in the ordinary and actual isolated compilation
+1. before any mutation, when the controller creates each stage-specific and
+   test-specific execution plan in the ordinary and isolated compilation
    contexts;
-2. after pinning, restore, and dependency setup;
+2. after the matching pin, restore, and dependency setup are applied to the
+   real build tree;
 3. after dependency builds and immediately before each stage build command;
 4. after test setup, including result-directory creation and receipt
    invalidation, and immediately before each test command;
 5. after each command and before outputs or test evidence are accepted;
 6. immediately before the final certification verdict.
 
-The new snapshot MUST equal the frozen plan for all inputs, imports, references,
-toolchain selections, targets, tasks, and planned outputs. Expected generated
-restore files MAY appear only when the frozen plan names their controller-owned
+Each new snapshot MUST equal the applicable frozen execution plan for all
+inputs, imports, references, toolchain selections, targets, tasks, and planned
+outputs. Stage 1 is compared with the stage-1 plan and stage 2 with the stage-2
+plan. Each test command is compared with its own plan. Expected generated
+restore files MAY appear only when that plan names their controller-owned
 location and the post-restore snapshot records their hashes.
 
 Any other graph change MUST fail the run. The controller MUST NOT repair,
@@ -299,7 +311,11 @@ boundary is under test. The suite MUST include:
   mutation, CLR entry-point and flags, COFF `Machine`, managed resources, and
   native or embedded resources;
 - MVID bytes repeated in an attribute or resource, proving that only the
-  referenced GUID slot is ignored.
+  referenced GUID slot is ignored;
+- malformed or duplicate module rows, zero or out-of-range MVID indexes,
+  truncated GUID heaps, an MVID index that aliases another semantic GUID use,
+  and metadata ranges that overlap or escape the PE section that contains
+  them.
 
 Each rejection test MUST also prove that caller inputs remain byte-for-byte
 unchanged. Error tests MUST prove that two independent failures cannot overwrite
