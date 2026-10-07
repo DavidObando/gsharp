@@ -9,8 +9,14 @@ Bootstrapping it takes three compilers:
 | 1 | stage-1 `Gsharp.NET.Sdk` | the cs2gs-migrated G# tree | stage 0 |
 | 2 | the migrated tree rebuilt | the same G# tree | stage 1 |
 
-The cut-over requires stage 2 to reproduce stage 1: `GSharp.Core.dll` and `gsc.dll` must have identical IL and
-metadata (MVID zeroed), and the test suites must pass under stage 2.
+The cut-over requires stage 2 to reproduce stage 1. The certification contract
+is defined by
+[ADR-0198](adr/0198-isolated-stage-2-self-host-certification.md). It requires
+immutable isolated source and build trees, controller-owned evidence, graph and
+toolchain revalidation at each build/test boundary, and complete-PE equality
+except for the exact validated `Module.Mvid` GUID slot. Draft PR #4693 is an
+in-place prototype and discrimination inventory. It is not a landable
+certification gate.
 
 ## Packing stage 1
 

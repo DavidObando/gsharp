@@ -1,0 +1,352 @@
+# ADR-0198: Isolated stage-2 self-host certification
+
+- **Status**: Proposed (owner direction approved October 5-6, 2026)
+- **Date**: 2026-10-07
+- **Phase**: Self-hosting Phase 0 — bootstrap proof
+- **Related**: issues #3501, #4631 and #4716; draft PR #4693; PR #4695;
+  ADR-0115 (C# to G# migration); ADR-0154 (test oracle strength);
+  ADR-0196 (validation-source provenance)
+
+## Context
+
+The cutover requires stage 2 to reproduce stage 1. Stage 1 is the migrated G#
+tree built by the final C# compiler. Stage 2 is the same source built by the
+stage-1 compiler.
+
+Draft PR #4693 tested an in-place driver. Review found repeated bypasses. The
+driver changed and built a caller-owned tree while project files, imports,
+targets, restore outputs, caches, and report paths could also change. Local
+guards fixed one shape at a time. They did not create a stable trust boundary.
+
+The owner approved a fail-closed contract on October 5, 2026. Every PE byte
+must remain significant except the exact, validated `Module.Mvid` GUID slot.
+Unsupported, ambiguous, stale, changed, or incomplete evidence cannot certify
+equivalence. Effective compiler selection and workspace ownership must be
+validated.
+
+On October 6, 2026, the owner stopped further in-place patches. The replacement
+must use immutable isolated input and build trees, externally owned evidence
+destinations, and graph snapshots that are revalidated at every build and test
+boundary.
+
+## Decision
+
+### 1. Certification controller and trust boundaries
+
+A stage-2 run MUST have one external certification controller. The controller
+MUST run outside the source and build trees. Projects and project-controlled
+MSBuild code are untrusted inputs.
+
+The controller MUST create and own these disjoint roots:
+
+| Root | Ownership and use |
+| --- | --- |
+| caller tree | Caller-owned input. The controller MUST NOT change it. |
+| source snapshot | Controller-owned, immutable copy of the caller tree. It is the source of both stages. |
+| stage-1 build tree | Controller-owned writable copy derived from the source snapshot. Only stage 0 may build it. |
+| stage-2 build tree | Controller-owned writable copy derived from the same source snapshot. Only stage 1 may build it. |
+| package feed and caches | Controller-owned. Stage 0, stage 1, restore, and test caches MUST be separate when their contents or compiler selection differ. |
+| evidence root | Controller-owned. It contains receipts, process records, graph snapshots, hashes, and comparison inputs. |
+| report root | Controller-owned. Reports are derived from accepted evidence. |
+
+The source snapshot MUST be frozen before any pin, restore, dependency setup,
+build, or test action. Freezing MUST record every file identity, length, and
+SHA-256 digest. The controller MUST verify this manifest before certification.
+Read-only permissions are defense in depth. The manifest is authoritative.
+
+Build trees MAY contain generated files, restored assets, and build outputs.
+They MUST NOT share writable files with each other, the caller tree, the source
+snapshot, or an evidence destination.
+
+The controller MUST create receipts, reports, logs, comparison snapshots, and
+test-result destinations. A project MUST NOT select or own those paths.
+
+### 2. Path and alias rules
+
+All input and output paths MUST be normalized to absolute real paths before the
+run starts. The controller MUST reject the run before mutation when:
+
+- a source, work, cache, output, evidence, or report root contains another root
+  that has a different owner or purpose;
+- two destinations resolve to the same path;
+- a destination exists as a symbolic link, junction, reparse point, or hardlink
+  to an input or another destination;
+- a path component escapes its declared root after real-path resolution;
+- an explicit assembly, PDB, package, log, receipt, test-result, comparison, or
+  report path aliases an input or another output;
+- `global.json` or any file that will be replaced aliases another input;
+- a participating project names a controller destination as `Compile`,
+  `Reference`, `HintPath`, analyzer, `AdditionalFiles`, resource, import, or
+  other build input.
+
+The controller MUST create output files by writing a new sibling and using an
+atomic replace. It MUST NOT follow an existing destination link.
+
+### 3. Participating closure
+
+The unit of graph identity is:
+
+```text
+(project real path, complete global-property map, SDK resolver environment)
+```
+
+The controller MUST discover the closure by evaluated MSBuild data, not by XML
+text search and not by `MSBuildAllProjects`. Discovery MUST include:
+
+- every requested build and test root;
+- every effective `ProjectReference`, with its reference metadata and property
+  context;
+- every evaluated import;
+- `Compile`, explicit `Reference` and `HintPath`, analyzer,
+  `GsharpCodeAnalyzer`, `AdditionalFiles`, resource, and generated input items;
+- implementation, reference, runtime, and test outputs;
+- package and SDK inputs selected by restore and SDK resolution.
+
+The snapshot MUST record the exact command, environment, selected .NET SDK,
+MSBuild version, NuGet configuration, package sources, package identities and
+hashes, global properties, evaluated properties, items, imports, references,
+targets, tasks, and planned outputs.
+
+The exact property map MUST include all properties passed to restore, build, or
+test. It includes, when applicable, `Configuration`, `Platform`,
+`TargetFramework`, `RuntimeIdentifier`, `SelfContained`,
+`BuildProjectReferences`, `CustomAfterMicrosoftCommonTargets`,
+`GsharpCompilerFullPath`, `GsharpToolFullPath`, and the effective test logger,
+filter, and result-directory properties.
+
+Stage-2 v1 supports one evaluated context for each project. It MUST REJECT:
+
+- multitargeted projects;
+- a reference that changes configuration, platform, target framework, global
+  properties, targets, or other evaluation context;
+- `BuildReference=false`, effective `BuildProjectReferences=false` where the
+  reference is expected to participate, or another build-disabled reference;
+- an outside-snapshot project, import, source, analyzer, or reference;
+- an ambiguous SDK, import, package, target, task, or output owner.
+
+The closure is frozen when every node and edge has one supported meaning and
+all input hashes are recorded. A path-only graph is not a frozen graph.
+
+### 4. Required graph revalidation
+
+The controller MUST evaluate and compare a fresh graph snapshot at these
+boundaries:
+
+1. before any mutation, in the ordinary and actual isolated compilation
+   contexts;
+2. after pinning, restore, and dependency setup;
+3. after dependency builds and immediately before each stage build command;
+4. after test setup, including result-directory creation and receipt
+   invalidation, and immediately before each test command;
+5. after each command and before outputs or test evidence are accepted;
+6. immediately before the final certification verdict.
+
+The new snapshot MUST equal the frozen plan for all inputs, imports, references,
+toolchain selections, targets, tasks, and planned outputs. Expected generated
+restore files MAY appear only when the frozen plan names their controller-owned
+location and the post-restore snapshot records their hashes.
+
+Any other graph change MUST fail the run. The controller MUST NOT repair,
+ignore, or learn a new graph after execution starts.
+
+### 5. Effective compiler and SDK selection
+
+Each participating project and reference MUST resolve the intended SDK package
+for its stage. Validation MUST use the same environment, cache, property map,
+and resolver inputs as the build command.
+
+For every participating G# project, the controller MUST prove:
+
+- the effective `Gsharp.NET.Sdk` ID and version;
+- the resolved package path and full package-payload hash;
+- the effective compiler executable, compiler runtime closure, build task
+  assembly, and task runtime closure;
+- the effective target and task definitions that invoke the compiler;
+- the compiler and task payload hashes immediately before invocation.
+
+A versioned project `Sdk` attribute or imported SDK override inside the
+participating closure MUST match the stage selection exactly or the run MUST be
+rejected. Intentional pins outside the closure MUST remain byte-for-byte
+unchanged. Unrelated helpers and package pins MUST NOT be rewritten.
+
+Case-insensitive MSBuild names and `TreatAsLocalProperty` rules MUST be applied
+as MSBuild applies them. A local-property exemption for a protected property
+MUST be rejected.
+
+### 6. Build, test, and evidence execution
+
+The controller MUST restore explicitly. Build and test commands MUST use
+`--no-restore`. Restore MUST use the same configuration and graph-defining
+properties as the later command.
+
+Dependencies MUST be built in frozen topological order. Each build command MUST
+consume only already verified dependency outputs. Implicit project-reference
+builds MUST be disabled and revalidated as disabled.
+
+Each command MUST receive a fresh nonce and fresh controller-owned evidence
+paths. Evidence MUST bind:
+
+- command identity and exact arguments;
+- process start and completion;
+- frozen graph snapshot identity;
+- compiler, task, SDK, and dependency payload hashes;
+- implementation, reference, and requested final output paths and hashes;
+- test assembly and compared dependency hashes, when testing.
+
+Evidence MUST be checked immediately after its command and again before final
+certification. Evidence from an earlier command, repeated root, prior run, or
+different graph MUST be rejected.
+
+Project-controlled targets and tasks MUST NOT create authoritative evidence.
+Stage-2 v1 MUST REJECT custom targets or tasks in a participating project or
+non-platform import. Trusted targets and tasks are limited to the installed
+.NET SDK, the byte-verified G# SDK, and controller-supplied instrumentation
+whose bytes and load paths are outside project control.
+
+A requested test run MUST produce fresh machine-readable results. The evidence
+MUST show a completed run, a positive executed-test count, no failed tests, and
+the requested filter and assembly identity. Exit code zero is not enough.
+Test setup and test execution MUST NOT change compared binaries.
+
+Reports MUST be written only after their destination is proven
+controller-owned. If that proof fails, the controller MUST leave the path
+unchanged and report the failure on standard error.
+
+### 7. Fail-closed support policy
+
+Stage-2 v1 models only graphs for which it can prove the rules above. It MUST
+REJECT unsupported input before destructive work.
+
+Rejection is the required result for custom project targets or tasks,
+multitargeting, context-changing or build-disabled references, ambiguous
+imports, mutable external inputs, and any graph that cannot be frozen and
+revalidated. A later ADR or amendment may add support. An implementation MUST
+NOT approximate these cases.
+
+An unsupported or rejected run is not evidence of non-equivalence. It is also
+not certification.
+
+### 8. Semantic fingerprint
+
+The stage-1 and stage-2 comparison MUST operate on complete PE files.
+
+The normalizer MUST:
+
+1. parse a valid PE and CLR image;
+2. locate the module row and its `Mvid` GUID heap index;
+3. validate that the index names one in-range 16-byte GUID slot;
+4. copy the complete file;
+5. replace only those 16 bytes with a fixed value;
+6. compare the resulting bytes.
+
+Every other byte MUST remain significant. This includes:
+
+- DOS, PE, COFF, optional, CLR, section, and debug headers;
+- COFF `Machine`;
+- CLR flags and entry point;
+- all metadata tables and heaps outside the one MVID slot;
+- method headers, IL, and exception regions;
+- attributes, signatures, names, and custom data;
+- managed resources;
+- native and embedded resources;
+- reference assemblies and every other certified PE output.
+
+The normalizer MUST reject malformed, ambiguous, duplicate, overlapping, or
+out-of-range MVID evidence. It MUST NOT search for and clear all occurrences of
+the MVID byte sequence.
+
+Raw SHA-256 and normalized SHA-256 MUST both be reported. Certification requires
+equal normalized bytes. A raw difference is acceptable only when the structural
+normalizer proves that the exact MVID slot is the sole difference.
+
+### 9. Security and correctness invariants
+
+The replacement implementation MUST preserve these invariants:
+
+1. Caller-owned bytes never change.
+2. Stage 1 and stage 2 start from the same immutable source manifest.
+3. No writable file is shared across stages or trust domains.
+4. Every participating input is known before a destructive action.
+5. Every command uses the frozen graph and intended effective compiler.
+6. Project code cannot select, overwrite, or forge authoritative evidence.
+7. Receipts are fresh, command-specific, output-bound, and revalidated.
+8. Tests execute against the certified stage-2 outputs.
+9. Only the validated `Module.Mvid` GUID slot is ignored.
+10. Missing or uncertain evidence causes rejection, never equivalence.
+
+### 10. Required acceptance tests
+
+ADR-0154 witnesses MUST run through the real replacement driver where the
+boundary is under test. The suite MUST include:
+
+- `global.json` symlink and hardlink aliases that would overwrite another input;
+- explicit `Reference`/`HintPath`, analyzer, `GsharpCodeAnalyzer`,
+  `AdditionalFiles`, and resource inputs under a cleanup or destination root;
+- inputs visible only under the actual compiler paths and
+  `BuildProjectReferences=false` context;
+- a graph that changes after restore or after a dependency build;
+- a test graph that changes after result-directory setup or receipt deletion;
+- report, log, receipt, and error-path collisions with project inputs;
+- project SDK attributes, imported SDK overrides, same-version alternate
+  packages, compiler path overrides, task overrides, and runtime-payload
+  replacement;
+- source/work containment, destination aliasing, symlink, junction, hardlink,
+  and real-path escape cases;
+- repeated roots, stale receipts, copied outputs, replaced implementation or
+  reference assemblies, test-only compilation, zero-test success, and test
+  execution against changed outputs;
+- non-MVID metadata mutation, method-header mutation, exception-region
+  mutation, CLR entry-point and flags, COFF `Machine`, managed resources, and
+  native or embedded resources;
+- MVID bytes repeated in an attribute or resource, proving that only the
+  referenced GUID slot is ignored.
+
+Each rejection test MUST also prove that caller inputs remain byte-for-byte
+unchanged. Error tests MUST prove that two independent failures cannot overwrite
+or misattribute each other's reports.
+
+### 11. Rollout and landing order
+
+The work lands in this order:
+
+1. Keep draft PR #4693 as the prototype and discrimination inventory. It MUST
+   NOT merge.
+2. Implement the isolated controller and port #4693's useful tests to the new
+   trust boundaries.
+3. Land the replacement stage-2 gate only after this ADR is accepted, its
+   acceptance tests pass, CI is green, and current-head review has no material
+   finding.
+4. Rebase and land PR #4695 after the replacement gate. #4695 MUST consume the
+   new controller-owned evidence contract and MUST NOT depend on #4693.
+5. Run the full stage-1/stage-2 proof on the cutover closure.
+6. Complete the fresh-clone cutover dry run required by #3501.
+
+The replacement MUST NOT claim that a normal self-migration nightly proves
+stage-2 equivalence. The nightly is a separate source-translation and behavior
+gate.
+
+## Consequences
+
+The design uses more disk space and repeats graph evaluation. It also rejects
+valid MSBuild features that stage-2 v1 does not model. These costs are accepted
+because certification must be stronger than an ordinary successful build.
+
+The controller has a narrow proof surface: immutable inputs, isolated writable
+trees, exact graph snapshots, verified toolchains, fresh external evidence, and
+complete-PE comparison. Support can expand only when the same invariants remain
+provable.
+
+## Alternatives considered
+
+- **Add more guards to the in-place driver.** Rejected. PR #4693 showed that
+  each guard exposed another alias, graph, task, or timing shape.
+- **Normalize PE fields that appear nondeterministic.** Rejected. Shape-by-shape
+  normalization already hid changes to metadata, COFF `Machine`, and resources.
+- **Trust project targets, task output, or project-selected receipts.** Rejected.
+  The project is inside the certification boundary and can create
+  success-shaped evidence.
+- **Use successful nightly self-migration as stage-2 proof.** Rejected. The
+  nightly does not establish the effective self-built compiler, immutable
+  inputs, byte equivalence, or fresh stage-2 test evidence.
+- **Support every MSBuild graph in v1.** Rejected. Partial modeling would turn
+  an unsupported graph into a false certificate.
