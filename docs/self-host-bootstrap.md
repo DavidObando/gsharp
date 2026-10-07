@@ -9,8 +9,8 @@ Bootstrapping it takes three compilers:
 | 1 | stage-1 `Gsharp.NET.Sdk` | the cs2gs-migrated G# tree | stage 0 |
 | 2 | the migrated tree rebuilt | the same G# tree | stage 1 |
 
-The cut-over requires stage 2 to reproduce stage 1: `GSharp.Core.dll` and `gsc.dll` must have identical IL and
-metadata (MVID zeroed), and the test suites must pass under stage 2.
+The cut-over requires stage 2 to reproduce stage 1: `GSharp.Core.dll` and `gsc.dll` must have identical normalized
+PE images (only the precise `Module.Mvid` GUID slot is zeroed), and the test suites must pass under stage 2.
 
 ## Packing stage 1
 
@@ -43,6 +43,36 @@ Measured on the nightly 36930275716 tree (main `6c4824cbc`):
 - Package payload: 150 entries.
 - Extras over stage 0: G#-built executables also ship `Gsharp.Extensions`, `Gsharp.Runtime.Channels` and `Gsharp.Runtime.Values`.
 - Missing docs: the XML documentation of the three executables.
+
+## Stage 2: the equivalence check
+
+```sh
+python3 build/selfhost-stage2.py \
+  --tree <tree prepared by selfhost-pack-stage1.py> \
+  --bootstrap <stage-0 nupkg> --stage1 <stage-1 nupkg> --work <dir> \
+  [--project src/Core/Core.gsproj ...] [--assembly out/bin/Release/Core/GSharp.Core.dll ...] \
+  [--test 'test/Core.Tests/Core.Tests.gsproj::FullyQualifiedName~RefactoringBaselineTests' ...] \
+  [--config Release]
+```
+
+The PE helpers use .NET 10 file-based apps (`dotnet run <helper.cs> -- ...`), supported by the SDK
+selected by this repository's `global.json`. They run from `build/selfhost`, which has no project file
+and isolates them from the repository's build props and targets.
+
+How it works:
+- Before building, it verifies the stage-1 package's payload and G# compiler/Core PDB provenance using the stage-1 packer's verifier. Its SDK version must differ from the bootstrap version; supplying stage 0 twice cannot certify self-hosting.
+- Before building, it evaluates the requested build and test project-reference closure with the same stage-specific environment and global properties used by compilation, including the requested configuration and custom after-target import. The authoritative preprocessed MSBuild import graph, rather than writable `MSBuildAllProjects`, drives inspection and input protection. A disposable cache and nonce-named guard provide the non-destructive preservation pass in both ordinary and isolated `BuildProjectReferences=false` contexts; every canonical driver-written path is checked for ownership before mutation. After cleanup, an explicit configuration-matched restore and second authoritative evaluation validate the graph actually used by `--no-restore` builds and tests. The closure must contain a validated G# project (a C# wrapper root may reference one through a build-enabled reference). Participating projects and non-platform imports may not define targets or tasks: compilation and evidence targets are accepted only from the installed .NET SDK, the byte-verified G# SDK, or the exact driver guard. Case-insensitive `TreatAsLocalProperty` exemptions for `BuildProjectReferences` and toolchain properties are rejected, and isolated evaluation must preserve `BuildProjectReferences=false`. Every participating G# project must inherit the requested `Gsharp.NET.Sdk` version from `global.json`, and the extracted `Sdk/`, `tools/` and `build/` payload must match the supplied nupkg byte-for-byte. Compiler/task paths and every compiler/task runtime file are hashed immediately before the SDK's `BuildTask` invocation. Dependencies are built bottom-up and verified in separate commands. Each G# command produces fresh random receipts binding implementation and reference assemblies to their evaluated final outputs; the driver checks each command immediately, then rechecks the union before snapshotting. Copied outputs, stale or forged receipts, fabricated properties, later-root mutations, target replacements, and `SkipCompilerExecution` therefore cannot substitute for compiler execution. Outside-tree references, build-disabled or context-changing `ProjectReference` metadata, and multi-targeted inputs fail before cleanup. Unrelated intentional project pins remain untouched.
+- It builds the projects twice in the **same tree path**: first pinned to stage 0 (which yields the stage-1 assemblies), then pinned to stage 1 (which yields the stage-2 assemblies). Each stage gets its own isolated package cache, cleared before that stage's build even when `--work` is reused. The stage-2 cache is retained for tests. Assembly snapshots have independent stage-local filenames even for parent-relative or absolute output paths. `--tree` and `--work` must be disjoint: neither may contain the other.
+- Bootstrap, stage-1 and sibling package inputs must be outside every cleanup root or file: the migrated tree's `out` directory, stage snapshots, stage package caches, compiler-evidence directories, requested test-result directories, and each configured assembly/PDB output. Validated build and test projects, authoritative imports, compile inputs, additional files and embedded resources must likewise be outside every cleanup root and explicit cleanup file before either stage mutates them; extracted package-cache imports are disposable and excluded from this user-input inventory. Existing `.nugs` destinations may not alias any supplied input, and feed staging replaces destination entries atomically rather than following links. Driver-owned guard, log and report files are likewise replaced through fresh sibling entries, so existing symlinks or hardlinks cannot redirect writes into package inputs.
+- For each assembly pair it compares the full-file SHA-256 and a normalized-image SHA-256. `build/selfhost/PeContentHash.cs` retains every PE byte—including COFF/CLR headers, metadata, complete method bodies, managed resources and debug-wrapper data—except the single validated `#GUID` heap slot referenced by `Module.Mvid`. The existing IL-only RefactoringBaselineTests body hash is unchanged.
+- Test projects run while pinned to stage 1 with the same stage-2 compilation-time toolchain guard and `--no-restore`, so everything they compile against is a validated stage-2 graph and target-time compiler overrides fail. A G# test root needs a fresh compiler receipt for every test command; the receipt is a guarded `CoreCompile` output, so deleting it forces repeated filtered runs to compile the root, while referenced G# outputs may remain incremental only while their bound receipt and output hash still validate. Immutable hashes of every compared live output must also still match the stage-2 snapshot after each test command. Every requested run must exit zero and produce fresh TRX evidence of a positive number of executed, passing tests. Missing, malformed, stale, changed-output, or zero-test evidence fails the gate. Each request has a separate results directory under `--work`; multiple target-framework TRX files are all checked.
+- Default assembly outputs follow `--config` (Release by default); explicit `--assembly` paths are used unchanged.
+- The verdict is "equivalent" only when every normalized-image hash matches. A full-file difference caused solely by the MVID is reported, not hidden.
+- `build/selfhost/PeDiff.cs` explains a difference: it compares table row counts, heap sizes and per-method IL keyed by type, name and signature.
+
+Results:
+- **First run (2026-10-01, main `6c4824cbc`): not equivalent.** Stage-1 and stage-2 `GSharp.Core.dll` had identical tables and heaps but different numbering on 1,093 capture-box classes. The cause was a gsc determinism bug: lowering passes numbered synthesized types in identity-hash order ([#4663](https://github.com/DavidObando/gsharp/issues/4663)). The C#-built compiler had the same bug: adding an unrelated file renumbered its boxes. RefactoringBaselineTests passed under stage 2. All 162 `samples/` compiled to identical IL+metadata with either compiler.
+- **With the #4663 fix:** `GSharp.Core.dll`, `GSharp.Cs2Gs.Translator.dll` and `GSharp.Cs2Gs.CodeModel.dll` are **byte-identical** between stage 1 and stage 2.
 
 ## Windows: the migrated Core.Tests on a 1 MB stack
 
