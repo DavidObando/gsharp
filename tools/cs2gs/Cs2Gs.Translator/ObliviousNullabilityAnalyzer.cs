@@ -1115,6 +1115,11 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        if (IsDeclaredNullablePosition(EffectiveImportedPositionType(symbol)))
+        {
+            return true;
+        }
+
         ImmutableArray<AttributeData> positionAttributes = symbol switch
         {
             IMethodSymbol method => method.GetReturnTypeAttributes(),
@@ -1144,6 +1149,56 @@ internal static class ObliviousNullabilityAnalyzer
 
     internal static bool IsReturnSignatureFixedByAnotherDeclaration(IMethodSymbol method) =>
         IsSignatureFixedByAnotherDeclaration(method);
+
+    private static ITypeSymbol EffectiveImportedPositionType(ISymbol symbol)
+    {
+        ITypeSymbol type = symbol switch
+        {
+            IMethodSymbol method => method.ReturnType,
+            IPropertySymbol property => property.Type,
+            IFieldSymbol field => field.Type,
+            _ => null,
+        };
+        if (IsDeclaredNullablePosition(type))
+        {
+            return type;
+        }
+
+        ITypeSymbol originalType = symbol switch
+        {
+            IMethodSymbol method => method.OriginalDefinition.ReturnType,
+            IPropertySymbol property => property.OriginalDefinition.Type,
+            IFieldSymbol field => field.OriginalDefinition.Type,
+            _ => null,
+        };
+        if (originalType is not ITypeParameterSymbol parameter)
+        {
+            return type;
+        }
+
+        if (parameter.TypeParameterKind == TypeParameterKind.Method
+            && symbol is IMethodSymbol methodSymbol
+            && parameter.Ordinal < methodSymbol.TypeArguments.Length)
+        {
+            return methodSymbol.TypeArguments[parameter.Ordinal];
+        }
+
+        for (INamedTypeSymbol containingType = symbol.ContainingType;
+            containingType != null;
+            containingType = containingType.ContainingType)
+        {
+            if (parameter.TypeParameterKind == TypeParameterKind.Type
+                && SymbolEqualityComparer.Default.Equals(
+                    containingType.OriginalDefinition,
+                    parameter.ContainingSymbol)
+                && parameter.Ordinal < containingType.TypeArguments.Length)
+            {
+                return containingType.TypeArguments[parameter.Ordinal];
+            }
+        }
+
+        return type;
+    }
 
     private static byte? MetadataNullabilityFlag(
         ImmutableArray<AttributeData> attributes,

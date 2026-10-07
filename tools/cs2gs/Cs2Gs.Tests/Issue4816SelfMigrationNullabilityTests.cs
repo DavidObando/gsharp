@@ -3,9 +3,14 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -56,6 +61,13 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                     }
                 }
 
+                public class Outer<T>
+                {
+                    public class Inner
+                    {
+                    }
+                }
+
                 #nullable enable
                 public static class AnnotatedFixture
                 {
@@ -81,6 +93,15 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         nullableShape = nonNullableShape;
                         return nullableShape;
                     }
+                    public static object MergedContainingContract(
+                        Outer<string>.Inner nonNullable,
+                        Outer<string?>.Inner nullable)
+                    {
+                        var nonNullableShape = new { Value = nonNullable };
+                        var nullableShape = new { Value = nullable };
+                        nonNullableShape = nullableShape;
+                        return nonNullableShape;
+                    }
                 }
                 """),
         });
@@ -103,5 +124,60 @@ public sealed class Issue4816SelfMigrationNullabilityTests
         Assert.DoesNotContain("""projected.Aggregate("seed", (acc, _) -> acc)!!""", rendered, StringComparison.Ordinal);
         Assert.Contains("""nonNullableShape.Value!!.Length""", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void ImportedGenericSubstitution_PreservesNullableValueContract()
+    {
+        var library = CSharpCompilation.Create(
+            "Issue4816.Imported",
+            new[]
+            {
+                CSharpSyntaxTree.ParseText("""
+                    #nullable enable
+                    public sealed class Box<T>
+                    {
+                        public T Value { get; }
+                        public Box(T value) => Value = value;
+                    }
+                    public static class Factory
+                    {
+                        public static Box<string?> Create() => new(null);
+                    }
+                    """),
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        using var image = new MemoryStream();
+        var emit = library.Emit(image);
+        Assert.True(emit.Success, string.Join("\n", emit.Diagnostics));
+
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromImage(image.ToArray()))
+            .ToList();
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("Consumer.cs", """
+                    #nullable disable
+                    public static class Consumer
+                    {
+                        public static int Read() => Factory.Create().Value.Length;
+                    }
+                    """),
+            },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("""Factory.Create().Value!!.Length""", rendered, StringComparison.Ordinal);
     }
 }

@@ -3574,11 +3574,18 @@ public sealed class CSharpTypeMapper
                                 named.TypeArguments[index],
                                 argument))
                         .ToList(),
-                    named.ContainingType),
+                    MergeAnonymousContainingType(named, namedSymbol)),
             _ => mapped,
         };
         return WithNullable(merged, nullable);
     }
+
+    private static GTypeReference MergeAnonymousContainingType(
+        NamedTypeReference mapped,
+        INamedTypeSymbol symbol) =>
+        symbol.ContainingType != null && mapped.ContainingType != null
+            ? MergeAnonymousNullability(mapped.ContainingType, symbol.ContainingType)
+            : mapped.ContainingType;
 
     private static ArrowTypeReference MergeAnonymousDelegateNullability(
         ArrowTypeReference arrow,
