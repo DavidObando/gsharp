@@ -640,6 +640,11 @@ namespace Corpus.Issue4675
         Type baselineBase = baseline.GetType("Corpus.Issue4828.Base", throwOnError: true);
         Type migratedBase = migrated.GetType("Corpus.Issue4828.Base", throwOnError: true);
         Assert.Equal(
+            baselineBase.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Select(ConstructorContract).OrderBy(value => value, StringComparer.Ordinal),
+            migratedBase.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Select(ConstructorContract).OrderBy(value => value, StringComparer.Ordinal));
+        Assert.Equal(
             "original",
             Assert.Single(baselineBase.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic),
                 ctor => ctor.GetParameters() is [{ ParameterType: var type }] && type == baselineBase)
