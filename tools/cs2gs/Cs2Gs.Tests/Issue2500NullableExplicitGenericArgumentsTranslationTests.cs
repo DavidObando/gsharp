@@ -130,7 +130,6 @@ public sealed class Issue2500NullableExplicitGenericArgumentsTranslationTests
         Assert.Contains("Echo[T?](default(T?))", printed, StringComparison.Ordinal);
         Assert.Contains("Task.FromResult[T?](default(T?))", printed, StringComparison.Ordinal);
         Assert.Contains("host.Instance[T?](default(T?))", printed, StringComparison.Ordinal);
-        Assert.Contains("host.Reduced[T?](default(T?))", printed, StringComparison.Ordinal);
         Assert.Contains("Extensions.Reduced[T?](host, default(T?))", printed, StringComparison.Ordinal);
         Assert.Contains("Same[List[T?]?](default(List[T?]?))", printed, StringComparison.Ordinal);
         Assert.Contains(

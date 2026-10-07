@@ -61,9 +61,13 @@ internal sealed partial class DeclarationBinder
         TypeSymbol? importedBaseType,
         ImmutableArray<ParameterSymbol> primaryCtorParameters)
     {
+        var hasPrimaryOnlyDataBase =
+            baseClassSymbol?.IsData == true
+            && baseClassSymbol.HasDeclaredPrimaryConstructor;
         var hasImplicitBaseConstructorToResolve =
             importedBaseType != null
-            || baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false;
+            || baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false
+            || hasPrimaryOnlyDataBase;
         if (!syntax.HasBaseConstructorArguments
             && ((!hasImplicitBaseConstructorToResolve)
                 || (!syntax.Constructors.IsDefaultOrEmpty
@@ -123,7 +127,10 @@ internal sealed partial class DeclarationBinder
                 arguments,
                 location);
         }
-        else if (baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false)
+        else if (baseClassSymbol != null
+            && (baseClassSymbol.EffectiveExplicitConstructors.IsDefaultOrEmpty == false
+                || (baseClassSymbol.IsData
+                    && baseClassSymbol.HasDeclaredPrimaryConstructor)))
         {
             initializer = ResolveGSharpBaseConstructor(
                 _ => location,
@@ -1578,7 +1585,9 @@ internal sealed partial class DeclarationBinder
         if (ctorSyntax.HasBaseInitializer
             || (!ctorSyntax.IsConvenience
                 && (importedBaseType != null
-                    || baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false)))
+                    || baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false
+                    || (baseClassSymbol?.IsData == true
+                        && baseClassSymbol.HasDeclaredPrimaryConstructor))))
         {
             var capturedScope = scope;
             pendingBaseInitializerBindings.Add(() =>

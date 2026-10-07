@@ -78,20 +78,14 @@ public static class MeterExtensions
 }"));
 
         string combined = string.Join(Environment.NewLine, printed.Values);
-        string target = Assert.Single(
-            printed.Values,
-            text => text.Contains("func Adjust(", StringComparison.Ordinal));
+        string holder = printed["Extensions.cs"];
 
         Assert.Equal(2, CountOccurrences(combined, "partial class Meter {"));
-        Assert.Equal(1, CountOccurrences(combined, "func Adjust("));
-        Assert.Contains("import System", target);
-        Assert.Contains("    func Adjust()", target);
-        Assert.Contains("var meter = this", target);
-        Assert.DoesNotContain("func Double(", target);
-        Assert.Contains("MeterExtensions.Adjust(meter)", target);
-        Assert.Contains("func (meter Meter) Adjust", combined);
+        Assert.Equal(1, CountOccurrences(combined, " Adjust()"));
+        Assert.Contains("import System", holder);
+        Assert.Contains("func (meter Meter) Adjust()", holder);
+        Assert.Contains("class MeterExtensions", holder);
         Assert.Contains("@ExtensionOwner(typeof(MeterExtensions))", combined);
-        Assert.Contains("class MeterExtensions", combined);
     }
 
     [Fact]
@@ -134,7 +128,6 @@ public static class MeterExtensions
         Assert.Contains("func Helper(value int32)", combined, StringComparison.Ordinal);
         Assert.Contains("func Helper(", combined, StringComparison.Ordinal);
         Assert.Contains("func Other_2[", combined, StringComparison.Ordinal);
-        Assert.Contains("Extensions.Extra(", combined, StringComparison.Ordinal);
         Assert.Contains("class Extensions", combined, StringComparison.Ordinal);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
@@ -165,8 +158,8 @@ public static class HostExtensions
         string host = printed["Host.cs"];
 
         Assert.Contains("func M()", host);
-        Assert.Contains("func M(value int32)", host);
-        Assert.Contains("func (host Host) M", combined);
+        Assert.DoesNotContain("func M(value int32)", host);
+        Assert.Contains("func (host Host) M(value int32)", combined);
         Assert.Contains("@ExtensionOwner(typeof(HostExtensions))", combined);
         Assert.Contains("class HostExtensions", combined);
 

@@ -1484,6 +1484,9 @@ internal sealed class TypeDefEmitter
     private static bool HasEmptyPrimaryConstructor(StructSymbol classSym) =>
         !classSym.HasPrimaryConstructor && (classSym.Declaration?.HasPrimaryConstructor ?? false);
 
+    private static bool IsExplicitlyAbstract(StructSymbol classSym) =>
+        classSym.IsDeclaredAbstract || classSym.Definition?.IsDeclaredAbstract == true;
+
     /// <summary>
     /// Emits a parameter-less <c>.ctor</c> for a user-defined <c>class</c>
     /// (Phase 3.B.3). The body chains to the base class's <c>.ctor()</c>
@@ -1525,7 +1528,7 @@ internal sealed class TypeDefEmitter
         // `family`, as in C#, since only derived classes may chain to it.
         var visibility = classSym.IsSharedClass
             ? MethodAttributes.Private
-            : classSym.IsDeclaredAbstract && !HasEmptyPrimaryConstructor(classSym)
+            : IsExplicitlyAbstract(classSym) && !HasEmptyPrimaryConstructor(classSym)
                 ? MethodAttributes.Family
                 : classSym.HasPrimaryConstructor && !classSym.IsData
                     ? MethodAttributes.Assembly
@@ -1714,8 +1717,11 @@ internal sealed class TypeDefEmitter
         // (parallel to the explicit `init(...)` emit path).
         var firstParamHandle = this.AddPrimaryCtorParameterRows(parameters, out var paramHandles);
 
+        var visibility = classSym.IsData && IsExplicitlyAbstract(classSym)
+            ? MethodAttributes.Family
+            : MethodAttributes.Public;
         var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+            attributes: visibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1781,7 +1787,7 @@ internal sealed class TypeDefEmitter
         // explicit base initializer (`abstract class D : Base(1) { }`) is `family`, like
         // the plain implicit constructor of a declared-abstract class (see
         // EmitClassDefaultConstructor); a primary constructor stays public.
-        var forwardingVisibility = classSym.IsDeclaredAbstract
+        var forwardingVisibility = IsExplicitlyAbstract(classSym)
             && !classSym.HasPrimaryConstructor
             && !HasEmptyPrimaryConstructor(classSym)
             ? MethodAttributes.Family

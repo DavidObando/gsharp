@@ -122,7 +122,7 @@ public class Issue4777InheritedDataEqualityTests
         Assert.Equal("obj", parameter.Name);
         Assert.Equal(NullabilityState.Nullable, new NullabilityInfoContext().Create(parameter).ReadState);
         Assert.True(method.IsVirtual);
-        Assert.True(method.IsFinal);
+        Assert.False(method.IsFinal);
         Assert.Equal(typeof(object), method.GetBaseDefinition().DeclaringType);
     }
 

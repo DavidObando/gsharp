@@ -19,6 +19,87 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 public class Issue4675RecordReviewRegressionTests
 {
+    [Fact]
+    public void NativeBodyDataClass_WithSelfEquatable_RetainsDeconstruct()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+            data class Body : IEquatable[Body] { public var Value int32 }
+            Body{}
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.NotNull(result.Value);
+        Assert.NotNull(result.Value.GetType().GetMethod("Deconstruct"));
+    }
+
+    [Fact]
+    public void PrimaryOnlyDataBase_ImplicitCallMaterializesOptionalDefault()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Base(Value int32 = 7) {
+                public func GetValue() int32 -> Value
+            }
+            class Derived : Base
+            Derived().GetValue()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void PrimaryOnlyDataBase_ImplicitCallDiagnosesMissingRequiredArgument()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Base(Value int32)
+            class Derived : Base
+            Derived()
+            """);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0214");
+    }
+
+    [Fact]
+    public void PrimaryOnlyDataBase_ExplicitDerivedInitMaterializesOptionalDefault()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Base(Value int32 = 7) {
+                public func GetValue() int32 -> Value
+            }
+            class Derived : Base {
+                init() { }
+            }
+            Derived().GetValue()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void PrimaryOnlyDataBase_ExplicitDerivedInitDiagnosesMissingRequiredArgument()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open data class Base(Value int32)
+            class Derived : Base {
+                init() { }
+            }
+            Derived()
+            """);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0214");
+    }
+
+    [Fact]
+    public void OrdinaryPrimaryClass_RetainsDefaultAndPrimaryConstructors()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base(Value int32) {
+                public func GetValue() int32 -> Value
+            }
+            class Derived : Base
+            Base(42).GetValue() + Derived().GetValue()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
     [Theory]
     [InlineData(4)]
     [InlineData(8)]

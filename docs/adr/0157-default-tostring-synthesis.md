@@ -49,9 +49,9 @@ member set as *real emitted overrides* —
 override model #3208 names is already implemented there: a user-declared
 `ToString` on a `data` type simply takes over the synthesized slot with
 identical vtable attributes (#2361,
-`DataStructSynthesizer.HasUserToStringOverride` +
-`IsDataObjectOverrideFinal`), and data-class hierarchies re-override
-correctly, non-final while open (#2338). Separately, any *plain* struct or
+`DataStructSynthesizer.HasUserToStringOverride`): it remains a non-final
+override because sealed owners already prevent derivation, while open
+data-class hierarchies can re-override it (#2338). Separately, any *plain* struct or
 class may declare `override func ToString() string` and it dispatches
 correctly everywhere, including BCL-initiated virtual calls (#2896, #3116).
 

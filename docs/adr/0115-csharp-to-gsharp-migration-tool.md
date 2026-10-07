@@ -115,6 +115,14 @@ Since issue #948, the inline field initializers the translator emits here — `p
 **Record ABI (issue #4675).** The `IEquatable<Self>` contract also applies to
 generic records, using the self-instantiation rather than the open definition,
 including enclosing generic arguments.
+Issue #4828 makes the shared synthesized representation match Roslyn's remaining
+surface details: positional records have no extra parameterless constructor,
+body-only records have no synthesized `Deconstruct`, equality operators use
+`left`/`right`, copy constructors use `original`, and object overrides omit
+redundant final flags on already-sealed owners. cs2gs marks translated records
+with the compiler-intrinsic, metadata-free
+`@__Cs2GsRecordProvenance_4828` annotation so native
+G# data types with the same interfaces retain their own deconstruction contract.
 Record classes with a protected virtual `PrintMembers` hook retain it once per
 partial type, including sealed derived records; derived hooks call the base hook, including user-authored
 implementations. Generator implementing parts do not introduce C# record hooks
@@ -454,7 +462,7 @@ Inside a G# `shared { }` block a bare sibling static call does **not** resolve (
 
 #### B.19 Extension methods → top-level receiver-clause funcs; emptied static class dropped — ADR-0079
 
-A C# extension method (`static R M(this T self, …)` on a `static class`) translates to a **top-level** receiver-clause `func (self T) M(…) R` (§B.5) — one plain form for every receiver, per [ADR-0182](0182-receiver-clause-is-always-extension.md); the ADR-0165 explicit `func extension (self T) M(…) R` form for enum/owned extension receivers this paragraph previously described is retired. A receiver-clause `func` only binds at top level, so the translator lifts it out of the enclosing static class. Cross-container overload sets may retain their original static helpers for explicitly qualified C# calls while also emitting explicit receiver companions; reduced calls, null-conditional calls, and method groups use the companion directly and no longer require static-helper spills.
+A C# extension method (`static R M(this T self, …)` on a `static class`) translates to a **top-level** receiver-clause `func (self T) M(…) R` (§B.5) — one plain form for every receiver, per [ADR-0182](0182-receiver-clause-is-always-extension.md); the ADR-0165 explicit `func extension (self T) M(…) R` form for enum/owned extension receivers this paragraph previously described is retired. A receiver-clause `func` only binds at top level, so the translator lifts it out of the enclosing static class. When `@ExtensionOwner` preserves the native static holder, the receiver declaration is that same hosted MethodDef: cs2gs rewrites translated reduced calls through the static helper instead of also attaching a public instance companion to the receiver (issue #4828). Cross-container overload sets that cannot use this hosted form may retain their existing explicit companion strategy.
 
 Once every member has been lifted the holder `static class` has no remaining body and is **dropped**. The lifted funcs carry the holder's *behaviour* but not its *identity*, so the drop is conditional on nothing observing that identity: a holder named by a `typeof(Holder)` anywhere in a file the migration still emits is **kept**, as an empty type declaration alongside the lifted funcs (issue #3750). Eliding it instead leaves the reference naming a type that no longer exists (`GS0113`, cascading to `GS0159` where the result feeds a member lookup). `typeof` is the only surviving reference form: `nameof(Holder)` constant-folds to a string literal, and the static-form (`Holder.M(recv, …)`) and bare sibling (`M(recv, …)`) call shapes are already rewritten to the receiver form and name no type.
 

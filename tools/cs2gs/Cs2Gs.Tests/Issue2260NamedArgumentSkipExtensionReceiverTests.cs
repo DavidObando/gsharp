@@ -48,7 +48,10 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("AddBoldColumn(\"Length\", noWrap: true)", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "TableExtensions.AddBoldColumn(table, \"Length\", noWrap: true)",
+            printed,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -77,7 +80,10 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("AddOptions(\"Length\", noWrap: true)", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "TableExtensions.AddOptions(table, \"Length\", noWrap: true)",
+            printed,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -107,7 +113,7 @@ namespace Demo
     }
 }");
         Assert.Contains(
-            "AddColumn(header: \"Length\", noWrap: true)",
+            "TableExtensions.AddColumn(table, header: \"Length\", noWrap: true)",
             printed,
             StringComparison.Ordinal);
     }

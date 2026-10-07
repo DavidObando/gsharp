@@ -408,7 +408,12 @@ public static class BoundNodePrinter
         }
 
         writer.WriteSpace();
-        node.Initializer?.WriteTo(writer);
+        var initializer = node.Initializer;
+        if (initializer != null)
+        {
+            initializer.WriteTo(writer);
+        }
+
         writer.WriteLine();
     }
 
@@ -1863,7 +1868,12 @@ public static class BoundNodePrinter
             }
 
             writer.WritePunctuation(SyntaxKind.OpenBraceToken);
-            part.Value?.WriteTo(writer);
+            var value = part.Value;
+            if (value != null)
+            {
+                value.WriteTo(writer);
+            }
+
             if (part.Alignment.HasValue)
             {
                 writer.WritePunctuation(SyntaxKind.CommaToken);

@@ -161,7 +161,7 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         string emitted = ReadAppOutput(outputRoot, result.RunId, app.AppId);
 
         Assert.Contains("item!!.Next!!.Name", emitted, StringComparison.Ordinal);
-        Assert.Contains("item!!.Label()", emitted, StringComparison.Ordinal);
+        Assert.Contains("Extensions.Label(item!!)", emitted, StringComparison.Ordinal);
         Assert.Contains("items!!.Count()", emitted, StringComparison.Ordinal);
         Assert.Contains("for current in items!!", emitted, StringComparison.Ordinal);
         Assert.Contains("var required = key!!", emitted, StringComparison.Ordinal);

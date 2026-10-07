@@ -598,6 +598,124 @@ namespace Corpus.Issue4675
         Assert.Equal(expectedEquality, actualEquality);
     }
 
+    [Fact]
+    public void SynthesizedRecordAndSealedOverrideMetadata_MatchesRoslyn()
+    {
+        const string source = """
+            namespace Corpus.Issue4828;
+            public abstract record Base(int Value);
+            public sealed record Leaf(int Value) : Base(Value);
+            public sealed record Body
+            {
+                public int Value { get; }
+                public Body(int value) { Value = value; }
+            }
+            public abstract class Parent
+            {
+                public virtual string Render() => "base";
+            }
+            public sealed class Child : Parent
+            {
+                public override string Render() => "child";
+            }
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Issue4828.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        TranslationTestValidation.AssertBinds(translated);
+
+        using var csharpImage = new MemoryStream();
+        Assert.True(project.Compilation.Emit(csharpImage).Success);
+        using var gsharpImage = new MemoryStream();
+        var compilation = new GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(translated)))
+        {
+            IsLibrary = true,
+        };
+        Assert.True(compilation.Emit(gsharpImage, null, null, "Issue4828Translated").Success);
+        Assembly baseline = Assembly.Load(csharpImage.ToArray());
+        Assembly migrated = Assembly.Load(gsharpImage.ToArray());
+
+        Type baselineBase = baseline.GetType("Corpus.Issue4828.Base", throwOnError: true);
+        Type migratedBase = migrated.GetType("Corpus.Issue4828.Base", throwOnError: true);
+        Assert.Equal(
+            baselineBase.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Select(ConstructorContract).OrderBy(value => value, StringComparer.Ordinal),
+            migratedBase.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Select(ConstructorContract).OrderBy(value => value, StringComparer.Ordinal));
+        Assert.Equal(
+            "original",
+            Assert.Single(baselineBase.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic),
+                ctor => ctor.GetParameters() is [{ ParameterType: var type }] && type == baselineBase)
+                .GetParameters()[0].Name);
+        Assert.Equal(
+            "original",
+            Assert.Single(migratedBase.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic),
+                ctor => ctor.GetParameters() is [{ ParameterType: var type }] && type == migratedBase)
+                .GetParameters()[0].Name);
+
+        Type baselineLeaf = baseline.GetType("Corpus.Issue4828.Leaf", throwOnError: true);
+        Type migratedLeaf = migrated.GetType("Corpus.Issue4828.Leaf", throwOnError: true);
+        Assert.Equal(
+            baselineLeaf.GetConstructors().Select(ConstructorContract).OrderBy(value => value, StringComparer.Ordinal),
+            migratedLeaf.GetConstructors().Select(ConstructorContract).OrderBy(value => value, StringComparer.Ordinal));
+        foreach (string name in new[] { "op_Equality", "op_Inequality" })
+        {
+            Assert.Equal(
+                baselineLeaf.GetMethod(name).GetParameters().Select(parameter => parameter.Name),
+                migratedLeaf.GetMethod(name).GetParameters().Select(parameter => parameter.Name));
+        }
+
+        foreach (string name in new[] { "Equals", "GetHashCode", "ToString" })
+        {
+            MethodInfo expected = baselineLeaf.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .Single(method => method.Name == name && (name != "Equals" || method.GetParameters().Length == 1
+                    && method.GetParameters()[0].ParameterType == typeof(object)));
+            MethodInfo actual = migratedLeaf.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .Single(method => method.Name == name && (name != "Equals" || method.GetParameters().Length == 1
+                    && method.GetParameters()[0].ParameterType == typeof(object)));
+            Assert.Equal(expected.IsFinal, actual.IsFinal);
+        }
+
+        Assert.Equal(
+            baseline.GetType("Corpus.Issue4828.Body", throwOnError: true).GetMethod("Deconstruct"),
+            migrated.GetType("Corpus.Issue4828.Body", throwOnError: true).GetMethod("Deconstruct"));
+        Assert.Equal(
+            baseline.GetType("Corpus.Issue4828.Child", throwOnError: true).GetMethod("Render").IsFinal,
+            migrated.GetType("Corpus.Issue4828.Child", throwOnError: true).GetMethod("Render").IsFinal);
+    }
+
+    [Fact]
+    public void AuthoredCSharpRecordAttribute_IsPreserved()
+    {
+        const string source = """
+            namespace Corpus.Issue4828;
+            public sealed class CSharpRecordAttribute : System.Attribute { }
+            [CSharpRecord]
+            public record Item(int Value);
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Issue4828.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains("@CSharpRecord", translated, StringComparison.Ordinal);
+        Assert.Contains("@__Cs2GsRecordProvenance_4828", translated, StringComparison.Ordinal);
+
+        using var image = new MemoryStream();
+        var compilation = new GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(translated)))
+        {
+            IsLibrary = true,
+        };
+        var emit = compilation.Emit(image, null, null, "Issue4828AuthoredAttribute");
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+        Type item = Assembly.Load(image.ToArray()).GetType("Corpus.Issue4828.Item", throwOnError: true);
+        Assert.Contains(
+            item.GetCustomAttributesData(),
+            attribute => attribute.AttributeType.FullName == "Corpus.Issue4828.CSharpRecordAttribute");
+    }
+
     [Theory]
     [InlineData("P")]
     [InlineData("this.P")]
@@ -935,6 +1053,15 @@ namespace Corpus.Issue4675
         Assert.Equal(true, interfaceEquals.Invoke(left, new[] { equal }));
         Assert.Equal(false, interfaceEquals.Invoke(left, new[] { different }));
     }
+
+    private static string ConstructorContract(ConstructorInfo constructor) =>
+        string.Join(
+            "|",
+            constructor.Attributes,
+            string.Join(
+                ";",
+                constructor.GetParameters().Select(parameter =>
+                    $"{parameter.Name}:{parameter.ParameterType.FullName}:{parameter.Attributes}")));
 
     private static void AssertPrintMembers(Assembly baseline, Assembly translated, string typeName)
     {

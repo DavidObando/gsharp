@@ -369,7 +369,7 @@ public class DataStructSynthesizedMembersTests
         var point = assembly.GetTypes().Single(t => t.Name == "Point");
         var equalsObject = point.GetMethod("Equals", new[] { typeof(object) })!;
         Assert.True(equalsObject.IsVirtual);
-        Assert.True(equalsObject.IsFinal);
+        Assert.False(equalsObject.IsFinal);
     }
 
     [Fact]

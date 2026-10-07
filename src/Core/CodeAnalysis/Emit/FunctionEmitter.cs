@@ -614,7 +614,14 @@ internal sealed class FunctionEmitter
                     methodAttrs |= MethodAttributes.NewSlot;
                 }
 
-                if (isDataToStringOverride ? DataStructSynthesizer.IsDataObjectOverrideFinal(receiverStruct) : !function.IsOpen)
+                bool redundantFinalOnSealedOverride = function.IsOverride
+                    && receiverStruct != null
+                    && (!receiverStruct.IsClass
+                        || (!receiverStruct.IsOpen && !receiverStruct.IsSealedHierarchy));
+                if ((isDataToStringOverride
+                        ? DataStructSynthesizer.IsDataObjectOverrideFinal(receiverStruct)
+                        : !function.IsOpen)
+                    && !redundantFinalOnSealedOverride)
                 {
                     methodAttrs |= MethodAttributes.Final;
                 }

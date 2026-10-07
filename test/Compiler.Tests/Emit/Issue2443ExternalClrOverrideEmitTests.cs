@@ -478,7 +478,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!;
 
             Assert.True(method.IsVirtual);
-            Assert.True(method.IsFinal);
+            Assert.False(method.IsFinal);
             Assert.False((method.Attributes & MethodAttributes.NewSlot) != 0);
             Assert.Equal(typeof(object).GetMethod("ToString"), method.GetBaseDefinition());
         }
@@ -660,7 +660,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
     private static void AssertValueTypeObjectOverride(MethodInfo implementation, MethodInfo declaration)
     {
         AssertOverrideSlot(implementation, declaration);
-        Assert.True(implementation.IsFinal);
+        Assert.False(implementation.IsFinal);
         Assert.True(implementation.IsHideBySig);
     }
 

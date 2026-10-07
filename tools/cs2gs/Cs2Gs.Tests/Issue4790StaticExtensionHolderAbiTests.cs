@@ -109,11 +109,9 @@ public class Issue4790StaticExtensionHolderAbiTests
             }
 
             Type receiver = images[1].GetType("Issue4790.Contracts.Node", throwOnError: true);
-            MethodInfo bridge = Assert.Single(receiver.GetMethods(BindingFlags.Public | BindingFlags.Instance),
-                method => method.Name == "Read" && method.GetParameters().Length == 1
-                    && method.GetParameters()[0].ParameterType == typeof(int));
-            Assert.False(bridge.IsStatic);
-            Assert.False(bridge.IsVirtual);
+            Assert.DoesNotContain(
+                receiver.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                method => method.Name is "Read" or "Echo" or "NullAllowed");
         });
     }
 
@@ -312,21 +310,15 @@ public class Issue4790StaticExtensionHolderAbiTests
                     .GetMethod(name, BindingFlags.Public | BindingFlags.Static);
                 MethodInfo original = images[1].GetType("Issue4790.Contracts.Holder", throwOnError: true)
                     .GetMethod(name, BindingFlags.Public | BindingFlags.Static);
-                MethodInfo canonical = images[1].GetType("Issue4790.Contracts.Node", throwOnError: true)
-                    .GetMethod(name, BindingFlags.Public | BindingFlags.Instance);
                 Assert.NotNull(expected);
                 Assert.NotNull(original);
-                Assert.NotNull(canonical);
                 Assert.True(expected.ReturnType.IsByRef);
                 Assert.Equal(Contract(expected), Contract(original));
-                Assert.True(canonical.ReturnType.IsByRef);
-                Assert.False(canonical.IsStatic);
                 Assert.Equal(
                     expected.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName),
                     original.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName));
-                Assert.Equal(
-                    expected.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName),
-                    canonical.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.FullName));
+                Assert.Null(images[1].GetType("Issue4790.Contracts.Node", throwOnError: true)
+                    .GetMethod(name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
             }
         }, source, consumerSource);
     }
@@ -410,17 +402,11 @@ public class Issue4790StaticExtensionHolderAbiTests
             Assembly actual = consumer.LoadTogether(File.ReadAllBytes(emitted))[0];
             MethodInfo original = actual.GetType("Issue4790.Contracts.Holder", throwOnError: true)
                 .GetMethod("Values", BindingFlags.Public | BindingFlags.Static);
-            MethodInfo canonical = actual.GetType("Issue4790.Contracts.Node", throwOnError: true)
-                .GetMethod("Values", BindingFlags.Public | BindingFlags.Instance);
             Assert.NotNull(original);
-            Assert.NotNull(canonical);
             Assert.Equal(Contract(expected.GetType("Issue4790.Contracts.Holder", throwOnError: true)
                 .GetMethod("Values", BindingFlags.Public | BindingFlags.Static)), Contract(original));
-            Assert.Equal(asyncIterator
-                ? typeof(System.Collections.Generic.IAsyncEnumerable<int>)
-                : typeof(System.Collections.Generic.IEnumerable<int>), canonical.ReturnType);
-            Assert.False(canonical.IsStatic);
-            Assert.Empty(canonical.GetParameters());
+            Assert.Null(actual.GetType("Issue4790.Contracts.Node", throwOnError: true)
+                .GetMethod("Values", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
         }, source, consumerSource);
     }
 
@@ -479,12 +465,8 @@ public class Issue4790StaticExtensionHolderAbiTests
             Assert.Equal("1,1,0", RunConsumer(native, consumer));
             Assert.Equal("1,1,0", RunConsumer(emitted, consumer));
             Assembly actual = consumer.LoadTogether(File.ReadAllBytes(emitted))[0];
-            MethodInfo canonical = actual.GetType("Issue4790.Contracts.Node", throwOnError: true)
-                .GetMethod("Value", BindingFlags.Public | BindingFlags.Instance);
-            Assert.NotNull(canonical);
-            Assert.False(canonical.IsStatic);
-            Assert.Equal(generic ? typeof(System.Threading.Tasks.Task<int>) : typeof(System.Threading.Tasks.Task),
-                canonical.ReturnType);
+            Assert.Null(actual.GetType("Issue4790.Contracts.Node", throwOnError: true)
+                .GetMethod("Value", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
         }, source, consumerSource);
     }
 
@@ -631,8 +613,8 @@ public class Issue4790StaticExtensionHolderAbiTests
             Assert.Equal("1", RunConsumer(emitted, consumer));
             string workspace = Path.GetDirectoryName(Path.GetDirectoryName(native));
             string translated = File.ReadAllText(Path.Combine(workspace, "Producer.gs"));
-            Assert.Contains("func Values() IEnumerable[string?]", translated);
             Assert.Contains("func (node Node) Values() sequence[string?]", translated);
+            Assert.Equal(1, translated.Split(" Values()", StringSplitOptions.None).Length - 1);
         }, source, consumerSource);
     }
 
@@ -770,7 +752,7 @@ public class Issue4790StaticExtensionHolderAbiTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void SuspendingOwnedExtensions_PreserveDeclaredContextAndLogicalCompanion(bool marked)
+    public void SuspendingOwnedExtensions_PreserveDeclaredContextWithoutReceiverAbi(bool marked)
     {
         string attribute = marked ? "[Suspending]" : string.Empty;
         string source = $$"""
@@ -840,33 +822,9 @@ public class Issue4790StaticExtensionHolderAbiTests
                     a => a.AttributeType == typeof(Gsharp.Concurrency.SuspendingAttribute));
                 Assert.Equal(original.GetParameters()[0].GetCustomAttributesData().Select(a => a.AttributeType.FullName),
                     hosted.GetParameters()[0].GetCustomAttributesData().Select(a => a.AttributeType.FullName));
-                MethodInfo companion = receiver.GetMethod(name);
-                Assert.Equal(hosted.ReturnType, companion.ReturnType);
-                Assert.Single(companion.GetParameters());
-                Assert.Equal(typeof(Gsharp.Concurrency.Context), companion.GetParameters()[0].ParameterType);
-                Assert.NotNull(companion.GetCustomAttribute<AsyncStateMachineAttribute>());
-                Assert.Single(companion.GetCustomAttributesData(),
-                    a => a.AttributeType == typeof(Gsharp.Concurrency.SuspendingAttribute));
-                object node = Activator.CreateInstance(receiver);
-                var gate = (TaskCompletionSource<int>)receiver.GetField("Gate").GetValue(node);
-                object pending = companion.Invoke(node, new object[] { Gsharp.Concurrency.Context.None });
-                Assert.Equal(1, receiver.GetField("Calls").GetValue(node));
-                if (name == "Read")
-                {
-                    var value = (ValueTask<int>)pending;
-                    Assert.False(value.IsCompleted);
-                    gate.SetResult(31);
-                    Assert.Equal(31, value.AsTask().GetAwaiter().GetResult());
-                }
-                else
-                {
-                    var value = (ValueTask)pending;
-                    Assert.False(value.IsCompleted);
-                    gate.SetResult(31);
-                    value.AsTask().GetAwaiter().GetResult();
-                }
-
-                Assert.Equal(1, receiver.GetField("Calls").GetValue(node));
+                Assert.Null(receiver.GetMethod(
+                    name,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
             }
         });
     }
@@ -918,15 +876,13 @@ public class Issue4790StaticExtensionHolderAbiTests
             Assert.Equal("True,1,False", RunConsumer(emitted, consumer));
             Assembly image = consumer.LoadTogether(File.ReadAllBytes(emitted))[0];
             Type receiver = image.GetType("Issue4790.NonGeneric.Node", throwOnError: true);
-            var gate = new TaskCompletionSource<int>();
-            object node = Activator.CreateInstance(receiver, gate.Task);
-            MethodInfo companion = receiver.GetMethod("Pass");
-            Assert.Null(companion.GetCustomAttribute<AsyncStateMachineAttribute>());
-            object pending = companion.Invoke(node, null);
-            Task actual = valueTask ? ((ValueTask)pending).AsTask() : (Task)pending;
-            Assert.Same(gate.Task, actual);
-            Assert.False(actual.IsCompleted);
-            Assert.Equal(1, receiver.GetField("Calls").GetValue(node));
+            Assert.Null(receiver.GetMethod(
+                "Pass",
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
+            MethodInfo hosted = image.GetType("Issue4790.NonGeneric.Holder", throwOnError: true)
+                .GetMethod("Pass", BindingFlags.Public | BindingFlags.Static);
+            Assert.NotNull(hosted);
+            Assert.Equal(valueTask ? typeof(ValueTask) : typeof(Task), hosted.ReturnType);
         });
     }
 

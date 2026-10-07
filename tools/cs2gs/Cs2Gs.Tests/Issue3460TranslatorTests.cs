@@ -351,19 +351,18 @@ namespace Cs2Gs.Tests
                 printed,
                 StringComparison.Ordinal);
             Assert.Contains("SystemObject_2()", printed, StringComparison.Ordinal);
-            Assert.Contains("func Measure()", printed, StringComparison.Ordinal);
-            Assert.Contains("HostExtensions.Measure(host)", printed, StringComparison.Ordinal);
             Assert.Contains("shared class HostExtensions", files["B.Extensions.cs"], StringComparison.Ordinal);
+            Assert.Contains("func (host Host) Measure()", files["B.Extensions.cs"], StringComparison.Ordinal);
             Assert.Contains("ExtensionOwner(typeof(HostExtensions))", files["B.Extensions.cs"], StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(files.Values.ToArray());
 
             EmittedOracleResult result = EmittedOracle.Evaluate(
                 files.Values.Append(
-                    "package Demo\nHost.Run() + \":\" + Host().Measure().ToString() + \":\" + HostExtensions.Measure(Host()).ToString()")
+                    "package Demo\nHost.Run() + \":\" + HostExtensions.Measure(Host()).ToString()")
                     .ToArray());
             Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
             Assert.Null(result.UnhandledException);
-            Assert.Equal("System.Object:1:1", result.Value);
+            Assert.Equal("System.Object:1", result.Value);
         }
 
         [Fact]
@@ -412,19 +411,21 @@ namespace Cs2Gs.Tests
                 StringComparison.Ordinal);
             Assert.Contains("SystemObject_2()", printed, StringComparison.Ordinal);
             Assert.Contains("class Nested", printed, StringComparison.Ordinal);
-            Assert.Contains("func Measure()", printed, StringComparison.Ordinal);
-            Assert.Contains("NestedExtensions.Measure(value)", printed, StringComparison.Ordinal);
             Assert.Contains("shared class NestedExtensions", files["C.Extensions.cs"], StringComparison.Ordinal);
+            Assert.Contains(
+                "func (value Outer.Nested) Measure()",
+                files["C.Extensions.cs"],
+                StringComparison.Ordinal);
             Assert.Contains("ExtensionOwner(typeof(NestedExtensions))", files["C.Extensions.cs"], StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(files.Values.ToArray());
 
             EmittedOracleResult result = EmittedOracle.Evaluate(
                 files.Values.Append(
-                    "package Demo\nOuter.Run() + \":\" + Outer.Nested().Measure().ToString() + \":\" + NestedExtensions.Measure(Outer.Nested()).ToString()")
+                    "package Demo\nOuter.Run() + \":\" + NestedExtensions.Measure(Outer.Nested()).ToString()")
                     .ToArray());
             Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
             Assert.Null(result.UnhandledException);
-            Assert.Equal("System.Object:1:1", result.Value);
+            Assert.Equal("System.Object:1", result.Value);
         }
 
         [Fact]

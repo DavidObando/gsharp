@@ -2170,6 +2170,14 @@ internal sealed class ReflectionMetadataEmitter
         void PlanClassMethods(StructSymbol c)
         {
             classCtorRows[c] = methodRow++;
+            bool dataPrimaryOnly = c.IsData
+                && c.HasPrimaryConstructor
+                && c.BaseConstructorInitializer == null
+                && c.ExplicitConstructor == null;
+            if (dataPrimaryOnly)
+            {
+                classPrimaryCtorRows[c] = classCtorRows[c];
+            }
 
             // Issue #656 / ADR-0065: when the class declares explicit init(...)
             // constructors, each overload beyond the first requires an additional
@@ -2186,7 +2194,10 @@ internal sealed class ReflectionMetadataEmitter
             // bodies, the synthesized primary ctor is allocated as one of the
             // ExplicitConstructors rows above — do not reserve an additional
             // primary-ctor row here.
-            if (c.HasPrimaryConstructor && c.BaseConstructorInitializer == null && c.ExplicitConstructor == null)
+            if (c.HasPrimaryConstructor
+                && c.BaseConstructorInitializer == null
+                && c.ExplicitConstructor == null
+                && !dataPrimaryOnly)
             {
                 classPrimaryCtorRows[c] = methodRow++;
             }
@@ -3797,13 +3808,18 @@ internal sealed class ReflectionMetadataEmitter
             }
             else
             {
-                var ctorHandle = this.typeDefEmitter.EmitClassDefaultConstructor(c);
-                this.cache.ClassCtorHandles[c] = ctorHandle;
-
-                if (c.HasPrimaryConstructor)
+                if (c.IsData && c.HasPrimaryConstructor)
                 {
-                    var primaryHandle = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
-                    this.cache.ClassPrimaryCtorHandles[c] = primaryHandle;
+                    this.cache.ClassPrimaryCtorHandles[c] = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
+                }
+                else
+                {
+                    var ctorHandle = this.typeDefEmitter.EmitClassDefaultConstructor(c);
+                    this.cache.ClassCtorHandles[c] = ctorHandle;
+                    if (c.HasPrimaryConstructor)
+                    {
+                        this.cache.ClassPrimaryCtorHandles[c] = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
+                    }
                 }
             }
 

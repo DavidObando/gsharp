@@ -1599,7 +1599,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 membersToTranslate.AddRange(
                     ownedExtensionMethods
-                        .Where(this.CanLowerOwnedExtension)
+                        .Where(method => this.CanLowerOwnedExtension(method)
+                            && !this.IsPreservedOwnedExtension(
+                                this.context.Compilation.GetSemanticModel(method.SyntaxTree)
+                                    .GetDeclaredSymbol(method) as IMethodSymbol))
                         .Select(method => (
                             Member: (MemberDeclarationSyntax)method,
                             OwnedExtensionTarget: symbol)));
@@ -1986,6 +1989,13 @@ public sealed partial class CSharpToGSharpTranslator
             bool isRefLike = symbol?.IsRefLikeType == true ||
                 node.Modifiers.Any(SyntaxKind.RefKeyword) ||
                 (otherParts != null && otherParts.Any(p => p.Modifiers.Any(SyntaxKind.RefKeyword)));
+            List<AttributeUse> attributes = this.MapAttributes(mergedAttributeLists);
+            if (symbol?.IsRecord == true)
+            {
+                attributes.Add(new AttributeUse(
+                    "__Cs2GsRecordProvenance_4828",
+                    Array.Empty<AttributeArgument>()));
+            }
 
             return new TypeDeclaration(
                 kind.Value,
@@ -1999,7 +2009,7 @@ public sealed partial class CSharpToGSharpTranslator
                 visibility: MapVisibility(symbol, this.context, node),
                 isOpen: isOpen && !isAbstract,
                 isAbstract: isAbstract,
-                attributes: this.MapAttributes(mergedAttributeLists),
+                attributes: attributes,
                 isUnsafe: isUnsafe,
                 isPartial: isPartial,
                 isRefLike: isRefLike,

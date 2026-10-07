@@ -29,9 +29,8 @@ namespace GSharp.Compiler.Tests.Emit;
 /// CLR attribute treatment as the other synthesized members — no NewSlot
 /// (so it reuses/participates in the correct vtable slot for TRUE
 /// polymorphic override dispatch through a base-typed reference,
-/// unlike a plain non-data class's hand-written ToString), and Final
-/// driven by the data type's open/sealed-hierarchy status exactly like
-/// <c>DataStructSynthesizer.IsDataObjectOverrideFinal</c>.</description></item>
+/// unlike a plain non-data class's hand-written ToString), and no redundant
+/// Final bit when the containing TypeDef already prevents derivation.</description></item>
 /// </list>
 /// These tests exercise the real-world <c>Oahu.Core.ProfileKey</c> /
 /// <c>Oahu.Core.ProfileKeyEx</c> (open data class, derived class chaining
@@ -121,7 +120,7 @@ public class Issue2361DataToStringOverrideEmitTests
     }
 
     [Fact]
-    public void DataClass_NotOpen_CompatibleToString_IsFinal()
+    public void DataClass_NotOpen_CompatibleToString_OmitsRedundantFinal()
     {
         var source = """
             package MyLib
@@ -138,17 +137,14 @@ public class Issue2361DataToStringOverrideEmitTests
 
         Assert.NotNull(toString);
         Assert.True(toString.IsVirtual);
-        Assert.True(toString.IsFinal);
+        Assert.False(toString.IsFinal);
     }
 
     [Fact]
-    public void DataStruct_CompatibleToString_IsVirtualAndFinal()
+    public void DataStruct_CompatibleToString_IsVirtualWithoutRedundantFinal()
     {
-        // Structs are never open (no derivation), so the struct ToString
-        // override must be unconditionally Virtual|Final just like the
-        // synthesized one — and MethodInfoHelpers.RequiresVirtualOnValueType
-        // (which would otherwise say "no Virtual needed" for a plain
-        // non-override struct method) must be bypassed for this case.
+        // Structs are never open, so the containing TypeDef already prevents
+        // derivation and the override does not need a redundant Final flag.
         var source = """
             package MyLib
             import System
@@ -167,7 +163,7 @@ public class Issue2361DataToStringOverrideEmitTests
 
         Assert.NotNull(toString);
         Assert.True(toString.IsVirtual);
-        Assert.True(toString.IsFinal);
+        Assert.False(toString.IsFinal);
     }
 
     [Fact]
