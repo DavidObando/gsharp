@@ -1092,23 +1092,7 @@ public sealed partial class CSharpToGSharpTranslator
             string emittedMemberName = this.InAnalyzerApiMode
                 ? this.nameAllocator.GetName(memberName)
                 : this.EmittedName(memberSymbol, memberName);
-            GExpression translatedMember =
-                new MemberAccessExpression(target, emittedMemberName, isArrow);
-
-            if (memberSymbol is IPropertySymbol anonymousProperty
-                && anonymousProperty.ContainingType.IsAnonymousType
-                && anonymousProperty.Type.IsReferenceType
-                && this.typeMapper.GetAnonymousPropertyType(
-                    anonymousProperty,
-                    this.context,
-                    member.GetLocation()).IsNullable
-                && this.context.GetTypeInfo(member).Nullability.FlowState
-                    == NullableFlowState.NotNull)
-            {
-                return EnsureNonNullAssertion(translatedMember);
-            }
-
-            return translatedMember;
+            return new MemberAccessExpression(target, emittedMemberName, isArrow);
         }
 
         /// <summary>

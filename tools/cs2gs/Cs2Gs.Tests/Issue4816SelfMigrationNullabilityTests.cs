@@ -91,6 +91,13 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         nullableShape = nonNullableShape;
                         return nonNullableShape.Value.Length;
                     }
+                    public static bool MergedContractNullObservation(string? maybe)
+                    {
+                        var nonNullableShape = new { Value = "fixed" };
+                        var nullableShape = new { Value = maybe };
+                        nonNullableShape = nullableShape;
+                        return nonNullableShape.Value == null;
+                    }
                     public static object MergedDelegateContract(
                         Func<string?> nullableFactory,
                         Func<string> nonNullableFactory)

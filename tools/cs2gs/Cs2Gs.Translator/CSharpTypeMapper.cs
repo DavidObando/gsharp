@@ -3489,7 +3489,11 @@ public sealed class CSharpTypeMapper
             return existing;
         }
 
-        var merged = mappedPropertyTypes.ToList();
+        var merged = properties
+            .Select((property, index) => NormalizeAnonymousProjectedStorage(
+                property.Type,
+                mappedPropertyTypes[index]))
+            .ToList();
         foreach (SyntaxTree tree in context.Compilation.SyntaxTrees)
         {
             SemanticModel model = context.Compilation.GetSemanticModel(tree);
@@ -3527,6 +3531,30 @@ public sealed class CSharpTypeMapper
 
         this.anonymousShapeContracts[shapeKey] = merged;
         return merged;
+    }
+
+    private static GTypeReference NormalizeAnonymousProjectedStorage(
+        ITypeSymbol symbol,
+        GTypeReference mapped)
+    {
+        if (symbol is not IArrayTypeSymbol arraySymbol
+            || mapped is not ArrayTypeReference array)
+        {
+            return mapped;
+        }
+
+        GTypeReference element = NormalizeAnonymousProjectedStorage(
+            arraySymbol.ElementType,
+            array.ElementType);
+        if (arraySymbol.ElementType.IsReferenceType)
+        {
+            element = WithNullable(element, true);
+        }
+
+        return new ArrayTypeReference(element, array.Rank)
+        {
+            IsNullable = array.IsNullable,
+        };
     }
 
     private static string AnonymousShapeKey(IReadOnlyList<IPropertySymbol> properties) =>
