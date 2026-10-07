@@ -1099,8 +1099,81 @@ internal static class ObliviousNullabilityAnalyzer
         type is { IsReferenceType: true } and not ITypeParameterSymbol
             && type.NullableAnnotation == NullableAnnotation.None;
 
+    // A disabled consumer reports every imported reference position as
+    // Annotation.None, including metadata that explicitly says `T?`. Read the
+    // top-level Nullable/NullableContext byte that gsc imports so ADR-0186's
+    // `T!` shortcut applies only to genuinely oblivious values.
+    internal static bool IsImportedStatedNullablePosition(
+        ISymbol symbol,
+        Compilation compilation)
+    {
+        if (symbol is not (IMethodSymbol or IPropertySymbol or IFieldSymbol)
+            || SymbolEqualityComparer.Default.Equals(
+                symbol.ContainingAssembly,
+                compilation.Assembly))
+        {
+            return false;
+        }
+
+        ImmutableArray<AttributeData> positionAttributes = symbol switch
+        {
+            IMethodSymbol method => method.GetReturnTypeAttributes(),
+            IPropertySymbol property => property.GetAttributes(),
+            IFieldSymbol field => field.GetAttributes(),
+            _ => default,
+        };
+        if (MetadataNullabilityFlag(
+                positionAttributes,
+                "System.Runtime.CompilerServices.NullableAttribute") is byte positionFlag)
+        {
+            return positionFlag == 2;
+        }
+
+        for (ISymbol current = symbol; current != null; current = current.ContainingSymbol)
+        {
+            if (MetadataNullabilityFlag(
+                    current.GetAttributes(),
+                    "System.Runtime.CompilerServices.NullableContextAttribute") is byte contextFlag)
+            {
+                return contextFlag == 2;
+            }
+        }
+
+        return false;
+    }
+
     internal static bool IsReturnSignatureFixedByAnotherDeclaration(IMethodSymbol method) =>
         IsSignatureFixedByAnotherDeclaration(method);
+
+    private static byte? MetadataNullabilityFlag(
+        ImmutableArray<AttributeData> attributes,
+        string attributeName)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        AttributeData attribute = attributes.FirstOrDefault(candidate =>
+            candidate.AttributeClass?.ToDisplayString() == attributeName);
+        if (attribute == null || attribute.ConstructorArguments.Length != 1)
+        {
+            return null;
+        }
+
+        TypedConstant argument = attribute.ConstructorArguments[0];
+        if (argument.Kind != TypedConstantKind.Array
+            && argument.Value is byte scalar)
+        {
+            return scalar;
+        }
+
+        return argument.Kind == TypedConstantKind.Array
+            && argument.Values.Length > 0
+            && argument.Values[0].Value is byte first
+                ? first
+                : null;
+    }
 
     private static bool IsTaintedCore(
         CSharpCompilation compilation,

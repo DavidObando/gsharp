@@ -3120,8 +3120,21 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IsNullableArrayElementAccess(ExpressionSyntax expression)
         {
-            return Unparenthesize(expression) is ElementAccessExpressionSyntax elementAccess
-                && this.ArrayExpressionHasNullableReferenceLikeElement(elementAccess.Expression);
+            expression = Unparenthesize(expression);
+            if (expression is not ElementAccessExpressionSyntax elementAccess)
+            {
+                return false;
+            }
+
+            if (this.ArrayExpressionHasNullableReferenceLikeElement(elementAccess.Expression))
+            {
+                return true;
+            }
+
+            return (this.GetManagedReferenceArrayProjectedExpressionType(
+                    elementAccess.Expression) as IArrayTypeSymbol)?.ElementType
+                is { NullableAnnotation: NullableAnnotation.Annotated } projectedElement
+                && this.IsReferenceLikeOrManagedReference(projectedElement);
         }
 
         private bool ArrayExpressionHasNullableReferenceLikeElement(ExpressionSyntax expression)

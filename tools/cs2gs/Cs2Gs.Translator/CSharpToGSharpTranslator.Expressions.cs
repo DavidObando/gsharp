@@ -705,12 +705,35 @@ public sealed partial class CSharpToGSharpTranslator
                 anonymous.GetLocation(),
                 TranslationSeverity.Info));
 
+            INamedTypeSymbol anonymousType =
+                this.context.GetTypeInfo(anonymous).Type as INamedTypeSymbol;
+            List<IPropertySymbol> anonymousProperties =
+                anonymousType?.GetMembers().OfType<IPropertySymbol>().ToList()
+                ?? new List<IPropertySymbol>();
+            List<bool> nullablePropertyFlags = anonymous.Initializers
+                .Select(initializer => this.AnonymousInitializerAcceptsNil(initializer.Expression))
+                .ToList();
+            List<GTypeReference> mappedPropertyTypes = anonymousProperties
+                .Select((property, index) =>
+                {
+                    GTypeReference mapped = this.typeMapper.Map(
+                        property.Type,
+                        this.context,
+                        anonymous.GetLocation());
+                    return index < anonymous.Initializers.Count
+                        && nullablePropertyFlags[index]
+                            ? MakeNullable(mapped)
+                            : mapped;
+                })
+                .ToList();
             (GTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) shape =
-                this.context.GetTypeInfo(anonymous).Type is INamedTypeSymbol anonymousType
+                anonymousType != null
                     ? this.typeMapper.GetOrCreateAnonymousDataClassShape(
                         anonymousType,
                         this.context,
-                        anonymous.GetLocation())
+                        anonymous.GetLocation(),
+                        mappedPropertyTypes,
+                        nullablePropertyFlags)
                     : (new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType), Array.Empty<IPropertySymbol>());
 
             // Roslyn exposes anonymous properties in constructor order. Drive
@@ -722,15 +745,16 @@ public sealed partial class CSharpToGSharpTranslator
                     .Select((property, index) =>
                     {
                         ExpressionSyntax value = anonymous.Initializers[index].Expression;
+                        GTypeReference propertyType = mappedPropertyTypes[index];
+                        ITypeSymbol targetType = nullablePropertyFlags[index]
+                            ? property.Type.WithNullableAnnotation(NullableAnnotation.Annotated)
+                            : property.Type;
                         GExpression translated = this.ForgiveNullableReferenceValue(
                             value,
                             this.TranslateExpression(value),
-                            property.Type,
-                            targetSymbol: null);
-                        GTypeReference propertyType = this.typeMapper.Map(
-                            property.Type,
-                            this.context,
-                            value.GetLocation());
+                            targetType,
+                            targetSymbol: null,
+                            includePromotedValue: true);
                         return this.AssertFlowNarrowedNullableReference(
                             value,
                             translated,
@@ -742,6 +766,20 @@ public sealed partial class CSharpToGSharpTranslator
                     .ToList();
 
             return BuildConstruction(shape.Type, arguments);
+        }
+
+        private bool AnonymousInitializerAcceptsNil(ExpressionSyntax value)
+        {
+            value = Unparenthesize(value);
+            return IsNullOrSuppressedNull(value)
+                || value.IsKind(SyntaxKind.DefaultLiteralExpression)
+                || value is DefaultExpressionSyntax
+                || (value is ConditionalExpressionSyntax conditional
+                    && (this.AnonymousInitializerAcceptsNil(conditional.WhenTrue)
+                        || this.AnonymousInitializerAcceptsNil(conditional.WhenFalse)))
+                || (value is SwitchExpressionSyntax switchExpression
+                    && switchExpression.Arms.Any(arm =>
+                        this.AnonymousInitializerAcceptsNil(arm.Expression)));
         }
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
@@ -1119,6 +1157,7 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression)
         {
             expression = Unparenthesize(expression);
+
             if (expression is IdentifierNameSyntax identifier
                 && this.context.GetSymbolInfo(identifier).Symbol is { } identifierSymbol)
             {
@@ -1147,7 +1186,7 @@ public sealed partial class CSharpToGSharpTranslator
                         return projectedLocalType;
                     }
 
-                    if (IsImplicitlyTypedLocal(local)
+                    if (local.Type is IArrayTypeSymbol
                         && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                             is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
                     {
@@ -1176,7 +1215,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.context.Compilation.CreateArrayTypeSymbol(
                     projectedArrayElement,
                     array.Rank,
-                    array.NullableAnnotation);
+                    projectedArrayElement.NullableAnnotation)
+                .WithNullableAnnotation(array.NullableAnnotation);
             }
 
             if (expression is ConditionalExpressionSyntax conditional)
@@ -1204,7 +1244,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (expression is ElementAccessExpressionSyntax arrayElement
-                && this.GetMappedArrayElementType(arrayElement.Expression)
+                && (this.GetManagedReferenceArrayProjectedExpressionType(
+                        arrayElement.Expression) as IArrayTypeSymbol)?.ElementType
                     is { } projectedElement
                 && this.context.GetTypeInfo(arrayElement).Type is { } elementType
                 && !SymbolEqualityComparer.IncludeNullability.Equals(
@@ -1216,6 +1257,37 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (expression is InvocationExpressionSyntax invocation)
             {
+                IMethodSymbol invokedMethod =
+                    this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+                if (invocation.Expression is MemberAccessExpressionSyntax memberAccess
+                    && invokedMethod?.ReturnType is { } invocationReturn
+                    && this.context.GetTypeInfo(memberAccess.Expression).Type
+                        is IArrayTypeSymbol receiverArray
+                    && SymbolEqualityComparer.Default.Equals(
+                        invocationReturn,
+                        receiverArray.ElementType)
+                    && this.GetManagedReferenceArrayProjectedExpressionType(
+                        memberAccess.Expression) is IArrayTypeSymbol projectedReceiver)
+                {
+                    return projectedReceiver.ElementType;
+                }
+
+                invokedMethod = invokedMethod?.ReducedFrom ?? invokedMethod?.OriginalDefinition;
+
+                if (invokedMethod?.ReturnType is IArrayTypeSymbol
+                        { ElementType: { IsReferenceType: true } returnElement } returnArray
+                    && invokedMethod.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                        is MethodDeclarationSyntax declaration
+                    && this.MapReturnType(invokedMethod, declaration)
+                        is ArrayTypeReference { ElementType.IsNullable: true })
+                {
+                    return this.context.Compilation.CreateArrayTypeSymbol(
+                        returnElement,
+                        returnArray.Rank,
+                        NullableAnnotation.Annotated)
+                    .WithNullableAnnotation(returnArray.NullableAnnotation);
+                }
+
                 if (this.TryGetManagedReferenceArrayProjectedMethod(
                     invocation,
                     out IMethodSymbol projectedMethod))
@@ -2384,8 +2456,14 @@ public sealed partial class CSharpToGSharpTranslator
             // `[]string`, while `File.ReadAllLines(path)!!` does (the
             // netstandard2.0 Gsharp.NET.Sdk, #4449). Only a value whose type
             // has no nested reference position is left bare.
-            ITypeSymbol type = this.context.GetTypeInfo(expression).Type;
-            if (HasNestedReferencePosition(type))
+            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
+            ITypeSymbol type = typeInfo.Type;
+            if (ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                    this.context.GetSymbolInfo(expression).Symbol,
+                    this.context.Compilation)
+                || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated
+                || type?.NullableAnnotation == NullableAnnotation.Annotated
+                || HasNestedReferencePosition(type))
             {
                 return false;
             }
@@ -4067,7 +4145,10 @@ public sealed partial class CSharpToGSharpTranslator
             // reports that metadata as Annotation.None, so its flow state cannot
             // drive the target-aware receiver/value bridges below.
             ISymbol valueSymbol = this.context.GetSymbolInfo(value).Symbol;
-            if (this.IsImportedObliviousNullableMember(valueSymbol))
+            if (ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                    valueSymbol,
+                    this.context.Compilation)
+                || this.IsImportedObliviousNullableMember(valueSymbol))
             {
                 return true;
             }

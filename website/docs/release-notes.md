@@ -27,6 +27,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 - **cs2gs preserves nullable inferred locals inside lambdas** (issue #4826). Local nullability scans now stay in the declaring lambda block, so a `Record.Exception` result observed by `Assert.Null` remains nullable instead of gaining a checked `!!` assertion.
 
+- **cs2gs distinguishes stated-nullable metadata from platform types in oblivious projects** (issue #4816). Imported `T?` values now retain the required use-site assertion when an oblivious C# consumer stores or dereferences them through a non-null G# contract; genuinely oblivious `T!` values still use gsc's platform coercion.
+
 - **Copies retain construction provenance** (issues #4776 and #4796). Data-struct `with` and `.copy(...)` copy existing storage without rerunning primary constructors or declaration initializers. Expression-tree source data-class copies use the exact virtual clone before ordered updates, retaining private/base state and invocation-time, once-only evaluation rather than constructing a fresh object.
   - The emitted-PE baseline now records the intentional storage-copy IL in `DataStructErgonomics` and `WebsiteSwift`; real gsc/native C# oracles pin fresh-construction counts, strict IL, output and original/copy state. The other 158 sample entries and hash policy are unchanged.
 

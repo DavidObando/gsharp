@@ -1235,12 +1235,23 @@ public sealed class CSharpTypeMapper
     internal (NamedTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) GetOrCreateAnonymousDataClassShape(
         INamedTypeSymbol anonymousType,
         TranslationContext context,
-        Location location)
+        Location location,
+        IReadOnlyList<GTypeReference> mappedPropertyTypes = null,
+        IReadOnlyList<bool> nullablePropertyFlags = null)
     {
         List<IPropertySymbol> properties = anonymousType.GetMembers().OfType<IPropertySymbol>().ToList();
+        mappedPropertyTypes ??= properties
+            .Select(property => this.Map(property.Type, context, location))
+            .ToList();
+        nullablePropertyFlags ??= mappedPropertyTypes
+            .Select(propertyType => propertyType.IsNullable)
+            .ToList();
         string shapeKey = string.Join(
             "|",
-            properties.Select(p => p.Name + ":" + p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)));
+            properties.Select((property, index) =>
+                property.Name + ":"
+                    + property.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+                    + (nullablePropertyFlags[index] ? "?" : string.Empty)));
 
         // A shape synthesized by an earlier file in the same package is reused
         // without redeclaration. A new shape gets the same deterministic name
@@ -1259,11 +1270,11 @@ public sealed class CSharpTypeMapper
 
         string syntheticName = AnonymousTypeRegistry.SyntheticName(shapeKey, properties.Count);
         var parameters = properties
-            .Select(p => new Cs2Gs.CodeModel.Ast.Parameter(
+            .Select((property, index) => new Cs2Gs.CodeModel.Ast.Parameter(
                 this.Names(context).GetName(
-                    p,
+                    property,
                     GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Parameter),
-                this.Map(p.Type, context, location)))
+                mappedPropertyTypes[index]))
             .ToList();
 
         context.Report(new TranslationDiagnostic(
