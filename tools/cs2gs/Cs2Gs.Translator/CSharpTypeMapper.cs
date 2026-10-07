@@ -119,6 +119,8 @@ public sealed class CSharpTypeMapper
     // document re-translated for ADR-0192 pair reconciliation declares each
     // of its shapes exactly once.
     private readonly HashSet<string> declaredAnonymousShapes = new(System.StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<GTypeReference>> anonymousShapeContracts =
+        new(System.StringComparer.Ordinal);
 
     private readonly Dictionary<string, string> synthesizedTypeAliases =
         new(System.StringComparer.Ordinal);
@@ -1243,11 +1245,11 @@ public sealed class CSharpTypeMapper
         mappedPropertyTypes ??= properties
             .Select(property => this.Map(property.Type, context, location))
             .ToList();
-        string shapeKey = string.Join(
-            "|",
-            properties.Select((property, index) =>
-                property.Name + ":"
-                    + GSharpPrinter.RenderTypeReference(mappedPropertyTypes[index])));
+        mappedPropertyTypes = this.MergeAnonymousShapeContracts(
+            properties,
+            mappedPropertyTypes,
+            context);
+        string shapeKey = AnonymousShapeKey(properties);
 
         // A shape synthesized by an earlier file in the same package is reused
         // without redeclaration. A new shape gets the same deterministic name
@@ -3453,6 +3455,134 @@ public sealed class CSharpTypeMapper
             && returnType.NullableAnnotation != NullableAnnotation.Annotated
                 ? WithNullable(mapped, true)
                 : mapped;
+    }
+
+    private IReadOnlyList<GTypeReference> MergeAnonymousShapeContracts(
+        IReadOnlyList<IPropertySymbol> properties,
+        IReadOnlyList<GTypeReference> mappedPropertyTypes,
+        TranslationContext context)
+    {
+        string shapeKey = AnonymousShapeKey(properties);
+        if (this.anonymousShapeContracts.TryGetValue(
+            shapeKey,
+            out IReadOnlyList<GTypeReference> existing))
+        {
+            return existing;
+        }
+
+        var merged = mappedPropertyTypes.ToList();
+        foreach (SyntaxTree tree in context.Compilation.SyntaxTrees)
+        {
+            SemanticModel model = context.Compilation.GetSemanticModel(tree);
+            foreach (AnonymousObjectCreationExpressionSyntax creation in
+                tree.GetRoot().DescendantNodes().OfType<AnonymousObjectCreationExpressionSyntax>())
+            {
+                if (model.GetTypeInfo(creation).Type is not INamedTypeSymbol candidateType)
+                {
+                    continue;
+                }
+
+                List<IPropertySymbol> candidateProperties =
+                    candidateType.GetMembers().OfType<IPropertySymbol>().ToList();
+                if (candidateProperties.Count != merged.Count
+                    || AnonymousShapeKey(candidateProperties) != shapeKey)
+                {
+                    continue;
+                }
+
+                for (int index = 0; index < merged.Count; index++)
+                {
+                    merged[index] = MergeAnonymousNullability(
+                        merged[index],
+                        candidateProperties[index].Type);
+                    if (index < creation.Initializers.Count
+                        && AnonymousInitializerAcceptsNil(
+                            creation.Initializers[index].Expression,
+                            model))
+                    {
+                        merged[index] = WithNullable(merged[index], true);
+                    }
+                }
+            }
+        }
+
+        this.anonymousShapeContracts[shapeKey] = merged;
+        return merged;
+    }
+
+    private static string AnonymousShapeKey(IReadOnlyList<IPropertySymbol> properties) =>
+        string.Join(
+            "|",
+            properties.Select(property =>
+                property.Name + ":"
+                    + property.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)));
+
+    private static GTypeReference MergeAnonymousNullability(
+        GTypeReference mapped,
+        ITypeSymbol symbol)
+    {
+        bool nullable = mapped.IsNullable
+            || symbol.NullableAnnotation == NullableAnnotation.Annotated;
+        GTypeReference merged = (symbol, mapped) switch
+        {
+            (IArrayTypeSymbol arraySymbol, ArrayTypeReference array) =>
+                new ArrayTypeReference(
+                    MergeAnonymousNullability(array.ElementType, arraySymbol.ElementType),
+                    array.Rank),
+            (INamedTypeSymbol { IsTupleType: true } tupleSymbol, TupleTypeReference tuple)
+                when tupleSymbol.TupleElements.Length == tuple.ElementTypes.Count =>
+                new TupleTypeReference(
+                    tupleSymbol.TupleElements
+                        .Select((element, index) =>
+                            MergeAnonymousNullability(
+                                tuple.ElementTypes[index],
+                                element.Type))
+                        .ToList(),
+                    tuple.ElementNames),
+            (INamedTypeSymbol namedSymbol, NamedTypeReference named)
+                when namedSymbol.TypeArguments.Length == named.TypeArguments.Count =>
+                new NamedTypeReference(
+                    named.Name,
+                    namedSymbol.TypeArguments
+                        .Select((argument, index) =>
+                            MergeAnonymousNullability(
+                                named.TypeArguments[index],
+                                argument))
+                        .ToList(),
+                    named.ContainingType),
+            _ => mapped,
+        };
+        return WithNullable(merged, nullable);
+    }
+
+    private static bool AnonymousInitializerAcceptsNil(
+        ExpressionSyntax expression,
+        SemanticModel model)
+    {
+        expression = expression is ParenthesizedExpressionSyntax parenthesized
+            ? parenthesized.Expression
+            : expression;
+        return expression.IsKind(SyntaxKind.NullLiteralExpression)
+            || expression is ConditionalAccessExpressionSyntax
+            || expression.IsKind(SyntaxKind.AsExpression)
+            || (expression is PostfixUnaryExpressionSyntax suppression
+                && suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression)
+                && AnonymousInitializerAcceptsNil(suppression.Operand, model))
+            || (expression is CastExpressionSyntax cast
+                && AnonymousInitializerAcceptsNil(cast.Expression, model))
+            || (expression is ConditionalExpressionSyntax conditional
+                && (AnonymousInitializerAcceptsNil(conditional.WhenTrue, model)
+                    || AnonymousInitializerAcceptsNil(conditional.WhenFalse, model)))
+            || (expression is SwitchExpressionSyntax switchExpression
+                && switchExpression.Arms.Any(arm =>
+                    AnonymousInitializerAcceptsNil(arm.Expression, model)))
+            || ((expression.IsKind(SyntaxKind.DefaultLiteralExpression)
+                    || expression is DefaultExpressionSyntax)
+                && (model.GetTypeInfo(expression).ConvertedType
+                        ?? model.GetTypeInfo(expression).Type) is ITypeSymbol type
+                && (type.IsReferenceType
+                    || type.OriginalDefinition.SpecialType
+                        == SpecialType.System_Nullable_T));
     }
 
     /// <summary>

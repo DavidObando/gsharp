@@ -780,6 +780,8 @@ public sealed partial class CSharpToGSharpTranslator
             return IsNullOrSuppressedNull(value)
                 || value is ConditionalAccessExpressionSyntax
                 || value.IsKind(SyntaxKind.AsExpression)
+                || (value is CastExpressionSyntax cast
+                    && this.AnonymousInitializerAcceptsNil(cast.Expression))
                 || (value is ConditionalExpressionSyntax conditional
                     && (this.AnonymousInitializerAcceptsNil(conditional.WhenTrue)
                         || this.AnonymousInitializerAcceptsNil(conditional.WhenFalse)))
