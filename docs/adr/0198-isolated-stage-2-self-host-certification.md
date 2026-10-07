@@ -153,14 +153,19 @@ Stage-2 v1 supports one evaluated context for each project. It MUST REJECT:
 
 The controller MUST freeze plans in producer order:
 
-1. Before mutation, freeze the common source manifest and the stage-1
-   build/package producer plan.
-2. Execute that plan. Accept and hash-bind the stage-1 SDK package, compiler,
-   task, runtime, and other declared outputs to the source manifest, producer
-   plan, command evidence, and output paths.
-3. Using only those accepted bytes, freeze the stage-2 build plan.
-4. After each accepted stage-2 producer output exists, freeze any downstream
-   build or test plan that consumes it.
+1. Before mutation, freeze the common source manifest and the stage-1 restore
+   producer plan.
+2. Execute the restore plan. Accept and hash-bind its assets, generated files,
+   packages, and other declared outputs. Then freeze the stage-1 build/package
+   producer plan from those accepted bytes.
+3. Execute the build/package plan. Accept and hash-bind the stage-1 SDK package,
+   compiler, task, runtime, and other declared outputs to the source manifest,
+   producer plan, command evidence, and output paths.
+4. Using only those accepted bytes, freeze and execute the stage-2 restore
+   plan. Accept and hash-bind its outputs before freezing the stage-2 build
+   plan.
+5. After each accepted stage-2 producer output exists, freeze any downstream
+   restore, build, setup, or test plan that consumes it.
 
 Each plan MUST be frozen before its own command executes. A downstream plan MAY
 depend on an earlier accepted producer output. It MUST name that output's
@@ -198,22 +203,25 @@ section 1 and return its snapshot through a one-command authenticated channel
 to the controller:
 
 1. before any mutation, when the controller creates the common source manifest
-   and stage-1 producer plan in the ordinary and isolated compilation contexts;
-2. after the matching pin, restore, and dependency setup are applied to the
-   real build tree;
-3. after dependency builds and immediately before each stage build command;
-4. after test setup, including result-directory creation and receipt
+   and stage-1 restore plan in the ordinary and isolated compilation contexts;
+2. after the matching pin and dependency setup, immediately before each restore
+   command;
+3. after each restore and before its outputs are accepted, then again after
+   those outputs are hash-bound when the dependent build plan is frozen;
+4. after dependency builds and immediately before each stage build command;
+5. after test setup, including result-directory creation and receipt
    invalidation, and immediately before each test command;
-5. after each command and before outputs or test evidence are accepted;
-6. immediately before the final certification verdict.
+6. after each build or test command and before outputs or test evidence are
+   accepted;
+7. immediately before the final certification verdict.
 
 Each new snapshot MUST equal the applicable frozen execution plan for all
 inputs, imports, references, toolchain selections, targets, tasks, and planned
-outputs. Stage 1 is compared with the stage-1 producer plan. Stage 2 and each
-test command are compared with their plans after those plans are frozen from
-accepted upstream output evidence. Expected generated restore files MAY appear
-only when that plan names their controller-owned location and the post-restore
-snapshot records their hashes.
+outputs. A restore command is compared with its restore plan. A build or test
+command is compared with its plan after that plan is frozen from accepted
+restore and upstream producer evidence. Generated restore files MAY enter a
+dependent plan only after the controller records their controller-owned
+locations and hashes.
 
 Any other graph change MUST fail the run. After a frozen plan begins execution,
 the controller MUST NOT repair, ignore, or relearn that plan. This prohibition
@@ -365,6 +373,9 @@ boundary is under test. The suite MUST include:
 - graph evaluation or SDK resolver code that attempts to read the caller tree
   or controller-owned evidence, proving that discovery and revalidation use the
   restricted command boundary;
+- a build-phase analyzer or generator that attempts to read the caller tree,
+  write controller-owned evidence, and use the network after restore, proving
+  that compiler child processes use the restricted command boundary;
 - a graph that changes after restore or after a dependency build;
 - a test graph that changes after result-directory setup or receipt deletion;
 - report, log, receipt, and error-path collisions with project inputs;

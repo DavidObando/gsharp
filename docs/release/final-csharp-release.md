@@ -27,10 +27,11 @@ commit.
 
 ### Stage-2 publication gate
 
-The table above describes the final 0.4 C# release. It is not sufficient for a
-0.5 release built by the stage-2 compiler.
+The table above describes the final 0.4 C# release. It is not sufficient for an
+artifact whose emitted version is 0.5 or whose build uses the stage-2 compiler.
+This rule applies regardless of tag text.
 
-Before any 0.5 tag can publish packages or extensions:
+Before any such package or extension can publish:
 
 - ADR-0198 MUST be accepted and its replacement gate MUST be on `main`;
 - the exact tagged commit MUST have successful controller-owned stage-1/stage-2
@@ -42,7 +43,7 @@ Before any 0.5 tag can publish packages or extensions:
 
 A self-migration nightly, a proof from another commit, or a manually copied
 report MUST NOT satisfy this gate. Until the workflow enforces these checks, a
-0.5 tag is prohibited.
+0.5 artifact or an artifact built by the stage-2 compiler MUST NOT publish.
 
 ### Publish order (one tag run)
 
