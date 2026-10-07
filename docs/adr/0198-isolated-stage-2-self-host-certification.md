@@ -1,6 +1,7 @@
 # ADR-0198: Isolated stage-2 self-host certification
 
-- **Status**: Proposed (owner direction approved October 5-6, 2026)
+- **Status**: Proposed (flips to Accepted on merge; owner direction was
+  approved October 5-6, 2026)
 - **Date**: 2026-10-07
 - **Phase**: Self-hosting Phase 0 — bootstrap proof
 - **Related**: issues #3501, #4631 and #4716; draft PR #4693; PR #4695;
@@ -413,16 +414,20 @@ The work lands in this order:
 
 1. Keep draft PR #4693 as the prototype and discrimination inventory. It MUST
    NOT merge.
-2. Implement the isolated controller and port #4693's useful tests to the new
+2. Before other 0.5 implementation work, add a temporary publish guard. It MUST
+   reject an emitted 0.5 artifact or any artifact built by the stage-2 compiler.
+   Tag text MUST NOT control this decision. The guard remains until the
+   evidence-bound gate replaces it in the same change.
+3. Implement the isolated controller and port #4693's useful tests to the new
    trust boundaries.
-3. Land the replacement stage-2 gate only after this ADR is accepted, its
+4. Land the replacement stage-2 gate only after this ADR is accepted, its
    acceptance tests pass, CI is green, and current-head review has no material
    finding.
-4. Rebase and land PR #4695 after the replacement gate. #4695 MUST consume the
+5. Rebase and land PR #4695 after the replacement gate. #4695 MUST consume the
    new controller-owned evidence contract and MUST NOT depend on #4693.
-5. Run the full stage-1/stage-2 proof on the cutover closure.
-6. Complete the fresh-clone cutover dry run required by #3501.
-7. Before any 0.5 package or extension can publish, make the release workflow
+6. Run the full stage-1/stage-2 proof on the cutover closure.
+7. Complete the fresh-clone cutover dry run required by #3501.
+8. Before any 0.5 package or extension can publish, make the release workflow
    require successful replacement-gate certification for the exact release
    commit. The publish jobs MUST consume and verify that run's controller-owned
    evidence identity. A missing, rejected, stale, or different-commit proof

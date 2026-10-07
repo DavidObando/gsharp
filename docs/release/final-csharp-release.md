@@ -41,6 +41,11 @@ Before any such package or extension can publish:
 - `publish-visual-studio-extension` MUST remain downstream of that gated
   `publish` job.
 
+A first implementation change MUST add a temporary workflow guard that rejects
+an emitted 0.5 artifact or an artifact built by the stage-2 compiler, regardless
+of tag text. The evidence-bound certification dependency MUST replace that
+guard in the same change that enables certified publication.
+
 A self-migration nightly, a proof from another commit, or a manually copied
 report MUST NOT satisfy this gate. Until the workflow enforces these checks, a
 0.5 artifact or an artifact built by the stage-2 compiler MUST NOT publish.
