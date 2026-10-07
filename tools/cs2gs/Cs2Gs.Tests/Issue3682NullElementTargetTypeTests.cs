@@ -255,6 +255,25 @@ namespace Demo
     }
 
     [Fact]
+    public void BareRectangularArrayInitializerWithNullElement_RendersNullableElementType()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public object[,] F()
+        {
+            object[,] grid = { { null } };
+            return grid;
+        }
+    }
+}");
+
+        Assert.Contains("[1, 1]object?", printed);
+    }
+
+    [Fact]
     public void ArrayWithoutNullElements_KeepsNonNullableElementType()
     {
         string printed = TranslateUnit(@"
