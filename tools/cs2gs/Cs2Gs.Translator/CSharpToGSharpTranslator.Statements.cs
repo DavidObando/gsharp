@@ -4996,7 +4996,7 @@ public sealed partial class CSharpToGSharpTranslator
             // while gsc requires a common result type outright (GS0263). When an
             // arm's own reference type differs from the common reference type by
             // more than a nullable annotation, spell the upcast (`arm as T`).
-            // Mirrors CoerceSwitchArmNumericValue's reference rule for switch
+            // Mirrors CoerceSwitchArmValue's reference rule for switch
             // arms; each arm is coerced independently.
             if (resultType?.IsReferenceType == true
                 && resultType.TypeKind != TypeKind.Error)

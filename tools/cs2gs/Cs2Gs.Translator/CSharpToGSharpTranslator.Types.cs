@@ -769,7 +769,7 @@ public sealed partial class CSharpToGSharpTranslator
                     expression,
                     () => nullableResultType != null && IsNullOrDefaultLiteral(expression)
                         ? new DefaultValueExpression(nullableResultType)
-                        : this.CoerceSwitchArmNumericValue(
+                        : this.CoerceSwitchArmValue(
                             expression,
                             this.TranslateValueWithNullForgiveness(expression)));
             return statements.Count == 0
@@ -777,15 +777,12 @@ public sealed partial class CSharpToGSharpTranslator
                 : new BlockExpression(statements, value);
         }
 
-        // Issue #3501: C# target-types every switch-expression arm to the
-        // switch's converted type (`long candidate = value switch { sbyte item
-        // => item, ... }` widens each numeric arm to `long` implicitly), while
-        // gsc requires every arm to produce the SAME type as the first arm
-        // (GS0179). When an arm's own numeric type differs from its C#
-        // converted type, spell the conversion the C# compiler inserted
-        // (`int64(item)`). Non-numeric arms (reference upcasts, nullable
-        // widening) are representation-compatible and left untouched.
-        private GExpression CoerceSwitchArmNumericValue(
+        // Issues #3501/#4832: C# target-types every switch-expression arm to
+        // the switch's converted type, while gsc requires every arm to produce
+        // the same type (GS0179). Spell conversions to non-nullable value
+        // result types, including numeric widening and implicit conversion
+        // operators such as TypeDefinitionHandle -> EntityHandle.
+        private GExpression CoerceSwitchArmValue(
             ExpressionSyntax expression,
             GExpression translated)
         {
@@ -797,6 +794,21 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.CoerceOperandTo(
                     translated,
                     info.ConvertedType,
+                    expression.GetLocation());
+            }
+
+            if (info.Type is { TypeKind: not TypeKind.Error } valueArmType
+                && info.ConvertedType is { TypeKind: not TypeKind.Error } valueTarget
+                && IsNonNullableValueType(valueTarget)
+                && !SymbolEqualityComparer.Default.Equals(valueArmType, valueTarget)
+                && this.GetUserDefinedConversionInputOperator(
+                    expression,
+                    valueTarget,
+                    out _) != null)
+            {
+                return this.CoerceOperandTo(
+                    translated,
+                    valueTarget,
                     expression.GetLocation());
             }
 
