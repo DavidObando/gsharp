@@ -1097,12 +1097,17 @@ internal static class ObliviousNullabilityAnalyzer
         SemanticModel model)
     {
         if (model.GetTypeInfo(expression).Nullability.FlowState
-            == NullableFlowState.NotNull)
+                == NullableFlowState.NotNull
+            || IsNullGuardDominatedRead(expression, model))
         {
             return false;
         }
 
-        return IsDirectlyNullable(expression, model, respectNullGuards: true);
+        ISymbol symbol = model.GetSymbolInfo(expression).Symbol;
+        return IsDirectlyNullable(expression, model, respectNullGuards: true)
+            || (symbol != null
+                && model.Compilation is CSharpCompilation compilation
+                && IsTainted(compilation, symbol));
     }
 
     /// <summary>Reads the declared concrete-reference obliviousness used by imported contract readers.</summary>

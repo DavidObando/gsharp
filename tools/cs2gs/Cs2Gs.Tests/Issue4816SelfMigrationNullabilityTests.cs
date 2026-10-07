@@ -9,6 +9,7 @@ using System.Linq;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Symbols;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -251,6 +252,8 @@ public sealed class Issue4816SelfMigrationNullabilityTests
             rendered.Split('\n').Single(line => line.Contains("func Merge(", StringComparison.Ordinal)).Trim());
         Assert.DoesNotContain("""Merge(left Node?, right Node?)""", rendered, StringComparison.Ordinal);
         Assert.Contains("""nonNullableShape.Value!!.Length""", rendered, StringComparison.Ordinal);
+        Assert.Contains("""nonNullableShape.Value == nil""", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("""nonNullableShape.Value!! == nil""", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
@@ -379,49 +382,66 @@ public sealed class Issue4816SelfMigrationNullabilityTests
             {
                 CSharpSyntaxTree.ParseText("""
                     #nullable enable
-                    public sealed class Box<T>
+                    namespace Issue4816Imported
                     {
-                        public T Value { get; }
-                        public Box(T value) => Value = value;
-                    }
-                    public static class Factory
-                    {
-                        public static Box<string?> Create() => new(null);
+                        public sealed class Box<T>
+                        {
+                            public T Value { get; }
+                            public Box(T value) => Value = value;
+                        }
+                        public static class Factory
+                        {
+                            public static Box<string?> Create() => new(null);
+                        }
                     }
                     """),
             },
             CSharpProjectLoader.RuntimeReferences(),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        using var image = new MemoryStream();
-        var emit = library.Emit(image);
-        Assert.True(emit.Success, string.Join("\n", emit.Diagnostics));
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "cs2gs-4816-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string libraryPath = Path.Combine(root, "Issue4816.Imported.dll");
+            var emit = library.Emit(libraryPath);
+            Assert.True(emit.Success, string.Join("\n", emit.Diagnostics));
 
-        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
-            .RuntimeReferences()
-            .Append(MetadataReference.CreateFromImage(image.ToArray()))
-            .ToList();
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[]
-            {
-                ("Consumer.cs", """
-                    #nullable disable
-                    public static class Consumer
-                    {
-                        public static int Read() => Factory.Create().Value.Length;
-                    }
-                    """),
-            },
-            references);
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+            IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromFile(libraryPath))
+                .ToList();
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                new[]
+                {
+                    ("Consumer.cs", """
+                        #nullable disable
+                        using Issue4816Imported;
+                        public static class Consumer
+                        {
+                            public static int Read() => Factory.Create().Value.Length;
+                        }
+                        """),
+                },
+                references);
+            Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
 
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(
-            project.Compilation,
-            document.SemanticModel,
-            document.FilePath);
-        string rendered = GSharpPrinter.Print(
-            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+            LoadedDocument document = Assert.Single(project.Documents);
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            string rendered = GSharpPrinter.Print(
+                new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
-        Assert.Contains("""Factory.Create().Value!!.Length""", rendered, StringComparison.Ordinal);
+            Assert.Contains("""Factory.Create().Value!!.Length""", rendered, StringComparison.Ordinal);
+            using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
+            TranslationTestValidation.AssertBinds(resolver, rendered);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 }

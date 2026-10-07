@@ -60,6 +60,11 @@ public sealed class CSharpTypeMapper
         object,
         Dictionary<string, List<(CSharpCompilation Compilation, SyntaxTree Tree)>>> LinkedDocumentIndexes = new();
 
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        Compilation,
+        Dictionary<string, List<(ITypeSymbol[] PropertyTypes, bool[] AcceptsNil)>>> AnonymousShapeEvidenceIndexes =
+            new();
+
     /// <summary>
     /// Issue #2211: every namespace this mapper has shortened a type reference
     /// into (via <see cref="QualifiedTypeName"/>), collected so the translator
@@ -3495,34 +3500,22 @@ public sealed class CSharpTypeMapper
                 property.Type,
                 mappedPropertyTypes[index]))
             .ToList();
-        foreach (SyntaxTree tree in context.Compilation.SyntaxTrees)
+        Dictionary<string, List<(ITypeSymbol[] PropertyTypes, bool[] AcceptsNil)>> evidenceIndex =
+            AnonymousShapeEvidenceIndexes.GetValue(
+                context.Compilation,
+                BuildAnonymousShapeEvidenceIndex);
+        if (evidenceIndex.TryGetValue(
+            shapeKey,
+            out List<(ITypeSymbol[] PropertyTypes, bool[] AcceptsNil)> evidence))
         {
-            SemanticModel model = context.Compilation.GetSemanticModel(tree);
-            foreach (AnonymousObjectCreationExpressionSyntax creation in
-                tree.GetRoot().DescendantNodes().OfType<AnonymousObjectCreationExpressionSyntax>())
+            foreach ((ITypeSymbol[] propertyTypes, bool[] acceptsNil) in evidence)
             {
-                if (model.GetTypeInfo(creation).Type is not INamedTypeSymbol candidateType)
-                {
-                    continue;
-                }
-
-                List<IPropertySymbol> candidateProperties =
-                    candidateType.GetMembers().OfType<IPropertySymbol>().ToList();
-                if (candidateProperties.Count != merged.Count
-                    || AnonymousShapeKey(candidateProperties) != shapeKey)
-                {
-                    continue;
-                }
-
                 for (int index = 0; index < merged.Count; index++)
                 {
                     merged[index] = MergeAnonymousNullability(
                         merged[index],
-                        candidateProperties[index].Type);
-                    if (index < creation.Initializers.Count
-                        && AnonymousInitializerAcceptsNil(
-                            creation.Initializers[index].Expression,
-                            model))
+                        propertyTypes[index]);
+                    if (acceptsNil[index])
                     {
                         merged[index] = WithNullable(merged[index], true);
                     }
@@ -3532,6 +3525,53 @@ public sealed class CSharpTypeMapper
 
         this.anonymousShapeContracts[shapeKey] = merged;
         return merged;
+    }
+
+    private static Dictionary<string, List<(ITypeSymbol[] PropertyTypes, bool[] AcceptsNil)>>
+        BuildAnonymousShapeEvidenceIndex(Compilation compilation)
+    {
+        var result =
+            new Dictionary<string, List<(ITypeSymbol[] PropertyTypes, bool[] AcceptsNil)>>(
+                System.StringComparer.Ordinal);
+        foreach (SyntaxTree tree in compilation.SyntaxTrees)
+        {
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (AnonymousObjectCreationExpressionSyntax creation in
+                tree.GetRoot().DescendantNodes().OfType<AnonymousObjectCreationExpressionSyntax>())
+            {
+                if (model.GetTypeInfo(creation).Type is not INamedTypeSymbol candidateType)
+                {
+                    continue;
+                }
+
+                IPropertySymbol[] properties =
+                    candidateType.GetMembers().OfType<IPropertySymbol>().ToArray();
+                string shapeKey = AnonymousShapeKey(properties);
+                if (!result.TryGetValue(
+                    shapeKey,
+                    out List<(ITypeSymbol[] PropertyTypes, bool[] AcceptsNil)> evidence))
+                {
+                    evidence = new List<(ITypeSymbol[] PropertyTypes, bool[] AcceptsNil)>();
+                    result.Add(shapeKey, evidence);
+                }
+
+                var acceptsNil = new bool[properties.Length];
+                for (int index = 0;
+                    index < properties.Length && index < creation.Initializers.Count;
+                    index++)
+                {
+                    acceptsNil[index] = AnonymousInitializerAcceptsNil(
+                        creation.Initializers[index].Expression,
+                        model);
+                }
+
+                evidence.Add((
+                    properties.Select(property => property.Type).ToArray(),
+                    acceptsNil));
+            }
+        }
+
+        return result;
     }
 
     private static GTypeReference NormalizeAnonymousProjectedStorage(
