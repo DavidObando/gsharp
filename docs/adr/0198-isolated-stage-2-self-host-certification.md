@@ -57,9 +57,10 @@ Read-only permissions are defense in depth. The manifest is authoritative.
 After stage-specific setup, project files, sources, imports, references,
 analyzers, SDK payloads, and other command inputs MUST be read-only to the
 command. Generated files, restored assets, intermediates, final outputs, and
-test files MUST use explicit controller-owned writable roots. The two stages
-MUST NOT share writable files with each other, the caller tree, the source
-snapshot, or an evidence destination.
+test scratch files MUST use explicit controller-owned writable roots.
+Authoritative test results remain controller-only evidence. The two stages MUST
+NOT share writable files with each other, the caller tree, the source snapshot,
+or an evidence destination.
 
 The controller MUST create receipts, reports, logs, comparison snapshots, and
 test-result destinations. A project MUST NOT select or own those paths.
@@ -69,7 +70,7 @@ under a separate restricted identity. The sandbox MUST:
 
 - allow reads only from the applicable immutable inputs and trusted toolchain;
 - allow writes only to the command's declared cache, intermediate, output, and
-  test-result roots;
+  test-scratch roots;
 - deny access to the caller tree, the other stage, controller state, evidence
   root, comparison snapshots, and report root;
 - disable network access after restore;
@@ -146,12 +147,28 @@ Stage-2 v1 supports one evaluated context for each project. It MUST REJECT:
 - an outside-snapshot project, import, source, analyzer, or reference;
 - an ambiguous SDK, import, package, target, task, or output owner.
 
-The controller MUST derive separate immutable execution plans for the stage-1
-build, stage-2 build, and each test command. It MUST do this before mutation by
-evaluating controller-owned projections of the source snapshot with the exact
-stage pin, roots, caches, properties, and toolchain paths that the command will
-use. The common source manifest and participating logical closure MUST match
-across the plans. Controller-owned pin, cache, build-root, evidence-root, and
+The controller MUST freeze plans in producer order:
+
+1. Before mutation, freeze the common source manifest and the stage-1
+   build/package producer plan.
+2. Execute that plan. Accept and hash-bind the stage-1 SDK package, compiler,
+   task, runtime, and other declared outputs to the source manifest, producer
+   plan, command evidence, and output paths.
+3. Using only those accepted bytes, freeze the stage-2 build plan.
+4. After each accepted stage-2 producer output exists, freeze any downstream
+   build or test plan that consumes it.
+
+Each plan MUST be frozen before its own command executes. A downstream plan MAY
+depend on an earlier accepted producer output. It MUST name that output's
+controller evidence identity and exact hash. A path, package ID, version, or
+filename without this binding is not an input identity.
+
+Stage-2 v1 MUST produce the stage-1 SDK inside the same certification run. It
+MUST REJECT a caller-supplied prebuilt stage-1 package. This prevents a stage-0
+package with a changed label from entering the stage-2 plan.
+
+The common source manifest and participating logical closure MUST match across
+the plans. Controller-owned pin, cache, build-root, evidence-root, and
 toolchain-path projections MUST differ as the plan declares.
 
 A plan is frozen when every node and edge has one supported meaning and all
@@ -174,9 +191,8 @@ in only one context MUST reject the plan.
 The controller MUST evaluate and compare a fresh graph snapshot at these
 boundaries:
 
-1. before any mutation, when the controller creates each stage-specific and
-   test-specific execution plan in the ordinary and isolated compilation
-   contexts;
+1. before any mutation, when the controller creates the common source manifest
+   and stage-1 producer plan in the ordinary and isolated compilation contexts;
 2. after the matching pin, restore, and dependency setup are applied to the
    real build tree;
 3. after dependency builds and immediately before each stage build command;
@@ -187,10 +203,11 @@ boundaries:
 
 Each new snapshot MUST equal the applicable frozen execution plan for all
 inputs, imports, references, toolchain selections, targets, tasks, and planned
-outputs. Stage 1 is compared with the stage-1 plan and stage 2 with the stage-2
-plan. Each test command is compared with its own plan. Expected generated
-restore files MAY appear only when that plan names their controller-owned
-location and the post-restore snapshot records their hashes.
+outputs. Stage 1 is compared with the stage-1 producer plan. Stage 2 and each
+test command are compared with their plans after those plans are frozen from
+accepted upstream output evidence. Expected generated restore files MAY appear
+only when that plan names their controller-owned location and the post-restore
+snapshot records their hashes.
 
 Any other graph change MUST fail the run. The controller MUST NOT repair,
 ignore, or learn a new graph after execution starts.
@@ -249,10 +266,17 @@ non-platform import. Trusted targets and tasks are limited to the installed
 .NET SDK, the byte-verified G# SDK, and controller-supplied instrumentation
 whose bytes and load paths are outside project control.
 
-A requested test run MUST produce fresh machine-readable results. The evidence
-MUST show a completed run, a positive executed-test count, no failed tests, and
-the requested filter and assembly identity. Exit code zero is not enough.
-Test setup and test execution MUST NOT change compared binaries.
+A requested test run MUST produce fresh machine-readable results through a
+controller-owned test supervisor. The test process MUST NOT have write access
+to the result or evidence destination. A trusted runner/logger outside the test
+sandbox MUST capture events through a one-command authenticated channel and
+write the result. Custom test adapters or result loggers MUST be rejected unless
+they can run under the same separation.
+
+The evidence MUST show a completed run, a positive executed-test count, no
+failed tests, and the requested filter and assembly identity. Exit code zero or
+a result file written by the test sandbox is not enough. Test setup and test
+execution MUST NOT change compared binaries.
 
 Reports MUST be written only after their destination is proven
 controller-owned. If that proof fails, the controller MUST leave the path
@@ -341,6 +365,11 @@ boundary is under test. The suite MUST include:
 - repeated roots, stale receipts, copied outputs, replaced implementation or
   reference assemblies, test-only compilation, zero-test success, and test
   execution against changed outputs;
+- a stage-0 SDK relabeled with the stage-1 package identity, and any downstream
+  input that names an unbound producer path instead of accepted output evidence;
+- a test and descendant process that write a success-shaped TRX or replace a
+  logger output after completion, proving that only supervisor-owned result
+  capture is accepted;
 - non-MVID metadata mutation, method-header mutation, exception-region
   mutation, CLR entry-point and flags, COFF `Machine`, managed resources, and
   native or embedded resources;
