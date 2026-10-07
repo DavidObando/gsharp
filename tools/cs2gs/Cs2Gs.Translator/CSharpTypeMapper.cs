@@ -3617,7 +3617,10 @@ public sealed class CSharpTypeMapper
         expression = expression is ParenthesizedExpressionSyntax parenthesized
             ? parenthesized.Expression
             : expression;
-        return expression.IsKind(SyntaxKind.NullLiteralExpression)
+        return ObliviousNullabilityAnalyzer.IsSemanticallyNullableInitializer(
+                expression,
+                model)
+            || expression.IsKind(SyntaxKind.NullLiteralExpression)
             || expression is ConditionalAccessExpressionSyntax
             || expression.IsKind(SyntaxKind.AsExpression)
             || (expression is PostfixUnaryExpressionSyntax suppression

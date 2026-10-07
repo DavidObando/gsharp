@@ -102,6 +102,15 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         nonNullableShape = nullableShape;
                         return nonNullableShape;
                     }
+                    public static int MergedArrayElementRead(
+                        string[] nonNullable,
+                        string?[] nullable)
+                    {
+                        var nonNullableShape = new { Values = nonNullable };
+                        var nullableShape = new { Values = nullable };
+                        nonNullableShape = nullableShape;
+                        return nonNullableShape.Values[0].Length;
+                    }
                 }
                 """),
         });

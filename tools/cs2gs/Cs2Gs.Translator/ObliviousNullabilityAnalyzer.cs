@@ -1092,6 +1092,19 @@ internal static class ObliviousNullabilityAnalyzer
             && IsDirectlyNullable(expression, model, respectNullGuards, readConversion: false);
     }
 
+    internal static bool IsSemanticallyNullableInitializer(
+        ExpressionSyntax expression,
+        SemanticModel model)
+    {
+        if (model.GetTypeInfo(expression).Nullability.FlowState
+            == NullableFlowState.NotNull)
+        {
+            return false;
+        }
+
+        return IsDirectlyNullable(expression, model, respectNullGuards: true);
+    }
+
     /// <summary>Reads the declared concrete-reference obliviousness used by imported contract readers.</summary>
     /// <param name="type">The original signature position, before type-argument substitution.</param>
     /// <returns>Whether the position is oblivious; open slots retain their type argument's contract.</returns>
@@ -6254,7 +6267,8 @@ internal static class ObliviousNullabilityAnalyzer
             _ => null,
         };
 
-        return IsDeclaredNullablePosition(symbolType ?? info.Type);
+        return IsImportedStatedNullablePosition(symbol, model.Compilation)
+            || IsDeclaredNullablePosition(symbolType ?? info.Type);
     }
 
     private static bool IsDeclaredNullablePosition(ITypeSymbol type) =>

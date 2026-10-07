@@ -3207,6 +3207,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
+            if (expression is MemberAccessExpressionSyntax member
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol property
+                && property.ContainingType.IsAnonymousType
+                && this.typeMapper.GetAnonymousPropertyType(
+                    property,
+                    this.context,
+                    member.GetLocation()) is ArrayTypeReference mergedArray)
+            {
+                return mergedArray.ElementType;
+            }
+
             if (!this.state.ManagedReferenceArrayNullable
                 .MappedArrayElementByElementType.TryGetValue(
                     array.ElementType,

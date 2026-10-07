@@ -788,6 +788,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return IsNullOrSuppressedNull(value)
+                || ObliviousNullabilityAnalyzer.IsSemanticallyNullableInitializer(
+                    value,
+                    this.context.SemanticModel)
                 || value is ConditionalAccessExpressionSyntax
                 || value.IsKind(SyntaxKind.AsExpression)
                 || (value is CastExpressionSyntax cast
