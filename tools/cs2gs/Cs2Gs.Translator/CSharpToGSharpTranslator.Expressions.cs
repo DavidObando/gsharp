@@ -733,8 +733,7 @@ public sealed partial class CSharpToGSharpTranslator
                         anonymousType,
                         this.context,
                         anonymous.GetLocation(),
-                        mappedPropertyTypes,
-                        nullablePropertyFlags)
+                        mappedPropertyTypes)
                     : (new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType), Array.Empty<IPropertySymbol>());
 
             // Roslyn exposes anonymous properties in constructor order. Drive
@@ -773,14 +772,24 @@ public sealed partial class CSharpToGSharpTranslator
         {
             value = Unparenthesize(value);
             return IsNullOrSuppressedNull(value)
-                || value.IsKind(SyntaxKind.DefaultLiteralExpression)
-                || value is DefaultExpressionSyntax
+                || ((value.IsKind(SyntaxKind.DefaultLiteralExpression)
+                        || value is DefaultExpressionSyntax)
+                    && this.DefaultExpressionAcceptsNil(value))
                 || (value is ConditionalExpressionSyntax conditional
                     && (this.AnonymousInitializerAcceptsNil(conditional.WhenTrue)
                         || this.AnonymousInitializerAcceptsNil(conditional.WhenFalse)))
                 || (value is SwitchExpressionSyntax switchExpression
                     && switchExpression.Arms.Any(arm =>
                         this.AnonymousInitializerAcceptsNil(arm.Expression)));
+        }
+
+        private bool DefaultExpressionAcceptsNil(ExpressionSyntax value)
+        {
+            ITypeSymbol type = this.context.GetTypeInfo(value).ConvertedType
+                ?? this.context.GetTypeInfo(value).Type;
+            return type?.IsReferenceType == true
+                || type?.OriginalDefinition.SpecialType
+                    == SpecialType.System_Nullable_T;
         }
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)

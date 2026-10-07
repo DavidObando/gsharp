@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -1236,22 +1237,17 @@ public sealed class CSharpTypeMapper
         INamedTypeSymbol anonymousType,
         TranslationContext context,
         Location location,
-        IReadOnlyList<GTypeReference> mappedPropertyTypes = null,
-        IReadOnlyList<bool> nullablePropertyFlags = null)
+        IReadOnlyList<GTypeReference> mappedPropertyTypes = null)
     {
         List<IPropertySymbol> properties = anonymousType.GetMembers().OfType<IPropertySymbol>().ToList();
         mappedPropertyTypes ??= properties
             .Select(property => this.Map(property.Type, context, location))
             .ToList();
-        nullablePropertyFlags ??= mappedPropertyTypes
-            .Select(propertyType => propertyType.IsNullable)
-            .ToList();
         string shapeKey = string.Join(
             "|",
             properties.Select((property, index) =>
                 property.Name + ":"
-                    + property.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
-                    + (nullablePropertyFlags[index] ? "?" : string.Empty)));
+                    + GSharpPrinter.RenderTypeReference(mappedPropertyTypes[index])));
 
         // A shape synthesized by an earlier file in the same package is reused
         // without redeclaration. A new shape gets the same deterministic name

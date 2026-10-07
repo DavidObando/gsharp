@@ -51,8 +51,12 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                 #nullable enable
                 public static class AnnotatedFixture
                 {
-                    public static object Nullable(string? value) => new { Name = value };
-                    public static object NonNull(string value) => new { Name = value };
+                    public static object Nullable(string? value, string?[] values) =>
+                        new { Name = value, Values = values };
+                    public static object NonNull(string value, string[] values) =>
+                        new { Name = value, Values = values };
+                    public static object DefaultValue(bool include) =>
+                        new { Count = include ? default : 1 };
                 }
                 """),
         });
