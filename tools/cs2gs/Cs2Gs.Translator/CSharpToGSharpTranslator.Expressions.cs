@@ -1204,6 +1204,19 @@ public sealed partial class CSharpToGSharpTranslator
         {
             expression = Unparenthesize(expression);
 
+            if (expression is MemberAccessExpressionSyntax anonymousMember
+                && this.context.GetSymbolInfo(anonymousMember).Symbol
+                    is IPropertySymbol anonymousProperty
+                && anonymousProperty.ContainingType.IsAnonymousType)
+            {
+                return this.ApplyMappedArrayElementShape(
+                    anonymousProperty.Type,
+                    this.typeMapper.GetAnonymousPropertyType(
+                        anonymousProperty,
+                        this.context,
+                        anonymousMember.GetLocation()));
+            }
+
             if (expression is IdentifierNameSyntax identifier
                 && this.context.GetSymbolInfo(identifier).Symbol is { } identifierSymbol)
             {

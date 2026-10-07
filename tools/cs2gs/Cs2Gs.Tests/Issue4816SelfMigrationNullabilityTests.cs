@@ -25,6 +25,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
             ("Fixture.cs", """
                 #nullable disable
                 using System;
+                using System.Collections.Generic;
                 using System.Linq;
                 using System.Reflection;
 
@@ -105,6 +106,15 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                     public static int MergedArrayElementRead(
                         string[] nonNullable,
                         string?[] nullable)
+                    {
+                        var nonNullableShape = new { Values = nonNullable };
+                        var nullableShape = new { Values = nullable };
+                        nonNullableShape = nullableShape;
+                        return nonNullableShape.Values[0].Length;
+                    }
+                    public static int MergedGenericElementRead(
+                        List<string> nonNullable,
+                        List<string?> nullable)
                     {
                         var nonNullableShape = new { Values = nonNullable };
                         var nullableShape = new { Values = nullable };
