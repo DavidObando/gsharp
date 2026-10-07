@@ -3808,14 +3808,18 @@ internal sealed class ReflectionMetadataEmitter
             }
             else
             {
-                var ctorHandle = c.IsData && c.HasPrimaryConstructor
-                    ? this.typeDefEmitter.EmitClassPrimaryConstructor(c)
-                    : this.typeDefEmitter.EmitClassDefaultConstructor(c);
-                this.cache.ClassCtorHandles[c] = ctorHandle;
-
-                if (c.HasPrimaryConstructor)
+                if (c.IsData && c.HasPrimaryConstructor)
                 {
-                    this.cache.ClassPrimaryCtorHandles[c] = ctorHandle;
+                    this.cache.ClassPrimaryCtorHandles[c] = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
+                }
+                else
+                {
+                    var ctorHandle = this.typeDefEmitter.EmitClassDefaultConstructor(c);
+                    this.cache.ClassCtorHandles[c] = ctorHandle;
+                    if (c.HasPrimaryConstructor)
+                    {
+                        this.cache.ClassPrimaryCtorHandles[c] = ctorHandle;
+                    }
                 }
             }
 

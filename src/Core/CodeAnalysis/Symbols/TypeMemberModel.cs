@@ -60,7 +60,7 @@ public static class TypeMemberModel
             return members.ToImmutable();
         }
 
-        if (HasDeclaredSelfEquatableContract(type))
+        if (IsTranslatedCSharpRecord(type))
         {
             return ImmutableArray<Symbol>.Empty;
         }
@@ -1258,14 +1258,17 @@ public static class TypeMemberModel
         }
     }
 
-    private static bool HasDeclaredSelfEquatableContract(StructSymbol type)
+    private static bool IsTranslatedCSharpRecord(StructSymbol type)
     {
-        foreach (var implemented in type.ImplementedClrInterfaces)
+        var declaration = (type.Definition ?? type).Declaration;
+        if (declaration == null)
         {
-            if (implemented.ClrType is { IsGenericType: true } clrType
-                && ClrTypeUtilities.AreSame(clrType.GetGenericTypeDefinition(), typeof(IEquatable<>))
-                && implemented.ConstructedTypeArguments is [{ } argument]
-                && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(argument, type))
+            return false;
+        }
+
+        foreach (var annotation in declaration.Annotations)
+        {
+            if (Binding.DeclarationBinder.IsCSharpRecordAnnotation(annotation))
             {
                 return true;
             }

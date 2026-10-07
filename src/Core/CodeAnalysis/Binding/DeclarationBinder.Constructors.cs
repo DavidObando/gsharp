@@ -63,7 +63,8 @@ internal sealed partial class DeclarationBinder
     {
         var hasImplicitBaseConstructorToResolve =
             importedBaseType != null
-            || baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false;
+            || baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false
+            || baseClassSymbol?.HasDeclaredPrimaryConstructor == true;
         if (!syntax.HasBaseConstructorArguments
             && ((!hasImplicitBaseConstructorToResolve)
                 || (!syntax.Constructors.IsDefaultOrEmpty
@@ -123,7 +124,9 @@ internal sealed partial class DeclarationBinder
                 arguments,
                 location);
         }
-        else if (baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false)
+        else if (baseClassSymbol != null
+            && (baseClassSymbol.EffectiveExplicitConstructors.IsDefaultOrEmpty == false
+                || baseClassSymbol.HasDeclaredPrimaryConstructor))
         {
             initializer = ResolveGSharpBaseConstructor(
                 _ => location,

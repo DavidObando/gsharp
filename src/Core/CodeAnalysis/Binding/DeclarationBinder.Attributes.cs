@@ -692,6 +692,18 @@ internal sealed partial class DeclarationBinder
             || string.Equals(name, "ExtensionOwnerAttribute", StringComparison.Ordinal);
     }
 
+    internal static bool IsCSharpRecordAnnotation(AnnotationSyntax annotation)
+    {
+        if (annotation.HasTypeArgumentList || annotation.Arguments.Count != 0)
+        {
+            return false;
+        }
+
+        var name = annotation.GetNameText();
+        return string.Equals(name, "CSharpRecord", StringComparison.Ordinal)
+            || string.Equals(name, "CSharpRecordAttribute", StringComparison.Ordinal);
+    }
+
     private BoundAttribute? BindAttribute(
         AnnotationSyntax annotation,
         AttributeTargetKind defaultTarget,
@@ -720,6 +732,14 @@ internal sealed partial class DeclarationBinder
         // no metadata of its own; DeclarationBinder.Functions.cs resolves
         // and consumes the `typeof` argument directly from the syntax.
         if (IsExtensionOwnerAnnotation(annotation))
+        {
+            return null;
+        }
+
+        // Issue #4828: cs2gs marks translated records explicitly so compiler
+        // synthesis does not infer C# provenance from user-visible interfaces.
+        // The marker affects synthesis only and is not emitted as CLR metadata.
+        if (IsCSharpRecordAnnotation(annotation))
         {
             return null;
         }

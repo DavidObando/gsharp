@@ -119,7 +119,9 @@ Issue #4828 makes the shared synthesized representation match Roslyn's remaining
 surface details: positional records have no extra parameterless constructor,
 body-only records have no synthesized `Deconstruct`, equality operators use
 `left`/`right`, copy constructors use `original`, and object overrides omit
-redundant final flags on already-sealed owners.
+redundant final flags on already-sealed owners. cs2gs marks translated records
+with the compiler-intrinsic, metadata-free `@CSharpRecord` annotation so native
+G# data types with the same interfaces retain their own deconstruction contract.
 Record classes with a protected virtual `PrintMembers` hook retain it once per
 partial type, including sealed derived records; derived hooks call the base hook, including user-authored
 implementations. Generator implementing parts do not introduce C# record hooks

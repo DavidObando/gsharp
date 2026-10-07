@@ -1989,6 +1989,11 @@ public sealed partial class CSharpToGSharpTranslator
             bool isRefLike = symbol?.IsRefLikeType == true ||
                 node.Modifiers.Any(SyntaxKind.RefKeyword) ||
                 (otherParts != null && otherParts.Any(p => p.Modifiers.Any(SyntaxKind.RefKeyword)));
+            List<AttributeUse> attributes = this.MapAttributes(mergedAttributeLists);
+            if (symbol?.IsRecord == true)
+            {
+                attributes.Add(new AttributeUse("CSharpRecord", Array.Empty<AttributeArgument>()));
+            }
 
             return new TypeDeclaration(
                 kind.Value,
@@ -2002,7 +2007,7 @@ public sealed partial class CSharpToGSharpTranslator
                 visibility: MapVisibility(symbol, this.context, node),
                 isOpen: isOpen && !isAbstract,
                 isAbstract: isAbstract,
-                attributes: this.MapAttributes(mergedAttributeLists),
+                attributes: attributes,
                 isUnsafe: isUnsafe,
                 isPartial: isPartial,
                 isRefLike: isRefLike,
