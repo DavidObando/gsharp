@@ -67,6 +67,25 @@ namespace Demo
     }
 
     [Fact]
+    public void BareObjectArrayInitializerWithNullElement_RendersNullableElementType()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public object[] F()
+        {
+            object[] arguments = { null };
+            return arguments;
+        }
+    }
+}");
+
+        Assert.Contains("[]object?{nil}", printed);
+    }
+
+    [Fact]
     public void ImplicitlyTypedArrayWithNullElements_RendersNullableElementType()
     {
         string printed = TranslateUnit(@"
@@ -233,6 +252,25 @@ namespace Demo
 }");
 
         Assert.Contains("[2, 2]object?", printed);
+    }
+
+    [Fact]
+    public void BareRectangularArrayInitializerWithNullElement_RendersNullableElementType()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public object[,] F()
+        {
+            object[,] grid = { { null } };
+            return grid;
+        }
+    }
+}");
+
+        Assert.Contains("[1, 1]object?", printed);
     }
 
     [Fact]
