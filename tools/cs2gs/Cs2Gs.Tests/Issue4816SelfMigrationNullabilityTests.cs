@@ -31,6 +31,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
             public static class Fixture
             {
                 private static string ReadMaybeNull() => null;
+                private static void Accept(string value) { }
 
                 public static void Run()
                 {
@@ -52,6 +53,9 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                     {
                         _ = promoted;
                     }
+
+                    string asserted = ReadMaybeNull()!;
+                    Accept(asserted);
                 }
             }
             """, path: "Fixture.cs");
@@ -83,6 +87,11 @@ public sealed class Issue4816SelfMigrationNullabilityTests
             """let promoted string? = ReadMaybeNull()""",
             rendered,
             StringComparison.Ordinal);
+        Assert.Contains(
+            """let asserted string? = ReadMaybeNull()!!""",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains("""Accept(asserted!!)""", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 

@@ -3387,6 +3387,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            if (this.IsNullablePromotedValue(expression))
+            {
+                return false;
+            }
+
             if (translated != null && TranslatedExpressionIsStaticallyNonNull(translated))
             {
                 return true;
