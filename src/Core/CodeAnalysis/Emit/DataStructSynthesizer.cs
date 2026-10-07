@@ -1209,7 +1209,7 @@ internal sealed class DataStructSynthesizer
 
     /// <summary>
     /// Issue #410 / ADR-0029: emits
-    /// <c>public sealed override int GetHashCode()</c>. For up to 8 fields the
+    /// <c>public override int GetHashCode()</c>. For up to 8 fields the
     /// implementation calls <c>HashCode.Combine&lt;object,...,object&gt;</c>
     /// after boxing each field; for &gt;8 fields it folds via a stack-allocated
     /// <c>HashCode</c> local using <c>HashCode.Add&lt;object&gt;</c> per field

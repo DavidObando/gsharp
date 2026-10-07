@@ -18,17 +18,17 @@ The synthesized contract has knock-on choices:
 - **What does `ToString()` look like?** Two precedents: C# records (`Point { X = 3, Y = 4 }`), Kotlin data classes (`Point(X=3, Y=4)`). Pick one; lock it.
 - **Do operators `==` / `!=` come for free?** For value types in CLR, the language must emit `op_Equality` / `op_Inequality` explicitly; nothing is synthesized by the runtime.
 - **Is `Deconstruct` synthesized?** C# records emit it; Kotlin data classes emit `componentN()`. We pick a representation now even though the *syntax* that consumes deconstruction (Phase 4+) lands later.
-- **Sealed or virtual?** Structs cannot be subclassed; the synthesized methods are *necessarily* sealed in CLR terms (`virtual final` because they override `System.ValueType.Equals` etc.). This sidesteps ADR-0017 — the data-struct case has no virtuality question.
+- **Sealed or virtual?** Structs cannot be subclassed. Their object overrides remain CLR `virtual` reuse-slot methods, but omit a redundant method-level `final` bit because the containing TypeDef already prevents derivation. The typed `Equals(Self)` slot remains final.
 - **What about `copy(field = newValue)` and positional destructuring syntax?** Surface form is out of scope for Phase 3.B.2 — slotted for **Phase 7 / ADR-0026**. This ADR commits only to the *underlying member shape* that ADR-0026 will eventually consume.
 
 ## Decision
 
 A `data struct Name { F1 T1; F2 T2; … }` declaration emits the same CLR `ValueType` shape as Phase 3.B.1's plain `struct` (sealed sequential-layout TypeDef extending `System.ValueType`, public fields), **plus** the following synthesized members:
 
-1. `public sealed override bool Equals(object other)` — returns `false` if `other` is not an instance of `Name`; otherwise returns `Equals((Name)other)`.
+1. `public override bool Equals(object other)` — returns `false` if `other` is not an instance of `Name`; otherwise returns `Equals((Name)other)`.
 2. `public bool Equals(Name other)` — returns `true` iff every field `Fi` satisfies `EqualityComparer<Ti>.Default.Equals(this.Fi, other.Fi)`. Fields are compared in source declaration order; first inequality short-circuits.
-3. `public sealed override int GetHashCode()` — combines field hashes via `System.HashCode.Combine(F1, F2, …)`. For data structs with more than 8 fields (the `HashCode.Combine` overload limit), the binder emits a fold using `HashCode.Add` on a stack-allocated `HashCode` then `ToHashCode()`.
-4. `public sealed override string ToString()` — produces `Name(F1=<value>, F2=<value>, …)`. Field values use `Convert.ToString(Fi, CultureInfo.InvariantCulture)` (null becomes empty string). Format chosen for parity with Kotlin and for one-line debuggability.
+3. `public override int GetHashCode()` — combines field hashes via `System.HashCode.Combine(F1, F2, …)`. For data structs with more than 8 fields (the `HashCode.Combine` overload limit), the binder emits a fold using `HashCode.Add` on a stack-allocated `HashCode` then `ToHashCode()`.
+4. `public override string ToString()` — produces `Name(F1=<value>, F2=<value>, …)`. Field values use `Convert.ToString(Fi, CultureInfo.InvariantCulture)` (null becomes empty string). Format chosen for parity with Kotlin and for one-line debuggability.
 5. `public static bool op_Equality(Name left, Name right)` and `public static bool op_Inequality(Name left, Name right)` — call `left.Equals(right)` and negation thereof. Required because the CLR does **not** synthesize value-type equality operators automatically.
 6. `public void Deconstruct(out T1 F1, out T2 F2, …)` — assigns each field to the corresponding `out`. Emits with the exact field names so C# users can `var (x, y) = point;` (C# uses positional matching but tooling shows the names). Skipped for zero-field data structs.
 
@@ -177,7 +177,8 @@ The same projection includes the already synthesized `Equals(object? obj)`
 override, so exposing typed equality does not hide object calls or object-typed
 method groups. Its parameter name and nullability use the existing CLR
 signature reader and parameter emitter, consistently in implementation and
-reference images; its body and virtual-slot finality are unchanged.
+reference images; its body is unchanged, and its virtual-slot finality follows
+the sealed-owner exception in the October 7, 2026 amendment above.
 Lazy equality signatures are materialized against source generic vectors before
 emission reifies nested owners. Implementation/reference emission must leave
 later source queries and repeated emits with the same declared generic shape.
