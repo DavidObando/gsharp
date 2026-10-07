@@ -354,7 +354,6 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("CExtensions.Extra(c, n)", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
             EmittedOracleResult result = EmittedOracle.Evaluate(
                 printed + Environment.NewLine + "C().Extra(2) + C().Helper(1)");

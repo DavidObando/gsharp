@@ -71,7 +71,8 @@ ordinary body members. A body-only translated record does not gain a synthesized
 `Deconstruct`; its fields and auto-properties still participate in structural
 equality and printing. Native G# body-form data types retain their existing
 field/property deconstruction, including when they explicitly implement
-`IEquatable<Self>`. cs2gs records carry the compiler-intrinsic `@CSharpRecord`
+`IEquatable<Self>`. cs2gs records carry the compiler-intrinsic
+`@__Cs2GsRecordProvenance_4828`
 provenance marker; it affects synthesis and emits no CLR metadata. A data class
 with a non-empty primary constructor emits that constructor only, not an
 additional public parameterless constructor.

@@ -699,9 +699,10 @@ internal sealed partial class DeclarationBinder
             return false;
         }
 
-        var name = annotation.GetNameText();
-        return string.Equals(name, "CSharpRecord", StringComparison.Ordinal)
-            || string.Equals(name, "CSharpRecordAttribute", StringComparison.Ordinal);
+        return string.Equals(
+            annotation.GetNameText(),
+            "__Cs2GsRecordProvenance_4828",
+            StringComparison.Ordinal);
     }
 
     private BoundAttribute? BindAttribute(

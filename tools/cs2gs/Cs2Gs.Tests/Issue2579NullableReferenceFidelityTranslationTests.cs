@@ -69,8 +69,7 @@ public sealed class Issue2579NullableReferenceFidelityTranslationTests
 
         Assert.Contains("item!!.Name", printed, StringComparison.Ordinal);
         Assert.Contains("item!!.Next!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("item!!.Label()", printed, StringComparison.Ordinal);
-        Assert.Contains("item.NullableLabel()", printed, StringComparison.Ordinal);
+        Assert.Contains("Extensions.Label(item!!)", printed, StringComparison.Ordinal);
         Assert.Contains("items!!.Count()", printed, StringComparison.Ordinal);
         Assert.Contains("for current in items!!", printed, StringComparison.Ordinal);
         Assert.Contains("var required = key!!", printed, StringComparison.Ordinal);

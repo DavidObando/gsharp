@@ -71,8 +71,7 @@ internal sealed partial class DeclarationBinder
         if (!syntax.HasBaseConstructorArguments
             && ((!hasImplicitBaseConstructorToResolve)
                 || (!syntax.Constructors.IsDefaultOrEmpty
-                    && !structSymbol.HasPrimaryConstructor
-                    && !hasPrimaryOnlyDataBase)))
+                    && !structSymbol.HasPrimaryConstructor)))
         {
             return;
         }

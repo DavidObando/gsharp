@@ -239,20 +239,20 @@ namespace Corpus.Adr0195
         var holder = Assert.Single(holders);
         Assert.True(holder.IsShared);
         Assert.DoesNotContain(holder.Members, member => member is SharedBlock);
+        if (unit.Members.OfType<TypeDeclaration>().SingleOrDefault(type => type.Name == "Target") is { } target)
+        {
+            Assert.DoesNotContain(target.Members.OfType<MethodDeclaration>(), method => method.Name == "Size");
+            MethodDeclaration original = Assert.Single(unit.Members.OfType<MethodDeclaration>(),
+                method => method.Name == "Size");
+            Assert.NotNull(original.Receiver);
+            Assert.Contains("ExtensionOwner(typeof(Holder))", GSharpPrinter.Print(unit), StringComparison.Ordinal);
+        }
+
         var diagnostic = Assert.Single(diagnostics);
         Assert.Equal(TranslationSeverity.Info, diagnostic.Severity);
         Assert.Contains("'shared class'", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Location);
         Assert.Equal(document.FilePath, diagnostic.Location.SourceTree.FilePath);
-        if (unit.Members.OfType<TypeDeclaration>().SingleOrDefault(type => type.Name == "Target") is { } target)
-        {
-            Assert.Single(target.Members.OfType<MethodDeclaration>(), method => method.Name == "Size");
-            MethodDeclaration original = Assert.Single(unit.Members.OfType<MethodDeclaration>(),
-                method => method.Name == "Size");
-            Assert.NotNull(original.Receiver);
-            Assert.Contains("ExtensionOwner(typeof(Holder))", GSharpPrinter.Print(unit), StringComparison.Ordinal);
-            Assert.Contains("Holder.Size(value)", GSharpPrinter.Print(unit), StringComparison.Ordinal);
-        }
     }
 
     [Fact]

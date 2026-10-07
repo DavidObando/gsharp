@@ -681,6 +681,36 @@ namespace Corpus.Issue4675
             migrated.GetType("Corpus.Issue4828.Child", throwOnError: true).GetMethod("Render").IsFinal);
     }
 
+    [Fact]
+    public void AuthoredCSharpRecordAttribute_IsPreserved()
+    {
+        const string source = """
+            namespace Corpus.Issue4828;
+            public sealed class CSharpRecordAttribute : System.Attribute { }
+            [CSharpRecord]
+            public record Item(int Value);
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Issue4828.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains("@CSharpRecord", translated, StringComparison.Ordinal);
+        Assert.Contains("@__Cs2GsRecordProvenance_4828", translated, StringComparison.Ordinal);
+
+        using var image = new MemoryStream();
+        var compilation = new GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(translated)))
+        {
+            IsLibrary = true,
+        };
+        var emit = compilation.Emit(image, null, null, "Issue4828AuthoredAttribute");
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+        Type item = Assembly.Load(image.ToArray()).GetType("Corpus.Issue4828.Item", throwOnError: true);
+        Assert.Contains(
+            item.GetCustomAttributesData(),
+            attribute => attribute.AttributeType.FullName == "Corpus.Issue4828.CSharpRecordAttribute");
+    }
+
     [Theory]
     [InlineData("P")]
     [InlineData("this.P")]

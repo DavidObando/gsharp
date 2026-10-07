@@ -1992,7 +1992,9 @@ public sealed partial class CSharpToGSharpTranslator
             List<AttributeUse> attributes = this.MapAttributes(mergedAttributeLists);
             if (symbol?.IsRecord == true)
             {
-                attributes.Add(new AttributeUse("CSharpRecord", Array.Empty<AttributeArgument>()));
+                attributes.Add(new AttributeUse(
+                    "__Cs2GsRecordProvenance_4828",
+                    Array.Empty<AttributeArgument>()));
             }
 
             return new TypeDeclaration(
