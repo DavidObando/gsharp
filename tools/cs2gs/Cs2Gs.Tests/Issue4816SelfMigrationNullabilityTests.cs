@@ -47,6 +47,13 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         _ = new { Emitted = include ? new { Path = "fixed" } : null };
                     }
                 }
+
+                #nullable enable
+                public static class AnnotatedFixture
+                {
+                    public static object Nullable(string? value) => new { Name = value };
+                    public static object NonNull(string value) => new { Name = value };
+                }
                 """),
         });
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));

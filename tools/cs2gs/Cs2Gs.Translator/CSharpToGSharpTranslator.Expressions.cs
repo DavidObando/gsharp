@@ -710,21 +710,22 @@ public sealed partial class CSharpToGSharpTranslator
             List<IPropertySymbol> anonymousProperties =
                 anonymousType?.GetMembers().OfType<IPropertySymbol>().ToList()
                 ?? new List<IPropertySymbol>();
-            List<bool> nullablePropertyFlags = anonymous.Initializers
-                .Select(initializer => this.AnonymousInitializerAcceptsNil(initializer.Expression))
-                .ToList();
             List<GTypeReference> mappedPropertyTypes = anonymousProperties
-                .Select((property, index) =>
-                {
-                    GTypeReference mapped = this.typeMapper.Map(
-                        property.Type,
-                        this.context,
-                        anonymous.GetLocation());
-                    return index < anonymous.Initializers.Count
-                        && nullablePropertyFlags[index]
-                            ? MakeNullable(mapped)
-                            : mapped;
-                })
+                .Select(property => this.typeMapper.Map(
+                    property.Type,
+                    this.context,
+                    anonymous.GetLocation()))
+                .ToList();
+            List<bool> nullablePropertyFlags = mappedPropertyTypes
+                .Select((propertyType, index) =>
+                    propertyType.IsNullable
+                    || (index < anonymous.Initializers.Count
+                        && this.AnonymousInitializerAcceptsNil(
+                            anonymous.Initializers[index].Expression)))
+                .ToList();
+            mappedPropertyTypes = mappedPropertyTypes
+                .Select((propertyType, index) =>
+                    nullablePropertyFlags[index] ? MakeNullable(propertyType) : propertyType)
                 .ToList();
             (GTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) shape =
                 anonymousType != null
