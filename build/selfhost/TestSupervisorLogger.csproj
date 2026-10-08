@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Adr0198.TestLogger</AssemblyName>
+    <RootNamespace>Adr0198</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RunAnalyzers>false</RunAnalyzers>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="TestSupervisorLogger.cs" />
+    <Reference Include="Microsoft.VisualStudio.TestPlatform.ObjectModel"
+               HintPath="$(MSBuildToolsPath)/Microsoft.VisualStudio.TestPlatform.ObjectModel.dll"
+               Private="false" />
+  </ItemGroup>
+</Project>

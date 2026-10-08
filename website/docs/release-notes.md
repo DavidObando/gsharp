@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Stage-2 self-host certification now uses isolated controller-owned trees and evidence** (issues #4716 and #4631, ADR-0198). The gate freezes one immutable source snapshot, builds stage 1 and stage 2 in separate restricted workspaces, revalidates the evaluated graph and toolchain at command boundaries, and compares complete PE bytes while ignoring only the structurally validated `Module.Mvid` GUID slot. Unsupported or ambiguous graphs fail without changing the caller tree.
+
 - **cs2gs preserves nullable tuple values stored through generic indexers** (issue #4833, parent #3501). Assigning a tuple containing an oblivious nullable return into a dictionary-style value slot now promotes the matching tuple element on the receiver declaration, avoiding a later GS0155 when an absent value is represented by `nil`.
 
 - **cs2gs preserves nullable elements in bare array initializers** (issue #4831, parent #3501). Initializers such as `object[] arguments = { null };` now use the same nullable-element projection as explicit and implicit array creations, so migrated code emits `[]object?{nil}` instead of failing with GS0155.
