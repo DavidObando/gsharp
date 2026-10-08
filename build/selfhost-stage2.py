@@ -54,6 +54,9 @@ HOST_DOTNET_ROOTS = (
     Path("/usr/share/dotnet"),
     Path("/usr/local/share/dotnet"),
 )
+ALLOWED_TEST_HOST_HASHES = {
+    "d3817a1f17e00b7f7b1040ab01e7aae73378f80c32aa4f62cb99c2aeed3cd5ad",
+}
 PACK_DEPENDENCIES = (
     Path("src/Compiler/Compiler.gsproj"),
     Path("src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj"),
@@ -414,6 +417,7 @@ def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
 
 def validate_vstest_extensions(
     root: Path, allowed_hashes: set[str], package_root: Path | None = None,
+    allowed_test_host_hashes: set[str] = ALLOWED_TEST_HOST_HASHES,
 ) -> None:
     package_hashes = {
         sha256_file(path)
@@ -427,9 +431,10 @@ def validate_vstest_extensions(
         if name.endswith("testadapter.dll"):
             accepted_test_adapter(path, allowed_hashes)
         elif name == "testhost.dll":
-            if sha256_file(path) not in package_hashes:
+            digest = sha256_file(path)
+            if digest not in allowed_test_host_hashes or digest not in package_hashes:
                 raise CertificationError(
-                    f"test host is not from the accepted package cache: {path}")
+                    f"test host is not an approved package payload: {path}")
         elif name.endswith((
             "testlogger.dll", "datacollector.dll",
             "testruntimeprovider.dll",
