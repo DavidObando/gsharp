@@ -235,6 +235,17 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("exactly one Module row", result.stderr)
 
+    def test_truncated_metadata_table_rows_are_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.type_def_row_count_offset, 0)
+        struct.pack_into("<I", data, layout.type_def_row_count_offset, 0xffffffff)
+        mutant = self.mutants / "truncated-table-rows.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("metadata table 2", result.stderr)
+
     def test_mvid_aliasing_enc_id_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)
@@ -1005,6 +1016,14 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         digest = hashlib.sha256(adapter.read_bytes()).hexdigest()
         valid = run_driver("--validate-vstest-extensions", output, digest)
         self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+
+    def test_adjacent_project_vstest_logger_is_rejected(self) -> None:
+        output = self.root / "out"
+        output.mkdir()
+        (output / "Forged.TestLogger.dll").write_bytes(b"forged logger")
+        result = run_driver("--validate-vstest-extensions", output)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("project-supplied VSTest extension", result.stderr)
 
 
 class RuntimeOutputBoundaryTests(unittest.TestCase):

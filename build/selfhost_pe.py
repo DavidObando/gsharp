@@ -33,6 +33,7 @@ class PeLayout:
     metadata_offset: int
     metadata_size: int
     module_row_count_offset: int
+    type_def_row_count_offset: int
     enc_id_index_offset: int
     enc_base_id_index_offset: int
     pe_resource_directory_offset: int
@@ -219,6 +220,101 @@ def inspect_layout(data: bytes) -> PeLayout:
 
     string_index_size = 4 if heap_sizes & 0x01 else 2
     guid_index_size = 4 if heap_sizes & 0x02 else 2
+    blob_index_size = 4 if heap_sizes & 0x04 else 2
+
+    def table_index(table: int) -> int:
+        return 4 if row_counts.get(table, 0) >= 0x10000 else 2
+
+    def coded_index(tag_bits: int, tables_in_code: tuple[int, ...]) -> int:
+        limit = 1 << (16 - tag_bits)
+        return 4 if any(row_counts.get(table, 0) >= limit
+                        for table in tables_in_code) else 2
+
+    type_def_or_ref = coded_index(2, (2, 1, 27))
+    has_constant = coded_index(2, (4, 8, 23))
+    has_custom_attribute = coded_index(
+        5, (6, 4, 1, 2, 8, 9, 10, 0, 14, 23, 20, 17, 26, 27, 32,
+            35, 38, 39, 40, 42, 44, 43))
+    has_field_marshal = coded_index(1, (4, 8))
+    has_decl_security = coded_index(2, (2, 6, 32))
+    member_ref_parent = coded_index(3, (2, 1, 26, 6, 27))
+    has_semantics = coded_index(1, (20, 23))
+    method_def_or_ref = coded_index(1, (6, 10))
+    member_forwarded = coded_index(1, (4, 6))
+    implementation = coded_index(2, (38, 35, 39))
+    custom_attribute_type = coded_index(3, (6, 10))
+    resolution_scope = coded_index(2, (0, 26, 35, 1))
+    type_or_method_def = coded_index(1, (2, 6))
+    has_custom_debug_information = coded_index(
+        5, (6, 4, 1, 2, 8, 9, 10, 0, 14, 23, 20, 17, 26, 27, 32,
+            35, 38, 39, 40, 42, 44, 43, 48, 50, 51, 52, 53))
+    row_sizes = {
+        0: 2 + string_index_size + 3 * guid_index_size,
+        1: resolution_scope + 2 * string_index_size,
+        2: 4 + 2 * string_index_size + type_def_or_ref
+           + table_index(4) + table_index(6),
+        3: table_index(4),
+        4: 2 + string_index_size + blob_index_size,
+        5: table_index(6),
+        6: 8 + string_index_size + blob_index_size + table_index(8),
+        7: table_index(8),
+        8: 4 + string_index_size,
+        9: table_index(2) + type_def_or_ref,
+        10: member_ref_parent + string_index_size + blob_index_size,
+        11: 2 + has_constant + blob_index_size,
+        12: has_custom_attribute + custom_attribute_type + blob_index_size,
+        13: has_field_marshal + blob_index_size,
+        14: 2 + has_decl_security + blob_index_size,
+        15: 6 + table_index(2),
+        16: 4 + table_index(4),
+        17: blob_index_size,
+        18: table_index(2) + table_index(20),
+        19: table_index(20),
+        20: 2 + string_index_size + type_def_or_ref,
+        21: table_index(2) + table_index(23),
+        22: table_index(23),
+        23: 2 + string_index_size + blob_index_size,
+        24: 2 + table_index(6) + has_semantics,
+        25: table_index(2) + 2 * method_def_or_ref,
+        26: string_index_size,
+        27: blob_index_size,
+        28: 2 + member_forwarded + string_index_size + table_index(26),
+        29: 4 + table_index(4),
+        30: 8,
+        31: 4,
+        32: 16 + blob_index_size + 2 * string_index_size,
+        33: 4,
+        34: 12,
+        35: 12 + 2 * blob_index_size + 2 * string_index_size,
+        36: 4 + table_index(35),
+        37: 12 + table_index(35),
+        38: 4 + string_index_size + blob_index_size,
+        39: 8 + 2 * string_index_size + implementation,
+        40: 8 + string_index_size + implementation,
+        41: 2 * table_index(2),
+        42: 4 + type_or_method_def + string_index_size,
+        43: method_def_or_ref + blob_index_size,
+        44: table_index(42) + type_def_or_ref,
+        48: blob_index_size + guid_index_size + blob_index_size + guid_index_size,
+        49: table_index(48) + blob_index_size,
+        50: table_index(6) + table_index(53) + table_index(51)
+            + table_index(52) + 8,
+        51: 4 + string_index_size,
+        52: string_index_size + blob_index_size,
+        53: table_index(53) + blob_index_size,
+        54: 2 * table_index(6),
+        55: has_custom_debug_information + guid_index_size + blob_index_size,
+    }
+    rows_end = row_cursor
+    for table, count in row_counts.items():
+        if table not in row_sizes:
+            raise PeError(f"unsupported metadata table {table}")
+        size = row_sizes[table] * count
+        _range(rows_end, size, tables + tables_size, f"metadata table {table}")
+        rows_end += size
+    if any(data[rows_end:tables + tables_size]):
+        raise PeError("metadata table stream has nonzero trailing bytes")
+
     module_row_size = 2 + string_index_size + 3 * guid_index_size
     _range(row_cursor, module_row_size, tables + tables_size, "Module row")
     mvid_index_offset = row_cursor + 2 + string_index_size
@@ -252,6 +348,7 @@ def inspect_layout(data: bytes) -> PeLayout:
         metadata_offset=metadata,
         metadata_size=metadata_size,
         module_row_count_offset=row_count_offsets[0],
+        type_def_row_count_offset=row_count_offsets.get(2, -1),
         enc_id_index_offset=mvid_index_offset + guid_index_size,
         enc_base_id_index_offset=mvid_index_offset + 2 * guid_index_size,
         pe_resource_directory_offset=directories + 2 * 8,
