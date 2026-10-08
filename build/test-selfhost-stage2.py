@@ -233,10 +233,10 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.root = REPO / "build" / f".stage2-controller-test-{suffix}"
         remove_tree(self.root)
         self.root.mkdir()
-        self.package = self.root / "Gsharp.NET.Sdk.1.2.3.nupkg"
+        self.package = self.root / "Gsharp.NET.Sdk.0.4.591.nupkg"
         with zipfile.ZipFile(self.package, "w") as archive:
             archive.writestr("Gsharp.NET.Sdk.nuspec", "<package><metadata><id>Gsharp.NET.Sdk</id>"
-                             "<version>1.2.3</version></metadata></package>")
+                             "<version>0.4.591</version></metadata></package>")
 
     def tearDown(self) -> None:
         remove_tree(self.root)
@@ -245,7 +245,7 @@ class ControllerBoundaryTests(unittest.TestCase):
         tree = self.root / "tree"
         tree.mkdir()
         (tree / "global.json").write_text(
-            '{"msbuild-sdks":{"Gsharp.NET.Sdk":"1.2.3"}}\n', encoding="utf-8")
+            '{"msbuild-sdks":{"Gsharp.NET.Sdk":"0.4.591"}}\n', encoding="utf-8")
         return tree
 
     def test_workspace_containing_source_is_rejected_without_mutation(self) -> None:
@@ -276,7 +276,7 @@ class ControllerBoundaryTests(unittest.TestCase):
             "--work", self.root / "work")
         self.assertEqual(2, result.returncode)
         self.assertEqual(
-            b'{"msbuild-sdks":{"Gsharp.NET.Sdk":"1.2.3"}}\n',
+            b'{"msbuild-sdks":{"Gsharp.NET.Sdk":"0.4.591"}}\n',
             target.read_bytes())
 
     def test_hardlinked_input_is_rejected_without_mutation(self) -> None:
@@ -321,7 +321,7 @@ class ControllerBoundaryTests(unittest.TestCase):
         tree = self.tree()
         project = tree / "App.gsproj"
         project.write_text(
-            '<Project Sdk="Gsharp.NET.Sdk/1.2.3"></Project>', encoding="utf-8")
+            '<Project Sdk="Gsharp.NET.Sdk/0.4.591"></Project>', encoding="utf-8")
         result = run_driver("--validate-project", tree, project)
         self.assertEqual(2, result.returncode)
         self.assertIn("overrides the global SDK pin", result.stderr)
