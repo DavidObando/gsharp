@@ -214,7 +214,10 @@ jobs:
           global-json-file: global.json
 
       - name: Install stage-2 sandbox
-        run: sudo apt-get update && sudo apt-get install --yes bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Verify isolated stage-2 certification contract
         run: |
