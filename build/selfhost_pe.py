@@ -36,6 +36,8 @@ class PeLayout:
     type_def_row_count_offset: int
     tables_valid_offset: int
     metadata_rows_offset: int
+    method_def_rows_offset: int
+    method_def_row_size: int
     enc_id_index_offset: int
     enc_base_id_index_offset: int
     pe_resource_directory_offset: int
@@ -90,6 +92,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         raise PeError("PE has no CLR data directory")
 
     sections_offset = optional + optional_size
+    size_of_headers = _u32(data, optional + 60)
+    _range(0, size_of_headers, len(data), "PE headers")
     _range(sections_offset, section_count * 40, len(data), "section table")
     sections: list[tuple[int, int, int, int]] = []
     raw_ranges: list[tuple[int, int]] = []
@@ -100,6 +104,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         raw_size = _u32(data, section + 16)
         raw_offset = _u32(data, section + 20)
         raw = _range(raw_offset, raw_size, len(data), f"section {index} raw data")
+        if raw_size and raw_offset < size_of_headers:
+            raise PeError("PE section raw data overlaps PE headers")
         if any(max(raw[0], start) < min(raw[1], end) for start, end in raw_ranges):
             raise PeError("overlapping PE section raw ranges")
         raw_ranges.append(raw)
@@ -312,11 +318,13 @@ def inspect_layout(data: bytes) -> PeLayout:
         55: has_custom_debug_information + guid_index_size + blob_index_size,
     }
     rows_end = row_cursor
+    table_offsets: dict[int, int] = {}
     for table, count in row_counts.items():
         if table not in row_sizes:
             raise PeError(f"unsupported metadata table {table}")
         size = row_sizes[table] * count
         _range(rows_end, size, tables + tables_size, f"metadata table {table}")
+        table_offsets[table] = rows_end
         rows_end += size
     if any(data[rows_end:tables + tables_size]):
         raise PeError("metadata table stream has nonzero trailing bytes")
@@ -344,6 +352,57 @@ def inspect_layout(data: bytes) -> PeLayout:
     for start, end, label in (*directory_ranges, *clr_ranges):
         if max(mvid_offset, start) < min(mvid_end, end):
             raise PeError(f"Module.Mvid overlaps {label}")
+
+    def method_body_range(rva: int) -> tuple[int, int]:
+        start = rva_to_offset(rva, 1, "method body")
+        first = data[start]
+        if first & 0x03 == 0x02:
+            end = start + 1 + (first >> 2)
+        elif first & 0x03 == 0x03:
+            flags = _u16(data, start)
+            header_size = (flags >> 12) * 4
+            if header_size < 12:
+                raise PeError("invalid fat method header")
+            code_size = _u32(data, start + 4)
+            end = start + header_size + code_size
+            _range(start, header_size + code_size, len(data), "method body")
+            if flags & 0x08:
+                cursor = (end + 3) & ~3
+                while True:
+                    _range(cursor, 2, len(data), "method data section")
+                    kind = data[cursor]
+                    if kind & 0x40:
+                        _range(cursor, 4, len(data), "fat method data section")
+                        size = int.from_bytes(data[cursor + 1:cursor + 4], "little")
+                    else:
+                        size = data[cursor + 1]
+                    _range(cursor, size, len(data), "method data section")
+                    end = cursor + size
+                    if not kind & 0x80:
+                        break
+                    cursor = (end + 3) & ~3
+        else:
+            raise PeError("invalid method header")
+        _range(start, end - start, len(data), "method body")
+        return start, end
+
+    method_rows = table_offsets.get(6, 0)
+    method_row_size = row_sizes[6]
+    for row in range(row_counts.get(6, 0)):
+        rva = _u32(data, method_rows + row * method_row_size)
+        if not rva:
+            continue
+        if mvid_offset <= rva_to_offset(rva, 1, "method body") < mvid_end:
+            raise PeError("Module.Mvid overlaps a method body")
+        start, end = method_body_range(rva)
+        if max(mvid_offset, start) < min(mvid_end, end):
+            raise PeError("Module.Mvid overlaps a method body")
+    field_rva_rows = table_offsets.get(29, 0)
+    for row in range(row_counts.get(29, 0)):
+        rva = _u32(data, field_rva_rows + row * row_sizes[29])
+        if rva and mvid_offset == rva_to_offset(rva, 1, "field RVA data"):
+            raise PeError("Module.Mvid aliases field RVA data")
+
     return PeLayout(
         mvid_offset=mvid_offset,
         mvid_rva=offset_to_rva(mvid_offset, 16, "Module.Mvid"),
@@ -357,6 +416,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         type_def_row_count_offset=row_count_offsets.get(2, -1),
         tables_valid_offset=tables + 8,
         metadata_rows_offset=row_cursor,
+        method_def_rows_offset=method_rows,
+        method_def_row_size=method_row_size,
         enc_id_index_offset=mvid_index_offset + guid_index_size,
         enc_base_id_index_offset=mvid_index_offset + 2 * guid_index_size,
         pe_resource_directory_offset=directories + 2 * 8,

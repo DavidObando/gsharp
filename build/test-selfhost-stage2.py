@@ -180,6 +180,18 @@ static class Program
         mutate(self.fixture, mutant, pe_offset + 4)
         self.assert_different(mutant)
 
+    def test_section_raw_data_overlapping_pe_headers_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+        optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+        first_section = pe_offset + 24 + optional_size
+        struct.pack_into("<I", data, first_section + 20, 0)
+        mutant = self.mutants / "section-header-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("section raw data overlaps PE headers", result.stderr)
+
     def test_managed_resource_mutation_is_rejected(self) -> None:
         data = self.fixture.read_bytes()
         offset = data.find(b"ADR0198-MANAGED-RESOURCE-MARKER")
@@ -251,6 +263,18 @@ static class Program
         result = run_driver("--compare-pe", self.fixture, mutant)
         self.assertEqual(2, result.returncode)
         self.assertIn("metadata table 2", result.stderr)
+
+    def test_mvid_overlapping_method_body_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.method_def_rows_offset, 0)
+        struct.pack_into(
+            "<I", data, layout.method_def_rows_offset, layout.mvid_rva)
+        mutant = self.mutants / "mvid-method-body-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps a method body", result.stderr)
 
     def test_semantic_guid_metadata_tables_are_rejected(self) -> None:
         for table in (48, 55):

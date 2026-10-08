@@ -33,7 +33,7 @@ python3 build/selfhost-stage2.py \
   --project src/Compiler/Compiler.gsproj \
   --assembly Core/GSharp.Core.dll \
   --assembly Compiler/gsc.dll \
-  --test 'test/Core.Tests/Core.Tests.csproj::<filter>' \
+  --test 'test/Core.Tests/Core.Tests.gsproj::<filter>' \
   --test-adapter-sha256 c5ac41b36fac0fcef9714fb80fea0175913530fb53dd7bb8e5e1470339667100 \
   --test-adapter-sha256 194458c816e0ea9ff0c5eac8896c52133fe9205661833b3d0f57e85a4e66936b \
   --test-adapter-sha256 ec705ad62e33f31fc46ad5800c9b1694c02d0ec4e1ee704712da9f24ebbea22e \
