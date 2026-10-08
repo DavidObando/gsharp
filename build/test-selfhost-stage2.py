@@ -332,6 +332,19 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("overlaps CLR managed resources", result.stderr)
 
+    def test_mvid_overlapping_debug_payload_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreaterEqual(layout.debug_directory_size, 28)
+        struct.pack_into(
+            "<III", data, layout.debug_directory_offset + 16,
+            16, layout.mvid_rva, layout.mvid_offset)
+        mutant = self.mutants / "mvid-debug-payload-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps PE debug payload 0", result.stderr)
+
     def test_truncated_guid_stream_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)

@@ -42,6 +42,8 @@ class PeLayout:
     enc_base_id_index_offset: int
     pe_resource_directory_offset: int
     clr_resources_directory_offset: int
+    debug_directory_offset: int
+    debug_directory_size: int
 
 
 def _u16(data: bytes, offset: int) -> int:
@@ -133,6 +135,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         return matches[0]
 
     directory_ranges: list[tuple[int, int, str]] = []
+    debug_directory_offset = 0
+    debug_directory_size = 0
     available_directories = (optional + optional_size - directories) // 8
     if directory_count > available_directories:
         raise PeError("PE data-directory count exceeds the optional header")
@@ -147,6 +151,28 @@ def inspect_layout(data: bytes) -> PeLayout:
             start = rva_to_offset(rva, size, f"PE data directory {index}")
             end = start + size
         directory_ranges.append((start, end, f"PE data directory {index}"))
+        if index == 6:
+            debug_directory_offset = start
+            debug_directory_size = size
+
+    debug_payload_ranges: list[tuple[int, int, str]] = []
+    if debug_directory_size:
+        if debug_directory_size % 28:
+            raise PeError("truncated PE debug directory")
+        for index in range(debug_directory_size // 28):
+            entry = debug_directory_offset + index * 28
+            size = _u32(data, entry + 16)
+            payload_rva = _u32(data, entry + 20)
+            payload_offset = _u32(data, entry + 24)
+            if not size:
+                continue
+            start, end = _range(
+                payload_offset, size, len(data), f"PE debug payload {index}")
+            if payload_rva and rva_to_offset(
+                    payload_rva, size, f"PE debug payload {index}") != start:
+                raise PeError("PE debug payload RVA and file offset disagree")
+            debug_payload_ranges.append(
+                (start, end, f"PE debug payload {index}"))
 
     clr_rva = _u32(data, directories + 14 * 8)
     clr_size = _u32(data, directories + 14 * 8 + 4)
@@ -349,7 +375,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         raise PeError("Module.Mvid is outside the #GUID stream")
     mvid_offset = guid_start + relative_mvid
     mvid_end = mvid_offset + 16
-    for start, end, label in (*directory_ranges, *clr_ranges):
+    for start, end, label in (
+            *directory_ranges, *debug_payload_ranges, *clr_ranges):
         if max(mvid_offset, start) < min(mvid_end, end):
             raise PeError(f"Module.Mvid overlaps {label}")
 
@@ -422,6 +449,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         enc_base_id_index_offset=mvid_index_offset + 2 * guid_index_size,
         pe_resource_directory_offset=directories + 2 * 8,
         clr_resources_directory_offset=clr + 24,
+        debug_directory_offset=debug_directory_offset,
+        debug_directory_size=debug_directory_size,
     )
 
 
