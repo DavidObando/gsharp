@@ -120,11 +120,18 @@ link.
 
 ### 3. Participating closure
 
-The unit of graph identity is:
+The execution-node identity is:
 
 ```text
 (project real path, complete global-property map, SDK resolver environment)
 ```
+
+The controller MUST retain that full identity for execution and revalidation.
+For the ordinary-to-isolated context comparison only, it MUST also compute a
+logical-node identity that removes the controller-owned
+`BuildProjectReferences` scheduling projection. No other property or resolver
+input may be removed. The two contexts compare logical-node identities and
+edges; each command still compares its full execution-node identity.
 
 The controller MUST discover the closure by evaluated MSBuild data, not by XML
 text search and not by `MSBuildAllProjects`. Discovery MUST include:
@@ -142,6 +149,13 @@ The snapshot MUST record the exact command, environment, selected .NET SDK,
 MSBuild version, NuGet configuration, package sources, package identities and
 hashes, global properties, evaluated properties, items, imports, references,
 targets, tasks, and planned outputs.
+
+The snapshot MUST NOT retain plaintext credentials, tokens, or secret-bearing
+arguments, environment values, or configuration entries. The controller MUST
+bind each secret value with a per-run keyed commitment and use that commitment
+for boundary comparisons. The key MUST remain controller-only, outside evidence
+and reports, and MUST be destroyed after final verification. Reports MAY retain
+only the entry name, redacted form, and commitment.
 
 The exact property map MUST include all properties passed to restore, build, or
 test. It includes, when applicable, `Configuration`, `Platform`,
@@ -331,11 +345,12 @@ unchanged and report the failure on standard error.
 Stage-2 v1 models only graphs for which it can prove the rules above. It MUST
 REJECT unsupported input before destructive work.
 
-Rejection is the required result for custom project targets or tasks,
+Rejection is the required result for unmodeled custom project targets or tasks,
 multitargeting, context-changing or build-disabled references, ambiguous
 imports, mutable external inputs, and any graph that cannot be frozen and
-revalidated. A later ADR or amendment may add support. An implementation MUST
-NOT approximate these cases.
+revalidated. The exact modeled and hash-allowlisted cases in section 6 are
+supported; an implementation MUST NOT approximate any other case. A later ADR
+or amendment may add support.
 
 An unsupported or rejected run is not evidence of non-equivalence. It is also
 not certification.
@@ -398,6 +413,10 @@ boundary is under test. The suite MUST include:
   `AdditionalFiles`, and resource inputs under a cleanup or destination root;
 - inputs visible only under the actual compiler paths and
   `BuildProjectReferences=false` context;
+- ordinary and isolated execution identities that differ only by the
+  controller-owned `BuildProjectReferences` projection;
+- secret-bearing restore configuration whose plaintext MUST NOT appear in
+  evidence, logs, or reports while changed commitments MUST reject;
 - graph evaluation or SDK resolver code that attempts to read the caller tree
   or controller-owned evidence, proving that discovery and revalidation use the
   restricted command boundary;
