@@ -457,6 +457,19 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("unsafe configuration name", result.stderr)
 
+    def test_complete_preprocessed_property_map_is_inventoried(self) -> None:
+        project = self.root / "preprocessed.xml"
+        project.write_text(
+            "<Project><PropertyGroup>"
+            "<DefineConstants>TRACE</DefineConstants>"
+            "<Optimize>true</Optimize>"
+            "</PropertyGroup></Project>",
+            encoding="utf-8")
+        result = run_driver("--preprocessed-properties", project)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            ["DefineConstants", "Optimize"], json.loads(result.stdout))
+
     def test_package_path_components_cannot_escape_controller_roots(self) -> None:
         for value in ("../victim", "a/b", r"a\b", ".", "..", "/rooted"):
             with self.subTest(value=value):
@@ -652,6 +665,7 @@ class ReceiptBoundaryTests(unittest.TestCase):
                 "path": str(events),
                 "sha256": hashlib.sha256(events.read_bytes()).hexdigest(),
                 "processPid": 123,
+                "challengeCommitment": "2" * 64,
             },
         }), encoding="utf-8")
         return receipt

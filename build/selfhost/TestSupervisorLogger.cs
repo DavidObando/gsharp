@@ -1,9 +1,11 @@
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Logging;
+using Microsoft.Win32.SafeHandles;
 
 namespace Adr0198;
 
@@ -15,15 +17,23 @@ public sealed class TestSupervisorLogger : ITestLogger
 
     public void Initialize(TestLoggerEvents events, string testRunDirectory)
     {
-        string path = Environment.GetEnvironmentVariable("ADR0198_TEST_EVENT_SOCKET")
-            ?? throw new InvalidOperationException("ADR0198_TEST_EVENT_SOCKET is missing");
-        Environment.SetEnvironmentVariable("ADR0198_TEST_EVENT_SOCKET", null);
-        Socket socket = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        socket.Connect(new UnixDomainSocketEndPoint(path));
+        string value = Environment.GetEnvironmentVariable("ADR0198_TEST_EVENT_FD")
+            ?? throw new InvalidOperationException("ADR0198_TEST_EVENT_FD is missing");
+        string challenge = Environment.GetEnvironmentVariable("ADR0198_TEST_EVENT_CHALLENGE")
+            ?? throw new InvalidOperationException("ADR0198_TEST_EVENT_CHALLENGE is missing");
+        int descriptor = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+        Environment.SetEnvironmentVariable("ADR0198_TEST_EVENT_FD", null);
+        Environment.SetEnvironmentVariable("ADR0198_TEST_EVENT_CHALLENGE", null);
+        if (fcntl(descriptor, 2, 1) != 0)
+        {
+            throw new InvalidOperationException("cannot protect the supervisor event channel");
+        }
+        Socket socket = new(new SafeSocketHandle((IntPtr)descriptor, ownsHandle: true));
         writer = new StreamWriter(new NetworkStream(socket, ownsSocket: true), new UTF8Encoding(false))
         {
             AutoFlush = true,
         };
+        Write(new { type = "ready", challenge });
         events.TestRunStart += (_, _) => Write(new { type = "started" });
         events.TestResult += (_, args) => Write(new
         {
@@ -63,4 +73,7 @@ public sealed class TestSupervisorLogger : ITestLogger
 
         writer.WriteLine(JsonSerializer.Serialize(value));
     }
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int fcntl(int descriptor, int command, int argument);
 }
