@@ -223,6 +223,18 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("outside the #GUID stream", result.stderr)
 
+    def test_truncated_guid_stream_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        name = data.find(b"#GUID\0")
+        self.assertGreater(name, 4)
+        struct.pack_into("<I", data, name - 4, layout.guid_stream_size - 1)
+        mutant = self.mutants / "truncated-guid.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("truncated #GUID stream", result.stderr)
+
     def test_truncated_metadata_is_rejected(self) -> None:
         mutant = self.mutants / "truncated.dll"
         mutant.write_bytes(self.fixture.read_bytes()[:-32])

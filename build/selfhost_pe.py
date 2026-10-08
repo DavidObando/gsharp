@@ -184,6 +184,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         raise PeError("Module.Mvid aliases another semantic Module GUID")
 
     guid_start, guid_size = streams["#GUID"]
+    if guid_size % 16:
+        raise PeError("truncated #GUID stream")
     relative_mvid = (mvid_index - 1) * 16
     if relative_mvid < 0 or relative_mvid + 16 > guid_size:
         raise PeError("Module.Mvid is outside the #GUID stream")
