@@ -527,6 +527,8 @@ def git_snapshot_entries(
         if object_type != "blob" or mode not in {"100644", "100755"}:
             raise CertificationError(
                 f"unsupported Git tree entry {os.fsdecode(name)}: {mode} {object_type}")
+        if b"\r" in name or b"\n" in name:
+            raise CertificationError("snapshot paths cannot contain CR or LF")
         entries.append((
             os.fsdecode(name),
             0o755 if mode == "100755" else 0o644,
