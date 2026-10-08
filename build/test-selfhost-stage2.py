@@ -449,6 +449,39 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("at least one --test", result.stderr)
 
+    def test_snapshot_bytes_come_from_the_recorded_commit(self) -> None:
+        tree = self.tree()
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "filter.adr0198.clean",
+             "sed s/WORKTREE/COMMIT/g"], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "filter.adr0198.smudge",
+             "sed s/COMMIT/WORKTREE/g"], check=True)
+        (tree / ".gitattributes").write_text(
+            "payload.txt filter=adr0198\n", encoding="utf-8")
+        (tree / "payload.txt").write_text("WORKTREE\n", encoding="utf-8")
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "filtered fixture"],
+            check=True, capture_output=True)
+        self.assertEqual(
+            b"COMMIT\n",
+            subprocess.run(
+                ["git", "-C", tree, "show", "HEAD:payload.txt"],
+                check=True, capture_output=True).stdout)
+        self.assertEqual(b"WORKTREE\n", (tree / "payload.txt").read_bytes())
+        snapshot = self.root / "snapshot"
+        result = run_driver("--freeze-source", tree, snapshot)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(b"COMMIT\n", (snapshot / "payload.txt").read_bytes())
+
     def test_stage1_version_must_differ_from_bootstrap(self) -> None:
         tree = self.tree()
         result = run_driver(
