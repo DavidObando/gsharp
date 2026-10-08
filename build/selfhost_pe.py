@@ -25,6 +25,7 @@ class PeFingerprint:
 @dataclass(frozen=True)
 class PeLayout:
     mvid_offset: int
+    mvid_rva: int
     mvid_index_offset: int
     guid_index_size: int
     guid_stream_offset: int
@@ -34,6 +35,8 @@ class PeLayout:
     module_row_count_offset: int
     enc_id_index_offset: int
     enc_base_id_index_offset: int
+    pe_resource_directory_offset: int
+    clr_resources_directory_offset: int
 
 
 def _u16(data: bytes, offset: int) -> int:
@@ -111,6 +114,31 @@ def inspect_layout(data: bytes) -> PeLayout:
         _range(matches[0], size, len(data), label)
         return matches[0]
 
+    def offset_to_rva(offset: int, size: int, label: str) -> int:
+        matches = []
+        for virtual_address, _, raw_offset, raw_size in sections:
+            if raw_offset <= offset and size <= raw_size - (offset - raw_offset):
+                matches.append(virtual_address + offset - raw_offset)
+        if len(matches) != 1:
+            raise PeError(f"{label} maps to {len(matches)} PE sections")
+        return matches[0]
+
+    directory_ranges: list[tuple[int, int, str]] = []
+    available_directories = (optional + optional_size - directories) // 8
+    if directory_count > available_directories:
+        raise PeError("PE data-directory count exceeds the optional header")
+    for index in range(directory_count):
+        rva = _u32(data, directories + index * 8)
+        size = _u32(data, directories + index * 8 + 4)
+        if not rva or not size:
+            continue
+        if index == 4:
+            start, end = _range(rva, size, len(data), "certificate directory")
+        else:
+            start = rva_to_offset(rva, size, f"PE data directory {index}")
+            end = start + size
+        directory_ranges.append((start, end, f"PE data directory {index}"))
+
     clr_rva = _u32(data, directories + 14 * 8)
     clr_size = _u32(data, directories + 14 * 8 + 4)
     if clr_size < 0x48:
@@ -119,6 +147,21 @@ def inspect_layout(data: bytes) -> PeLayout:
     metadata_rva = _u32(data, clr + 8)
     metadata_size = _u32(data, clr + 12)
     metadata = rva_to_offset(metadata_rva, metadata_size, "CLR metadata")
+    clr_ranges: list[tuple[int, int, str]] = []
+    for field, label in (
+        (24, "CLR managed resources"),
+        (32, "CLR strong-name signature"),
+        (40, "CLR code-manager table"),
+        (48, "CLR vtable fixups"),
+        (56, "CLR export-address jumps"),
+        (64, "CLR managed-native header"),
+    ):
+        rva = _u32(data, clr + field)
+        size = _u32(data, clr + field + 4)
+        if not rva or not size:
+            continue
+        start = rva_to_offset(rva, size, label)
+        clr_ranges.append((start, start + size, label))
     metadata_end = metadata + metadata_size
     if data[metadata:metadata + 4] != b"BSJB":
         raise PeError("invalid CLR metadata signature")
@@ -194,8 +237,14 @@ def inspect_layout(data: bytes) -> PeLayout:
     relative_mvid = (mvid_index - 1) * 16
     if relative_mvid < 0 or relative_mvid + 16 > guid_size:
         raise PeError("Module.Mvid is outside the #GUID stream")
+    mvid_offset = guid_start + relative_mvid
+    mvid_end = mvid_offset + 16
+    for start, end, label in (*directory_ranges, *clr_ranges):
+        if max(mvid_offset, start) < min(mvid_end, end):
+            raise PeError(f"Module.Mvid overlaps {label}")
     return PeLayout(
-        mvid_offset=guid_start + relative_mvid,
+        mvid_offset=mvid_offset,
+        mvid_rva=offset_to_rva(mvid_offset, 16, "Module.Mvid"),
         mvid_index_offset=mvid_index_offset,
         guid_index_size=guid_index_size,
         guid_stream_offset=guid_start,
@@ -205,6 +254,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         module_row_count_offset=row_count_offsets[0],
         enc_id_index_offset=mvid_index_offset + guid_index_size,
         enc_base_id_index_offset=mvid_index_offset + 2 * guid_index_size,
+        pe_resource_directory_offset=directories + 2 * 8,
+        clr_resources_directory_offset=clr + 24,
     )
 
 

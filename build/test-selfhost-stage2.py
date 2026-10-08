@@ -250,6 +250,30 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("aliases another semantic Module GUID", result.stderr)
 
+    def test_mvid_overlapping_pe_resource_directory_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        struct.pack_into(
+            "<II", data, layout.pe_resource_directory_offset,
+            layout.mvid_rva, 16)
+        mutant = self.mutants / "mvid-pe-resource-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps PE data directory 2", result.stderr)
+
+    def test_mvid_overlapping_clr_resource_directory_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        struct.pack_into(
+            "<II", data, layout.clr_resources_directory_offset,
+            layout.mvid_rva, 16)
+        mutant = self.mutants / "mvid-clr-resource-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps CLR managed resources", result.stderr)
+
     def test_truncated_guid_stream_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)
