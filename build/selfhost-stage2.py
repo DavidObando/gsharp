@@ -113,6 +113,58 @@ ALLOWED_IMPORT_TASKS = {
      "Gsharp.NET.Sdk.Tools.BuildTask"):
         "773860a7d7b669c025ba1233f47ac38873bbe8314deb9164967299f5021b3fa4",
 }
+ALLOWED_EXTERNAL_DEFINITION_HASHES = frozenset({
+    # Nerdbank.GitVersioning 3.11.13-beta
+    "b12fbdb6fc69500e73c9c15a0eb01b51175c2f79a42a40eafd7f2cfeaedc2e4c",
+    "db621654de269a8915e83eac8780d26d3551b4ab22c6119ed18b0187e98ddede",
+    "d03ed7fe9235a59b2dadf5fdba743a8ebeb87cf8a5c530972e624393fc9471fe",
+    "679ef11a7d6e8c19b96bba2630f2d70c043fc5dababced2e9fcbb67007ab7346",
+    "54a0b0d6f3b12c864d0f08b78526ef01c5e143fb14e95aeb85a42cc8689cdd7d",
+    "e9e55544c155279a90c25337a88c1b0c90aa77a533ceffc9d61aab06c488d008",
+    "716f5978b17cbac62b8d114efe7907ad73d61446bffcba3e2dde6f9f8d96c171",
+    "498fc5db167fefbfa7451d7d0b4b21726723e160f4894aa7927c5b987ac89fc6",
+    "6c9d8a2e5f3efb319ce0f76ef44f736a9f9dfecf22487049baafadf8bc4f64b6",
+    "701505af5428907af69c73adaf0036a7b981af6b1da01536f7b17309966b00b3",
+    "a770b8b81a785362bacc295e8eb0b5506601f410540ddf210bef7696d1b05fc3",
+    "dc1d15e9c4a3559321938dba90524605ecc3da98a4a98383ee372fe7796e647b",
+    "2c91f1e8c5c0d9e35f7b80390ed731b8c3055398029c18e5802d2464ac916354",
+    "87eff83279fcdbd580819d8b0dc7d1e25332cf9fb19a778133ba5ffe93e539dc",
+    "8e2469dd65e257893114447658a2cd993bcb8b2be5a2226f7fdabf4f61c80876",
+    "3aa8ccd1df50cd00d391d576ee2159ff8ea5c0bcd858783fba822b4ef02c2553",
+    "7477d4e7ad74024586a348bea221f9c56588c010f94b7b1e38210146348ffff4",
+    "4b2e5738bf1251f90ffdee29da389ab2c2b042710acac8234e8ebe22fcaf3940",
+    "094f20acb6d225bf001ed0ffd04d713fc496d78d37f71eb42af24b52b2f32663",
+    "690d06ffc77d4c5aecb292819af27e48118299f568f9bdd4cd7d8a78a5ac3266",
+    "0b4dd1c4458476616312ebfe847cf508b63df8f8b75dcc0a22ead5310d7a8f52",
+    "6d1ee89d299127ab631f7a9615931c1c96f727e73e67f3fad94bc1753ac5924c",
+    "409fc15cd70956e0c43cfaae4d1898be4ea06849d1cc2500c8e4319214bfa90c",
+    "17144e6dc953ec6f9b46dd50af7c56840f3f6711ea50595f6bcf9414886e1531",
+    "80e06389a5aff38e97242b4017367c6a40ee386c2b05773ecd0e2af0e41d2fc5",
+    "34a5e3ec44b0e0475271d9148cb98c80c1cf8b99f7350c8c47b6b9dd2b49a8e1",
+    "3341d59f6ffed4e95d7d3bb6a1dd5e9cfa5afada25db836146dc8bf96ced64db",
+    # SourceLink 8.0.0 and Microsoft.Build.Tasks.Git 10.0.401
+    "bd350acbe1f63d81827c4297bbb1536334278d90082bae272fb6af7a7ed26682",
+    "a0162f71ea11af00ad6279ad66c95f15850001e3f1a7d5a13abaca7301f65033",
+    "34309c14bf3fa34de98b3cbc518d01ffe2c3839e3ce0a229c38601565d53f541",
+    "d9217e49752b6b4138a4220513f9b9fcd3c59c3308dd88930ff20ca92cb15484",
+    "cf8b5e2b31ce65c7664e923b1a581cca5ecdc9597f8347550c12ae4094fd75b4",
+    "badfb7082412a9beb0c11a65ab8bd4d03c11b17dbd639844c9bded893862eb5d",
+    "cc45f21409e5495bc7a82bc9f7cc7da5cb18dd67a94835441ab87dae0cefc1be",
+    "f43f2f74ce89aa36418245c1f2be0d85014944632b6393bd2e3760d1fa0cdf44",
+    "49be5f506c132876b5a1770985154fa6c1a8f6c5ac331271ea4ba74460ef2cac",
+    "2cde1e2564517da3146d477f3b34c6ae514db7c61458b42c1f980b350525d442",
+    "0857fe94e0260bf611ae5a06aa3280b4784ec7294080f10393f4bf77bc92517c",
+    "9d3117d47a8c060fa0c2075f4a3d7d18e81160882e6eac4015300f0d4a9c6c05",
+    "19f1190911af0eb3bebc932fbc77faef80e2255c8e1c72b74bee72596ba4de9d",
+    "bdeb07f359586099fa9795ca47dfe6897492db852dbd9955cc75aea302a7fcbf",
+    "4eaea071cb6ddbe0eea48bbacd6f16ef6d3affe5ef7bcff8eefcd4edbfb325e7",
+    "79a7859f34aaf94aba3a9cc1ed2db98f04fdc8ab519cddb15bb805fcc3f7f141",
+    "5eedeb0de9f99b3c3e656a8e662e0234017e9f39d761c51101cc9cc0f7c0a2d6",
+    "81c8df98694c6bd9533da848c8050a0def79b4dc6c06473bfe170f77bb5fbd51",
+    "9f0abec8cfc4721a7984c422b4c14a0a31d199ad46d41fec7c387c696ca3fba6",
+    # Microsoft.NET.Test.Sdk 17.11.1
+    "d074738813cee4241a75e35ae752e4c2c3a29c807e7e9b4297a171b55ccbeff5",
+})
 
 
 class CertificationError(Exception):
@@ -742,8 +794,9 @@ def inspect_repository_import(
         if tag == "Target":
             target = element.attrib.get("Name", "")
             definition = xml_definition_hash(element)
-            if (not external
-                    and ALLOWED_IMPORT_TARGETS.get((relative, target)) != definition):
+            if ((external and definition not in ALLOWED_EXTERNAL_DEFINITION_HASHES)
+                    or (not external
+                        and ALLOWED_IMPORT_TARGETS.get((relative, target)) != definition)):
                 raise CertificationError(
                     f"unmodeled imported target definition {target!r} in {relative}")
             inventory["targets"].append({
@@ -751,8 +804,9 @@ def inspect_repository_import(
         elif tag == "UsingTask":
             task = element.attrib.get("TaskName", "")
             definition = xml_definition_hash(element)
-            if (not external
-                    and ALLOWED_IMPORT_TASKS.get((relative, task)) != definition):
+            if ((external and definition not in ALLOWED_EXTERNAL_DEFINITION_HASHES)
+                    or (not external
+                        and ALLOWED_IMPORT_TASKS.get((relative, task)) != definition)):
                 raise CertificationError(
                     f"unmodeled imported task definition {task!r} in {relative}")
             inventory["tasks"].append({
@@ -761,9 +815,6 @@ def inspect_repository_import(
                 "assemblyName": element.attrib.get("AssemblyName", ""),
                 "definitionSha256": definition,
             })
-    if external and (inventory["targets"] or inventory["tasks"]):
-        raise CertificationError(
-            f"external custom targets and tasks are unsupported in v1: {relative}")
     return inventory
 
 
