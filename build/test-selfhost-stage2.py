@@ -225,6 +225,31 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("outside the #GUID stream", result.stderr)
 
+    def test_duplicate_module_rows_are_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        struct.pack_into("<I", data, layout.module_row_count_offset, 2)
+        mutant = self.mutants / "duplicate-module.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("exactly one Module row", result.stderr)
+
+    def test_mvid_aliasing_enc_id_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        mvid_index = data[
+            layout.mvid_index_offset:
+            layout.mvid_index_offset + layout.guid_index_size]
+        data[
+            layout.enc_id_index_offset:
+            layout.enc_id_index_offset + layout.guid_index_size] = mvid_index
+        mutant = self.mutants / "aliased-mvid.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("aliases another semantic Module GUID", result.stderr)
+
     def test_truncated_guid_stream_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)
