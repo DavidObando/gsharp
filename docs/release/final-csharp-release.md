@@ -25,6 +25,39 @@ commit.
 | `publish` waits for `build, tests, test-partition, e2e, ilverify, cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix, visual-studio-extension`. `nullable-hygiene` and the hot-core guard are not in the list; the hot-core guard only runs on PRs. | `build.yml:716`, `build.yml:567` |
 | No job declares an `environment:`, so publishing has no approval gate: pushing the tag is the approval. Repository environments are only `copilot` and `github-pages` (`gh api repos/DavidObando/gsharp/environments`, read 2026-10-02). | `build.yml` (no `environment:` key) |
 
+### Stage-2 publication gate
+
+The table above describes the final 0.4 C# release. It is not sufficient for an
+artifact whose emitted version is 0.5 or whose build uses the stage-2 compiler.
+This rule applies regardless of tag text.
+
+Before any such package or extension can publish:
+
+- ADR-0198 MUST be accepted and its replacement gate MUST be on `main`;
+- the exact tagged commit MUST have successful controller-owned stage-1/stage-2
+  certification evidence and the required fresh-clone cutover dry run;
+- that evidence MUST bind the exact commit and Git tree identities to the common
+  source manifest. Dirty, untracked participating, or different-commit source
+  bytes MUST be rejected;
+- the `publish` job MUST depend on the replacement certification job and verify
+  the evidence commit and run identity;
+- the controller-owned release manifest MUST list the SHA-256 digest of every
+  package and extension to publish, and each artifact MUST be produced by the
+  certified run or have every input bound to accepted evidence;
+- before the first upload, the publish jobs MUST verify every artifact against
+  that manifest. Same-commit artifacts with different bytes MUST be rejected;
+- `publish-visual-studio-extension` MUST remain downstream of that gated
+  `publish` job.
+
+A first implementation change MUST add a temporary workflow guard that rejects
+an emitted 0.5 artifact or an artifact built by the stage-2 compiler, regardless
+of tag text. The evidence-bound certification dependency MUST replace that
+guard in the same change that enables certified publication.
+
+A self-migration nightly, a proof from another commit, or a manually copied
+report MUST NOT satisfy this gate. Until the workflow enforces these checks, a
+0.5 artifact or an artifact built by the stage-2 compiler MUST NOT publish.
+
 ### Publish order (one tag run)
 
 Rows marked "build" produce artifacts before anything is published; publishing is steps 1-4.

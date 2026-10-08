@@ -37,10 +37,11 @@ had suggested shipping stage 1 first):
   in the repository's `global.json` `msbuild-sdks`.
 - **Stage 2 (what 0.5.x ships):** the G# source compiled again by the
   stage-1 compiler, so the shipped compiler is built by a G#-built compiler.
-  The cut-over is accepted only when stage 1 and stage 2 produce
-  IL/metadata-identical `GSharp.Core.dll` and `gsc.dll` (MVIDs zeroed), and
-  `RefactoringBaselineTests`, Core.Tests and Compiler.Tests pass under stage 2
-  (#4631).
+  Under [ADR-0198](../adr/0198-isolated-stage-2-self-host-certification.md),
+  the cut-over is accepted only when stage 1 and stage 2 produce identical PE
+  bytes for `GSharp.Core.dll` and `gsc.dll`, except only the structurally
+  validated 16-byte `Module.Mvid` GUID slot, and `RefactoringBaselineTests`,
+  Core.Tests and Compiler.Tests pass under stage 2 (#4631).
 - After 0.5.x is published, the pin moves from 0.4.NNNN to a 0.5 release.
   From then on, each release is built by an earlier G# release.
 
