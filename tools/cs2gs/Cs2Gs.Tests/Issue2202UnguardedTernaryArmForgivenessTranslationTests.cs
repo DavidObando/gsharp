@@ -55,14 +55,15 @@ namespace Demo
     }
 
     [Fact]
-    public void StableGuardReceiver_StillSuppressesNullableArm()
+    public void RepeatedPropertyRead_DoesNotSuppressNullableArm()
     {
         string printed = TranslateOblivious(@"
 namespace Demo
 {
     public sealed class Holder
     {
-        public string Value { get; }
+        private int reads;
+        public string Value { get => reads++ == 0 ? ""first"" : null; }
     }
 
     public static class C
@@ -76,8 +77,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("func Keep(value string) string", printed);
-        Assert.DoesNotContain("func Keep(value string?)", printed);
+        Assert.Contains("func Keep(value string?) string?", printed);
     }
 
     /// <summary>

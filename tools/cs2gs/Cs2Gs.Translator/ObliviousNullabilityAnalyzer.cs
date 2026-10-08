@@ -5993,7 +5993,8 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         if (stripped is not MemberAccessExpressionSyntax member
-            || model.GetSymbolInfo(member).Symbol is not IPropertySymbol { SetMethod: null })
+            || model.GetSymbolInfo(member).Symbol is not IPropertySymbol { SetMethod: null } property
+            || !IsSourceGetOnlyAutoProperty(property))
         {
             return false;
         }
@@ -6014,6 +6015,23 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsSourceGetOnlyAutoProperty(IPropertySymbol property)
+    {
+        ImmutableArray<SyntaxReference> declarations = property.DeclaringSyntaxReferences;
+        return !declarations.IsDefaultOrEmpty
+            && !property.IsAbstract
+            && !property.IsVirtual
+            && !property.IsOverride
+            && property.ContainingType.TypeKind != TypeKind.Interface
+            && declarations.All(reference =>
+                reference.GetSyntax() is PropertyDeclarationSyntax declaration
+                && declaration.AccessorList?.Accessors is [{ } getter]
+                && getter.IsKind(SyntaxKind.GetAccessorDeclaration)
+                && getter.Body is null
+                && getter.ExpressionBody is null
+                && getter.SemicolonToken.IsKind(SyntaxKind.SemicolonToken));
     }
 
     private static bool MemberReceiverRemainsUnchanged(

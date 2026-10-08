@@ -404,6 +404,11 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         public static class Factory
                         {
                             public static Box<string?> Create() => new(null);
+                            public static string? NullableField;
+                            public static string? NullableProperty { get; }
+                            public static string NonNullField = "field";
+                            public static string NonNullProperty { get; } = "property";
+                            public static int Accept(string value) => value.Length;
                         }
                     }
                     """),
@@ -433,6 +438,10 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                         public static class Consumer
                         {
                             public static int Read() => Factory.Create().Value.Length;
+                            public static int ReadField() => Factory.Accept(Factory.NullableField);
+                            public static int ReadProperty() => Factory.Accept(Factory.NullableProperty);
+                            public static int ReadNonNullField() => Factory.Accept(Factory.NonNullField);
+                            public static int ReadNonNullProperty() => Factory.Accept(Factory.NonNullProperty);
                         }
                         """),
                 },
@@ -448,6 +457,12 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                 new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
             Assert.Contains("""Factory.Create().Value!!.Length""", rendered, StringComparison.Ordinal);
+            Assert.Contains("""Factory.Accept(Factory.NullableField!!)""", rendered, StringComparison.Ordinal);
+            Assert.Contains("""Factory.Accept(Factory.NullableProperty!!)""", rendered, StringComparison.Ordinal);
+            Assert.Contains("""Factory.Accept(Factory.NonNullField)""", rendered, StringComparison.Ordinal);
+            Assert.Contains("""Factory.Accept(Factory.NonNullProperty)""", rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain("""Factory.NonNullField!!""", rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain("""Factory.NonNullProperty!!""", rendered, StringComparison.Ordinal);
             using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
             TranslationTestValidation.AssertBinds(resolver, rendered);
         }
