@@ -410,8 +410,17 @@ def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
 
 def validate_vstest_extensions(root: Path, allowed_hashes: set[str]) -> None:
     for path in root.rglob("*"):
-        if path.is_file() and path.name.casefold().endswith("testadapter.dll"):
+        if not path.is_file():
+            continue
+        name = path.name.casefold()
+        if name.endswith("testadapter.dll"):
             accepted_test_adapter(path, allowed_hashes)
+        elif name.endswith((
+            "testlogger.dll", "datacollector.dll",
+            "testruntimeprovider.dll", "testhost.dll",
+        )):
+            raise CertificationError(
+                f"project-supplied VSTest extension is unsupported: {path}")
 
 
 def msbuild_property_arg(name: str, value: Any) -> str:
