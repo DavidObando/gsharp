@@ -463,7 +463,9 @@ public static class NullAssertionPolishPass
                 if (resolved != null)
                 {
                     suffix.Reverse();
-                    return suffix.Aggregate(resolved, Path.Combine);
+
+                    // G# generic inference does not carry this null check into the accumulator seed.
+                    return suffix.Aggregate(resolved!, Path.Combine);
                 }
             }
 
