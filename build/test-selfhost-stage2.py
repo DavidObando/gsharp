@@ -409,6 +409,35 @@ static class Program
                 self.assertEqual(2, result.returncode)
                 self.assertIn("native entry point", result.stderr)
 
+    def test_mvid_aliasing_import_name_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.import_directory_offset, 0)
+        struct.pack_into(
+            "<I", data, layout.import_directory_offset + 12,
+            layout.mvid_rva)
+        mutant = self.mutants / "mvid-import-name-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("PE import", result.stderr)
+
+    def test_mvid_aliasing_relocation_target_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.relocation_directory_offset, 0)
+        page = layout.mvid_rva & ~0xfff
+        entry = 0x3000 | (layout.mvid_rva - page)
+        struct.pack_into(
+            "<I", data, layout.relocation_directory_offset, page)
+        struct.pack_into(
+            "<H", data, layout.relocation_directory_offset + 8, entry)
+        mutant = self.mutants / "mvid-relocation-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps a PE relocation target", result.stderr)
+
     def test_mvid_overlapping_field_rva_data_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)
@@ -1200,6 +1229,17 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         result = run_driver("--validate-vstest-extensions", output)
         self.assertEqual(2, result.returncode)
         self.assertIn("project-supplied VSTest extension", result.stderr)
+
+    def test_adjacent_adapter_dependency_is_hash_bound(self) -> None:
+        output = self.root / "out"
+        output.mkdir()
+        dependency = output / "xunit.runner.utility.netcoreapp10.dll"
+        dependency.write_bytes(b"forged adapter dependency")
+        digest = hashlib.sha256(dependency.read_bytes()).hexdigest()
+        result = run_driver(
+            "--validate-vstest-extensions", output, digest)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("not hash-allowlisted", result.stderr)
 
     def test_locked_package_testhost_is_accepted(self) -> None:
         output = self.root / "out"

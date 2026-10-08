@@ -50,6 +50,8 @@ class PeLayout:
     optional_entrypoint_offset: int
     clr_flags_offset: int
     clr_entrypoint_offset: int
+    import_directory_offset: int
+    relocation_directory_offset: int
 
 
 def _u16(data: bytes, offset: int) -> int:
@@ -151,6 +153,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         size = _u32(data, directories + index * 8 + 4)
         if not rva or not size:
             continue
+        if index not in {1, 2, 4, 5, 6, 12, 14}:
+            raise PeError(f"unsupported PE data directory {index}")
         if index == 4:
             start, end = _range(rva, size, len(data), "certificate directory")
         else:
@@ -442,6 +446,90 @@ def inspect_layout(data: bytes) -> PeLayout:
                     mvid_end, payload + payload_size):
                 raise PeError("Module.Mvid overlaps a CLR vtable-fixup payload")
 
+    def mapped_cstring_range(rva: int, label: str) -> tuple[int, int]:
+        start = rva_to_offset(rva, 1, label)
+        end = data.find(b"\0", start, min(len(data), start + 4096))
+        if end < 0:
+            raise PeError(f"unterminated {label}")
+        rva_to_offset(rva, end + 1 - start, label)
+        return start, end + 1
+
+    import_rva = _u32(data, directories + 8)
+    import_size = _u32(data, directories + 12)
+    if import_rva and import_size:
+        imports = rva_to_offset(import_rva, import_size, "PE import directory")
+        import_end = imports + import_size
+        pointer_size = 8 if magic == 0x20B else 4
+        ordinal_mask = 1 << (pointer_size * 8 - 1)
+        cursor = imports
+        terminated = False
+        while cursor + 20 <= import_end:
+            fields = struct.unpack_from("<IIIII", data, cursor)
+            cursor += 20
+            if not any(fields):
+                terminated = True
+                break
+            original_thunks, _, _, name_rva, first_thunks = fields
+            name_start, name_end = mapped_cstring_range(
+                name_rva, "PE import DLL name")
+            if max(mvid_offset, name_start) < min(mvid_end, name_end):
+                raise PeError("Module.Mvid overlaps a PE import DLL name")
+            thunk_rva = original_thunks or first_thunks
+            for index in range(len(data) // pointer_size):
+                thunk = rva_to_offset(
+                    thunk_rva + index * pointer_size,
+                    pointer_size, "PE import thunk")
+                if max(mvid_offset, thunk) < min(
+                        mvid_end, thunk + pointer_size):
+                    raise PeError("Module.Mvid overlaps a PE import thunk")
+                value = (
+                    _u64(data, thunk) if pointer_size == 8
+                    else _u32(data, thunk))
+                if not value:
+                    break
+                if not value & ordinal_mask:
+                    import_name = rva_to_offset(
+                        value, 2, "PE import-by-name entry")
+                    name_start, name_end = mapped_cstring_range(
+                        value + 2, "PE imported symbol name")
+                    if max(mvid_offset, import_name) < min(
+                            mvid_end, name_end):
+                        raise PeError(
+                            "Module.Mvid overlaps a PE import-by-name entry")
+            else:
+                raise PeError("unterminated PE import thunk table")
+        if not terminated:
+            raise PeError("unterminated PE import directory")
+
+    reloc_rva = _u32(data, directories + 5 * 8)
+    reloc_size = _u32(data, directories + 5 * 8 + 4)
+    if reloc_rva and reloc_size:
+        cursor = rva_to_offset(reloc_rva, reloc_size, "PE relocation directory")
+        reloc_end = cursor + reloc_size
+        while cursor < reloc_end:
+            _range(cursor, 8, reloc_end, "PE relocation block")
+            page_rva = _u32(data, cursor)
+            block_size = _u32(data, cursor + 4)
+            if block_size < 8 or block_size % 2:
+                raise PeError("invalid PE relocation block size")
+            _range(cursor, block_size, reloc_end, "PE relocation block")
+            for entry in range(cursor + 8, cursor + block_size, 2):
+                value = _u16(data, entry)
+                relocation_type = value >> 12
+                if relocation_type == 0:
+                    continue
+                widths = {1: 2, 2: 2, 3: 4, 10: 8}
+                if relocation_type not in widths:
+                    raise PeError(
+                        f"unsupported PE relocation type {relocation_type}")
+                target = rva_to_offset(
+                    page_rva + (value & 0xfff), widths[relocation_type],
+                    "PE relocation target")
+                if max(mvid_offset, target) < min(
+                        mvid_end, target + widths[relocation_type]):
+                    raise PeError("Module.Mvid overlaps a PE relocation target")
+            cursor += block_size
+
     native_entrypoint_rva = _u32(data, optional + 16)
     if native_entrypoint_rva:
         start = rva_to_offset(native_entrypoint_rva, 6, "PE native entry point")
@@ -640,6 +728,12 @@ def inspect_layout(data: bytes) -> PeLayout:
         optional_entrypoint_offset=optional + 16,
         clr_flags_offset=clr + 16,
         clr_entrypoint_offset=clr + 20,
+        import_directory_offset=(
+            rva_to_offset(import_rva, import_size, "PE import directory")
+            if import_rva and import_size else 0),
+        relocation_directory_offset=(
+            rva_to_offset(reloc_rva, reloc_size, "PE relocation directory")
+            if reloc_rva and reloc_size else 0),
     )
 
 
