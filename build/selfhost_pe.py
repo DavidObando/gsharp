@@ -47,6 +47,9 @@ class PeLayout:
     field_rva_rows_offset: int
     field_rva_row_size: int
     method_data_section_offset: int
+    optional_entrypoint_offset: int
+    clr_flags_offset: int
+    clr_entrypoint_offset: int
 
 
 def _u16(data: bytes, offset: int) -> int:
@@ -384,6 +387,17 @@ def inspect_layout(data: bytes) -> PeLayout:
             *directory_ranges, *debug_payload_ranges, *clr_ranges):
         if max(mvid_offset, start) < min(mvid_end, end):
             raise PeError(f"Module.Mvid overlaps {label}")
+    native_entrypoint_rva = _u32(data, optional + 16)
+    if native_entrypoint_rva:
+        start = rva_to_offset(native_entrypoint_rva, 1, "PE native entry point")
+        if mvid_offset <= start < mvid_end:
+            raise PeError("Module.Mvid aliases the PE native entry point")
+    clr_flags = _u32(data, clr + 16)
+    if clr_flags & 0x10:
+        start = rva_to_offset(
+            _u32(data, clr + 20), 1, "CLR native entry point")
+        if mvid_offset <= start < mvid_end:
+            raise PeError("Module.Mvid aliases the CLR native entry point")
 
     method_data_section_offset = 0
 
@@ -549,6 +563,9 @@ def inspect_layout(data: bytes) -> PeLayout:
         field_rva_rows_offset=field_rva_rows,
         field_rva_row_size=field_rva_row_size,
         method_data_section_offset=method_data_section_offset,
+        optional_entrypoint_offset=optional + 16,
+        clr_flags_offset=clr + 16,
+        clr_entrypoint_offset=clr + 20,
     )
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import base64
+import functools
 import hashlib
 import hmac
 import importlib.util
@@ -60,6 +61,9 @@ ALLOWED_TEST_HOST_HASHES = {
 }
 ALLOWED_DOTNET_HOST_HASHES = {
     "0a5ec28e49da2c0be91ff3fc8fff53c250c9bbd92b25d3b9bfc5721adba96a0c",
+}
+ALLOWED_DOTNET_ROOT_MANIFESTS = {
+    "d4fd0200cc21c46deaf86d0e97f9e215010a425fba9004009b299b3cac1ef1de",
 }
 ALLOWED_TEST_ADAPTER_HASHES = {
     "c5ac41b36fac0fcef9714fb80fea0175913530fb53dd7bb8e5e1470339667100",
@@ -429,11 +433,16 @@ def validate_vstest_extensions(
     root: Path, allowed_hashes: set[str], package_root: Path | None = None,
     allowed_test_host_hashes: set[str] = ALLOWED_TEST_HOST_HASHES,
 ) -> None:
-    package_hashes = {
-        sha256_file(path)
-        for path in package_root.rglob("*")
+    package_files = [
+        path for path in package_root.rglob("*")
         if package_root is not None and path.is_file()
-    } if package_root is not None else set()
+    ] if package_root is not None else []
+    package_hashes = {sha256_file(path) for path in package_files}
+    package_by_name: dict[str, set[str]] = {}
+    for path in package_files:
+        package_by_name.setdefault(path.name.casefold(), set()).add(
+            sha256_file(path))
+    testhost_directories: set[Path] = set()
     for path in root.rglob("*"):
         if not path.is_file():
             continue
@@ -445,16 +454,54 @@ def validate_vstest_extensions(
             if digest not in allowed_test_host_hashes or digest not in package_hashes:
                 raise CertificationError(
                     f"test host is not an approved package payload: {path}")
+            testhost_directories.add(path.parent)
+        elif (name in {"testhost.deps.json", "testhost.runtimeconfig.json"}
+              or name.startswith(("microsoft.testplatform.",
+                                  "microsoft.visualstudio.testplatform."))):
+            if sha256_file(path) not in package_by_name.get(name, set()):
+                raise CertificationError(
+                    f"test host runtime closure is not an approved package payload: {path}")
         elif name.endswith((
             "testlogger.dll", "datacollector.dll",
             "testruntimeprovider.dll",
         )):
             raise CertificationError(
                 f"project-supplied VSTest extension is unsupported: {path}")
+    for directory in testhost_directories:
+        deps = directory / "testhost.deps.json"
+        runtimeconfig = directory / "testhost.runtimeconfig.json"
+        for required in (deps, runtimeconfig):
+            name = required.name.casefold()
+            if (not required.is_file()
+                    or sha256_file(required) not in package_by_name.get(name, set())):
+                raise CertificationError(
+                    f"test host runtime closure is incomplete: {required}")
+        try:
+            document = json.loads(deps.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise CertificationError(f"invalid test host dependency manifest: {deps}") from error
+        runtime_assets = {
+            Path(asset).name.casefold()
+            for target in document.get("targets", {}).values()
+            for library in target.values()
+            for group in ("runtime", "runtimeTargets", "native")
+            for asset in library.get(group, {})
+        }
+        for name in sorted(runtime_assets & package_by_name.keys()):
+            candidates = [
+                path for path in directory.rglob("*")
+                if path.is_file() and path.name.casefold() == name
+            ]
+            if (len(candidates) != 1
+                    or sha256_file(candidates[0]) not in package_by_name[name]):
+                raise CertificationError(
+                    f"test host runtime closure differs from the locked package: {name}")
 
 
 def resolution_properties(properties: dict[str, str]) -> dict[str, str]:
-    return dict(properties)
+    resolved = dict(properties)
+    resolved["BuildProjectReferences"] = "false"
+    return resolved
 
 
 def require_frozen_graph(
@@ -692,7 +739,7 @@ def directory_manifest(root: Path) -> list[FileIdentity]:
             raise CertificationError(f"toolchain contains a symbolic link: {path}")
         if path.is_file():
             rows.append(identity(root, path))
-    return rows
+    return sorted(rows, key=lambda row: row.path)
 
 
 def verify_output_inventory(roots: list[Path], expected_hashes: dict[str, str]) -> None:
@@ -1146,6 +1193,22 @@ def bind_external_task_assembly(
     return {"path": str(path), "sha256": digest}
 
 
+def system_owned_tree(root: Path) -> bool:
+    for path in (root, *root.rglob("*")):
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            return False
+    return True
+
+
+def dotnet_manifest_sha256(root: Path) -> str:
+    return sha256_bytes(json.dumps([
+        asdict(row)
+        for row in sorted(directory_manifest(root), key=lambda row: row.path)
+    ], sort_keys=True).encode())
+
+
+@functools.cache
 def trusted_dotnet() -> Path:
     account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     system_candidates = (
@@ -1158,11 +1221,15 @@ def trusted_dotnet() -> Path:
         executable = real(candidate)
         if executable.is_file():
             info = executable.stat()
-            if info.st_uid == 0 and not info.st_mode & 0o022:
+            if (info.st_uid == 0 and not info.st_mode & 0o022
+                    and system_owned_tree(executable.parent)):
                 return executable
     for candidate in (account_home / ".dotnet/dotnet",):
         executable = real(candidate)
-        if executable.is_file() and sha256_file(executable) in ALLOWED_DOTNET_HOST_HASHES:
+        if (executable.is_file()
+                and sha256_file(executable) in ALLOWED_DOTNET_HOST_HASHES
+                and dotnet_manifest_sha256(executable.parent)
+                in ALLOWED_DOTNET_ROOT_MANIFESTS):
             return executable
     raise CertificationError("approved dotnet executable not found")
 
@@ -1939,7 +2006,7 @@ class Controller:
             for name in INPUT_ITEMS
         }
         assets = properties_out.get("ProjectAssetsFile")
-        if isolated and assets and Path(assets).is_file():
+        if assets and Path(assets).is_file():
             out_dir = Path(properties_out.get("OutDir", ""))
             output_root = self.writable(stage, "out")
             if not out_dir.is_absolute() or not contains(output_root, out_dir):
@@ -2167,14 +2234,6 @@ class Controller:
             right.pop("preprocessCommand", None)
             left.pop("hint", None)
             right.pop("hint", None)
-            left["inputs"] = [
-                row for row in left["inputs"]
-                if not row["kind"].startswith("Resolved")
-            ]
-            right["inputs"] = [
-                row for row in right["inputs"]
-                if not row["kind"].startswith("Resolved")
-            ]
             if left != right:
                 raise CertificationError(
                     f"ordinary and isolated graph identities differ for {relative}: "
@@ -2666,7 +2725,7 @@ class Controller:
                 value = value.replace(root, token)
             return value
 
-        for name, node in plan["ordinary"].items():
+        for name, node in plan["isolated"].items():
             effective = {
                 key: logical_value(value)
                 for key, value in node["effectiveProperties"].items()
@@ -2674,9 +2733,9 @@ class Controller:
                     "buildprojectreferences", "baseoutputpath",
                     "baseintermediateoutputpath", "msbuildprojectextensionspath",
                     "restorepackagespath", "gsharpcompilerfullpath",
-                    "gsharptoolfullpath", "projectassetsfile", "targetpath",
-                    "targetrefpath", "msbuildallprojects",
-                    "msbuildprojectfullpath", "msbuildtoolspath", "outdir",
+                    "gsharptoolfullpath", "projectassetsfile",
+                    "msbuildallprojects", "msbuildprojectfullpath",
+                    "msbuildtoolspath",
                 }
             }
             logical_inputs = []
