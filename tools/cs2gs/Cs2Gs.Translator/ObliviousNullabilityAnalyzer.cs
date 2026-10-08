@@ -2841,15 +2841,9 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
-        return !scope.DescendantNodes()
-            .OfType<AssignmentExpressionSyntax>()
-            .Where(assignment =>
-                assignment.SpanStart > declarator.Span.End
-                && assignment.SpanStart < value.SpanStart)
-            .Any(assignment =>
-                SymbolEqualityComparer.Default.Equals(
-                    model.GetSymbolInfo(assignment.Left).Symbol,
-                    local));
+        return !scope.DescendantNodes().Any(node =>
+            node.SpanStart > declarator.Span.End
+            && CSharpToGSharpTranslator.SyntaxNodeWritesSymbol(node, local, model));
     }
 
     // Parameters do not have documentation IDs of their own. The owning
@@ -5998,8 +5992,8 @@ internal static class ObliviousNullabilityAnalyzer
             stripped = parentheses.Expression;
         }
 
-        if (stripped is not MemberAccessExpressionSyntax
-            || model.GetSymbolInfo(stripped).Symbol is not IPropertySymbol { SetMethod: null })
+        if (stripped is not MemberAccessExpressionSyntax member
+            || model.GetSymbolInfo(member).Symbol is not IPropertySymbol { SetMethod: null })
         {
             return false;
         }
@@ -6008,13 +6002,36 @@ internal static class ObliviousNullabilityAnalyzer
         {
             if (node.Parent is ConditionalExpressionSyntax conditional
                 && node == conditional.WhenTrue
-                && IsNullTestOfExpression(conditional.Condition, stripped))
+                && IsNullTestOfExpression(conditional.Condition, member)
+                && MemberReceiverRemainsUnchanged(
+                    member,
+                    conditional.Condition,
+                    conditional.WhenTrue,
+                    model))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static bool MemberReceiverRemainsUnchanged(
+        MemberAccessExpressionSyntax value,
+        ExpressionSyntax guard,
+        ExpressionSyntax region,
+        SemanticModel model)
+    {
+        ExpressionSyntax receiver = value.Expression;
+        while (receiver is ParenthesizedExpressionSyntax parentheses)
+        {
+            receiver = parentheses.Expression;
+        }
+
+        return receiver is IdentifierNameSyntax identifier
+            && model.GetSymbolInfo(identifier).Symbol is ISymbol symbol
+            && symbol is ILocalSymbol or IParameterSymbol
+            && GuardValueRemainsUnchanged(guard, region, identifier, symbol, model);
     }
 
     private static bool IsNullTestOfExpression(

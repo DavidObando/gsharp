@@ -98,6 +98,40 @@ namespace Demo
         Assert.Contains("Pair(Name string?,", printed);
     }
 
+    [Fact]
+    public void Oblivious_MutableCreationArguments_StillTaintPositionalParameters()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class C
+    {
+        private static void Clear(out object value) => value = null;
+
+        public void Run(bool repeat)
+        {
+            var loopValue = new object();
+            while (repeat)
+            {
+                _ = new LoopPair(loopValue);
+                loopValue = null;
+                repeat = false;
+            }
+
+            var outValue = new object();
+            Clear(out outValue);
+            _ = new OutPair(outValue);
+        }
+    }
+
+    public record LoopPair(object Value);
+    public record OutPair(object Value);
+}");
+
+        Assert.Contains("LoopPair(Value object?", printed);
+        Assert.Contains("OutPair(Value object?", printed);
+    }
+
     private static string TranslateOblivious(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
