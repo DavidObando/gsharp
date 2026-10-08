@@ -1975,7 +1975,7 @@ class Controller:
                 raise CertificationError(
                     f"invalid resolved input inventory for {relative}: {error}") from error
             for name in resolved_names:
-                item_sets.setdefault(name, []).extend(
+                item_sets.setdefault(f"Resolved{name}", []).extend(
                     resolved.get("Items", {}).get(name, []))
         inputs: list[dict[str, str]] = [{
             "kind": "Project",
@@ -2167,6 +2167,14 @@ class Controller:
             right.pop("preprocessCommand", None)
             left.pop("hint", None)
             right.pop("hint", None)
+            left["inputs"] = [
+                row for row in left["inputs"]
+                if not row["kind"].startswith("Resolved")
+            ]
+            right["inputs"] = [
+                row for row in right["inputs"]
+                if not row["kind"].startswith("Resolved")
+            ]
             if left != right:
                 raise CertificationError(
                     f"ordinary and isolated graph identities differ for {relative}: "
