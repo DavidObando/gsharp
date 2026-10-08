@@ -1939,7 +1939,7 @@ class Controller:
             for name in INPUT_ITEMS
         }
         assets = properties_out.get("ProjectAssetsFile")
-        if assets and Path(assets).is_file():
+        if isolated and assets and Path(assets).is_file():
             out_dir = Path(properties_out.get("OutDir", ""))
             output_root = self.writable(stage, "out")
             if not out_dir.is_absolute() or not contains(output_root, out_dir):
@@ -1961,7 +1961,7 @@ class Controller:
                 "-target:" + ";".join((
                     "ResolveReferences",
                     *(("_GsharpResolveAnalyzers",)
-                      if isolated and project.suffix == ".gsproj" else ()),
+                      if project.suffix == ".gsproj" else ()),
                 )),
                 "-getItem:" + ",".join(resolved_names),
                 *resolve_property_args, "-nodeReuse:false",
