@@ -1946,7 +1946,8 @@ class Controller:
                     f"resolved output directory is outside controller storage: {out_dir}")
             out_dir.mkdir(parents=True, exist_ok=True)
             resolved_names = (
-                "ReferencePath", "Analyzer", "GsharpCodeAnalyzer",
+                "ReferencePath", "ReferencePathWithRefAssemblies",
+                "Analyzer", "GsharpAnalyzer", "GsharpCodeAnalyzer",
                 "AdditionalFiles", "EmbeddedResource", "Content", "TestAdapter",
             )
             resolve_property_args = [
@@ -1955,7 +1956,12 @@ class Controller:
             ]
             resolve_command = [
                 str(self.stage_dotnet(stage) / "dotnet"), "msbuild",
-                str(relative), "-nologo", "-target:ResolveReferences",
+                str(relative), "-nologo",
+                "-target:" + ";".join((
+                    "ResolveReferences",
+                    *(("_GsharpResolveAnalyzers",)
+                      if project.suffix == ".gsproj" else ()),
+                )),
                 "-getItem:" + ",".join(resolved_names),
                 *resolve_property_args, "-nodeReuse:false",
             ]

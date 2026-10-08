@@ -88,6 +88,9 @@ sealed class BytesAttribute(params byte[] value) : Attribute;
 
 static class Program
 {
+    static readonly byte[] Data =
+        [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16];
+
     static int Fat(int value)
     {
         try
@@ -105,7 +108,7 @@ static class Program
         }
     }
 
-    static int Main() => Fat(1);
+    static int Main() => Fat(Data[0]);
 }
 """, encoding="utf-8")
         (project / "payload.bin").write_bytes(b"ADR0198-MANAGED-RESOURCE-MARKER")
@@ -344,6 +347,31 @@ static class Program
         result = run_driver("--compare-pe", self.fixture, mutant)
         self.assertEqual(2, result.returncode)
         self.assertIn("overlaps PE debug payload 0", result.stderr)
+
+    def test_mvid_overlapping_field_rva_data_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.field_rva_rows_offset, 0)
+        struct.pack_into(
+            "<I", data, layout.field_rva_rows_offset, layout.mvid_rva - 1)
+        mutant = self.mutants / "mvid-field-rva-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps field RVA data", result.stderr)
+
+    def test_zero_sized_method_data_section_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.method_data_section_offset, 0)
+        data[
+            layout.method_data_section_offset + 1:
+            layout.method_data_section_offset + 4] = bytes(3)
+        mutant = self.mutants / "zero-method-data-section.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("invalid method data section size", result.stderr)
 
     def test_truncated_guid_stream_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
