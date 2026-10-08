@@ -1120,16 +1120,21 @@ def bind_external_task_assembly(
 
 def trusted_dotnet() -> Path:
     account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    for candidate in (
+    system_candidates = (
         Path("/usr/share/dotnet/dotnet"),
         Path("/usr/local/share/dotnet/dotnet"),
-        account_home / ".dotnet/dotnet",
         Path("/usr/bin/dotnet"),
         Path("/bin/dotnet"),
-    ):
+    )
+    for candidate in system_candidates:
         executable = real(candidate)
-        if (executable.is_file()
-                and sha256_file(executable) in ALLOWED_DOTNET_HOST_HASHES):
+        if executable.is_file():
+            info = executable.stat()
+            if info.st_uid == 0 and not info.st_mode & 0o022:
+                return executable
+    for candidate in (account_home / ".dotnet/dotnet",):
+        executable = real(candidate)
+        if executable.is_file() and sha256_file(executable) in ALLOWED_DOTNET_HOST_HASHES:
             return executable
     raise CertificationError("approved dotnet executable not found")
 
