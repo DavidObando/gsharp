@@ -1055,12 +1055,14 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         packages.mkdir()
         (output / "testhost.dll").write_bytes(b"locked test host")
         (packages / "testhost.dll").write_bytes(b"locked test host")
-        stage2.validate_vstest_extensions(output, set(), packages)
-        (output / "testhost.dll").write_bytes(b"forged test host")
+        approved = hashlib.sha256(b"locked test host").hexdigest()
+        stage2.validate_vstest_extensions(output, set(), packages, {approved})
+        (output / "testhost.dll").write_bytes(b"other locked package")
+        (packages / "other.dll").write_bytes(b"other locked package")
         with self.assertRaisesRegex(
-            stage2.CertificationError, "not from the accepted package cache",
+            stage2.CertificationError, "not an approved package payload",
         ):
-            stage2.validate_vstest_extensions(output, set(), packages)
+            stage2.validate_vstest_extensions(output, set(), packages, {approved})
 
 
 class RuntimeOutputBoundaryTests(unittest.TestCase):
