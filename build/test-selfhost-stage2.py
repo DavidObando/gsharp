@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import base64
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -1164,9 +1165,10 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         output = self.root / "out"
         packages = self.root / "packages"
         output.mkdir()
-        packages.mkdir()
+        package = packages / "microsoft.testplatform.testhost" / "1.0"
+        package.mkdir(parents=True)
         (output / "testhost.dll").write_bytes(b"locked test host")
-        (packages / "testhost.dll").write_bytes(b"locked test host")
+        (package / "testhost.dll").write_bytes(b"locked test host")
         deps = json.dumps({
             "targets": {
                 "net10.0": {
@@ -1184,21 +1186,27 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
             ("Microsoft.TestPlatform.Core.dll", b"locked runtime"),
         ):
             (output / name).write_bytes(content)
-            (packages / name).write_bytes(content)
+            (package / name).write_bytes(content)
         approved = hashlib.sha256(b"locked test host").hexdigest()
-        stage2.validate_vstest_extensions(output, set(), packages, {approved})
+        package_manifest = hashlib.sha256(json.dumps([
+            dataclasses.asdict(row) for row in stage2.directory_manifest(package)
+        ], sort_keys=True).encode()).hexdigest()
+        stage2.validate_vstest_extensions(
+            output, set(), packages, {approved}, {package_manifest})
         (output / "Microsoft.TestPlatform.Core.dll").write_bytes(b"forged runtime")
         with self.assertRaisesRegex(
             stage2.CertificationError, "runtime closure",
         ):
-            stage2.validate_vstest_extensions(output, set(), packages, {approved})
+            stage2.validate_vstest_extensions(
+                output, set(), packages, {approved}, {package_manifest})
         (output / "Microsoft.TestPlatform.Core.dll").write_bytes(b"locked runtime")
         (output / "testhost.dll").write_bytes(b"other locked package")
-        (packages / "other.dll").write_bytes(b"other locked package")
+        (package / "other.dll").write_bytes(b"other locked package")
         with self.assertRaisesRegex(
             stage2.CertificationError, "not an approved package payload",
         ):
-            stage2.validate_vstest_extensions(output, set(), packages, {approved})
+            stage2.validate_vstest_extensions(
+                output, set(), packages, {approved}, {package_manifest})
 
 
 class RuntimeOutputBoundaryTests(unittest.TestCase):
@@ -1232,6 +1240,33 @@ class RuntimeOutputBoundaryTests(unittest.TestCase):
         (self.root / "forged.deps.json").write_bytes(b"forged")
         extra = run_driver("--verify-output-closure", self.root, manifest)
         self.assertEqual(2, extra.returncode)
+
+    def test_test_runtime_must_load_certified_product_bytes(self) -> None:
+        certified = self.root / "Core" / "GSharp.Core.dll"
+        test_target = self.root / "Core.Tests" / "Core.Tests.dll"
+        certified.parent.mkdir()
+        test_target.parent.mkdir()
+        certified.write_bytes(b"certified")
+        test_target.write_bytes(b"tests")
+        test_target.with_suffix(".deps.json").write_text(json.dumps({
+            "targets": {
+                "net10.0": {
+                    "Core/1.0": {
+                        "runtime": {"GSharp.Core.dll": {}},
+                    },
+                },
+            },
+        }), encoding="utf-8")
+        loaded = test_target.parent / certified.name
+        loaded.write_bytes(certified.read_bytes())
+        stage2.validate_certified_runtime_closure(
+            test_target, self.root, ["Core/GSharp.Core.dll"])
+        loaded.write_bytes(b"replacement")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "does not use the certified output",
+        ):
+            stage2.validate_certified_runtime_closure(
+                test_target, self.root, ["Core/GSharp.Core.dll"])
 
 
 class ToolchainManifestTests(unittest.TestCase):
