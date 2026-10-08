@@ -85,6 +85,9 @@ restricted command boundary. That boundary MUST:
   test-scratch roots;
 - deny access to the caller tree, the other stage, controller state, evidence
   root, comparison snapshots, and report root;
+- during restore, allow network access only to controller-approved package
+  endpoints; use a controller-owned credential broker for authenticated sources
+  so the command cannot read or reuse package credentials;
 - disable network access after restore;
 - terminate descendant processes when the command ends.
 
@@ -133,6 +136,14 @@ logical-node identity that removes the controller-owned
 `BuildProjectReferences` scheduling projection. No other property or resolver
 input may be removed. The two contexts compare logical-node identities and
 edges; each command still compares its full execution-node identity.
+
+For cross-stage closure comparison, the controller MUST compute a separate
+source-logical identity. It replaces the build-tree real path with the path
+relative to the common source snapshot and removes only declared
+controller-owned stage projections: scheduling, pin, cache, build root,
+evidence root, and toolchain path. It MUST retain every project-authored
+property and semantic edge. Stage-specific toolchain identities remain in the
+full execution plans and are validated separately under section 5.
 
 The controller MUST discover the closure by evaluated MSBuild data, not by XML
 text search and not by `MSBuildAllProjects`. Discovery MUST include:
@@ -200,9 +211,9 @@ Stage-2 v1 MUST produce the stage-1 SDK inside the same certification run. It
 MUST REJECT a caller-supplied prebuilt stage-1 package. This prevents a stage-0
 package with a changed label from entering the stage-2 plan.
 
-The common source manifest and participating logical closure MUST match across
-the plans. Controller-owned pin, cache, build-root, evidence-root, and
-toolchain-path projections MUST differ as the plan declares.
+The common source manifest and participating source-logical closure MUST match
+across the plans. Controller-owned pin, cache, build-root, evidence-root, and
+toolchain-path projections MUST differ only as the plan declares.
 
 A plan is frozen when every node and edge has one supported meaning and all
 input hashes are recorded. A path-only graph is not a frozen graph.
@@ -288,10 +299,11 @@ builds MUST be disabled and revalidated as disabled.
 
 For each command, the supervisor MUST create and retain a fresh nonce and fresh
 controller-owned evidence destinations. The command MUST NOT receive the nonce,
-evidence-channel credentials, or destination paths. A restore command MAY
-receive required package-source credentials through a controller-provided
-ephemeral secret input. That input MUST follow the commitment and redaction
-rules in section 3 and MUST NOT grant evidence or controller access. When
+evidence-channel credentials, package-source credentials, or destination paths.
+An authenticated restore MUST obtain access only through the controller-owned
+credential broker and approved endpoint allowlist. Broker state MUST follow the
+commitment and redaction rules in section 3 and MUST NOT grant evidence or
+controller access. When
 in-process reporting is unavoidable, the command MAY receive only a pre-opened
 channel whose peer and process identity the supervisor authenticates. Channel
 messages are untrusted until the supervisor verifies them against its
@@ -419,8 +431,13 @@ boundary is under test. The suite MUST include:
   `BuildProjectReferences=false` context;
 - ordinary and isolated execution identities that differ only by the
   controller-owned `BuildProjectReferences` projection;
+- stage-1 and stage-2 build roots with equal source-logical closure but distinct
+  full execution identities, plus a project-authored property difference that
+  MUST reject;
 - secret-bearing restore configuration whose plaintext MUST NOT appear in
   evidence, logs, or reports while changed commitments MUST reject;
+- a restore that attempts credential use or network egress to a non-approved
+  endpoint, proving that the controller broker and endpoint allowlist block it;
 - graph evaluation or SDK resolver code that attempts to read the caller tree
   or controller-owned evidence, proving that discovery and revalidation use the
   restricted command boundary;
