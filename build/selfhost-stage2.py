@@ -457,6 +457,16 @@ def resolution_properties(properties: dict[str, str]) -> dict[str, str]:
     return dict(properties)
 
 
+def require_frozen_graph(
+    current: dict[str, Any], frozen: dict[str, Any], boundary: str,
+) -> None:
+    expected = {
+        name: frozen[name] for name in current if name in frozen
+    }
+    if current != expected:
+        raise CertificationError(f"frozen graph changed at {boundary}")
+
+
 def msbuild_property_arg(name: str, value: Any) -> str:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", name):
         raise CertificationError(f"unsafe MSBuild property name: {name!r}")
@@ -1164,7 +1174,7 @@ class Controller:
         self.logs = self.work / "logs"
         self.mutable = self.work / "mutable"
         self.toolchains = self.work / "toolchains"
-        self.dotnet = trusted_dotnet()
+        self.dotnet: Path | None = None
         self.bwrap = real(Path(shutil.which("bwrap", path=os.defpath) or ""))
         self.run_id = secrets.token_hex(16)
         self.report: dict[str, Any] = {
@@ -1599,6 +1609,7 @@ class Controller:
         }
 
     def seed_sdk_resolution(self, stage: str, package: Path) -> dict[str, Any]:
+        self.dotnet = trusted_dotnet()
         version_result = subprocess.run(
             [str(self.dotnet), "--version"], capture_output=True, text=True, check=True)
         installed_root = dotnet_root()
@@ -2277,9 +2288,13 @@ class Controller:
         order = self.topological_order(plan)
         for root in order:
             project_plan = self.graph(stage, tree, [root])
-            self.revalidate(
-                stage, tree, [root], project_plan,
-                f"before-build-{sha256_bytes(root.encode())[:8]}")
+            self.verify_plan_files(plan)
+            current_logical = self.source_logical_graph(project_plan, tree)
+            frozen_logical = self.source_logical_graph(plan, tree)
+            boundary = f"before-build-{sha256_bytes(root.encode())[:8]}"
+            require_frozen_graph(current_logical, frozen_logical, boundary)
+            atomic_json(
+                self.evidence / f"{stage}-{boundary}-graph.json", project_plan)
             properties = self.properties(stage, Path(root))
             effective = project_plan["isolated"][root]["effectiveProperties"]
             for name in ("TargetFramework", "RuntimeIdentifier", "SelfContained"):
@@ -3119,14 +3134,8 @@ def main(argv: list[str]) -> int:
         work = real(Path(work_name))
         try:
             work.mkdir(mode=0o700)
-            result = subprocess.run([
-                str(trusted_dotnet()), "run",
-                "--project", str(HERE / "selfhost" / "PackageContentHash.csproj"),
-                "--", str(real(Path(package_name))),
-            ], capture_output=True, text=True)
-            if result.returncode != 0:
-                raise CertificationError("package content hash helper failed")
-            actual_hash = result.stdout.strip()
+            actual_hash = base64.b64encode(hashlib.sha512(
+                real(Path(package_name)).read_bytes()).digest()).decode()
             if not hmac.compare_digest(actual_hash, expected_hash):
                 raise CertificationError("package content hash differs from the lock")
         except (CertificationError, OSError) as error:
