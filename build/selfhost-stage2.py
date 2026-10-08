@@ -1961,7 +1961,7 @@ class Controller:
                 "-target:" + ";".join((
                     "ResolveReferences",
                     *(("_GsharpResolveAnalyzers",)
-                      if project.suffix == ".gsproj" else ()),
+                      if isolated and project.suffix == ".gsproj" else ()),
                 )),
                 "-getItem:" + ",".join(resolved_names),
                 *resolve_property_args, "-nodeReuse:false",
