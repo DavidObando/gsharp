@@ -610,6 +610,28 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(b"COMMIT\n", (snapshot / "payload.txt").read_bytes())
         self.assertEqual(b"nested\n", (snapshot / "nested" / "tracked.txt").read_bytes())
 
+    def test_snapshot_rejects_unstaged_tracked_edits_without_filters(self) -> None:
+        tree = self.tree()
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        tracked = tree / "tracked.txt"
+        tracked.write_text("before\n", encoding="utf-8")
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "fixture"],
+            check=True, capture_output=True)
+        original = tracked.stat()
+        tracked.write_text("after!\n", encoding="utf-8")
+        os.utime(tracked, ns=(original.st_atime_ns, original.st_mtime_ns))
+        result = run_driver("--freeze-source", tree, self.root / "snapshot")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("tracked path differs from the Git index", result.stderr)
+
     def test_snapshot_ignores_caller_git_environment_and_fsmonitor(self) -> None:
         tree = self.tree()
         subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
