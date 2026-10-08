@@ -3061,10 +3061,25 @@ public sealed partial class CSharpToGSharpTranslator
                 return operatorOperand;
             }
 
+            ISymbol valueSymbol = this.context.GetSymbolInfo(value).Symbol;
+            ILocalSymbol valueLocal = valueSymbol as ILocalSymbol
+                ?? GetReferencedLocal(this.context.SemanticModel.GetOperation(value));
+            bool isFlowNarrowedLocal = valueLocal != null
+                && (this.IsDominatedByNullCheckGuard(value, valueLocal)
+                    || (!this.IsObliviousCompilation()
+                        && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull));
+            bool emittedNullablePromotedValue = !isFlowNarrowedLocal
+                && valueSymbol is IFieldSymbol or IPropertySymbol or ILocalSymbol
+                    or IParameterSymbol or IMethodSymbol
+                && (this.ShouldPromoteToNullableReference(valueSymbol)
+                    || (valueSymbol is ILocalSymbol local
+                        && this.LocalInitializerMakesStorageNullable(local)));
+
             // ADR-0186 step 6 (PR 0): a `T!` value flowing into a non-null
             // target is checked by gsc at that coercion (§4).
-            if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
-                || this.PlatformTypedImportNeedsNoBridge(value))
+            if ((!includePromotedValue || !emittedNullablePromotedValue)
+                && (this.GSharpExpressionIsStaticallyNonNull(value, translated)
+                    || this.PlatformTypedImportNeedsNoBridge(value)))
             {
                 return translated;
             }
@@ -3091,12 +3106,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return translated;
             }
 
-            ILocalSymbol valueLocal = this.context.GetSymbolInfo(value).Symbol as ILocalSymbol
-                ?? GetReferencedLocal(this.context.SemanticModel.GetOperation(value));
-            bool isFlowNarrowedLocal = valueLocal != null
-                && (this.IsDominatedByNullCheckGuard(value, valueLocal)
-                    || (!this.IsObliviousCompilation()
-                        && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull));
             if (translated is NonNullAssertionExpression
                 || resultAcceptsNil
                 || IsNullOrSuppressedNull(value)
@@ -3145,9 +3154,8 @@ public sealed partial class CSharpToGSharpTranslator
                 && !directlyNullableResult
                 && !generatedPromotedValue
                 && !(includePromotedValue
-                    && !isFlowNarrowedLocal
                     && this.IsObliviousCompilation()
-                    && this.IsNullablePromotedValue(value)))
+                    && emittedNullablePromotedValue))
             {
                 return translated;
             }
@@ -3383,11 +3391,6 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (checkNullableForEachBinding
                 && this.IsNullableForEachBindingUse(expression))
-            {
-                return false;
-            }
-
-            if (this.IsNullablePromotedValue(expression))
             {
                 return false;
             }
