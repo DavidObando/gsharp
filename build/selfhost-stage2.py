@@ -366,6 +366,19 @@ def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
     return actual
 
 
+def msbuild_property_arg(name: str, value: Any) -> str:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", name):
+        raise CertificationError(f"unsafe MSBuild property name: {name!r}")
+    text = str(value)
+    if "\0" in text:
+        raise CertificationError(f"unsafe MSBuild property value for {name}")
+    escaped = "".join({
+        "%": "%25", ";": "%3B", ",": "%2C",
+        "\r": "%0D", "\n": "%0A",
+    }.get(character, character) for character in text)
+    return f"-p:{name}={escaped}"
+
+
 def accepted_logical_path(path: Path, roots: list[tuple[str, Path]]) -> str:
     path = real(path)
     for label, root in roots:
@@ -889,6 +902,8 @@ class Controller:
                 raise CertificationError(
                     f"--stage1-version {self.args.stage1_version!r} "
                     "is not a valid package version")
+        if not re.fullmatch(r"[0-9A-Za-z._+-]+", self.args.config):
+            raise CertificationError(f"unsafe configuration name: {self.args.config!r}")
         if self.bootstrap.stat().st_nlink != 1:
             raise CertificationError("bootstrap package is hard-linked")
         if self.work.exists():
@@ -1456,7 +1471,10 @@ class Controller:
         properties = self.properties(stage, relative)
         properties.update(extra_properties or {})
         properties["BuildProjectReferences"] = "false" if isolated else "true"
-        property_args = [f"-p:{name}={value}" for name, value in sorted(properties.items())]
+        property_args = [
+            msbuild_property_arg(name, value)
+            for name, value in sorted(properties.items())
+        ]
         env, writable = self.environment(stage)
         obj = Path(properties["BaseIntermediateOutputPath"])
         writable = [*writable, obj]
@@ -1500,6 +1518,11 @@ class Controller:
             if Path(item.strip()).is_absolute() and Path(item.strip()).is_file()
         })
         properties_out = evaluated.get("Properties", {})
+        for name, expected in properties.items():
+            if str(properties_out.get(name, "")) != str(expected):
+                raise CertificationError(
+                    f"{relative} changed controller property {name}: "
+                    f"{properties_out.get(name)!r} != {expected!r}")
         item_sets = {
             name: list(evaluated.get("Items", {}).get(name, []))
             for name in INPUT_ITEMS
@@ -1519,7 +1542,7 @@ class Controller:
             resolve_properties = dict(properties)
             resolve_properties["BuildProjectReferences"] = "false"
             resolve_property_args = [
-                f"-p:{name}={value}"
+                msbuild_property_arg(name, value)
                 for name, value in sorted(resolve_properties.items())
             ]
             resolve_command = [
@@ -1807,7 +1830,8 @@ class Controller:
                 str(self.stage_dotnet(stage) / "dotnet"), "restore", root,
                 f"-p:Configuration={self.args.config}",
                 "-p:NuGetAudit=false",
-                *[f"-p:{name}={value}" for name, value in sorted(properties.items())],
+                *[msbuild_property_arg(name, value)
+                  for name, value in sorted(properties.items())],
                 "--configfile", str(self.write_offline_config(stage)),
                 "--disable-build-servers", "--no-dependencies", "--locked-mode",
                 "-nodeReuse:false",
@@ -1842,7 +1866,8 @@ class Controller:
             command = [
                 str(self.stage_dotnet(stage) / "dotnet"), "build", root, "--configuration", self.args.config,
                 "--no-restore", "--no-dependencies", "--disable-build-servers",
-                *[f"-p:{name}={value}" for name, value in sorted(properties.items())],
+                *[msbuild_property_arg(name, value)
+                  for name, value in sorted(properties.items())],
                 "-nodeReuse:false",
             ]
             node = project_plan["isolated"][root]["effectiveProperties"]
@@ -1989,7 +2014,8 @@ class Controller:
             str(self.stage_dotnet(stage) / "dotnet"), "publish", project,
             "--configuration", self.args.config, "--no-restore", "--no-build",
             "--disable-build-servers",
-            *[f"-p:{name}={value}" for name, value in sorted(properties.items())],
+            *[msbuild_property_arg(name, value)
+              for name, value in sorted(properties.items())],
             "-nodeReuse:false",
         ]
         writable = [
