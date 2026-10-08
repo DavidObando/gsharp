@@ -278,7 +278,9 @@ def reject_root_collisions(named: dict[str, Path]) -> None:
                     f"{left_name} and {right_name} are not disjoint: {left} / {right}")
 
 
-def git_snapshot_paths(tree: Path) -> tuple[list[Path], dict[str, str] | None]:
+def git_snapshot_entries(
+    tree: Path,
+) -> tuple[list[tuple[str, int, str]], dict[str, str]]:
     probe = subprocess.run(
         ["git", "-C", str(tree), "rev-parse", "--show-toplevel"],
         capture_output=True, text=True)
@@ -291,17 +293,32 @@ def git_snapshot_paths(tree: Path) -> tuple[list[Path], dict[str, str] | None]:
     if status_result.stdout:
         raise CertificationError(
             "caller tree is dirty or has untracked files:\n" + status_result.stdout.rstrip())
-    names = subprocess.run(
-        ["git", "-C", str(tree), "ls-files", "-z", "--recurse-submodules"],
-        capture_output=True, check=True).stdout.split(b"\0")
-    paths = [tree / os.fsdecode(name) for name in names if name]
     commit = subprocess.run(
         ["git", "-C", str(tree), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True).stdout.strip()
     git_tree = subprocess.run(
         ["git", "-C", str(tree), "rev-parse", "HEAD^{tree}"],
         capture_output=True, text=True, check=True).stdout.strip()
-    return paths, {"commit": commit, "tree": git_tree}
+    raw = subprocess.run(
+        ["git", "-C", str(tree), "ls-tree", "-rz", "--full-tree", commit],
+        capture_output=True, check=True).stdout
+    entries = []
+    for row in raw.split(b"\0"):
+        if not row:
+            continue
+        metadata, name = row.split(b"\t", 1)
+        mode, object_type, object_id = metadata.decode().split()
+        if object_type != "blob" or mode not in {"100644", "100755"}:
+            raise CertificationError(
+                f"unsupported Git tree entry {os.fsdecode(name)}: {mode} {object_type}")
+        entries.append((
+            os.fsdecode(name),
+            0o755 if mode == "100755" else 0o644,
+            object_id,
+        ))
+    for relative, _, _ in entries:
+        identity(tree, tree / relative)
+    return entries, {"commit": commit, "tree": git_tree}
 
 
 def identity(tree: Path, path: Path) -> FileIdentity:
@@ -325,18 +342,35 @@ def owned_file(path: Path, label: str) -> os.stat_result:
 
 
 def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dict[str, str] | None]:
-    paths, git_identity = git_snapshot_paths(caller)
-    manifest = [identity(caller, path) for path in paths]
+    entries, git_identity = git_snapshot_entries(caller)
     snapshot.mkdir()
-    for row in manifest:
-        source = caller / row.path
-        destination = snapshot / row.path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
-        os.chmod(destination, row.mode)
-    copied = [identity(snapshot, snapshot / row.path) for row in manifest]
-    if copied != manifest:
-        raise CertificationError("caller tree changed while the immutable snapshot was copied")
+    manifest = []
+    process = subprocess.Popen(
+        ["git", "-C", str(caller), "cat-file", "--batch"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    if process.stdin is None or process.stdout is None:
+        raise CertificationError("cannot open Git object reader")
+    try:
+        for relative, mode, object_id in entries:
+            process.stdin.write((object_id + "\n").encode())
+            process.stdin.flush()
+            header = process.stdout.readline().decode().strip().split()
+            if len(header) != 3 or header[:2] != [object_id, "blob"]:
+                raise CertificationError(f"cannot read Git blob for {relative}")
+            data = process.stdout.read(int(header[2]))
+            if process.stdout.read(1) != b"\n":
+                raise CertificationError(f"truncated Git blob for {relative}")
+            destination = snapshot / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+            os.chmod(destination, mode)
+            manifest.append(FileIdentity(
+                relative, mode, len(data), sha256_bytes(data)))
+    finally:
+        process.stdin.close()
+        process.wait()
+    if process.returncode != 0:
+        raise CertificationError("Git object reader failed")
     make_read_only(snapshot)
     frozen = [identity(snapshot, snapshot / row.path) for row in manifest]
     verify_manifest(snapshot, frozen)
@@ -2158,6 +2192,9 @@ def main(argv: list[str]) -> int:
         "--compare-pe", nargs=2, metavar=("STAGE1", "STAGE2"), type=Path,
         help="run the controller's exact ADR-0198 PE comparison only")
     parser.add_argument(
+        "--freeze-source", nargs=2, metavar=("TREE", "SNAPSHOT"), type=Path,
+        help="materialize one immutable source snapshot from Git")
+    parser.add_argument(
         "--validate-project", nargs=2, metavar=("TREE", "PROJECT"), type=Path,
         help="run the controller's fail-closed project XML validation only")
     parser.add_argument(
@@ -2187,6 +2224,16 @@ def main(argv: list[str]) -> int:
         "--validate-package-component", metavar="VALUE",
         help="validate one package path component")
     args = parser.parse_args(argv)
+    if args.freeze_source:
+        try:
+            manifest, git_identity = freeze_source(*args.freeze_source)
+            print(json.dumps({
+                "files": len(manifest), "git": git_identity,
+            }, sort_keys=True))
+        except (CertificationError, OSError, subprocess.SubprocessError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
     if args.compare_pe:
         try:
             first, second, equal = compare_pe(*args.compare_pe)
