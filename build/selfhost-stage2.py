@@ -171,6 +171,31 @@ def authenticated_events(data: bytes, key: bytes) -> list[dict[str, Any]]:
     return events
 
 
+def positive_test_count(events: list[dict[str, Any]], test_target: Path) -> int:
+    starts = [event for event in events if event.get("type") == "started"]
+    completed = [event for event in events if event.get("type") == "completed"]
+    results = [event for event in events if event.get("type") == "result"]
+    if len(starts) != 1 or len(completed) != 1:
+        raise CertificationError("test supervisor did not observe one complete run")
+    target = real(test_target)
+    if any(
+        not isinstance(result.get("source"), str)
+        or real(Path(result["source"])) != target
+        for result in results
+    ):
+        raise CertificationError("test result is not from the accepted test assembly")
+    summary = completed[0]
+    total = int(summary.get("total", 0))
+    failed = int(summary.get("failed", 0))
+    if (total <= 0 or total != len(results) or failed != 0
+            or summary.get("canceled") or summary.get("aborted")
+            or any(result.get("outcome") != "Passed" for result in results)):
+        raise CertificationError(
+            f"test evidence is not a positive completed pass: "
+            f"total={total}, observed={len(results)}, failed={failed}")
+    return total
+
+
 def verify_receipt_set(
     run_id: str, paths: list[Path],
     expected_hashes: dict[str, str] | None = None,
@@ -263,6 +288,19 @@ def contains(parent: Path, child: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def accepted_input_hash(
+    path: Path, trusted_roots: list[Path], accepted_hashes: dict[str, str],
+) -> str:
+    path = real(path)
+    if not path.is_file():
+        raise CertificationError(f"resolved compilation input is missing: {path}")
+    actual = sha256_file(path)
+    if (not any(contains(real(root), path) for root in trusted_roots)
+            and accepted_hashes.get(str(path)) != actual):
+        raise CertificationError(f"resolved compilation input is outside accepted roots: {path}")
+    return actual
 
 
 def reject_root_collisions(named: dict[str, Path]) -> None:
@@ -1325,28 +1363,33 @@ class Controller:
                 path = real(path)
                 producer_name = item.get("MSBuildSourceProjectFile")
                 producer = real(Path(producer_name)) if producer_name else None
-                if (producer is not None and producer.is_file()
-                        and contains(tree, producer) and producer != project):
-                    if not path.exists():
-                        continue
-                    accepted = self.accepted_build_outputs.get(stage, {}).get(str(path))
-                    actual = sha256_file(path) if path.is_file() else None
-                    if accepted is None or actual != accepted["sha256"]:
-                        raise CertificationError(
-                            f"producer input is not an accepted build output: {path}")
+                accepted = self.accepted_build_outputs.get(stage, {}).get(str(path))
+                if accepted is not None:
+                    actual = accepted_input_hash(
+                        path, [], {str(path): accepted["sha256"]})
                     inputs.append({
                         "kind": item_name, "path": str(path),
                         "sha256": actual,
-                        "producerProject": producer.relative_to(tree).as_posix(),
+                        "producerProject": accepted["project"],
                         "producerReceipt": accepted["receipt"],
                         "logicalPath": path.relative_to(
                             self.writable(stage, "out")).as_posix(),
                     })
                     continue
+                if (producer is not None and producer.is_file()
+                        and contains(tree, producer) and producer != project):
+                    if not path.exists():
+                        continue
+                    raise CertificationError(
+                        f"producer input is not an accepted build output: {path}")
                 elif path.exists() and path.is_file():
                     inputs.append({
                         "kind": item_name, "path": str(path),
-                        "sha256": sha256_file(path),
+                        "sha256": accepted_input_hash(path, [
+                            tree,
+                            self.writable(stage, "packages"),
+                            self.stage_toolchain(stage),
+                        ], self.accepted_restore_outputs.get(stage, {})),
                     })
                 elif item_name in {
                     "ReferencePath", "Analyzer", "GsharpCodeAnalyzer",
@@ -2044,20 +2087,8 @@ class Controller:
                     Path(receipt.events).read_bytes(), receipt.event_key)
             except (OSError, CertificationError) as error:
                 raise CertificationError(f"invalid test supervisor evidence: {error}") from error
-            starts = [event for event in events if event.get("type") == "started"]
-            completed = [event for event in events if event.get("type") == "completed"]
-            results = [event for event in events if event.get("type") == "result"]
-            if len(starts) != 1 or len(completed) != 1:
-                raise CertificationError("test supervisor did not observe one complete run")
-            summary = completed[0]
-            total = int(summary.get("total", 0))
-            failed = int(summary.get("failed", 0))
-            if (total <= 0 or total != len(results) or failed != 0
-                    or summary.get("canceled") or summary.get("aborted")
-                    or any(result.get("outcome") != "Passed" for result in results)):
-                raise CertificationError(
-                    f"test evidence is not a positive completed pass: "
-                    f"total={total}, observed={len(results)}, failed={failed}")
+            total = positive_test_count(events, test_target)
+            failed = 0
             self.revalidate(
                 "stage-2", tree, [project], test_plan, f"after-test-{index}",
                 test_properties)
@@ -2214,6 +2245,13 @@ def main(argv: list[str]) -> int:
         "--verify-events", nargs=2, metavar=("KEY_HEX", "EVENTS"),
         help="verify authenticated supervisor event evidence")
     parser.add_argument(
+        "--verify-test-events", nargs=3,
+        metavar=("KEY_HEX", "EVENTS", "TEST_ASSEMBLY"),
+        help="verify positive supervisor evidence for one bound test assembly")
+    parser.add_argument(
+        "--validate-input-root", nargs=2, metavar=("TRUSTED_ROOT", "INPUT"),
+        type=Path, help="validate one resolved compilation input boundary")
+    parser.add_argument(
         "--verify-manifest", nargs=2, metavar=("ROOT", "MANIFEST"), type=Path,
         help="verify a frozen boundary manifest")
     parser.add_argument(
@@ -2292,6 +2330,24 @@ def main(argv: list[str]) -> int:
         try:
             authenticated_events(Path(event_name).read_bytes(), bytes.fromhex(key_hex))
         except (CertificationError, OSError, ValueError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_test_events:
+        key_hex, event_name, test_assembly = args.verify_test_events
+        try:
+            events = authenticated_events(
+                Path(event_name).read_bytes(), bytes.fromhex(key_hex))
+            positive_test_count(events, Path(test_assembly))
+        except (CertificationError, OSError, ValueError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.validate_input_root:
+        try:
+            accepted_input_hash(
+                args.validate_input_root[1], [args.validate_input_root[0]], {})
+        except (CertificationError, OSError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
