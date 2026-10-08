@@ -71,33 +71,47 @@ PROTECTED_PROPERTIES = {
 }
 ALLOWED_PROJECT_TARGETS = {
     ("src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj",
-     "_GsharpExtensionsResetCompileItems"),
-    *{
-        ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", name)
-        for name in (
-            "PackGsharpBuildTask", "PackGsharpCompiler", "PackGsharpFormatter",
-            "PackGsgen", "PackGsharpHotReloadRuntime",
-            "PackGsharpChannelsRuntime", "PackGsharpValuesRuntime",
-            "PackGsharpExtensions",
-        )
-    },
+     "_GsharpExtensionsResetCompileItems"):
+        "665e23834520e40fc298b22b6eec5d0b5e61e48393b6437fa3907cc4903cf6c5",
+    ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpBuildTask"):
+        "6f3da180f1d43bc4b0cb9e7279adea49d140b8486d0419acbdc0b33f9574d236",
+    ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpCompiler"):
+        "e331e60887acd7437c2ae7dd4af82dd8e1e05a5661a86e35c42e66329c33930a",
+    ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpFormatter"):
+        "2d508433cdacb86d471567535a2fb526f99e5c1ed79ba638590bb6e120f53155",
+    ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsgen"):
+        "72c98eee85a77eb9cf5fb13d65e58e4173c0d319ca7c648779fec7504baea38a",
+    ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpHotReloadRuntime"):
+        "1acb9836d2fd29a80d1afdad36b4b71ebcd0b7d87994268dc1000ad8d4c7d4bd",
+    ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpChannelsRuntime"):
+        "f533f2a88afa65d616d35378a5c90a58478c00de6ec7f48457bf01858ce61d65",
+    ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpValuesRuntime"):
+        "4a5f332b47ec810147c105b412a83cc5445cff3303d9a2d58ea72a845ac3cf03",
+    ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpExtensions"):
+        "6749f459a9c9632053ce5f56db5755dd8d97cb2be107df09c744e9274e5a48e5",
 }
 ALLOWED_IMPORT_TARGETS = {
-    ("build/gsharp.props", "InitGsharpProps"),
-    ("build/notest.targets", "VSTest"),
-    *{
-        ("src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets", name)
-        for name in (
-            "_GsharpCreateCoreCompileInputsCache", "CoreCompile",
-            "_PopulateGsharpDocFileItems", "CreateManifestResourceNames",
-        )
-    },
+    ("build/gsharp.props", "InitGsharpProps"):
+        "10a03c89258f8cf3691c70153f7f5a0d2d84b96d066db2393fcff50dedfe6988",
+    ("build/notest.targets", "VSTest"):
+        "bfddf78318f0ff1f89b6129a527838031625d098b450ac6729040b440d9b67cb",
+    ("src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets",
+     "_GsharpCreateCoreCompileInputsCache"):
+        "231402dc60a522d4fde916f1b7936c34f7bb6382f38b85f568f5ebc92a8f0492",
+    ("src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets",
+     "CoreCompile"):
+        "da5835b156c1c1b1137ec64b2d33c273868a60c58b695f73c266ea1fcbc1c8dd",
+    ("src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets",
+     "_PopulateGsharpDocFileItems"):
+        "b093eb333e93fb6f1f4403e1fbc4fcb65e352749bf40aeb1a7f62d6d2a6b9879",
+    ("src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets",
+     "CreateManifestResourceNames"):
+        "a01c783eb66fc5c8d5b52ac60b3b893f7af48ff604ea38c1b326604192310cb8",
 }
 ALLOWED_IMPORT_TASKS = {
-    (
-        "src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets",
-        "Gsharp.NET.Sdk.Tools.BuildTask",
-    ),
+    ("src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets",
+     "Gsharp.NET.Sdk.Tools.BuildTask"):
+        "773860a7d7b669c025ba1233f47ac38873bbe8314deb9164967299f5021b3fa4",
 }
 
 
@@ -560,6 +574,10 @@ def inspect_sdk_declarations(relative: str, root: ET.Element) -> None:
                     f"{relative} overrides the global SDK pin with {name}/{version}")
 
 
+def xml_definition_hash(element: ET.Element) -> str:
+    return sha256_bytes(ET.tostring(element, encoding="utf-8"))
+
+
 def inspect_project_xml(tree: Path, path: Path) -> None:
     try:
         root = ET.parse(path).getroot()
@@ -582,8 +600,10 @@ def inspect_project_xml(tree: Path, path: Path) -> None:
             raise CertificationError(f"unmodeled project task in {relative}")
         if tag == "Target":
             target = element.attrib.get("Name", "")
-            if (relative, target) not in ALLOWED_PROJECT_TARGETS:
-                raise CertificationError(f"unmodeled project target {target!r} in {relative}")
+            expected = ALLOWED_PROJECT_TARGETS.get((relative, target))
+            if expected is None or xml_definition_hash(element) != expected:
+                raise CertificationError(
+                    f"unmodeled project target definition {target!r} in {relative}")
 
 def inspect_repository_import(
     tree: Path, path: Path, external: bool = False,
@@ -599,18 +619,25 @@ def inspect_repository_import(
         tag = element.tag.rsplit("}", 1)[-1]
         if tag == "Target":
             target = element.attrib.get("Name", "")
-            if not external and (relative, target) not in ALLOWED_IMPORT_TARGETS:
+            definition = xml_definition_hash(element)
+            if (not external
+                    and ALLOWED_IMPORT_TARGETS.get((relative, target)) != definition):
                 raise CertificationError(
-                    f"unmodeled imported target {target!r} in {relative}")
-            inventory["targets"].append({"name": target})
+                    f"unmodeled imported target definition {target!r} in {relative}")
+            inventory["targets"].append({
+                "name": target, "definitionSha256": definition})
         elif tag == "UsingTask":
             task = element.attrib.get("TaskName", "")
-            if not external and (relative, task) not in ALLOWED_IMPORT_TASKS:
-                raise CertificationError(f"unmodeled imported task {task!r} in {relative}")
+            definition = xml_definition_hash(element)
+            if (not external
+                    and ALLOWED_IMPORT_TASKS.get((relative, task)) != definition):
+                raise CertificationError(
+                    f"unmodeled imported task definition {task!r} in {relative}")
             inventory["tasks"].append({
                 "name": task,
                 "assemblyFile": element.attrib.get("AssemblyFile", ""),
                 "assemblyName": element.attrib.get("AssemblyName", ""),
+                "definitionSha256": definition,
             })
     if external and (inventory["targets"] or inventory["tasks"]):
         raise CertificationError(
