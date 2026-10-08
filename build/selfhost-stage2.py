@@ -58,7 +58,7 @@ PACK_DEPENDENCIES = (
 INPUT_ITEMS = (
     "Compile", "Reference", "Analyzer", "GsharpCodeAnalyzer",
     "AdditionalFiles", "EmbeddedResource", "Content", "None",
-    "ProjectReference",
+    "ProjectReference", "TestAdapter",
 )
 PROTECTED_PROPERTIES = {
     "buildprojectreferences", "customaftermicrosoftcommontargets",
@@ -300,6 +300,13 @@ def accepted_input_hash(
     if (not any(contains(real(root), path) for root in trusted_roots)
             and accepted_hashes.get(str(path)) != actual):
         raise CertificationError(f"resolved compilation input is outside accepted roots: {path}")
+    return actual
+
+
+def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
+    actual = sha256_file(path) if path.is_file() else ""
+    if actual not in allowed_hashes:
+        raise CertificationError(f"test adapter is not hash-allowlisted: {path}")
     return actual
 
 
@@ -795,6 +802,7 @@ class Controller:
             "projects": args.project or list(DEFAULT_PROJECTS),
             "assemblies": args.assembly or list(DEFAULT_ASSEMBLIES),
             "tests": args.test,
+            "testAdapterSha256": sorted(args.test_adapter_sha256),
         }
         self.stage_packages: dict[str, Path] = {}
         self.accepted_restore_outputs: dict[str, dict[str, str]] = {}
@@ -853,6 +861,11 @@ class Controller:
         if not self.report["tests"]:
             raise CertificationError(
                 "at least one --test is required for positive certification evidence")
+        if (len(self.args.test_adapter_sha256) != len(set(self.args.test_adapter_sha256))
+                or any(not re.fullmatch(r"[0-9a-f]{64}", value)
+                       for value in self.args.test_adapter_sha256)):
+            raise CertificationError(
+                "--test-adapter-sha256 values must be unique lowercase SHA-256 hashes")
 
     def freeze_bootstrap(self) -> None:
         source = self.bootstrap
@@ -1372,7 +1385,7 @@ class Controller:
             out_dir.mkdir(parents=True, exist_ok=True)
             resolved_names = (
                 "ReferencePath", "Analyzer", "GsharpCodeAnalyzer",
-                "AdditionalFiles", "EmbeddedResource", "Content",
+                "AdditionalFiles", "EmbeddedResource", "Content", "TestAdapter",
             )
             resolve_properties = dict(properties)
             resolve_properties["BuildProjectReferences"] = "false"
@@ -1433,6 +1446,9 @@ class Controller:
                     raise CertificationError(
                         f"producer input is not an accepted build output: {path}")
                 elif path.exists() and path.is_file():
+                    if item_name == "TestAdapter":
+                        accepted_test_adapter(
+                            path, set(self.args.test_adapter_sha256))
                     inputs.append({
                         "kind": item_name, "path": str(path),
                         "sha256": accepted_input_hash(path, [
@@ -1443,7 +1459,7 @@ class Controller:
                     })
                 elif item_name in {
                     "ReferencePath", "Analyzer", "GsharpCodeAnalyzer",
-                    "AdditionalFiles", "EmbeddedResource", "Content",
+                    "AdditionalFiles", "EmbeddedResource", "Content", "TestAdapter",
                 }:
                     raise CertificationError(
                         f"resolved compilation input is missing: {path}")
@@ -2300,6 +2316,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--project", action="append")
     parser.add_argument("--assembly", action="append")
     parser.add_argument("--test", action="append", default=[])
+    parser.add_argument(
+        "--test-adapter-sha256", action="append", default=[], metavar="SHA256")
     parser.add_argument("--config", default="Release")
     parser.add_argument("--stage1-version")
     parser.add_argument(
@@ -2336,6 +2354,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--validate-input-root", nargs=2, metavar=("TRUSTED_ROOT", "INPUT"),
         type=Path, help="validate one resolved compilation input boundary")
+    parser.add_argument(
+        "--validate-test-adapter", nargs="+", metavar="VALUE",
+        help="validate one test adapter against exact allowed hashes")
     parser.add_argument(
         "--verify-manifest", nargs=2, metavar=("ROOT", "MANIFEST"), type=Path,
         help="verify a frozen boundary manifest")
@@ -2438,6 +2459,14 @@ def main(argv: list[str]) -> int:
         try:
             accepted_input_hash(
                 args.validate_input_root[1], [args.validate_input_root[0]], {})
+        except (CertificationError, OSError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.validate_test_adapter:
+        adapter_name, *allowed = args.validate_test_adapter
+        try:
+            accepted_test_adapter(real(Path(adapter_name)), set(allowed))
         except (CertificationError, OSError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
