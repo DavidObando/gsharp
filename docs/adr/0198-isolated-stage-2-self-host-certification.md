@@ -271,8 +271,13 @@ Dependencies MUST be built in frozen topological order. Each build command MUST
 consume only already verified dependency outputs. Implicit project-reference
 builds MUST be disabled and revalidated as disabled.
 
-Each command MUST receive a fresh nonce and fresh controller-owned evidence
-paths. Evidence MUST bind:
+For each command, the supervisor MUST create and retain a fresh nonce and fresh
+controller-owned evidence destinations. The command MUST NOT receive the nonce,
+credentials, or destination paths. When in-process reporting is unavoidable,
+the command MAY receive only a pre-opened channel whose peer and process
+identity the supervisor authenticates. Channel messages are untrusted until the
+supervisor verifies them against its independent process and output
+observations. Evidence MUST bind:
 
 - command identity and exact arguments;
 - process start and completion;
@@ -286,10 +291,24 @@ certification. Evidence from an earlier command, repeated root, prior run, or
 different graph MUST be rejected.
 
 Project-controlled targets and tasks MUST NOT create authoritative evidence.
-Stage-2 v1 MUST REJECT custom targets or tasks in a participating project or
-non-platform import. Trusted targets and tasks are limited to the installed
-.NET SDK, the byte-verified G# SDK, and controller-supplied instrumentation
-whose bytes and load paths are outside project control.
+Stage-2 v1 MUST REJECT an unmodeled custom target or task. A participating
+project or non-platform import MAY execute one only when the frozen plan:
+
+- identifies its exact definition, import owner, conditions, ordering, inputs,
+  outputs, property and item effects, task assembly, and complete payload
+  hashes;
+- records why the target or task is required by the accepted cutover closure;
+- revalidates those identities and effects at every applicable boundary; and
+- executes it inside the restricted command boundary without access to
+  controller evidence.
+
+The replacement implementation MUST either model and hash-allowlist the custom
+targets and non-platform imports required by the current cutover closure,
+including the `Gsharp.Extensions` compile-item reset and repository versioning
+imports, or remove them from that closure before certification. Any undeclared
+target, task, effect, or payload change MUST reject the run. The installed .NET
+SDK, byte-verified G# SDK, and controller-supplied instrumentation remain
+trusted only at their recorded bytes and load paths.
 
 A requested test run MUST produce fresh machine-readable results through a
 controller-owned test supervisor. The test process MUST NOT have write access
@@ -391,6 +410,8 @@ boundary is under test. The suite MUST include:
 - project SDK attributes, imported SDK overrides, same-version alternate
   packages, compiler path overrides, task overrides, and runtime-payload
   replacement;
+- the accepted current-closure custom target/import inventory, plus a changed
+  definition, ordering, effect, task assembly, or payload that MUST reject;
 - source/work containment, destination aliasing, symlink, junction, hardlink,
   and real-path escape cases;
 - repeated roots, stale receipts, copied outputs, replaced implementation or
