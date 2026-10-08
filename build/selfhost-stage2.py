@@ -69,6 +69,7 @@ PROTECTED_PROPERTIES = {
     "outdir", "outputpath", "intermediateoutputpath",
     "msbuildprojectextensionspath", "restorepackagespath",
     "restoreprojectreferences", "restorerecursive",
+    "msbuildcopycontenttransitively",
     "vstesttestcasefilter", "vstestlogger", "vstesttestadapterpath",
 }
 ALLOWED_PROJECT_TARGETS = {
@@ -1716,6 +1717,7 @@ class Controller:
             "RestorePackagesPath": str(self.writable(stage, "packages")),
             "RestoreConfigFile": str(self.write_offline_config(stage)),
             "BuildProjectReferences": "false",
+            "MSBuildCopyContentTransitively": "false",
             "RestoreProjectReferences": "false",
             "RestoreRecursive": "false",
         }
