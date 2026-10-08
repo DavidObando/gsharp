@@ -50,6 +50,10 @@ DEFAULT_ASSEMBLIES = (
     "Core/GSharp.Core.dll",
     "Compiler/gsc.dll",
 )
+HOST_DOTNET_ROOTS = (
+    Path("/usr/share/dotnet"),
+    Path("/usr/local/share/dotnet"),
+)
 PACK_DEPENDENCIES = (
     Path("src/Compiler/Compiler.gsproj"),
     Path("src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj"),
@@ -421,6 +425,10 @@ def validate_vstest_extensions(root: Path, allowed_hashes: set[str]) -> None:
         )):
             raise CertificationError(
                 f"project-supplied VSTest extension is unsupported: {path}")
+
+
+def resolution_properties(properties: dict[str, str]) -> dict[str, str]:
+    return dict(properties)
 
 
 def msbuild_property_arg(name: str, value: Any) -> str:
@@ -1269,6 +1277,12 @@ class Controller:
         for path in (Path("/usr"), Path("/bin"), Path("/lib"), Path("/lib64")):
             if path.exists():
                 arguments.extend(("--ro-bind", str(path), str(path)))
+        hidden_sdk = self.toolchains / "hidden-host-sdk"
+        hidden_sdk.mkdir(exist_ok=True)
+        hidden_sdk.chmod(0o555)
+        for path in HOST_DOTNET_ROOTS:
+            if path.exists():
+                arguments.extend(("--ro-bind", str(hidden_sdk), str(path)))
         arguments.extend(("--dir", "/etc"))
         for path in (
             Path("/etc/passwd"), Path("/etc/group"), Path("/etc/nsswitch.conf"),
@@ -1874,11 +1888,9 @@ class Controller:
                 "ReferencePath", "Analyzer", "GsharpCodeAnalyzer",
                 "AdditionalFiles", "EmbeddedResource", "Content", "TestAdapter",
             )
-            resolve_properties = dict(properties)
-            resolve_properties["BuildProjectReferences"] = "false"
             resolve_property_args = [
                 msbuild_property_arg(name, value)
-                for name, value in sorted(resolve_properties.items())
+                for name, value in sorted(resolution_properties(properties).items())
             ]
             resolve_command = [
                 str(self.stage_dotnet(stage) / "dotnet"), "msbuild",
