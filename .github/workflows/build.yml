@@ -213,6 +213,9 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Install stage-2 sandbox
+        run: sudo apt-get update && sudo apt-get install --yes bubblewrap
+
       - name: Verify isolated stage-2 certification contract
         run: |
           dotnet build build/selfhost/PackageContentHash.csproj --configuration Release --nologo

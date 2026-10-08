@@ -49,7 +49,10 @@ DEFAULT_ASSEMBLIES = (
 )
 PACK_DEPENDENCIES = (
     Path("src/Compiler/Compiler.gsproj"),
+    Path("src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj"),
     Path("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"),
+    Path("src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj"),
+    Path("tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj"),
 )
 INPUT_ITEMS = (
     "Compile", "Reference", "Analyzer", "GsharpCodeAnalyzer",
@@ -300,6 +303,13 @@ def identity(tree: Path, path: Path) -> FileIdentity:
         raise CertificationError(f"hard-linked participating input: {relative}")
     return FileIdentity(
         relative, stat.S_IMODE(info.st_mode), info.st_size, sha256_file(path))
+
+
+def owned_file(path: Path, label: str) -> os.stat_result:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise CertificationError(f"{label} is not a single-link regular file: {path}")
+    return info
 
 
 def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dict[str, str] | None]:
@@ -838,10 +848,9 @@ class Controller:
         output_rows = []
         if process.returncode == 0:
             for path in outputs or []:
-                if not path.is_file():
-                    raise CertificationError(f"command did not produce {path}")
+                info = owned_file(path, "command output")
                 output_rows.append({
-                    "path": str(path), "size": path.stat().st_size,
+                    "path": str(path), "size": info.st_size,
                     "sha256": sha256_file(path),
                 })
         receipt = {
@@ -1662,10 +1671,16 @@ class Controller:
                 self.writable(stage, "packages"),
                 self.writable(stage, "out"),
             ])
-        published = [
-            {"path": str(path), "size": path.stat().st_size, "sha256": sha256_file(path)}
-            for path in sorted(destination.rglob("*")) if path.is_file()
-        ]
+        published = []
+        for path in sorted(destination.rglob("*")):
+            if path.is_symlink():
+                raise CertificationError(f"published payload is aliased: {path}")
+            if path.is_file():
+                info = owned_file(path, "published payload")
+                published.append({
+                    "path": str(path), "size": info.st_size,
+                    "sha256": sha256_file(path),
+                })
         if not published:
             raise CertificationError(f"publish produced no files for {project}")
         atomic_json(
@@ -1680,6 +1695,14 @@ class Controller:
         published = self.writable("stage-1", "published")
         compiler = published / "compiler"
         self.publish_project("src/Compiler/Compiler.gsproj", plan, compiler)
+        formatter = published / "formatter"
+        self.publish_project(
+            "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj", plan, formatter)
+        gsgen = published / "gsgen"
+        self.publish_project("tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj", plan, gsgen)
+        extensions = published / "extensions"
+        self.publish_project(
+            "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj", plan, extensions)
 
         bootstrap_version = package_version(self.bootstrap)
         version = self.args.stage1_version or packer.default_stage1_version(bootstrap_version)
@@ -1689,10 +1712,16 @@ class Controller:
 
         def add_directory(prefix: str, directory: Path) -> None:
             for path in sorted(directory.rglob("*")):
+                if path.is_symlink():
+                    raise CertificationError(f"package payload is aliased: {path}")
                 if path.is_file():
+                    owned_file(path, "package payload")
                     replacements[prefix + path.relative_to(directory).as_posix()] = path.read_bytes()
 
         add_directory("tools/compiler/", compiler)
+        add_directory("tools/formatter/", formatter)
+        add_directory("tools/gsgen/", gsgen)
+        add_directory("tools/extensions/", extensions)
         sdk_target = self.project_target(
             plan, "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj")
         self.accepted_output_hash(stage, sdk_target)
@@ -1703,7 +1732,6 @@ class Controller:
             ("src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj", "tools/hotreload/"),
             ("src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj", "tools/channels/"),
             ("src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj", "tools/values/"),
-            ("src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj", "tools/extensions/"),
         ):
             if project not in plan["isolated"]:
                 continue
@@ -1711,6 +1739,7 @@ class Controller:
             self.accepted_output_hash(stage, target)
             for path in target.parent.glob(target.stem + ".*"):
                 if path.is_file():
+                    owned_file(path, "package payload")
                     replacements[prefix + path.name] = path.read_bytes()
         static = {
             "Sdk/Sdk.props": "src/Sdk/Gsharp.NET.Sdk/Sdk/Sdk.props",
@@ -1731,6 +1760,7 @@ class Controller:
         replaced_prefixes = (
             "tools/compiler/", "tools/task/",
             "tools/hotreload/", "tools/channels/", "tools/values/",
+            "tools/formatter/", "tools/gsgen/", "tools/extensions/",
             "Sdk/", "build/",
         )
         temporary = produced.with_suffix(".new")
