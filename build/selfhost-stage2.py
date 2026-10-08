@@ -63,8 +63,16 @@ ALLOWED_DOTNET_HOST_HASHES = {
     "0a5ec28e49da2c0be91ff3fc8fff53c250c9bbd92b25d3b9bfc5721adba96a0c",
 }
 ALLOWED_DOTNET_ROOT_MANIFESTS = {
-    "1e8230158b71f1d2b55dd629e2338b54bee6d3d59e53c0f92ce69922aff80848",
+    "e362d932f8adc51ae4642740d24df422adf5908eff2e6941a691fef8529dc6a9",
 }
+TRUSTED_DOTNET_SDK_VERSION = "10.0.400"
+TRUSTED_DOTNET_COMPONENTS = (
+    Path("dotnet"),
+    Path("host"),
+    Path("shared"),
+    Path("sdk") / TRUSTED_DOTNET_SDK_VERSION,
+    Path("packs"),
+)
 ALLOWED_TEST_ADAPTER_HASHES = {
     "c5ac41b36fac0fcef9714fb80fea0175913530fb53dd7bb8e5e1470339667100",
     "194458c816e0ea9ff0c5eac8896c52133fe9205661833b3d0f57e85a4e66936b",
@@ -1202,10 +1210,22 @@ def system_owned_tree(root: Path) -> bool:
 
 
 def dotnet_manifest_sha256(root: Path) -> str:
-    return sha256_bytes(json.dumps([
-        asdict(row)
-        for row in sorted(directory_manifest(root), key=lambda row: row.path)
-    ], sort_keys=True).encode())
+    rows = []
+    for relative in TRUSTED_DOTNET_COMPONENTS:
+        path = root / relative
+        if path.is_file():
+            rows.append(identity(root, path))
+        elif path.is_dir():
+            rows.extend(
+                identity(root, child)
+                for child in path.rglob("*")
+                if child.is_file() or child.is_symlink())
+        else:
+            raise CertificationError(
+                f"trusted dotnet component is missing: {path}")
+    return sha256_bytes(json.dumps(
+        [asdict(row) for row in sorted(rows, key=lambda row: row.path)],
+        sort_keys=True).encode())
 
 
 @functools.cache
@@ -1695,13 +1715,19 @@ class Controller:
 
     def seed_sdk_resolution(self, stage: str, package: Path) -> dict[str, Any]:
         self.dotnet = trusted_dotnet()
-        version_result = subprocess.run(
-            [str(self.dotnet), "--version"], capture_output=True, text=True, check=True)
         installed_root = dotnet_root()
         destination = self.stage_dotnet(stage)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(installed_root, destination, copy_function=shutil.copy2)
-        resolution = destination / "sdk" / version_result.stdout.strip() / "Sdks"
+        destination.mkdir()
+        for relative in TRUSTED_DOTNET_COMPONENTS:
+            source = installed_root / relative
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, target, copy_function=shutil.copy2)
+            else:
+                shutil.copy2(source, target)
+        resolution = destination / "sdk" / TRUSTED_DOTNET_SDK_VERSION / "Sdks"
         if not resolution.is_dir():
             raise CertificationError(f"copied MSBuild SDK root not found: {resolution}")
         package_root = resolution / SDK_ID
