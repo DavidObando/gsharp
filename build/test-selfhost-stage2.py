@@ -384,6 +384,16 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("relative to the stage output root", result.stderr)
 
+    def test_symbolic_link_root_is_rejected_before_resolution(self) -> None:
+        tree = self.tree()
+        alias = self.root / "tree-alias"
+        alias.symlink_to(tree, target_is_directory=True)
+        result = run_driver(
+            "--tree", alias, "--bootstrap", self.package,
+            "--work", self.root / "work")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("symbolic-link path", result.stderr)
+
     def test_repeated_roots_and_tests_are_rejected(self) -> None:
         for arguments in (
             ("--project", "App.gsproj", "--project", "App.gsproj"),
@@ -557,7 +567,7 @@ class PostSetupMutationTests(unittest.TestCase):
         names = [
             "App.gsproj", "hidden.targets", "reference.dll", "analyzer.dll",
             "generated.g.cs", "compiler.dll", "task.dll", "package.nupkg",
-            "accepted-output.dll", "Tests.gsproj",
+            "accepted-output.dll", "test-output.dll", "Tests.gsproj",
         ]
         manifest = self.manifest(names)
         target = self.root / name
@@ -586,6 +596,7 @@ class PostSetupMutationTests(unittest.TestCase):
     def test_replaced_toolchain_package_and_output_are_rejected(self) -> None:
         for name in (
             "compiler.dll", "task.dll", "package.nupkg", "accepted-output.dll",
+            "test-output.dll",
         ):
             with self.subTest(name=name):
                 self.assert_mutation_rejected(name)
