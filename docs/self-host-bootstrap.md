@@ -41,7 +41,11 @@ project SDK overrides, multitargeting, context-changing or build-disabled
 references, secret-bearing restore configuration, and unmodeled project targets
 or tasks. The current-closure hash allowlist contains the
 `Gsharp.Extensions` compile-item reset, SDK packing targets, bootstrap imported
-targets, and the bootstrap imported task declaration only.
+targets and task declaration, plus exact definitions from the pinned
+Nerdbank.GitVersioning, Microsoft.SourceLink, Microsoft.Build.Tasks.Git,
+Microsoft.NET.Test.Sdk, Microsoft.CodeAnalysis.Analyzers, and coverlet.collector
+packages, and Microsoft.CodeCoverage and Microsoft.Extensions.Logging.Abstractions
+and Microsoft.Extensions.Options packages.
 Restore is offline inside the restricted boundary; required packages must
 already be available from the frozen local inputs.
 
