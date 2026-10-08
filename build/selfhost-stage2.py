@@ -83,6 +83,12 @@ ALLOWED_TEST_ADAPTER_HASHES = {
     "ec705ad62e33f31fc46ad5800c9b1694c02d0ec4e1ee704712da9f24ebbea22e",
     "3166dc70323fb30ccf1cedb0fe86f2ad122c46d254542342d90386efc4c9285c",
 }
+APPROVED_TEST_ADAPTER_CLOSURE = {
+    "xunit.abstractions.dll",
+    "xunit.runner.reporters.netcoreapp10.dll",
+    "xunit.runner.utility.netcoreapp10.dll",
+    "xunit.runner.visualstudio.testadapter.dll",
+}
 PACK_DEPENDENCIES = (
     Path("src/Compiler/Compiler.gsproj"),
     Path("src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj"),
@@ -477,8 +483,10 @@ def validate_vstest_extensions(
         if not path.is_file():
             continue
         name = path.name.casefold()
-        if name.endswith("testadapter.dll"):
+        if name in APPROVED_TEST_ADAPTER_CLOSURE:
             accepted_test_adapter(path, allowed_hashes)
+        elif name.endswith("testadapter.dll"):
+            raise CertificationError(f"test adapter is not hash-allowlisted: {path}")
         elif name == "testhost.dll":
             digest = sha256_file(path)
             if digest not in allowed_test_host_hashes or digest not in package_hashes:
@@ -2059,16 +2067,10 @@ class Controller:
         preprocessed = self.command_stdout(
             stage, f"graph-preprocess-{suffix}", tree, preprocess,
             graph_hint, writable, env, read_only)
-        imports = sorted({
-            item.strip()
-            for item in re.findall(
-                r"(?:^|\r?\n)[ \t]*([^\r\n]+)\r?\n[ \t]*={20,}(?:\r?\n|$)",
-                preprocessed.decode(errors="replace"))
-            if Path(item.strip()).is_absolute() and Path(item.strip()).is_file()
-        })
         property_names = sorted({
             *preprocessed_property_names(preprocessed),
             *properties,
+            "MSBuildAllProjects",
         })
         property_command = [
             str(self.stage_dotnet(stage) / "dotnet"), "msbuild",
@@ -2084,6 +2086,15 @@ class Controller:
         except json.JSONDecodeError as error:
             raise CertificationError(
                 f"invalid complete property inventory for {relative}: {error}") from error
+        all_projects = properties_out.get("MSBuildAllProjects")
+        if not isinstance(all_projects, str) or not all_projects:
+            raise CertificationError(
+                f"MSBuild returned no evaluated import inventory for {relative}")
+        imports = sorted({
+            item
+            for item in all_projects.split(";")
+            if Path(item).is_absolute() and Path(item).is_file()
+        })
         for name, expected in properties.items():
             if str(properties_out.get(name, "")) != str(expected):
                 raise CertificationError(
