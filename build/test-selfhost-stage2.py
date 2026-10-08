@@ -1025,8 +1025,9 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         self.assertEqual(2, rejected.returncode)
         self.assertIn("not hash-allowlisted", rejected.stderr)
         digest = hashlib.sha256(adapter.read_bytes()).hexdigest()
-        valid = run_driver("--validate-test-adapter", adapter, digest)
-        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        caller_allowlisted = run_driver("--validate-test-adapter", adapter, digest)
+        self.assertEqual(2, caller_allowlisted.returncode)
+        self.assertIn("not hash-allowlisted", caller_allowlisted.stderr)
 
     def test_adjacent_vstest_adapter_requires_an_exact_hash_allowlist(self) -> None:
         output = self.root / "out"
@@ -1037,8 +1038,10 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         self.assertEqual(2, rejected.returncode)
         self.assertIn("not hash-allowlisted", rejected.stderr)
         digest = hashlib.sha256(adapter.read_bytes()).hexdigest()
-        valid = run_driver("--validate-vstest-extensions", output, digest)
-        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        caller_allowlisted = run_driver(
+            "--validate-vstest-extensions", output, digest)
+        self.assertEqual(2, caller_allowlisted.returncode)
+        self.assertIn("not hash-allowlisted", caller_allowlisted.stderr)
 
     def test_adjacent_project_vstest_logger_is_rejected(self) -> None:
         output = self.root / "out"
@@ -1150,6 +1153,11 @@ class ToolchainManifestTests(unittest.TestCase):
         fake.chmod(0o755)
         environment = os.environ.copy()
         environment["PATH"] = f"{attacker}{os.pathsep}{environment['PATH']}"
+        environment["HOME"] = str(attacker)
+        fake_home = attacker / ".dotnet"
+        fake_home.mkdir()
+        (fake_home / "dotnet").write_bytes(b"untrusted")
+        (fake_home / "dotnet").chmod(0o755)
         result = subprocess.run(
             [
                 sys.executable, "-c",
