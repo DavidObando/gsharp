@@ -504,14 +504,6 @@ def git_snapshot_entries(
     if probe.returncode != 0 or real(Path(probe.stdout.strip())) != real(tree):
         raise CertificationError(
             "caller tree must be the root of a clean Git worktree")
-    command, git_env = git_invocation(
-        tree, "status", "--porcelain=v1", "--untracked-files=all")
-    status_result = subprocess.run(
-        command,
-        capture_output=True, text=True, check=True, env=git_env)
-    if status_result.stdout:
-        raise CertificationError(
-            "caller tree is dirty or has untracked files:\n" + status_result.stdout.rstrip())
     command, git_env = git_invocation(tree, "rev-parse", "HEAD")
     commit = subprocess.run(
         command,
@@ -539,6 +531,28 @@ def git_snapshot_entries(
             0o755 if mode == "100755" else 0o644,
             object_id,
         ))
+    command, git_env = git_invocation(tree, "ls-files", "-sz")
+    index_rows = subprocess.run(
+        command, capture_output=True, check=True, env=git_env).stdout
+    index_entries = []
+    for row in index_rows.split(b"\0"):
+        if not row:
+            continue
+        metadata, name = row.split(b"\t", 1)
+        mode, object_id, stage = metadata.decode().split()
+        index_entries.append((os.fsdecode(name), mode, object_id, stage))
+    expected_index = sorted(
+        (name, "100755" if mode == 0o755 else "100644", object_id, "0")
+        for name, mode, object_id in entries
+    )
+    if sorted(index_entries) != expected_index:
+        raise CertificationError("caller Git index differs from the recorded commit")
+    command, git_env = git_invocation(
+        tree, "ls-files", "--others", "--exclude-standard", "-z")
+    untracked = subprocess.run(
+        command, capture_output=True, check=True, env=git_env).stdout
+    if untracked:
+        raise CertificationError("caller tree has untracked paths")
     for relative, _, _ in entries:
         identity(tree, tree / relative)
     return entries, {"commit": commit, "tree": git_tree}
@@ -1837,17 +1851,16 @@ class Controller:
                     (str(self.mutable / stage), "$STAGE"),
                 )
                 metadata = {}
-                if item_name != "ProjectReference":
-                    for key, item_value in sorted(item.items()):
-                        if key in {
-                            "FullPath", "Identity",
-                            "AccessedTime", "CreatedTime", "ModifiedTime",
-                        }:
-                            continue
-                        normalized = str(item_value)
-                        for root, token in metadata_roots:
-                            normalized = normalized.replace(root, token)
-                        metadata[key] = normalized
+                for key, item_value in sorted(item.items()):
+                    if key in {
+                        "FullPath", "Identity",
+                        "AccessedTime", "CreatedTime", "ModifiedTime",
+                    }:
+                        continue
+                    normalized = str(item_value)
+                    for root, token in metadata_roots:
+                        normalized = normalized.replace(root, token)
+                    metadata[key] = normalized
                 value = item.get("FullPath") or item.get("Identity")
                 if not value:
                     continue
