@@ -60,6 +60,7 @@ PROTECTED_PROPERTIES = {
     "buildprojectreferences", "customaftermicrosoftcommontargets",
     "gsharpcompilerfullpath", "gsharptoolfullpath",
     "baseoutputpath", "baseintermediateoutputpath",
+    "outdir", "outputpath", "intermediateoutputpath",
     "msbuildprojectextensionspath", "restorepackagespath",
     "restoreprojectreferences", "restorerecursive",
     "vstesttestcasefilter", "vstestlogger", "vstesttestadapterpath",
@@ -353,7 +354,9 @@ def package_version(path: Path) -> str:
         raise CertificationError(str(error)) from error
 
 
-def extract_verified_package(source: Path, destination: Path) -> Path:
+def extract_verified_package(
+    source: Path, destination: Path, content_hash: str | None = None,
+) -> Path:
     nupkgs = list(source.glob("*.nupkg"))
     hash_files = list(source.glob("*.nupkg.sha512"))
     if len(nupkgs) != 1 or len(hash_files) != 1:
@@ -379,6 +382,11 @@ def extract_verified_package(source: Path, destination: Path) -> Path:
     atomic_bytes(destination / nupkgs[0].name, nupkgs[0].read_bytes())
     atomic_bytes(
         destination / hash_files[0].name, (package_hash + "\n").encode())
+    atomic_json(destination / ".nupkg.metadata", {
+        "version": 2,
+        "contentHash": content_hash or package_hash,
+        "source": "adr0198-controller",
+    })
     return nupkgs[0]
 
 
@@ -631,7 +639,7 @@ class Controller:
         }
         self.stage_packages: dict[str, Path] = {}
         self.accepted_restore_outputs: dict[str, dict[str, str]] = {}
-        self.accepted_build_outputs: dict[str, dict[str, str]] = {}
+        self.accepted_build_outputs: dict[str, dict[str, dict[str, str]]] = {}
         self.receipts: list[tuple[Path, str]] = []
         self.receipt_expectations: dict[str, dict[str, Any]] = {}
 
@@ -1013,7 +1021,7 @@ class Controller:
             if not hmac.compare_digest(actual_hash, expected_hash):
                 raise CertificationError(
                     f"package content hash differs from the lock: {package_id}/{version}")
-            nupkg = extract_verified_package(source, destination)
+            nupkg = extract_verified_package(source, destination, expected_hash)
             feed_package = self.offline_feed(stage) / nupkg.name
             if feed_package.exists() and sha256_file(feed_package) != sha256_file(nupkg):
                 raise CertificationError(
@@ -1198,6 +1206,21 @@ class Controller:
                 producer = real(Path(producer_name)) if producer_name else None
                 if (producer is not None and producer.is_file()
                         and contains(tree, producer) and producer != project):
+                    if not path.exists():
+                        continue
+                    accepted = self.accepted_build_outputs.get(stage, {}).get(str(path))
+                    actual = sha256_file(path) if path.is_file() else None
+                    if accepted is None or actual != accepted["sha256"]:
+                        raise CertificationError(
+                            f"producer input is not an accepted build output: {path}")
+                    inputs.append({
+                        "kind": item_name, "path": str(path),
+                        "sha256": actual,
+                        "producerProject": producer.relative_to(tree).as_posix(),
+                        "producerReceipt": accepted["receipt"],
+                        "logicalPath": path.relative_to(
+                            self.writable(stage, "out")).as_posix(),
+                    })
                     continue
                 elif path.exists() and path.is_file():
                     inputs.append({
@@ -1354,6 +1377,7 @@ class Controller:
                 "taskSha256": sha256_file(expected_task),
             },
         }
+        self.validate_output_ownership(stage, value)
         value["identity"] = sha256_bytes(
             json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
         return value
@@ -1427,22 +1451,27 @@ class Controller:
             assets = Path(plan["isolated"][root]["effectiveProperties"]["ProjectAssetsFile"])
             writable = [
                 *runtime_writable,
-                self.writable(stage, "packages"),
                 Path(properties["BaseIntermediateOutputPath"]),
             ]
             self.command(
                 stage, "restore", tree, command, plan["identity"], writable, env,
-                outputs=[assets], read_only=[self.writable(stage, "out")])
+                outputs=[assets], read_only=[
+                    self.writable(stage, "packages"),
+                    self.writable(stage, "out"),
+                ])
 
     def build(
         self, stage: str, tree: Path, roots: list[str], plan: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
         env, runtime_writable = self.environment(stage)
         order = self.topological_order(plan)
         for root in order:
-            self.revalidate(stage, tree, roots, plan, f"before-build-{sha256_bytes(root.encode())[:8]}")
+            project_plan = self.graph(stage, tree, [root])
+            self.revalidate(
+                stage, tree, [root], project_plan,
+                f"before-build-{sha256_bytes(root.encode())[:8]}")
             properties = self.properties(stage, Path(root))
-            effective = plan["isolated"][root]["effectiveProperties"]
+            effective = project_plan["isolated"][root]["effectiveProperties"]
             for name in ("TargetFramework", "RuntimeIdentifier", "SelfContained"):
                 if effective.get(name):
                     properties[name] = effective[name]
@@ -1452,7 +1481,7 @@ class Controller:
                 *[f"-p:{name}={value}" for name, value in sorted(properties.items())],
                 "-nodeReuse:false",
             ]
-            node = plan["isolated"][root]["effectiveProperties"]
+            node = project_plan["isolated"][root]["effectiveProperties"]
             outputs = [self.planned_target(node)]
             if node.get("TargetRefPath"):
                 outputs.append(Path(node["TargetRefPath"]))
@@ -1462,7 +1491,7 @@ class Controller:
                 outputs[0].parent,
             ]
             receipt = self.command(
-                stage, "build", tree, command, plan["identity"], writable, env,
+                stage, "build", tree, command, project_plan["identity"], writable, env,
                 outputs=outputs, read_only=[
                     self.writable(stage, "packages"),
                     self.writable(stage, "out"),
@@ -1470,8 +1499,15 @@ class Controller:
             document = json.loads(Path(receipt.receipt).read_text(encoding="utf-8"))
             accepted = self.accepted_build_outputs.setdefault(stage, {})
             for output in document["outputs"]:
-                accepted[output["path"]] = output["sha256"]
-            self.revalidate(stage, tree, roots, plan, f"after-build-{sha256_bytes(root.encode())[:8]}")
+                accepted[output["path"]] = {
+                    "sha256": output["sha256"],
+                    "receipt": receipt.receipt,
+                    "project": root,
+                }
+            self.revalidate(
+                stage, tree, [root], project_plan,
+                f"after-build-{sha256_bytes(root.encode())[:8]}")
+        return self.graph(stage, tree, roots)
 
     @staticmethod
     def topological_order(plan: dict[str, Any]) -> list[str]:
@@ -1508,6 +1544,24 @@ class Controller:
             raise CertificationError("frozen plan has no unambiguous output owner")
         return Path(out_dir) / target_file
 
+    def validate_output_ownership(self, stage: str, plan: dict[str, Any]) -> None:
+        output_root = self.writable(stage, "out")
+        owners: list[tuple[str, Path, Path]] = []
+        for project, node in plan["isolated"].items():
+            target = real(self.planned_target(node["effectiveProperties"]))
+            directory = target.parent
+            if not contains(output_root, target):
+                raise CertificationError(
+                    f"{project} output is outside its controller-owned root: {target}")
+            for other_project, other_directory, other_target in owners:
+                if (target == other_target or directory == other_directory
+                        or contains(directory, other_directory)
+                        or contains(other_directory, directory)):
+                    raise CertificationError(
+                        "projects do not have disjoint output ownership: "
+                        f"{project} / {other_project}")
+            owners.append((project, directory, target))
+
     def project_target(self, plan: dict[str, Any], project: str) -> Path:
         try:
             properties = plan["isolated"][project]["effectiveProperties"]
@@ -1521,7 +1575,7 @@ class Controller:
     def accepted_output_hash(self, stage: str, path: Path) -> str:
         actual = sha256_file(path) if path.is_file() else None
         expected = self.accepted_build_outputs.get(stage, {}).get(str(path))
-        if expected is None or actual != expected:
+        if expected is None or actual != expected["sha256"]:
             raise CertificationError(f"not an accepted {stage} build output: {path}")
         return actual
 
@@ -1674,7 +1728,8 @@ class Controller:
             right = self.writable("stage-2", "out") / name
             for stage, path in (("stage-1", left), ("stage-2", right)):
                 expected = self.accepted_build_outputs.get(stage, {}).get(str(path))
-                if expected is None or not path.is_file() or sha256_file(path) != expected:
+                if (expected is None or not path.is_file()
+                        or sha256_file(path) != expected["sha256"]):
                     raise CertificationError(
                         f"selected PE is not an accepted build output: {path}")
             first, second, equal = compare_pe(left, right)
@@ -1702,6 +1757,22 @@ class Controller:
                     "msbuildprojectfullpath", "msbuildtoolspath", "outdir",
                 }
             }
+            logical_inputs = []
+            for row in node["inputs"]:
+                if row["kind"] == "ProjectReference":
+                    continue
+                if row.get("producerProject"):
+                    logical_inputs.append({
+                        "kind": row["kind"],
+                        "path": row["logicalPath"],
+                        "producerProject": row["producerProject"],
+                    })
+                elif contains(tree, Path(row["path"])):
+                    logical_inputs.append({
+                        "kind": row["kind"],
+                        "path": Path(row["path"]).relative_to(tree).as_posix(),
+                        "sha256": row["sha256"],
+                    })
             logical[name] = {
                 "project": name,
                 "properties": {
@@ -1725,22 +1796,8 @@ class Controller:
                     for row in node["imports"]
                     if contains(tree, Path(row["path"]))
                 ), key=lambda row: row["path"]),
-                "inputs": sorted((
-                    {
-                        "kind": row["kind"],
-                        "path": Path(row["path"]).relative_to(tree).as_posix(),
-                        "sha256": row["sha256"],
-                        **({
-                            "logicalPath": "/".join(
-                                Path(row["logicalPath"]).parts[
-                                    Path(row["logicalPath"]).parts.index("out") + 1:])
-                        } if row.get("logicalPath")
-                             and "out" in Path(row["logicalPath"]).parts else {}),
-                    }
-                    for row in node["inputs"]
-                    if row["kind"] != "ProjectReference"
-                    and contains(tree, Path(row["path"]))
-                ), key=lambda row: (row["kind"], row["path"])),
+                "inputs": sorted(
+                    logical_inputs, key=lambda row: (row["kind"], row["path"])),
             }
         return logical
 
@@ -1916,8 +1973,9 @@ class Controller:
             self.verify_plan_files(stage1_restore)
             self.accept_restore_outputs("stage-1", stage1_restore)
             stage1_build = self.graph("stage-1", self.stage1, roots)
+            atomic_json(self.evidence / "stage-1-prebuild-plan.json", stage1_build)
+            stage1_build = self.build("stage-1", self.stage1, roots, stage1_build)
             atomic_json(self.evidence / "stage-1-build-plan.json", stage1_build)
-            self.build("stage-1", self.stage1, roots, stage1_build)
             stage1_package = self.pack_stage1(stage1_build)
             self.report["stage1Package"] = {
                 "path": str(stage1_package),
@@ -1942,12 +2000,13 @@ class Controller:
             self.verify_plan_files(stage2_restore)
             self.accept_restore_outputs("stage-2", stage2_restore)
             stage2_build = self.graph("stage-2", self.stage2, roots)
-            atomic_json(self.evidence / "stage-2-build-plan.json", stage2_build)
+            atomic_json(self.evidence / "stage-2-prebuild-plan.json", stage2_build)
             if (self.source_logical_graph(stage1_build, self.stage1)
                     != self.source_logical_graph(stage2_build, self.stage2)):
                 raise CertificationError(
                     "stage-1 and stage-2 source-logical closures differ")
-            self.build("stage-2", self.stage2, roots, stage2_build)
+            stage2_build = self.build("stage-2", self.stage2, roots, stage2_build)
+            atomic_json(self.evidence / "stage-2-build-plan.json", stage2_build)
 
             verify_manifest(self.source, manifest)
             self.verify_receipts()
