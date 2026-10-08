@@ -1086,7 +1086,13 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
     def test_source_manifest_rejects_extra_files_and_aliases(self) -> None:
         accepted = self.root / "accepted.txt"
         accepted.write_bytes(b"accepted")
-        expected = [stage2.identity(self.root, accepted)]
+        nested = self.root / "accepted" / "child.txt"
+        nested.parent.mkdir()
+        nested.write_bytes(b"nested")
+        expected = sorted(
+            (stage2.identity(self.root, accepted),
+             stage2.identity(self.root, nested)),
+            key=lambda row: row.path)
         stage2.verify_manifest(self.root, expected)
         extra = self.root / "extra.txt"
         extra.write_bytes(b"extra")
