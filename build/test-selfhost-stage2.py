@@ -656,6 +656,14 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("tracked path differs from the Git index", result.stderr)
 
+    def test_snapshot_rejects_newlines_in_tracked_paths(self) -> None:
+        tree = self.tree()
+        (tree / "hidden\n.targets").write_text("<Project />", encoding="utf-8")
+        self.commit_tree(tree)
+        result = run_driver("--freeze-source", tree, self.root / "snapshot")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("snapshot paths cannot contain CR or LF", result.stderr)
+
     def test_snapshot_ignores_caller_git_environment_and_fsmonitor(self) -> None:
         tree = self.tree()
         subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
