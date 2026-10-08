@@ -394,7 +394,7 @@ class ControllerBoundaryTests(unittest.TestCase):
             encoding="utf-8")
         result = run_driver("--validate-import", tree, imported)
         self.assertEqual(2, result.returncode)
-        self.assertIn("external custom targets and tasks", result.stderr)
+        self.assertIn("unmodeled imported task definition", result.stderr)
 
     def test_project_controlled_target_cannot_forge_receipts(self) -> None:
         tree = self.tree()
