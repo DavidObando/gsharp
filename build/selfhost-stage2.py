@@ -22,7 +22,6 @@ import shlex
 import shutil
 import socket
 import stat
-import struct
 import subprocess
 import sys
 import threading
@@ -303,7 +302,9 @@ def verify_receipt_set(
             if (not event_path.is_file()
                     or sha256_file(event_path) != events["sha256"]
                     or not isinstance(events.get("processPid"), int)
-                    or events["processPid"] <= 0):
+                    or events["processPid"] <= 0
+                    or not isinstance(events.get("challengeCommitment"), str)
+                    or len(events["challengeCommitment"]) != 64):
                 raise CertificationError(
                     f"test supervisor evidence changed: {event_path}")
 
@@ -770,6 +771,21 @@ def xml_definition_hash(element: ET.Element) -> str:
     return sha256_bytes(ET.tostring(element, encoding="utf-8"))
 
 
+def preprocessed_property_names(data: bytes) -> list[str]:
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as error:
+        raise CertificationError(f"cannot inspect preprocessed property map: {error}") from error
+    names = {
+        child.tag.rsplit("}", 1)[-1]
+        for group in root.iter()
+        if group.tag.rsplit("}", 1)[-1] == "PropertyGroup"
+        for child in group
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", child.tag.rsplit("}", 1)[-1])
+    }
+    return sorted(names)
+
+
 def inspect_project_xml(tree: Path, path: Path) -> None:
     try:
         root = ET.parse(path).getroot()
@@ -1047,49 +1063,49 @@ class Controller:
         event_reader: threading.Thread | None = None
         event_errors: list[BaseException] = []
         event_process_pid: int | None = None
-        event_server: socket.socket | None = None
-        event_socket_path: Path | None = None
+        event_parent: socket.socket | None = None
+        event_child: socket.socket | None = None
+        event_challenge: str | None = None
         command_env = dict(env)
+        pass_fds: tuple[int, ...] = ()
         event_key: bytes | None = None
         if capture_test_events:
             event_key = secrets.token_bytes(32)
-            event_directory = self.writable(stage, "event-sockets")
-            event_socket_path = event_directory / f"{secrets.token_hex(8)}.sock"
-            event_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            event_server.bind(str(event_socket_path))
-            event_server.listen(1)
-            command_env["ADR0198_TEST_EVENT_SOCKET"] = str(event_socket_path)
-            writable = [*writable, event_directory]
+            event_challenge = secrets.token_hex(32)
+            event_parent, event_child = socket.socketpair(
+                socket.AF_UNIX, socket.SOCK_STREAM)
+            event_child.set_inheritable(True)
+            command_env["ADR0198_TEST_EVENT_FD"] = str(event_child.fileno())
+            command_env["ADR0198_TEST_EVENT_CHALLENGE"] = event_challenge
+            pass_fds = (event_child.fileno(),)
 
             def read_events() -> None:
                 nonlocal event_process_pid
                 try:
-                    assert event_server is not None
-                    event_server.settimeout(self.args.command_timeout)
-                    connection, _ = event_server.accept()
-                    with connection:
-                        credentials = connection.getsockopt(
-                            socket.SOL_SOCKET, socket.SO_PEERCRED,
-                            struct.calcsize("3i"))
-                        event_process_pid = struct.unpack("3i", credentials)[0]
-                        with connection.makefile("rb") as handle:
-                            for sequence, line in enumerate(handle):
-                                payload = line.rstrip(b"\n")
-                                json.loads(payload)
-                                mac = hmac.new(
-                                    event_key,
-                                    str(sequence).encode() + b"\n" + payload,
-                                    hashlib.sha256).hexdigest()
-                                event_chunks.append((json.dumps({
-                                    "sequence": sequence,
-                                    "payload": payload.decode(),
-                                    "mac": mac,
-                                }) + "\n").encode())
+                    assert event_parent is not None
+                    event_parent.settimeout(self.args.command_timeout)
+                    event_process_pid = process.pid
+                    with event_parent.makefile("rb") as handle:
+                        for sequence, line in enumerate(handle):
+                            payload = line.rstrip(b"\n")
+                            document = json.loads(payload)
+                            if sequence == 0 and (
+                                document.get("type") != "ready"
+                                or document.get("challenge") != event_challenge
+                            ):
+                                raise CertificationError(
+                                    "test supervisor challenge mismatch")
+                            mac = hmac.new(
+                                event_key,
+                                str(sequence).encode() + b"\n" + payload,
+                                hashlib.sha256).hexdigest()
+                            event_chunks.append((json.dumps({
+                                "sequence": sequence,
+                                "payload": payload.decode(),
+                                "mac": mac,
+                            }) + "\n").encode())
                 except BaseException as error:
                     event_errors.append(error)
-
-            event_reader = threading.Thread(target=read_events, daemon=True)
-            event_reader.start()
         protected = [
             Path(path)
             for path in self.accepted_restore_outputs.get(stage, {})
@@ -1099,41 +1115,35 @@ class Controller:
         started = time.time_ns()
         process = subprocess.Popen(
             sandboxed, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            start_new_session=True)
+            start_new_session=True, pass_fds=pass_fds)
+        if event_child is not None:
+            event_child.close()
+            event_reader = threading.Thread(target=read_events, daemon=True)
+            event_reader.start()
         try:
             captured, _ = process.communicate(timeout=self.args.command_timeout)
         except subprocess.TimeoutExpired as error:
             process.kill()
             captured, _ = process.communicate()
             atomic_bytes(log, captured)
-            if event_server is not None:
-                event_server.close()
-            if event_socket_path is not None:
-                event_socket_path.unlink(missing_ok=True)
+            if event_parent is not None:
+                event_parent.close()
             raise CertificationError(
                 f"{stage} {purpose} exceeded {self.args.command_timeout} seconds; "
                 f"see {log}") from error
         if event_reader is not None:
             event_reader.join(timeout=10)
             if event_reader.is_alive():
-                if event_server is not None:
-                    event_server.close()
+                if event_parent is not None:
+                    event_parent.close()
                 event_reader.join(timeout=1)
             if event_reader.is_alive():
-                if event_socket_path is not None:
-                    event_socket_path.unlink(missing_ok=True)
                 raise CertificationError("test supervisor event channel did not close")
             if event_errors:
-                if event_server is not None:
-                    event_server.close()
-                if event_socket_path is not None:
-                    event_socket_path.unlink(missing_ok=True)
                 raise CertificationError(
                     f"test supervisor event channel failed: {event_errors[0]}")
-        if event_server is not None:
-            event_server.close()
-        if event_socket_path is not None:
-            event_socket_path.unlink(missing_ok=True)
+        if event_parent is not None:
+            event_parent.close()
         completed = time.time_ns()
         atomic_bytes(log, captured)
         events_path = None
@@ -1167,6 +1177,7 @@ class Controller:
                 "path": str(events_path),
                 "sha256": sha256_file(events_path),
                 "processPid": event_process_pid,
+                "challengeCommitment": sha256_bytes(event_challenge.encode()),
             } if events_path is not None else None),
         }
         receipt_path = self.evidence / receipt_name
@@ -1517,7 +1528,24 @@ class Controller:
                 preprocessed.decode(errors="replace"))
             if Path(item.strip()).is_absolute() and Path(item.strip()).is_file()
         })
-        properties_out = evaluated.get("Properties", {})
+        property_names = sorted({
+            *preprocessed_property_names(preprocessed),
+            *properties,
+        })
+        property_command = [
+            str(self.stage_dotnet(stage) / "dotnet"), "msbuild",
+            str(relative), "-nologo",
+            "-getProperty:" + ",".join(property_names),
+            *property_args, "-nodeReuse:false",
+        ]
+        property_bytes = self.command_stdout(
+            stage, f"graph-properties-{suffix}", tree, property_command,
+            graph_hint, writable, env, read_only)
+        try:
+            properties_out = json.loads(property_bytes).get("Properties", {})
+        except json.JSONDecodeError as error:
+            raise CertificationError(
+                f"invalid complete property inventory for {relative}: {error}") from error
         for name, expected in properties.items():
             if str(properties_out.get(name, "")) != str(expected):
                 raise CertificationError(
@@ -2517,6 +2545,9 @@ def main(argv: list[str]) -> int:
         "--verify-directory-manifest", nargs=2, metavar=("ROOT", "MANIFEST"),
         type=Path, help="verify a complete controller-owned directory manifest")
     parser.add_argument(
+        "--preprocessed-properties", metavar="PROJECT_XML", type=Path,
+        help="inventory every property declared by preprocessed MSBuild XML")
+    parser.add_argument(
         "--verify-package-cache", nargs=2, metavar=("SOURCE", "DESTINATION"),
         type=Path, help="verify and extract one cached package archive")
     parser.add_argument(
@@ -2661,6 +2692,14 @@ def main(argv: list[str]) -> int:
             if directory_manifest(real(root)) != expected:
                 raise CertificationError(f"directory manifest changed: {root}")
         except (CertificationError, OSError, TypeError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.preprocessed_properties:
+        try:
+            print(json.dumps(preprocessed_property_names(
+                args.preprocessed_properties.read_bytes())))
+        except (CertificationError, OSError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
