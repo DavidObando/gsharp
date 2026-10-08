@@ -448,6 +448,15 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("not a valid package version", result.stderr)
 
+    def test_configuration_property_injection_is_rejected(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work",
+            "--config", "Release;BuildProjectReferences=true")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("unsafe configuration name", result.stderr)
+
     def test_package_path_components_cannot_escape_controller_roots(self) -> None:
         for value in ("../victim", "a/b", r"a\b", ".", "..", "/rooted"):
             with self.subTest(value=value):
