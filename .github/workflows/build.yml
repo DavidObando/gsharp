@@ -214,7 +214,10 @@ jobs:
           global-json-file: global.json
 
       - name: Verify isolated stage-2 certification contract
-        run: python3 build/test-selfhost-stage2.py
+        run: |
+          dotnet build build/selfhost/PackageContentHash.csproj --configuration Release --nologo
+          dotnet build build/selfhost/TestSupervisorLogger.csproj --configuration Release --nologo
+          python3 build/test-selfhost-stage2.py
 
       - name: Restore
         run: dotnet restore GSharp.sln --locked-mode

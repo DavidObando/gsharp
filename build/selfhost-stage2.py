@@ -650,15 +650,13 @@ class Controller:
             raise CertificationError(f"caller tree does not exist: {self.caller}")
         if not self.bootstrap.is_file():
             raise CertificationError(f"bootstrap package does not exist: {self.bootstrap}")
-        bootstrap_version = package_version(self.bootstrap)
         if self.args.stage1_version is not None:
             if not packer.VERSION_RE.fullmatch(self.args.stage1_version):
                 raise CertificationError(
                     f"--stage1-version {self.args.stage1_version!r} "
                     "is not a valid package version")
-            if self.args.stage1_version == bootstrap_version:
-                raise CertificationError(
-                    "the stage-1 version must differ from the bootstrap version")
+        if self.bootstrap.stat().st_nlink != 1:
+            raise CertificationError("bootstrap package is hard-linked")
         if self.work.exists():
             raise CertificationError("--work must name a new controller-owned directory")
         if self.work.parent.is_symlink():
@@ -688,6 +686,22 @@ class Controller:
         self.work.mkdir(mode=0o700)
         for path in (self.evidence, self.reports, self.logs, self.mutable, self.toolchains):
             path.mkdir(mode=0o700)
+        self.freeze_bootstrap()
+        if self.args.stage1_version == package_version(self.bootstrap):
+            raise CertificationError(
+                "the stage-1 version must differ from the bootstrap version")
+
+    def freeze_bootstrap(self) -> None:
+        source = self.bootstrap
+        destination = self.toolchains / "controller-inputs" / source.name
+        atomic_bytes(destination, source.read_bytes())
+        make_read_only(destination.parent)
+        self.bootstrap = destination
+        self.report["bootstrap"] = {
+            "source": str(source),
+            "snapshot": str(destination),
+            "sha256": sha256_file(destination),
+        }
 
     def writable(self, stage: str, purpose: str) -> Path:
         path = self.mutable / stage / purpose
@@ -720,6 +734,7 @@ class Controller:
         self, tree: Path, writable: list[Path], command: list[str],
         env: dict[str, str], network: bool = False,
         read_only: list[Path] | None = None,
+        protected_read_only: list[Path] | None = None,
     ) -> list[str]:
         arguments = [
             "bwrap", "--clearenv", "--die-with-parent", "--new-session", "--unshare-user",
@@ -747,6 +762,8 @@ class Controller:
             arguments.extend(("--ro-bind", str(path), str(path)))
         for path in writable:
             arguments.extend(("--bind", str(path), str(path)))
+        for path in protected_read_only or []:
+            arguments.extend(("--ro-bind", str(path), str(path)))
         offline_feed = self.offline_feed(env["ADR0198_STAGE"])
         arguments.extend(("--ro-bind", str(offline_feed), str(offline_feed)))
         sandbox_temp = self.mutable / env["ADR0198_STAGE"] / "runtime" / "temp"
@@ -787,8 +804,12 @@ class Controller:
 
             event_reader = threading.Thread(target=read_events, daemon=True)
             event_reader.start()
+        protected = [
+            Path(path)
+            for path in self.accepted_restore_outputs.get(stage, {})
+        ]
         sandboxed = self.sandbox_command(
-            tree, writable, command, command_env, network, read_only)
+            tree, writable, command, command_env, network, read_only, protected)
         started = time.time_ns()
         process = subprocess.Popen(
             sandboxed, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1012,16 +1033,32 @@ class Controller:
             if not source.is_dir():
                 raise CertificationError(
                     f"offline package cache lacks {package_id}/{version}")
-            destination = destination_root / package_id / version
             source_packages = list(source.glob("*.nupkg"))
-            if len(source_packages) != 1:
+            source_hashes = list(source.glob("*.nupkg.sha512"))
+            if len(source_packages) != 1 or len(source_hashes) != 1:
                 raise CertificationError(
-                    f"package cache entry must contain one nupkg: {source}")
-            actual_hash = self.package_content_hash(source_packages[0])
+                    f"package cache entry must contain one nupkg and hash: {source}")
+            archive_bytes = source_packages[0].read_bytes()
+            archive_hash = base64.b64encode(
+                hashlib.sha512(archive_bytes).digest()).decode()
+            if source_hashes[0].read_text(encoding="utf-8").strip() != archive_hash:
+                raise CertificationError(f"package archive hash is invalid: {source}")
+            archive_root = (
+                self.writable(stage, "verified-archives") / package_id / version)
+            archive_root.mkdir(parents=True)
+            archive = archive_root / source_packages[0].name
+            atomic_bytes(archive, archive_bytes)
+            atomic_bytes(
+                archive_root / source_hashes[0].name,
+                (archive_hash + "\n").encode())
+            make_read_only(archive_root)
+            destination = destination_root / package_id / version
+            actual_hash = self.package_content_hash(archive)
             if not hmac.compare_digest(actual_hash, expected_hash):
                 raise CertificationError(
                     f"package content hash differs from the lock: {package_id}/{version}")
-            nupkg = extract_verified_package(source, destination, expected_hash)
+            nupkg = extract_verified_package(
+                archive_root, destination, expected_hash)
             feed_package = self.offline_feed(stage) / nupkg.name
             if feed_package.exists() and sha256_file(feed_package) != sha256_file(nupkg):
                 raise CertificationError(
@@ -1260,6 +1297,7 @@ class Controller:
                     "path": str(path.relative_to(tree)),
                     "sha256": sha256_file(path),
                 })
+                references.append(str(path.relative_to(tree)))
                 continue
             references.append(str(path.relative_to(tree)))
         import_rows = []
@@ -1360,7 +1398,7 @@ class Controller:
             properties = node["effectiveProperties"]
             compiler = properties.get("GsharpCompilerFullPath")
             task = properties.get("GsharpToolFullPath")
-            if compiler or task:
+            if Path(name).suffix.casefold() == ".gsproj" or compiler or task:
                 if not compiler or real(Path(compiler)) != expected_compiler:
                     raise CertificationError(
                         f"{name} selected unexpected compiler {compiler!r}")
