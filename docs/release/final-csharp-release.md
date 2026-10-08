@@ -36,6 +36,9 @@ Before any such package or extension can publish:
 - ADR-0198 MUST be accepted and its replacement gate MUST be on `main`;
 - the exact tagged commit MUST have successful controller-owned stage-1/stage-2
   certification evidence and the required fresh-clone cutover dry run;
+- that evidence MUST bind the exact commit and Git tree identities to the common
+  source manifest. Dirty, untracked participating, or different-commit source
+  bytes MUST be rejected;
 - the `publish` job MUST depend on the replacement certification job and verify
   the evidence commit and run identity;
 - the controller-owned release manifest MUST list the SHA-256 digest of every

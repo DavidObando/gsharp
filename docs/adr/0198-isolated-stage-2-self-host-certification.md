@@ -55,6 +55,13 @@ build, or test action. Freezing MUST record every file identity, length, and
 SHA-256 digest. The controller MUST verify this manifest before certification.
 Read-only permissions are defense in depth. The manifest is authoritative.
 
+For release certification, the controller MUST construct the source snapshot
+from the exact release commit. It MUST verify every participating tracked path,
+file mode, symbolic-link target, and submodule identity against that commit.
+Dirty, untracked participating, or different-commit inputs MUST reject the run.
+The evidence MUST bind the commit identity, Git tree identity, and common source
+manifest identity.
+
 After stage-specific setup, project files, sources, imports, references,
 analyzers, SDK payloads, and other command inputs MUST be read-only to the
 command. Generated files, restored assets, intermediates, final outputs, and
@@ -69,7 +76,8 @@ test-result destinations. A project MUST NOT select or own those paths.
 Each graph discovery, graph revalidation, restore, build, and test command MUST
 run in an OS-enforced sandbox or under a separate restricted identity. This
 includes MSBuild evaluation and SDK resolution before the controller can reject
-an unsupported target, task, import, or graph. The sandbox MUST:
+an unsupported target, task, import, or graph. Either mechanism MUST provide one
+restricted command boundary. That boundary MUST:
 
 - allow reads only from the applicable immutable inputs and trusted toolchain;
 - allow writes only to the command's declared cache, intermediate, output, and
@@ -388,6 +396,8 @@ boundary is under test. The suite MUST include:
 - repeated roots, stale receipts, copied outputs, replaced implementation or
   reference assemblies, test-only compilation, zero-test success, and test
   execution against changed outputs;
+- a dirty tracked input, an untracked participating input, and source bytes from
+  a different commit carrying the expected commit label;
 - a stage-0 SDK relabeled with the stage-1 package identity, and any downstream
   input that names an unbound producer path instead of accepted output evidence;
 - a test and descendant process that write a success-shaped TRX or replace a
