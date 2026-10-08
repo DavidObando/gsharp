@@ -908,6 +908,18 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         valid = run_driver("--validate-test-adapter", adapter, digest)
         self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
 
+    def test_adjacent_vstest_adapter_requires_an_exact_hash_allowlist(self) -> None:
+        output = self.root / "out"
+        output.mkdir()
+        adapter = output / "Synthetic.TestAdapter.dll"
+        adapter.write_bytes(b"synthetic passing adapter")
+        rejected = run_driver("--validate-vstest-extensions", output)
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("not hash-allowlisted", rejected.stderr)
+        digest = hashlib.sha256(adapter.read_bytes()).hexdigest()
+        valid = run_driver("--validate-vstest-extensions", output, digest)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+
 
 class RuntimeOutputBoundaryTests(unittest.TestCase):
     def setUp(self) -> None:

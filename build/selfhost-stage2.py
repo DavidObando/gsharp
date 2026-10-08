@@ -406,6 +406,12 @@ def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
     return actual
 
 
+def validate_vstest_extensions(root: Path, allowed_hashes: set[str]) -> None:
+    for path in root.rglob("*"):
+        if path.is_file() and path.name.casefold().endswith("testadapter.dll"):
+            accepted_test_adapter(path, allowed_hashes)
+
+
 def msbuild_property_arg(name: str, value: Any) -> str:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", name):
         raise CertificationError(f"unsafe MSBuild property name: {name!r}")
@@ -427,6 +433,27 @@ def accepted_logical_path(path: Path, roots: list[tuple[str, Path]]) -> str:
             relative = path.relative_to(root).as_posix()
             return f"{label}/{relative}" if label else relative
     raise CertificationError(f"input has no accepted logical root: {path}")
+
+
+def first_difference(left: Any, right: Any, path: str = "$") -> str:
+    if type(left) is not type(right):
+        return f"{path}: {type(left).__name__} != {type(right).__name__}"
+    if isinstance(left, dict):
+        if left.keys() != right.keys():
+            return f"{path}: keys {sorted(left)} != {sorted(right)}"
+        for key in left:
+            if left[key] != right[key]:
+                return first_difference(left[key], right[key], f"{path}.{key}")
+    elif isinstance(left, list):
+        if len(left) != len(right):
+            return f"{path}: lengths {len(left)} != {len(right)}"
+        for index, (left_item, right_item) in enumerate(zip(left, right)):
+            if left_item != right_item:
+                return first_difference(
+                    left_item, right_item, f"{path}[{index}]")
+    elif left != right:
+        return f"{path}: {left!r} != {right!r}"
+    return path
 
 
 def reject_root_collisions(named: dict[str, Path]) -> None:
@@ -1077,7 +1104,7 @@ class Controller:
         self.work.mkdir(mode=0o700)
         for path in (self.evidence, self.reports, self.logs, self.mutable, self.toolchains):
             path.mkdir(mode=0o700)
-        self.freeze_bootstrap()
+        self.freeze_controller_inputs()
         if self.args.stage1_version == package_version(self.bootstrap):
             raise CertificationError(
                 "the stage-1 version must differ from the bootstrap version")
@@ -1090,16 +1117,31 @@ class Controller:
             raise CertificationError(
                 "--test-adapter-sha256 values must be unique lowercase SHA-256 hashes")
 
-    def freeze_bootstrap(self) -> None:
+    def freeze_controller_inputs(self) -> None:
         source = self.bootstrap
-        destination = self.toolchains / "controller-inputs" / source.name
+        inputs = self.toolchains / "controller-inputs"
+        destination = inputs / source.name
         atomic_bytes(destination, source.read_bytes())
-        make_read_only(destination.parent)
+        helper_source = inputs / "selfhost"
+        helper_source.mkdir()
+        helper_files = (
+            "PackageContentHash.cs", "PackageContentHash.csproj",
+            "TestSupervisorLogger.cs", "TestSupervisorLogger.csproj",
+        )
+        for name in helper_files:
+            atomic_bytes(helper_source / name, (HERE / "selfhost" / name).read_bytes())
+        helper_manifest = directory_manifest(helper_source)
+        make_read_only(inputs)
         self.bootstrap = destination
         self.report["bootstrap"] = {
             "source": str(source),
             "snapshot": str(destination),
             "sha256": sha256_file(destination),
+        }
+        self.report["controllerInputs"] = {
+            "manifestSha256": sha256_bytes(json.dumps(
+                [asdict(row) for row in helper_manifest],
+                sort_keys=True, separators=(",", ":")).encode()),
         }
 
     def writable(self, stage: str, purpose: str) -> Path:
@@ -1155,7 +1197,8 @@ class Controller:
         toolchain = self.stage_toolchain(env["ADR0198_STAGE"])
         arguments.extend(("--ro-bind", str(toolchain), str(toolchain)))
         test_supervisor = self.toolchains / "test-supervisor"
-        if test_supervisor.is_dir():
+        if (test_supervisor.is_dir()
+                and all(real(path) != real(test_supervisor) for path in writable)):
             arguments.extend(("--ro-bind", str(test_supervisor), str(test_supervisor)))
         for path in read_only or []:
             arguments.extend(("--ro-bind", str(path), str(path)))
@@ -1515,7 +1558,7 @@ class Controller:
                 (archive_hash + "\n").encode())
             make_read_only(archive_root)
             destination = destination_root / package_id / version
-            actual_hash = self.package_content_hash(archive)
+            actual_hash = self.package_content_hash(stage, archive)
             if not hmac.compare_digest(actual_hash, expected_hash):
                 raise CertificationError(
                     f"package content hash differs from the lock: {package_id}/{version}")
@@ -1543,40 +1586,77 @@ class Controller:
         self.write_offline_config(stage)
         return rows
 
-    def package_content_hash(self, package: Path) -> str:
-        output = self.toolchains / "package-content-hash"
-        assembly = output / "Adr0198.PackageContentHash.dll"
+    def build_trusted_helper(
+        self, stage: str, project_name: str, assembly_name: str, label: str,
+    ) -> Path:
+        output = self.toolchains / label
+        assembly = output / assembly_name
+        if assembly.is_file():
+            return assembly
+        source = self.toolchains / "controller-inputs" / "selfhost"
+        project = source / project_name
+        source_file = source / project_name.replace(".csproj", ".cs")
+        if not project.is_file() or not source_file.is_file():
+            raise CertificationError(f"trusted {label} source changed")
+        obj = self.writable(stage, f"{label}-obj")
+        output.mkdir(parents=True)
+        env, writable = self.environment(stage)
+        properties = [
+            "-p:ImportDirectoryBuildProps=false",
+            "-p:ImportDirectoryBuildTargets=false",
+            f"-p:BaseIntermediateOutputPath={obj}{os.sep}",
+            f"-p:MSBuildProjectExtensionsPath={obj}{os.sep}",
+        ]
+        identity = sha256_bytes(json.dumps({
+            "project": sha256_file(project),
+            "source": sha256_file(source_file),
+            "toolchain": [asdict(row) for row in self.toolchain_manifests[stage]],
+        }, sort_keys=True).encode())
+        self.command(
+            stage, f"{label}-restore", self.stage1 if stage == "stage-1" else self.stage2,
+            [str(self.stage_dotnet(stage) / "dotnet"), "restore", str(project),
+             "--configfile", str(self.write_offline_config(stage)), "--nologo",
+             *properties, "-p:RestoreRecursive=false"],
+            identity, [*writable, obj], env, output_roots=[obj],
+            read_only=[source])
+        restore_inputs = output_inventory([obj])
+        build_identity = sha256_bytes(json.dumps({
+            "helper": identity, "restoreInputs": restore_inputs,
+        }, sort_keys=True).encode())
+        self.command(
+            stage, f"{label}-build", self.stage1 if stage == "stage-1" else self.stage2,
+            [str(self.stage_dotnet(stage) / "dotnet"), "build", str(project),
+             "--configuration", "Release", "--no-restore", "--nologo",
+             *properties, "-o", str(output)],
+            build_identity, [*writable, obj, output], env, output_roots=[output],
+            read_only=[source])
         if not assembly.is_file():
-            obj = self.mutable / "controller" / "package-content-hash-obj"
-            obj.mkdir(parents=True, exist_ok=True)
-            result = subprocess.run([
-                str(self.dotnet), "build",
-                str(HERE / "selfhost" / "PackageContentHash.csproj"),
-                "--configuration", "Release", "--nologo",
-                "-p:ImportDirectoryBuildProps=false",
-                "-p:ImportDirectoryBuildTargets=false",
-                f"-p:BaseIntermediateOutputPath={obj}{os.sep}",
-                f"-p:MSBuildProjectExtensionsPath={obj}{os.sep}",
-                "-o", str(output),
-            ], capture_output=True, text=True)
-            if result.returncode != 0 or not assembly.is_file():
-                raise CertificationError(
-                    "cannot build the trusted package hash helper:\n"
-                    + result.stdout + result.stderr)
-            make_read_only(output)
-            atomic_json(self.evidence / "package-content-hash.json", {
-                "path": str(assembly), "sha256": sha256_file(assembly),
-                "sourceSha256": sha256_file(
-                    HERE / "selfhost" / "PackageContentHash.cs"),
-            })
-        result = subprocess.run(
-            [str(self.dotnet), str(assembly), str(package)],
-            capture_output=True, text=True)
-        if result.returncode != 0 or not result.stdout.strip():
-            raise CertificationError(
-                f"cannot compute the NuGet content hash for {package}: "
-                + result.stderr.strip())
-        return result.stdout.strip()
+            raise CertificationError(f"trusted {label} build produced no {assembly_name}")
+        manifest = directory_manifest(output)
+        make_read_only(output)
+        atomic_json(self.evidence / f"{label}.json", {
+            "path": str(assembly), "sha256": sha256_file(assembly),
+            "manifest": [asdict(row) for row in manifest],
+            "projectSha256": sha256_file(project),
+            "sourceSha256": sha256_file(source_file),
+        })
+        return assembly
+
+    def package_content_hash(self, stage: str, package: Path) -> str:
+        assembly = self.build_trusted_helper(
+            stage, "PackageContentHash.csproj",
+            "Adr0198.PackageContentHash.dll", "package-content-hash")
+        env, writable = self.environment(stage)
+        result = self.command_stdout(
+            stage, "package-content-hash-run",
+            self.stage1 if stage == "stage-1" else self.stage2,
+            [str(self.stage_dotnet(stage) / "dotnet"), str(assembly), str(package)],
+            sha256_bytes((sha256_file(assembly) + sha256_file(package)).encode()),
+            writable, env, [assembly.parent, package.parent])
+        value = result.decode().strip()
+        if not value:
+            raise CertificationError(f"cannot compute the NuGet content hash for {package}")
+        return value
 
     def properties(self, stage: str, project: Path) -> dict[str, str]:
         key = hashlib.sha256(project.as_posix().encode()).hexdigest()[:16]
@@ -1723,6 +1803,24 @@ class Controller:
         }]
         for item_name, items in item_sets.items():
             for item in items:
+                metadata_roots = (
+                    (str(tree), "$TREE"),
+                    (str(self.writable(stage, "packages")), "$PACKAGES"),
+                    (str(self.stage_toolchain(stage)), "$TOOLCHAIN"),
+                    (str(self.mutable / stage), "$STAGE"),
+                )
+                metadata = {}
+                if item_name != "ProjectReference":
+                    for key, item_value in sorted(item.items()):
+                        if key in {
+                            "FullPath", "Identity",
+                            "AccessedTime", "CreatedTime", "ModifiedTime",
+                        }:
+                            continue
+                        normalized = str(item_value)
+                        for root, token in metadata_roots:
+                            normalized = normalized.replace(root, token)
+                        metadata[key] = normalized
                 value = item.get("FullPath") or item.get("Identity")
                 if not value:
                     continue
@@ -1743,6 +1841,7 @@ class Controller:
                         "producerReceipt": accepted["receipt"],
                         "logicalPath": path.relative_to(
                             self.writable(stage, "out")).as_posix(),
+                        "metadata": metadata,
                     })
                     continue
                 if (producer is not None and producer.is_file()
@@ -1762,6 +1861,7 @@ class Controller:
                             self.writable(stage, "packages"),
                             self.stage_toolchain(stage),
                         ], self.accepted_restore_outputs.get(stage, {})),
+                        "metadata": metadata,
                     })
                 elif item_name in {
                     "ReferencePath", "Analyzer", "GsharpCodeAnalyzer",
@@ -1889,7 +1989,8 @@ class Controller:
             right.pop("hint", None)
             if left != right:
                 raise CertificationError(
-                    f"ordinary and isolated graph identities differ for {relative}")
+                    f"ordinary and isolated graph identities differ for {relative}: "
+                    + first_difference(left, right))
             pending.extend(ordinary[key]["references"])
         package = self.stage_packages.get(stage)
         if package is None:
@@ -2368,12 +2469,14 @@ class Controller:
                         "kind": row["kind"],
                         "path": row["logicalPath"],
                         "producerProject": row["producerProject"],
+                        "metadata": row.get("metadata", {}),
                     })
                 elif contains(tree, Path(row["path"])):
                     logical_inputs.append({
                         "kind": row["kind"],
                         "path": Path(row["path"]).relative_to(tree).as_posix(),
                         "sha256": row["sha256"],
+                        "metadata": row.get("metadata", {}),
                     })
                 else:
                     logical_inputs.append({
@@ -2383,6 +2486,7 @@ class Controller:
                             ("toolchain", self.stage_toolchain(stage)),
                             ("stage", self.mutable / stage),
                         ]),
+                        "metadata": row.get("metadata", {}),
                     })
             logical[name] = {
                 "project": name,
@@ -2413,33 +2517,9 @@ class Controller:
         return logical
 
     def ensure_test_supervisor(self) -> Path:
-        output = self.toolchains / "test-supervisor"
-        assembly = output / "Adr0198.TestLogger.dll"
-        if assembly.is_file():
-            return assembly
-        obj = self.mutable / "controller" / "test-supervisor-obj"
-        obj.mkdir(parents=True, exist_ok=True)
-        command = [
-            str(self.dotnet), "build",
-            str(HERE / "selfhost" / "TestSupervisorLogger.csproj"),
-            "--configuration", "Release", "--nologo",
-            "-p:ImportDirectoryBuildProps=false",
-            "-p:ImportDirectoryBuildTargets=false",
-            f"-p:BaseIntermediateOutputPath={obj}{os.sep}",
-            f"-p:MSBuildProjectExtensionsPath={obj}{os.sep}",
-            "-o", str(output),
-        ]
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0 or not assembly.is_file():
-            raise CertificationError(
-                "cannot build the trusted test supervisor logger:\n"
-                + result.stdout + result.stderr)
-        make_read_only(output)
-        atomic_json(self.evidence / "test-supervisor.json", {
-            "path": str(assembly), "sha256": sha256_file(assembly),
-            "sourceSha256": sha256_file(HERE / "selfhost" / "TestSupervisorLogger.cs"),
-        })
-        return assembly
+        return self.build_trusted_helper(
+            "stage-2", "TestSupervisorLogger.csproj",
+            "Adr0198.TestLogger.dll", "test-supervisor")
 
     def run_tests(
         self, tree: Path, plan: dict[str, Any], roots: list[str],
@@ -2460,6 +2540,9 @@ class Controller:
                 "stage-2", tree, [project], test_plan, f"before-test-{index}")
             env, runtime_writable = self.environment("stage-2")
             test_target = self.project_target(test_plan, project)
+            validate_vstest_extensions(
+                self.writable("stage-2", "out"),
+                set(self.args.test_adapter_sha256))
             command = [
                 str(self.stage_dotnet("stage-2") / "dotnet"), "vstest",
                 str(test_target),
@@ -2572,10 +2655,10 @@ class Controller:
 
             stage1_version = package_version(stage1_package)
             atomic_pin(self.stage2, stage1_version)
-            stage_package(self.stage2, stage1_package)
-            self.stage_packages["stage-2"] = stage1_package
-            self.seed_sdk_cache("stage-2", stage1_package)
-            self.seed_sdk_resolution("stage-2", stage1_package)
+            stage2_package = stage_package(self.stage2, stage1_package)
+            self.stage_packages["stage-2"] = stage2_package
+            self.seed_sdk_cache("stage-2", stage2_package)
+            self.seed_sdk_resolution("stage-2", stage2_package)
             reject_secret_restore_configuration(self.stage2)
             stage2_restore = self.graph("stage-2", self.stage2, roots)
             self.seed_locked_packages(
@@ -2668,6 +2751,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--validate-test-adapter", nargs="+", metavar="VALUE",
         help="validate one test adapter against exact allowed hashes")
+    parser.add_argument(
+        "--validate-vstest-extensions", nargs="+", metavar="VALUE",
+        help="validate every discoverable VSTest adapter below one output root")
     parser.add_argument(
         "--verify-manifest", nargs=2, metavar=("ROOT", "MANIFEST"), type=Path,
         help="verify a frozen boundary manifest")
@@ -2788,6 +2874,14 @@ def main(argv: list[str]) -> int:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
+    if args.validate_vstest_extensions:
+        root_name, *allowed = args.validate_vstest_extensions
+        try:
+            validate_vstest_extensions(real(Path(root_name)), set(allowed))
+        except (CertificationError, OSError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
     if args.verify_manifest:
         root, manifest_path = args.verify_manifest
         try:
@@ -2852,15 +2946,14 @@ def main(argv: list[str]) -> int:
         work = real(Path(work_name))
         try:
             work.mkdir(mode=0o700)
-            controller = object.__new__(Controller)
-            controller.dotnet = real(Path(shutil.which("dotnet") or ""))
-            controller.toolchains = work / "toolchains"
-            controller.mutable = work / "mutable"
-            controller.evidence = work / "evidence"
-            controller.toolchains.mkdir()
-            controller.mutable.mkdir()
-            controller.evidence.mkdir()
-            actual_hash = controller.package_content_hash(real(Path(package_name)))
+            result = subprocess.run([
+                str(real(Path(shutil.which("dotnet") or ""))), "run",
+                "--project", str(HERE / "selfhost" / "PackageContentHash.csproj"),
+                "--", str(real(Path(package_name))),
+            ], capture_output=True, text=True)
+            if result.returncode != 0:
+                raise CertificationError("package content hash helper failed")
+            actual_hash = result.stdout.strip()
             if not hmac.compare_digest(actual_hash, expected_hash):
                 raise CertificationError("package content hash differs from the lock")
         except (CertificationError, OSError) as error:
