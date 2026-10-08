@@ -718,6 +718,7 @@ def probe_sandbox(tree: Path, writable: Path, denied: list[Path]) -> None:
     controller = object.__new__(Controller)
     controller.mutable = state / "mutable"
     controller.toolchains = state / "toolchains"
+    controller.bwrap = real(Path(shutil.which("bwrap", path=os.defpath) or ""))
     script = [
         "set -eu",
         f"! touch {shlex.quote(str(tree / 'forbidden-write'))}",
@@ -1050,6 +1051,7 @@ class Controller:
         self.mutable = self.work / "mutable"
         self.toolchains = self.work / "toolchains"
         self.dotnet = real(Path(shutil.which("dotnet") or ""))
+        self.bwrap = real(Path(shutil.which("bwrap", path=os.defpath) or ""))
         self.run_id = secrets.token_hex(16)
         self.report: dict[str, Any] = {
             "schema": 1, "runId": self.run_id, "configuration": args.config,
@@ -1094,7 +1096,7 @@ class Controller:
         })
         if not self.package_cache.is_dir():
             raise CertificationError(f"package cache does not exist: {self.package_cache}")
-        if shutil.which("bwrap") is None:
+        if not self.bwrap.is_file():
             raise CertificationError("bubblewrap is required for the ADR-0198 restricted boundary")
         for name in self.report["assemblies"]:
             path = Path(name)
@@ -1186,7 +1188,7 @@ class Controller:
         status_fd: int | None = None,
     ) -> list[str]:
         arguments = [
-            "bwrap", "--clearenv", "--die-with-parent", "--new-session", "--unshare-user",
+            str(self.bwrap), "--clearenv", "--die-with-parent", "--new-session", "--unshare-user",
             "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",
         ]
         if not network:
@@ -1482,11 +1484,7 @@ class Controller:
         installed_root = dotnet_root()
         destination = self.stage_dotnet(stage)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        copied = subprocess.run(
-            ["cp", "-a", "--reflink=auto", str(installed_root) + "/.", str(destination)],
-            capture_output=True, text=True)
-        if copied.returncode != 0:
-            raise CertificationError(f"cannot copy trusted dotnet toolchain: {copied.stderr}")
+        shutil.copytree(installed_root, destination, copy_function=shutil.copy2)
         resolution = destination / "sdk" / version_result.stdout.strip() / "Sdks"
         if not resolution.is_dir():
             raise CertificationError(f"copied MSBuild SDK root not found: {resolution}")
