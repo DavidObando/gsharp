@@ -430,6 +430,16 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("protected properties", result.stderr)
 
+    def test_imported_local_property_override_is_rejected(self) -> None:
+        tree = self.tree()
+        imported = tree / "package.props"
+        imported.write_text(
+            '<Project TreatAsLocalProperty="BuildProjectReferences;OutDir" />',
+            encoding="utf-8")
+        result = run_driver("--validate-import", tree, imported)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("protected properties", result.stderr)
+
     def test_stage1_version_path_escape_is_rejected(self) -> None:
         tree = self.tree()
         result = run_driver(
@@ -755,6 +765,39 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         rejected = run_driver("--validate-input-root", trusted, outside)
         self.assertEqual(2, rejected.returncode)
         self.assertIn("outside accepted roots", rejected.stderr)
+
+
+class RuntimeOutputBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-output-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_changed_and_unbound_runtime_outputs_are_rejected(self) -> None:
+        target = self.root / "Tests.dll"
+        sidecar = self.root / "Tests.runtimeconfig.json"
+        target.write_bytes(b"target")
+        sidecar.write_bytes(b"sidecar")
+        rows = [{
+            "path": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        } for path in (target, sidecar)]
+        manifest = self.root.parent / f"{self.root.name}.json"
+        manifest.write_text(json.dumps(rows), encoding="utf-8")
+        self.addCleanup(manifest.unlink, missing_ok=True)
+        valid = run_driver("--verify-output-closure", self.root, manifest)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        sidecar.write_bytes(b"changed")
+        changed = run_driver("--verify-output-closure", self.root, manifest)
+        self.assertEqual(2, changed.returncode)
+        sidecar.write_bytes(b"sidecar")
+        (self.root / "forged.deps.json").write_bytes(b"forged")
+        extra = run_driver("--verify-output-closure", self.root, manifest)
+        self.assertEqual(2, extra.returncode)
 
 
 class PostSetupMutationTests(unittest.TestCase):
