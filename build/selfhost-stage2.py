@@ -49,6 +49,7 @@ DEFAULT_ASSEMBLIES = (
 )
 PACK_DEPENDENCIES = (
     Path("src/Compiler/Compiler.gsproj"),
+    Path("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"),
 )
 INPUT_ITEMS = (
     "Compile", "Reference", "Analyzer", "GsharpCodeAnalyzer",
@@ -310,6 +311,9 @@ def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dic
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
         os.chmod(destination, row.mode)
+    copied = [identity(snapshot, snapshot / row.path) for row in manifest]
+    if copied != manifest:
+        raise CertificationError("caller tree changed while the immutable snapshot was copied")
     make_read_only(snapshot)
     frozen = [identity(snapshot, snapshot / row.path) for row in manifest]
     verify_manifest(snapshot, frozen)
@@ -520,6 +524,20 @@ def reject_secret_restore_configuration(tree: Path) -> None:
                     f"secret-bearing restore configuration is unsupported in v1: {path.relative_to(tree)}")
 
 
+def inspect_sdk_declarations(relative: str, root: ET.Element) -> None:
+    for element in root.iter():
+        tag = element.tag.rsplit("}", 1)[-1]
+        declarations = element.attrib.get("Sdk", "").split(";")
+        if tag == "Sdk":
+            declarations.append(element.attrib.get("Name", ""))
+        for declaration in declarations:
+            name, slash, selected = declaration.strip().partition("/")
+            version = selected if slash else element.attrib.get("Version", "")
+            if name.casefold() == SDK_ID.casefold() and version:
+                raise CertificationError(
+                    f"{relative} overrides the global SDK pin with {name}/{version}")
+
+
 def inspect_project_xml(tree: Path, path: Path) -> None:
     try:
         root = ET.parse(path).getroot()
@@ -535,6 +553,7 @@ def inspect_project_xml(tree: Path, path: Path) -> None:
         raise CertificationError(
             f"{path.relative_to(tree)} exempts protected properties: {', '.join(forbidden)}")
     relative = path.relative_to(tree).as_posix()
+    inspect_sdk_declarations(relative, root)
     for element in root.iter():
         tag = element.tag.rsplit("}", 1)[-1]
         if tag == "UsingTask":
@@ -543,30 +562,35 @@ def inspect_project_xml(tree: Path, path: Path) -> None:
             target = element.attrib.get("Name", "")
             if (relative, target) not in ALLOWED_PROJECT_TARGETS:
                 raise CertificationError(f"unmodeled project target {target!r} in {relative}")
-        for sdk in element.attrib.get("Sdk", "").split(";"):
-            name, slash, selected = sdk.strip().partition("/")
-            if name.casefold() == SDK_ID.casefold() and slash:
-                raise CertificationError(
-                    f"{relative} overrides the global SDK pin with {name}/{selected}")
 
-
-def inspect_repository_import(tree: Path, path: Path) -> None:
-    relative = path.relative_to(tree).as_posix()
+def inspect_repository_import(
+    tree: Path, path: Path, external: bool = False,
+) -> dict[str, list[dict[str, str]]]:
+    relative = str(path) if external else path.relative_to(tree).as_posix()
     try:
         root = ET.parse(path).getroot()
     except (ET.ParseError, OSError) as error:
         raise CertificationError(f"cannot inspect import {relative}: {error}") from error
+    inspect_sdk_declarations(relative, root)
+    inventory: dict[str, list[dict[str, str]]] = {"targets": [], "tasks": []}
     for element in root.iter():
         tag = element.tag.rsplit("}", 1)[-1]
         if tag == "Target":
             target = element.attrib.get("Name", "")
-            if (relative, target) not in ALLOWED_IMPORT_TARGETS:
+            if not external and (relative, target) not in ALLOWED_IMPORT_TARGETS:
                 raise CertificationError(
                     f"unmodeled imported target {target!r} in {relative}")
+            inventory["targets"].append({"name": target})
         elif tag == "UsingTask":
             task = element.attrib.get("TaskName", "")
-            if (relative, task) not in ALLOWED_IMPORT_TASKS:
+            if not external and (relative, task) not in ALLOWED_IMPORT_TASKS:
                 raise CertificationError(f"unmodeled imported task {task!r} in {relative}")
+            inventory["tasks"].append({
+                "name": task,
+                "assemblyFile": element.attrib.get("AssemblyFile", ""),
+                "assemblyName": element.attrib.get("AssemblyName", ""),
+            })
+    return inventory
 
 
 def dotnet_root() -> Path:
@@ -941,7 +965,7 @@ class Controller:
     def seed_locked_packages(
         self, stage: str, tree: Path, projects: list[str],
     ) -> list[dict[str, str]]:
-        requested: dict[tuple[str, str], str | None] = {}
+        requested: dict[tuple[str, str], str] = {}
         locks = {
             tree / Path(project).parent / "packages.lock.json"
             for project in projects
@@ -960,7 +984,16 @@ class Controller:
                     version = details.get("resolved")
                     if not version:
                         raise CertificationError(f"{lock} has an unresolved package {package_id}")
-                    requested[(package_id.casefold(), version.casefold())] = details.get("contentHash")
+                    key = (package_id.casefold(), version.casefold())
+                    expected_hash = details.get("contentHash")
+                    if not isinstance(expected_hash, str) or not expected_hash:
+                        raise CertificationError(
+                            f"{lock} has no content hash for {package_id}/{version}")
+                    previous = requested.get(key)
+                    if previous is not None and previous != expected_hash:
+                        raise CertificationError(
+                            f"lock files disagree on {package_id}/{version} content")
+                    requested[key] = expected_hash
         destination_root = self.writable(stage, "packages")
         rows = []
         for (package_id, version), expected_hash in sorted(requested.items()):
@@ -972,6 +1005,14 @@ class Controller:
                 raise CertificationError(
                     f"offline package cache lacks {package_id}/{version}")
             destination = destination_root / package_id / version
+            source_packages = list(source.glob("*.nupkg"))
+            if len(source_packages) != 1:
+                raise CertificationError(
+                    f"package cache entry must contain one nupkg: {source}")
+            actual_hash = self.package_content_hash(source_packages[0])
+            if not hmac.compare_digest(actual_hash, expected_hash):
+                raise CertificationError(
+                    f"package content hash differs from the lock: {package_id}/{version}")
             nupkg = extract_verified_package(source, destination)
             feed_package = self.offline_feed(stage) / nupkg.name
             if feed_package.exists() and sha256_file(feed_package) != sha256_file(nupkg):
@@ -994,6 +1035,41 @@ class Controller:
         atomic_json(self.evidence / f"{stage}-package-inputs.json", rows)
         self.write_offline_config(stage)
         return rows
+
+    def package_content_hash(self, package: Path) -> str:
+        output = self.toolchains / "package-content-hash"
+        assembly = output / "Adr0198.PackageContentHash.dll"
+        if not assembly.is_file():
+            obj = self.mutable / "controller" / "package-content-hash-obj"
+            obj.mkdir(parents=True, exist_ok=True)
+            result = subprocess.run([
+                str(self.dotnet), "build",
+                str(HERE / "selfhost" / "PackageContentHash.csproj"),
+                "--configuration", "Release", "--nologo",
+                "-p:ImportDirectoryBuildProps=false",
+                "-p:ImportDirectoryBuildTargets=false",
+                f"-p:BaseIntermediateOutputPath={obj}{os.sep}",
+                f"-p:MSBuildProjectExtensionsPath={obj}{os.sep}",
+                "-o", str(output),
+            ], capture_output=True, text=True)
+            if result.returncode != 0 or not assembly.is_file():
+                raise CertificationError(
+                    "cannot build the trusted package hash helper:\n"
+                    + result.stdout + result.stderr)
+            make_read_only(output)
+            atomic_json(self.evidence / "package-content-hash.json", {
+                "path": str(assembly), "sha256": sha256_file(assembly),
+                "sourceSha256": sha256_file(
+                    HERE / "selfhost" / "PackageContentHash.cs"),
+            })
+        result = subprocess.run(
+            [str(self.dotnet), str(assembly), str(package)],
+            capture_output=True, text=True)
+        if result.returncode != 0 or not result.stdout.strip():
+            raise CertificationError(
+                f"cannot compute the NuGet content hash for {package}: "
+                + result.stderr.strip())
+        return result.stdout.strip()
 
     def properties(self, stage: str, project: Path) -> dict[str, str]:
         key = hashlib.sha256(project.as_posix().encode()).hexdigest()[:16]
@@ -1179,8 +1255,16 @@ class Controller:
                     or accepted_restore):
                 raise CertificationError(f"import outside accepted roots: {path}")
             if contains(tree, path) and path != project:
-                inspect_repository_import(tree, path)
-            import_rows.append({"path": str(path), "sha256": sha256_file(path)})
+                definitions = inspect_repository_import(tree, path)
+            elif (contains(self.writable(stage, "packages"), path)
+                  or accepted_restore):
+                definitions = inspect_repository_import(tree, path, external=True)
+            else:
+                definitions = {"targets": [], "tasks": []}
+            import_rows.append({
+                "path": str(path), "sha256": sha256_file(path),
+                "definitions": definitions,
+            })
         plan = {
             "project": str(relative), "isolated": isolated,
             "properties": properties, "effectiveProperties": properties_out,
@@ -1517,6 +1601,12 @@ class Controller:
                     replacements[prefix + path.relative_to(directory).as_posix()] = path.read_bytes()
 
         add_directory("tools/compiler/", compiler)
+        sdk_target = self.project_target(
+            plan, "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj")
+        self.accepted_output_hash(stage, sdk_target)
+        for path in sdk_target.parent.glob(sdk_target.stem + ".*"):
+            if path.is_file():
+                replacements["tools/task/" + path.name] = path.read_bytes()
         for project, prefix in (
             ("src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj", "tools/hotreload/"),
             ("src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj", "tools/channels/"),
@@ -1526,6 +1616,7 @@ class Controller:
             if project not in plan["isolated"]:
                 continue
             target = self.project_target(plan, project)
+            self.accepted_output_hash(stage, target)
             for path in target.parent.glob(target.stem + ".*"):
                 if path.is_file():
                     replacements[prefix + path.name] = path.read_bytes()
@@ -1546,7 +1637,7 @@ class Controller:
         for package_path, source_path in static.items():
             replacements[package_path] = (self.stage1 / source_path).read_bytes()
         replaced_prefixes = (
-            "tools/compiler/",
+            "tools/compiler/", "tools/task/",
             "tools/hotreload/", "tools/channels/", "tools/values/",
             "Sdk/", "build/",
         )
@@ -1629,6 +1720,7 @@ class Controller:
                     {
                         "path": Path(row["path"]).relative_to(tree).as_posix(),
                         "sha256": row["sha256"],
+                        "definitions": row["definitions"],
                     }
                     for row in node["imports"]
                     if contains(tree, Path(row["path"]))
@@ -1903,6 +1995,9 @@ def main(argv: list[str]) -> int:
         "--validate-project", nargs=2, metavar=("TREE", "PROJECT"), type=Path,
         help="run the controller's fail-closed project XML validation only")
     parser.add_argument(
+        "--validate-import", nargs=2, metavar=("TREE", "IMPORT"), type=Path,
+        help="run the controller's external import inventory only")
+    parser.add_argument(
         "--verify-receipts", nargs="+", metavar="VALUE",
         help="verify a controller receipt set")
     parser.add_argument(
@@ -1918,6 +2013,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--verify-package-cache", nargs=2, metavar=("SOURCE", "DESTINATION"),
         type=Path, help="verify and extract one cached package archive")
+    parser.add_argument(
+        "--verify-package-content", nargs=3,
+        metavar=("PACKAGE", "EXPECTED_HASH", "WORK"),
+        help="verify one package against a lock-file content hash")
     args = parser.parse_args(argv)
     if args.compare_pe:
         try:
@@ -1937,6 +2036,16 @@ def main(argv: list[str]) -> int:
             if not contains(tree, project):
                 raise CertificationError("project is outside the source tree")
             inspect_project_xml(tree, project)
+        except (CertificationError, OSError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.validate_import:
+        tree, import_path = (real(path) for path in args.validate_import)
+        try:
+            print(json.dumps(
+                inspect_repository_import(tree, import_path, external=True),
+                sort_keys=True))
         except (CertificationError, OSError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
@@ -1984,6 +2093,26 @@ def main(argv: list[str]) -> int:
         try:
             extract_verified_package(real(source), destination.resolve())
         except (CertificationError, OSError, zipfile.BadZipFile) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_package_content:
+        package_name, expected_hash, work_name = args.verify_package_content
+        work = real(Path(work_name))
+        try:
+            work.mkdir(mode=0o700)
+            controller = object.__new__(Controller)
+            controller.dotnet = real(Path(shutil.which("dotnet") or ""))
+            controller.toolchains = work / "toolchains"
+            controller.mutable = work / "mutable"
+            controller.evidence = work / "evidence"
+            controller.toolchains.mkdir()
+            controller.mutable.mkdir()
+            controller.evidence.mkdir()
+            actual_hash = controller.package_content_hash(real(Path(package_name)))
+            if not hmac.compare_digest(actual_hash, expected_hash):
+                raise CertificationError("package content hash differs from the lock")
+        except (CertificationError, OSError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
