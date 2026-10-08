@@ -260,24 +260,23 @@ internal static class DeclaredProjectItems
         foreach (DeclaredProjectItem item in items ?? Array.Empty<DeclaredProjectItem>())
         {
             XElement element = new XElement(item.Element);
-            string targetPath = item.SourceInclude;
-            string include = element.Attribute("Include")?.Value;
+            string? targetPath = item.SourceInclude;
+            string? include = element.Attribute("Include")?.Value;
             if (string.IsNullOrEmpty(targetPath)
                 && IsMsbuildExpression(include))
             {
                 continue;
             }
 
-            if (!string.IsNullOrEmpty(targetPath) &&
-                generatedProjectPaths is not null &&
-                generatedProjectPaths.TryGetValue(Path.GetFullPath(targetPath), out string generatedPath))
+            if (targetPath is string path && path.Length > 0)
             {
-                targetPath = generatedPath;
-            }
+                if (generatedProjectPaths is not null
+                    && generatedProjectPaths.TryGetValue(Path.GetFullPath(path), out string generatedPath))
+                {
+                    path = generatedPath;
+                }
 
-            if (!string.IsNullOrEmpty(targetPath))
-            {
-                element.SetAttributeValue("Include", Path.GetRelativePath(generatedProjectDirectory, targetPath));
+                element.SetAttributeValue("Include", Path.GetRelativePath(generatedProjectDirectory, path));
             }
 
             rewritten.Add(new DeclaredProjectItem(
@@ -321,10 +320,16 @@ internal static class DeclaredProjectItems
                 expression => $"'{expression}'"))}.");
     }
 
-    private static bool IsMsbuildExpression(string? value) =>
-        !string.IsNullOrEmpty(value)
-        && (value.Contains("$(", StringComparison.Ordinal)
-            || value.Contains("@(", StringComparison.Ordinal));
+    private static bool IsMsbuildExpression(string? value)
+    {
+        if (value is not string text)
+        {
+            return false;
+        }
+
+        return text.Contains("$(", StringComparison.Ordinal)
+            || text.Contains("@(", StringComparison.Ordinal);
+    }
 
     private static XElement StripNamespaces(XElement element) =>
         new XElement(
