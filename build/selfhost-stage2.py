@@ -16,6 +16,7 @@ import hmac
 import importlib.util
 import json
 import os
+import pwd
 import re
 import secrets
 import shlex
@@ -56,6 +57,15 @@ HOST_DOTNET_ROOTS = (
 )
 ALLOWED_TEST_HOST_HASHES = {
     "d3817a1f17e00b7f7b1040ab01e7aae73378f80c32aa4f62cb99c2aeed3cd5ad",
+}
+ALLOWED_DOTNET_HOST_HASHES = {
+    "0a5ec28e49da2c0be91ff3fc8fff53c250c9bbd92b25d3b9bfc5721adba96a0c",
+}
+ALLOWED_TEST_ADAPTER_HASHES = {
+    "c5ac41b36fac0fcef9714fb80fea0175913530fb53dd7bb8e5e1470339667100",
+    "194458c816e0ea9ff0c5eac8896c52133fe9205661833b3d0f57e85a4e66936b",
+    "ec705ad62e33f31fc46ad5800c9b1694c02d0ec4e1ee704712da9f24ebbea22e",
+    "3166dc70323fb30ccf1cedb0fe86f2ad122c46d254542342d90386efc4c9285c",
 }
 PACK_DEPENDENCIES = (
     Path("src/Compiler/Compiler.gsproj"),
@@ -410,7 +420,7 @@ def accepted_input_hash(
 
 def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
     actual = sha256_file(path) if path.is_file() else ""
-    if actual not in allowed_hashes:
+    if actual not in ALLOWED_TEST_ADAPTER_HASHES or actual not in allowed_hashes:
         raise CertificationError(f"test adapter is not hash-allowlisted: {path}")
     return actual
 
@@ -1109,17 +1119,19 @@ def bind_external_task_assembly(
 
 
 def trusted_dotnet() -> Path:
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     for candidate in (
         Path("/usr/share/dotnet/dotnet"),
         Path("/usr/local/share/dotnet/dotnet"),
-        Path.home() / ".dotnet/dotnet",
+        account_home / ".dotnet/dotnet",
         Path("/usr/bin/dotnet"),
         Path("/bin/dotnet"),
     ):
         executable = real(candidate)
-        if executable.is_file():
+        if (executable.is_file()
+                and sha256_file(executable) in ALLOWED_DOTNET_HOST_HASHES):
             return executable
-    raise CertificationError("dotnet executable not found in a trusted location")
+    raise CertificationError("approved dotnet executable not found")
 
 
 def dotnet_root() -> Path:
