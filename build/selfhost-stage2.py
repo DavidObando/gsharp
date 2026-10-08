@@ -759,6 +759,7 @@ def verify_manifest(root: Path, expected: list[FileIdentity]) -> None:
                         f"immutable source manifest has an extra directory: {relative}")
                 continue
             actual.append(identity(root, path))
+        actual.sort(key=lambda row: row.path)
     except OSError as error:
         raise CertificationError(
             f"immutable source manifest changed under {root}") from error
