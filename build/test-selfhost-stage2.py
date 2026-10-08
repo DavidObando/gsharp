@@ -26,6 +26,12 @@ if _PE_SPEC is None or _PE_SPEC.loader is None:
 pe = importlib.util.module_from_spec(_PE_SPEC)
 sys.modules[_PE_SPEC.name] = pe
 _PE_SPEC.loader.exec_module(pe)
+_DRIVER_SPEC = importlib.util.spec_from_file_location("selfhost_stage2", DRIVER)
+if _DRIVER_SPEC is None or _DRIVER_SPEC.loader is None:
+    raise RuntimeError("cannot load build/selfhost-stage2.py")
+stage2 = importlib.util.module_from_spec(_DRIVER_SPEC)
+sys.modules[_DRIVER_SPEC.name] = stage2
+_DRIVER_SPEC.loader.exec_module(stage2)
 
 
 def run_driver(
@@ -1085,6 +1091,40 @@ class ToolchainManifestTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         remove_tree(self.root)
+
+    def test_resolution_preserves_ordinary_and_isolated_contexts(self) -> None:
+        ordinary = {"BuildProjectReferences": "true"}
+        isolated = {"BuildProjectReferences": "false"}
+        self.assertEqual(ordinary, stage2.resolution_properties(ordinary))
+        self.assertEqual(isolated, stage2.resolution_properties(isolated))
+
+    def test_sandbox_masks_host_dotnet_roots(self) -> None:
+        controller = object.__new__(stage2.Controller)
+        controller.bwrap = Path("/usr/bin/bwrap")
+        controller.toolchains = self.root / "toolchains"
+        controller.mutable = self.root / "mutable"
+        tree = self.root / "tree"
+        writable = self.root / "writable"
+        toolchain = self.root / "stage-toolchain"
+        feed = self.root / "feed"
+        host_sdk = self.root / "host-sdk"
+        for path in (controller.toolchains, tree, writable, toolchain, feed, host_sdk):
+            path.mkdir(parents=True, exist_ok=True)
+        (controller.mutable / "stage-1/runtime/temp").mkdir(parents=True)
+        controller.stage_toolchain = lambda _: toolchain
+        controller.offline_feed = lambda _: feed
+        original = stage2.HOST_DOTNET_ROOTS
+        stage2.HOST_DOTNET_ROOTS = (host_sdk,)
+        try:
+            arguments = controller.sandbox_command(
+                tree, [writable], ["/bin/true"],
+                {"ADR0198_STAGE": "stage-1"})
+        finally:
+            stage2.HOST_DOTNET_ROOTS = original
+        hidden = controller.toolchains / "hidden-host-sdk"
+        self.assertIn(
+            ["--ro-bind", str(hidden), str(host_sdk)],
+            [arguments[index:index + 3] for index in range(len(arguments) - 2)])
 
     def test_dotnet_root_ignores_caller_path(self) -> None:
         attacker = self.root / "attacker"
