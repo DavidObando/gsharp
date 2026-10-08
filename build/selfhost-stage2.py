@@ -42,6 +42,7 @@ _PACKER_SPEC.loader.exec_module(packer)
 from selfhost_pe import PeError, compare as compare_pe
 
 SDK_ID = "Gsharp.NET.Sdk"
+PACKAGE_COMPONENT_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]*$")
 DEFAULT_PROJECTS = ("src/Core/Core.gsproj", "src/Compiler/Compiler.gsproj")
 DEFAULT_ASSEMBLIES = (
     "Core/GSharp.Core.dll",
@@ -362,6 +363,12 @@ def package_version(path: Path) -> str:
         return packer.package_version(path)
     except packer.SelfHostError as error:
         raise CertificationError(str(error)) from error
+
+
+def package_component(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not PACKAGE_COMPONENT_RE.fullmatch(value):
+        raise CertificationError(f"unsafe package {label}: {value!r}")
+    return value
 
 
 def extract_verified_package(
@@ -1019,7 +1026,8 @@ class Controller:
                 for package_id, details in target.items():
                     if details.get("type") == "Project":
                         continue
-                    version = details.get("resolved")
+                    package_id = package_component(package_id, "id")
+                    version = package_component(details.get("resolved"), "version")
                     if not version:
                         raise CertificationError(f"{lock} has an unresolved package {package_id}")
                     key = (package_id.casefold(), version.casefold())
@@ -2069,12 +2077,12 @@ class Controller:
             self.accept_restore_outputs("stage-2", stage2_restore)
             stage2_build = self.graph("stage-2", self.stage2, roots)
             atomic_json(self.evidence / "stage-2-prebuild-plan.json", stage2_build)
+            stage2_build = self.build("stage-2", self.stage2, roots, stage2_build)
+            atomic_json(self.evidence / "stage-2-build-plan.json", stage2_build)
             if (self.source_logical_graph(stage1_build, self.stage1)
                     != self.source_logical_graph(stage2_build, self.stage2)):
                 raise CertificationError(
                     "stage-1 and stage-2 source-logical closures differ")
-            stage2_build = self.build("stage-2", self.stage2, roots, stage2_build)
-            atomic_json(self.evidence / "stage-2-build-plan.json", stage2_build)
 
             verify_manifest(self.source, manifest)
             self.verify_receipts()
@@ -2144,6 +2152,9 @@ def main(argv: list[str]) -> int:
         "--verify-package-content", nargs=3,
         metavar=("PACKAGE", "EXPECTED_HASH", "WORK"),
         help="verify one package against a lock-file content hash")
+    parser.add_argument(
+        "--validate-package-component", metavar="VALUE",
+        help="validate one package path component")
     args = parser.parse_args(argv)
     if args.compare_pe:
         try:
@@ -2240,6 +2251,13 @@ def main(argv: list[str]) -> int:
             if not hmac.compare_digest(actual_hash, expected_hash):
                 raise CertificationError("package content hash differs from the lock")
         except (CertificationError, OSError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.validate_package_component:
+        try:
+            package_component(args.validate_package_component, "component")
+        except CertificationError as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0

@@ -396,6 +396,13 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("not a valid package version", result.stderr)
 
+    def test_package_path_components_cannot_escape_controller_roots(self) -> None:
+        for value in ("../victim", "a/b", r"a\b", ".", "..", "/rooted"):
+            with self.subTest(value=value):
+                result = run_driver("--validate-package-component", value)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("unsafe package component", result.stderr)
+
     def test_stage1_version_must_differ_from_bootstrap(self) -> None:
         tree = self.tree()
         result = run_driver(
