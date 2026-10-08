@@ -3068,16 +3068,29 @@ public sealed partial class CSharpToGSharpTranslator
                 && (this.IsDominatedByNullCheckGuard(value, valueLocal)
                     || (!this.IsObliviousCompilation()
                         && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull));
-            bool emittedNullablePromotedValue = !isFlowNarrowedLocal
-                && valueSymbol is IFieldSymbol or IPropertySymbol or ILocalSymbol
-                    or IParameterSymbol or IMethodSymbol
-                && (this.ShouldPromoteToNullableReference(valueSymbol)
-                    || (valueSymbol is ILocalSymbol local
-                        && this.LocalInitializerMakesStorageNullable(local)));
+            bool nullableObservedLambdaResult =
+                this.LambdaResultFeedsNullableObservedInvocation(value);
+            bool importedStatedNullableValue =
+                ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                    valueSymbol,
+                    this.context.Compilation);
+            bool emittedNullablePromotedLocal = !isFlowNarrowedLocal
+                && valueSymbol is ILocalSymbol local
+                && (this.ShouldPromoteToNullableReference(local)
+                    || this.LocalInitializerMakesStorageNullable(local));
+            bool emittedNullablePromotedStorage = !isFlowNarrowedLocal
+                && valueSymbol is IFieldSymbol or IPropertySymbol or IParameterSymbol
+                && this.ShouldPromoteToNullableReference(valueSymbol);
+            bool strictUseMayBeNullable = emittedNullablePromotedLocal
+                || emittedNullablePromotedStorage
+                || (!isFlowNarrowedLocal
+                    && !nullableObservedLambdaResult
+                    && (importedStatedNullableValue
+                        || value is ConditionalAccessExpressionSyntax));
 
             // ADR-0186 step 6 (PR 0): a `T!` value flowing into a non-null
             // target is checked by gsc at that coercion (§4).
-            if ((!includePromotedValue || !emittedNullablePromotedValue)
+            if ((!includePromotedValue || !strictUseMayBeNullable)
                 && (this.GSharpExpressionIsStaticallyNonNull(value, translated)
                     || this.PlatformTypedImportNeedsNoBridge(value)))
             {
@@ -3155,7 +3168,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && !generatedPromotedValue
                 && !(includePromotedValue
                     && this.IsObliviousCompilation()
-                    && emittedNullablePromotedValue))
+                    && strictUseMayBeNullable))
             {
                 return translated;
             }

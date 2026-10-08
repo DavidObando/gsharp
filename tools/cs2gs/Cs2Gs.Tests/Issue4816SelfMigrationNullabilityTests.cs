@@ -3,9 +3,7 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
@@ -47,6 +45,7 @@ public sealed class Issue4816SelfMigrationNullabilityTests
                     {
                         _ = parent;
                     }
+                    _ = Path.GetFullPath(Path.GetDirectoryName(current));
 
                     string promoted = ReadMaybeNull();
                     if (string.IsNullOrEmpty(promoted))
@@ -85,6 +84,10 @@ public sealed class Issue4816SelfMigrationNullabilityTests
             StringComparison.Ordinal);
         Assert.Contains(
             """let promoted string? = ReadMaybeNull()""",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            """Path.GetFullPath(Path.GetDirectoryName(current)!!)""",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains(
