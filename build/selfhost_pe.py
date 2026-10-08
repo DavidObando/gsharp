@@ -389,15 +389,34 @@ def inspect_layout(data: bytes) -> PeLayout:
             raise PeError(f"Module.Mvid overlaps {label}")
     native_entrypoint_rva = _u32(data, optional + 16)
     if native_entrypoint_rva:
-        start = rva_to_offset(native_entrypoint_rva, 1, "PE native entry point")
-        if mvid_offset <= start < mvid_end:
-            raise PeError("Module.Mvid aliases the PE native entry point")
+        start = rva_to_offset(native_entrypoint_rva, 6, "PE native entry point")
+        if data[start:start + 2] != b"\xff\x25":
+            raise PeError("unsupported PE native entry point")
+        if magic == 0x10B:
+            target_rva = _u32(data, start + 2) - _u32(data, optional + 28)
+            target_size = 4
+        else:
+            displacement = struct.unpack_from("<i", data, start + 2)[0]
+            target_rva = native_entrypoint_rva + 6 + displacement
+            target_size = 8
+        target = rva_to_offset(
+            target_rva, target_size, "PE native entry point target")
+        iat_ranges = [
+            (range_start, range_end)
+            for range_start, range_end, label in directory_ranges
+            if label == "PE data directory 12"
+        ]
+        if (len(iat_ranges) != 1
+                or not (iat_ranges[0][0] <= target
+                        and target + target_size <= iat_ranges[0][1])):
+            raise PeError("PE native entry point does not target the IAT")
+        for range_start, range_end in (
+                (start, start + 6), (target, target + target_size)):
+            if max(mvid_offset, range_start) < min(mvid_end, range_end):
+                raise PeError("Module.Mvid overlaps the PE native entry point")
     clr_flags = _u32(data, clr + 16)
     if clr_flags & 0x10:
-        start = rva_to_offset(
-            _u32(data, clr + 20), 1, "CLR native entry point")
-        if mvid_offset <= start < mvid_end:
-            raise PeError("Module.Mvid aliases the CLR native entry point")
+        raise PeError("CLR native entry points are unsupported")
 
     method_data_section_offset = 0
 

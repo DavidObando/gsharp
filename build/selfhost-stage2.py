@@ -59,6 +59,10 @@ HOST_DOTNET_ROOTS = (
 ALLOWED_TEST_HOST_HASHES = {
     "d3817a1f17e00b7f7b1040ab01e7aae73378f80c32aa4f62cb99c2aeed3cd5ad",
 }
+ALLOWED_TEST_PLATFORM_PACKAGE_MANIFESTS = {
+    "2caef8d46a753ca239123ca296059d910cde2c2262e7503eaa573cb00c74ac39",
+    "a05e51b34126a2a4d92c0286b58f38098b4b6c55ac720f46bdeccfabfc57d96a",
+}
 ALLOWED_DOTNET_HOST_HASHES = {
     "0a5ec28e49da2c0be91ff3fc8fff53c250c9bbd92b25d3b9bfc5721adba96a0c",
 }
@@ -440,11 +444,29 @@ def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
 def validate_vstest_extensions(
     root: Path, allowed_hashes: set[str], package_root: Path | None = None,
     allowed_test_host_hashes: set[str] = ALLOWED_TEST_HOST_HASHES,
+    allowed_package_manifests: set[str] = ALLOWED_TEST_PLATFORM_PACKAGE_MANIFESTS,
 ) -> None:
+    approved_package_roots = []
+    if package_root is not None:
+        for package_id in (
+            "microsoft.testplatform.testhost",
+            "microsoft.testplatform.objectmodel",
+        ):
+            package_id_root = package_root / package_id
+            for version in (
+                    package_id_root.iterdir() if package_id_root.is_dir() else ()):
+                if (version.is_dir()
+                        and sha256_bytes(json.dumps(
+                            [asdict(row) for row in directory_manifest(version)],
+                            sort_keys=True).encode())
+                        in allowed_package_manifests):
+                    approved_package_roots.append(version)
     package_files = [
-        path for path in package_root.rglob("*")
-        if package_root is not None and path.is_file()
-    ] if package_root is not None else []
+        path
+        for approved_root in approved_package_roots
+        for path in approved_root.rglob("*")
+        if path.is_file()
+    ]
     package_hashes = {sha256_file(path) for path in package_files}
     package_by_name: dict[str, set[str]] = {}
     for path in package_files:
@@ -504,6 +526,38 @@ def validate_vstest_extensions(
                     or sha256_file(candidates[0]) not in package_by_name[name]):
                 raise CertificationError(
                     f"test host runtime closure differs from the locked package: {name}")
+
+
+def validate_certified_runtime_closure(
+    test_target: Path, output_root: Path, assemblies: list[str],
+) -> None:
+    deps = test_target.with_suffix(".deps.json")
+    try:
+        document = json.loads(deps.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CertificationError(
+            f"test assembly has no valid runtime dependency graph: {deps}") from error
+    runtime_names = {
+        Path(asset).name.casefold()
+        for target in document.get("targets", {}).values()
+        for library in target.values()
+        for group in ("runtime", "runtimeTargets")
+        for asset in library.get(group, {})
+    }
+    certified = 0
+    for relative in assemblies:
+        source = output_root / relative
+        if source.name.casefold() not in runtime_names:
+            continue
+        loaded = test_target.parent / source.name
+        if (not loaded.is_file()
+                or sha256_file(loaded) != sha256_file(source)):
+            raise CertificationError(
+                f"test runtime does not use the certified output: {source.name}")
+        certified += 1
+    if not certified:
+        raise CertificationError(
+            "test runtime dependency graph contains no certified output")
 
 
 def resolution_properties(properties: dict[str, str]) -> dict[str, str]:
@@ -2871,6 +2925,9 @@ class Controller:
                 self.writable("stage-2", "out"),
                 set(self.args.test_adapter_sha256),
                 self.writable("stage-2", "packages"))
+            validate_certified_runtime_closure(
+                test_target, self.writable("stage-2", "out"),
+                self.report["assemblies"])
             command = [
                 str(self.stage_dotnet("stage-2") / "dotnet"), "vstest",
                 str(test_target),
