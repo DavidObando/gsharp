@@ -3674,41 +3674,55 @@ public sealed class CSharpTypeMapper
     {
         bool nullable = mapped.IsNullable
             || symbol.NullableAnnotation == NullableAnnotation.Annotated;
-        GTypeReference merged = (symbol, mapped) switch
+        GTypeReference merged;
+        if (symbol is IArrayTypeSymbol arraySymbol
+            && mapped is ArrayTypeReference array)
         {
-            (IArrayTypeSymbol arraySymbol, ArrayTypeReference array) =>
-                new ArrayTypeReference(
-                    MergeAnonymousNullability(array.ElementType, arraySymbol.ElementType),
-                    array.Rank),
-            (INamedTypeSymbol { IsTupleType: true } tupleSymbol, TupleTypeReference tuple)
-                when tupleSymbol.TupleElements.Length == tuple.ElementTypes.Count =>
-                new TupleTypeReference(
-                    tupleSymbol.TupleElements
-                        .Select((element, index) =>
-                            MergeAnonymousNullability(
-                                tuple.ElementTypes[index],
-                                element.Type))
-                        .ToList(),
-                    tuple.ElementNames),
-            (INamedTypeSymbol { DelegateInvokeMethod: { } invoke }, ArrowTypeReference arrow)
-                when invoke.Parameters.Length == arrow.ParameterTypes.Count
-                    && (invoke.ReturnsVoid
-                        ? arrow.ReturnTypes.Count == 0
-                        : arrow.ReturnTypes.Count == 1) =>
-                MergeAnonymousDelegateNullability(arrow, invoke),
-            (INamedTypeSymbol namedSymbol, NamedTypeReference named)
-                when namedSymbol.TypeArguments.Length == named.TypeArguments.Count =>
-                new NamedTypeReference(
-                    named.Name,
-                    namedSymbol.TypeArguments
-                        .Select((argument, index) =>
-                            MergeAnonymousNullability(
-                                named.TypeArguments[index],
-                                argument))
-                        .ToList(),
-                    MergeAnonymousContainingType(named, namedSymbol)),
-            _ => mapped,
-        };
+            merged = new ArrayTypeReference(
+                MergeAnonymousNullability(array.ElementType, arraySymbol.ElementType),
+                array.Rank);
+        }
+        else if (symbol is INamedTypeSymbol { IsTupleType: true } tupleSymbol
+            && mapped is TupleTypeReference tuple
+            && tupleSymbol.TupleElements.Length == tuple.ElementTypes.Count)
+        {
+            merged = new TupleTypeReference(
+                tupleSymbol.TupleElements
+                    .Select((element, index) =>
+                        MergeAnonymousNullability(
+                            tuple.ElementTypes[index],
+                            element.Type))
+                    .ToList(),
+                tuple.ElementNames);
+        }
+        else if (symbol is INamedTypeSymbol { DelegateInvokeMethod: { } invoke }
+            && mapped is ArrowTypeReference arrow
+            && invoke.Parameters.Length == arrow.ParameterTypes.Count
+            && (invoke.ReturnsVoid
+                ? arrow.ReturnTypes.Count == 0
+                : arrow.ReturnTypes.Count == 1))
+        {
+            merged = MergeAnonymousDelegateNullability(arrow, invoke);
+        }
+        else if (symbol is INamedTypeSymbol namedSymbol
+            && mapped is NamedTypeReference named
+            && namedSymbol.TypeArguments.Length == named.TypeArguments.Count)
+        {
+            merged = new NamedTypeReference(
+                named.Name,
+                namedSymbol.TypeArguments
+                    .Select((argument, index) =>
+                        MergeAnonymousNullability(
+                            named.TypeArguments[index],
+                            argument))
+                    .ToList(),
+                MergeAnonymousContainingType(named, namedSymbol));
+        }
+        else
+        {
+            merged = mapped;
+        }
+
         return WithNullable(merged, nullable);
     }
 
