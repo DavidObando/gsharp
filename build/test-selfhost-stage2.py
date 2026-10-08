@@ -336,6 +336,46 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("overlaps CLR managed resources", result.stderr)
 
+    def test_mvid_overlapping_indirect_native_resource_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        marker = data.find(b"ADR0198-MANAGED-RESOURCE-MARKER")
+        self.assertGreater(marker, 4)
+        resource = marker - 4
+        resource_rva = struct.unpack_from(
+            "<I", data, layout.clr_resources_directory_offset)[0]
+        data[resource:resource + 40] = bytes(40)
+        struct.pack_into("<H", data, resource + 14, 1)
+        struct.pack_into("<II", data, resource + 16, 1, 24)
+        struct.pack_into(
+            "<IIII", data, resource + 24, layout.mvid_rva, 16, 0, 0)
+        struct.pack_into(
+            "<II", data, layout.pe_resource_directory_offset,
+            resource_rva, 40)
+        mutant = self.mutants / "mvid-native-resource-payload.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps a PE resource payload", result.stderr)
+
+    def test_mvid_overlapping_vtable_fixup_payload_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        marker = data.find(b"ADR0198-MANAGED-RESOURCE-MARKER")
+        self.assertGreater(marker, 4)
+        table = marker - 4
+        table_rva = struct.unpack_from(
+            "<I", data, layout.clr_resources_directory_offset)[0]
+        struct.pack_into("<IHH", data, table, layout.mvid_rva, 1, 1)
+        struct.pack_into(
+            "<II", data, layout.clr_resources_directory_offset + 24,
+            table_rva, 8)
+        mutant = self.mutants / "mvid-vtable-fixup-payload.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps a CLR vtable-fixup payload", result.stderr)
+
     def test_mvid_overlapping_debug_payload_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)

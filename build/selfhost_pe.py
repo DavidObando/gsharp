@@ -387,6 +387,61 @@ def inspect_layout(data: bytes) -> PeLayout:
             *directory_ranges, *debug_payload_ranges, *clr_ranges):
         if max(mvid_offset, start) < min(mvid_end, end):
             raise PeError(f"Module.Mvid overlaps {label}")
+
+    resource_rva = _u32(data, directories + 2 * 8)
+    resource_size = _u32(data, directories + 2 * 8 + 4)
+    if resource_rva and resource_size:
+        resource_base = rva_to_offset(
+            resource_rva, resource_size, "PE resource directory")
+        resource_end = resource_base + resource_size
+        pending = [0]
+        visited: set[int] = set()
+        while pending:
+            relative = pending.pop()
+            if relative in visited:
+                raise PeError("cyclic PE resource directory")
+            visited.add(relative)
+            directory = resource_base + relative
+            _range(directory, 16, resource_end, "PE resource directory node")
+            count = _u16(data, directory + 12) + _u16(data, directory + 14)
+            entries = directory + 16
+            _range(entries, count * 8, resource_end, "PE resource directory entries")
+            for index in range(count):
+                target = _u32(data, entries + index * 8 + 4)
+                relative_target = target & 0x7fffffff
+                if target & 0x80000000:
+                    pending.append(relative_target)
+                    continue
+                entry = resource_base + relative_target
+                _range(entry, 16, resource_end, "PE resource data entry")
+                payload_rva = _u32(data, entry)
+                payload_size = _u32(data, entry + 4)
+                payload = rva_to_offset(
+                    payload_rva, payload_size, "PE resource payload")
+                if max(mvid_offset, payload) < min(
+                        mvid_end, payload + payload_size):
+                    raise PeError("Module.Mvid overlaps a PE resource payload")
+
+    vtable_rva = _u32(data, clr + 48)
+    vtable_size = _u32(data, clr + 52)
+    if vtable_rva and vtable_size:
+        if vtable_size % 8:
+            raise PeError("truncated CLR vtable-fixup table")
+        table = rva_to_offset(vtable_rva, vtable_size, "CLR vtable fixups")
+        for entry in range(table, table + vtable_size, 8):
+            slots_rva = _u32(data, entry)
+            count = _u16(data, entry + 4)
+            flags = _u16(data, entry + 6)
+            widths = [width for bit, width in ((0x01, 4), (0x02, 8)) if flags & bit]
+            if len(widths) != 1:
+                raise PeError("unsupported CLR vtable-fixup width")
+            payload_size = count * widths[0]
+            payload = rva_to_offset(
+                slots_rva, payload_size, "CLR vtable-fixup payload")
+            if max(mvid_offset, payload) < min(
+                    mvid_end, payload + payload_size):
+                raise PeError("Module.Mvid overlaps a CLR vtable-fixup payload")
+
     native_entrypoint_rva = _u32(data, optional + 16)
     if native_entrypoint_rva:
         start = rva_to_offset(native_entrypoint_rva, 6, "PE native entry point")
