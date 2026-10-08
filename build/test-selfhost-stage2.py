@@ -358,6 +358,27 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("overlaps a PE resource payload", result.stderr)
 
+    def test_out_of_range_native_resource_name_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        marker = data.find(b"ADR0198-MANAGED-RESOURCE-MARKER")
+        self.assertGreater(marker, 4)
+        resource = marker - 4
+        resource_rva = struct.unpack_from(
+            "<I", data, layout.clr_resources_directory_offset)[0]
+        data[resource:resource + 40] = bytes(40)
+        struct.pack_into("<H", data, resource + 12, 1)
+        struct.pack_into("<II", data, resource + 16, 0x80000027, 24)
+        struct.pack_into("<IIII", data, resource + 24, 0, 0, 0, 0)
+        struct.pack_into(
+            "<II", data, layout.pe_resource_directory_offset,
+            resource_rva, 40)
+        mutant = self.mutants / "invalid-native-resource-name.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("PE resource directory name", result.stderr)
+
     def test_mvid_overlapping_vtable_fixup_payload_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)
@@ -421,6 +442,19 @@ static class Program
         result = run_driver("--compare-pe", self.fixture, mutant)
         self.assertEqual(2, result.returncode)
         self.assertIn("PE import", result.stderr)
+
+    def test_mvid_aliasing_import_address_thunk_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.import_directory_offset, 0)
+        struct.pack_into(
+            "<I", data, layout.import_directory_offset + 16,
+            layout.mvid_rva)
+        mutant = self.mutants / "mvid-import-address-thunk-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("PE import address thunk", result.stderr)
 
     def test_mvid_aliasing_relocation_target_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())

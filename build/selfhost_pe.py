@@ -411,6 +411,20 @@ def inspect_layout(data: bytes) -> PeLayout:
             entries = directory + 16
             _range(entries, count * 8, resource_end, "PE resource directory entries")
             for index in range(count):
+                name = _u32(data, entries + index * 8)
+                if name & 0x80000000:
+                    name_offset = resource_base + (name & 0x7fffffff)
+                    _range(
+                        name_offset, 2, resource_end,
+                        "PE resource directory name")
+                    name_size = 2 + _u16(data, name_offset) * 2
+                    _range(
+                        name_offset, name_size, resource_end,
+                        "PE resource directory name")
+                    if max(mvid_offset, name_offset) < min(
+                            mvid_end, name_offset + name_size):
+                        raise PeError(
+                            "Module.Mvid overlaps a PE resource directory name")
                 target = _u32(data, entries + index * 8 + 4)
                 relative_target = target & 0x7fffffff
                 if target & 0x80000000:
@@ -459,10 +473,46 @@ def inspect_layout(data: bytes) -> PeLayout:
     if import_rva and import_size:
         imports = rva_to_offset(import_rva, import_size, "PE import directory")
         import_end = imports + import_size
+        iat_rva = _u32(data, directories + 12 * 8)
+        iat_size = _u32(data, directories + 12 * 8 + 4)
+        if not iat_rva or not iat_size:
+            raise PeError("PE imports require an IAT directory")
+        iat = rva_to_offset(iat_rva, iat_size, "PE IAT directory")
+        iat_end = iat + iat_size
         pointer_size = 8 if magic == 0x20B else 4
         ordinal_mask = 1 << (pointer_size * 8 - 1)
+
+        def scan_thunks(
+                thunk_rva: int, label: str,
+                parse_names: bool) -> tuple[list[int], int, int]:
+            values: list[int] = []
+            start = rva_to_offset(thunk_rva, pointer_size, label)
+            for index in range(len(data) // pointer_size):
+                thunk = rva_to_offset(
+                    thunk_rva + index * pointer_size, pointer_size, label)
+                if max(mvid_offset, thunk) < min(
+                        mvid_end, thunk + pointer_size):
+                    raise PeError(f"Module.Mvid overlaps a {label}")
+                value = (
+                    _u64(data, thunk) if pointer_size == 8
+                    else _u32(data, thunk))
+                if not value:
+                    return values, start, thunk + pointer_size
+                values.append(value)
+                if parse_names and not value & ordinal_mask:
+                    import_name = rva_to_offset(
+                        value, 2, "PE import-by-name entry")
+                    _, name_end = mapped_cstring_range(
+                        value + 2, "PE imported symbol name")
+                    if max(mvid_offset, import_name) < min(
+                            mvid_end, name_end):
+                        raise PeError(
+                            "Module.Mvid overlaps a PE import-by-name entry")
+            raise PeError(f"unterminated {label}")
+
         cursor = imports
         terminated = False
+        iat_ranges: list[tuple[int, int]] = []
         while cursor + 20 <= import_end:
             fields = struct.unpack_from("<IIIII", data, cursor)
             cursor += 20
@@ -474,32 +524,28 @@ def inspect_layout(data: bytes) -> PeLayout:
                 name_rva, "PE import DLL name")
             if max(mvid_offset, name_start) < min(mvid_end, name_end):
                 raise PeError("Module.Mvid overlaps a PE import DLL name")
-            thunk_rva = original_thunks or first_thunks
-            for index in range(len(data) // pointer_size):
-                thunk = rva_to_offset(
-                    thunk_rva + index * pointer_size,
-                    pointer_size, "PE import thunk")
-                if max(mvid_offset, thunk) < min(
-                        mvid_end, thunk + pointer_size):
-                    raise PeError("Module.Mvid overlaps a PE import thunk")
-                value = (
-                    _u64(data, thunk) if pointer_size == 8
-                    else _u32(data, thunk))
-                if not value:
-                    break
-                if not value & ordinal_mask:
-                    import_name = rva_to_offset(
-                        value, 2, "PE import-by-name entry")
-                    name_start, name_end = mapped_cstring_range(
-                        value + 2, "PE imported symbol name")
-                    if max(mvid_offset, import_name) < min(
-                            mvid_end, name_end):
-                        raise PeError(
-                            "Module.Mvid overlaps a PE import-by-name entry")
-            else:
-                raise PeError("unterminated PE import thunk table")
+            if not first_thunks:
+                raise PeError("PE import descriptor has no FirstThunk")
+            lookup_values, _, _ = scan_thunks(
+                original_thunks or first_thunks,
+                "PE import lookup thunk", True)
+            address_values, address_start, address_end = scan_thunks(
+                first_thunks, "PE import address thunk", False)
+            if original_thunks and lookup_values != address_values:
+                raise PeError("PE import lookup and address thunks disagree")
+            if address_start < iat or address_end > iat_end:
+                raise PeError("PE import address thunk is outside the IAT directory")
+            iat_ranges.append((address_start, address_end))
         if not terminated:
             raise PeError("unterminated PE import directory")
+        covered = sorted(iat_ranges)
+        cursor = iat
+        for start, end in covered:
+            if start != cursor:
+                raise PeError("PE IAT directory has unowned bytes")
+            cursor = end
+        if cursor != iat_end:
+            raise PeError("PE IAT directory has unowned bytes")
 
     reloc_rva = _u32(data, directories + 5 * 8)
     reloc_size = _u32(data, directories + 5 * 8 + 4)
