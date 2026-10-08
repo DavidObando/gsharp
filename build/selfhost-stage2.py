@@ -281,27 +281,29 @@ def reject_root_collisions(named: dict[str, Path]) -> None:
 def git_snapshot_entries(
     tree: Path,
 ) -> tuple[list[tuple[str, int, str]], dict[str, str]]:
+    git_env = os.environ.copy()
+    git_env["GIT_NO_REPLACE_OBJECTS"] = "1"
     probe = subprocess.run(
         ["git", "-C", str(tree), "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=git_env)
     if probe.returncode != 0 or real(Path(probe.stdout.strip())) != real(tree):
         raise CertificationError(
             "caller tree must be the root of a clean Git worktree")
     status_result = subprocess.run(
         ["git", "-C", str(tree), "status", "--porcelain=v1", "--untracked-files=all"],
-        capture_output=True, text=True, check=True)
+        capture_output=True, text=True, check=True, env=git_env)
     if status_result.stdout:
         raise CertificationError(
             "caller tree is dirty or has untracked files:\n" + status_result.stdout.rstrip())
     commit = subprocess.run(
         ["git", "-C", str(tree), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=True).stdout.strip()
+        capture_output=True, text=True, check=True, env=git_env).stdout.strip()
     git_tree = subprocess.run(
         ["git", "-C", str(tree), "rev-parse", "HEAD^{tree}"],
-        capture_output=True, text=True, check=True).stdout.strip()
+        capture_output=True, text=True, check=True, env=git_env).stdout.strip()
     raw = subprocess.run(
-        ["git", "-C", str(tree), "ls-tree", "-rz", "--full-tree", commit],
-        capture_output=True, check=True).stdout
+        ["git", "-C", str(tree), "ls-tree", "-rz", "--full-tree", "-r", commit],
+        capture_output=True, check=True, env=git_env).stdout
     entries = []
     for row in raw.split(b"\0"):
         if not row:
@@ -347,7 +349,8 @@ def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dic
     manifest = []
     process = subprocess.Popen(
         ["git", "-C", str(caller), "cat-file", "--batch"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        env={**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"})
     if process.stdin is None or process.stdout is None:
         raise CertificationError("cannot open Git object reader")
     try:

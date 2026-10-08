@@ -479,6 +479,8 @@ class ControllerBoundaryTests(unittest.TestCase):
         (tree / ".gitattributes").write_text(
             "payload.txt filter=adr0198\n", encoding="utf-8")
         (tree / "payload.txt").write_text("WORKTREE\n", encoding="utf-8")
+        (tree / "nested").mkdir()
+        (tree / "nested" / "tracked.txt").write_text("nested\n", encoding="utf-8")
         subprocess.run(["git", "-C", tree, "add", "."], check=True)
         subprocess.run(
             ["git", "-C", tree, "commit", "-m", "filtered fixture"],
@@ -493,6 +495,39 @@ class ControllerBoundaryTests(unittest.TestCase):
         result = run_driver("--freeze-source", tree, snapshot)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual(b"COMMIT\n", (snapshot / "payload.txt").read_bytes())
+        self.assertEqual(b"nested\n", (snapshot / "nested" / "tracked.txt").read_bytes())
+
+    def test_snapshot_ignores_git_replacement_objects(self) -> None:
+        tree = self.tree()
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        (tree / "payload.txt").write_text("ORIGINAL\n", encoding="utf-8")
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "replacement fixture"],
+            check=True, capture_output=True)
+        original = subprocess.run(
+            ["git", "-C", tree, "rev-parse", "HEAD:payload.txt"],
+            check=True, capture_output=True, text=True).stdout.strip()
+        replacement = subprocess.run(
+            ["git", "-C", tree, "hash-object", "-w", "--stdin"],
+            input=b"REPLACEMENT\n", check=True, capture_output=True).stdout.decode().strip()
+        subprocess.run(
+            ["git", "-C", tree, "replace", original, replacement], check=True)
+        self.assertEqual(
+            "",
+            subprocess.run(
+                ["git", "-C", tree, "status", "--porcelain=v1"],
+                check=True, capture_output=True, text=True).stdout)
+        snapshot = self.root / "snapshot"
+        result = run_driver("--freeze-source", tree, snapshot)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(b"ORIGINAL\n", (snapshot / "payload.txt").read_bytes())
 
     def test_stage1_version_must_differ_from_bootstrap(self) -> None:
         tree = self.tree()
