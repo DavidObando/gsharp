@@ -34,6 +34,8 @@ class PeLayout:
     metadata_size: int
     module_row_count_offset: int
     type_def_row_count_offset: int
+    tables_valid_offset: int
+    metadata_rows_offset: int
     enc_id_index_offset: int
     enc_base_id_index_offset: int
     pe_resource_directory_offset: int
@@ -217,6 +219,10 @@ def inspect_layout(data: bytes) -> PeLayout:
             row_cursor += 4
     if row_counts.get(0) != 1:
         raise PeError("metadata must contain exactly one Module row")
+    for table in (48, 55):
+        if row_counts.get(table, 0):
+            raise PeError(
+                f"metadata table {table} has unsupported semantic GUID columns")
 
     string_index_size = 4 if heap_sizes & 0x01 else 2
     guid_index_size = 4 if heap_sizes & 0x02 else 2
@@ -349,6 +355,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         metadata_size=metadata_size,
         module_row_count_offset=row_count_offsets[0],
         type_def_row_count_offset=row_count_offsets.get(2, -1),
+        tables_valid_offset=tables + 8,
+        metadata_rows_offset=row_cursor,
         enc_id_index_offset=mvid_index_offset + guid_index_size,
         enc_base_id_index_offset=mvid_index_offset + 2 * guid_index_size,
         pe_resource_directory_offset=directories + 2 * 8,

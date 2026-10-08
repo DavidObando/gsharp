@@ -246,6 +246,23 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("metadata table 2", result.stderr)
 
+    def test_semantic_guid_metadata_tables_are_rejected(self) -> None:
+        for table in (48, 55):
+            with self.subTest(table=table):
+                data = bytearray(self.fixture.read_bytes())
+                layout = pe.inspect_layout(data)
+                valid = struct.unpack_from("<Q", data, layout.tables_valid_offset)[0]
+                struct.pack_into(
+                    "<Q", data, layout.tables_valid_offset, valid | (1 << table))
+                struct.pack_into("<I", data, layout.metadata_rows_offset, 1)
+                mutant = self.mutants / f"semantic-guid-table-{table}.dll"
+                mutant.write_bytes(data)
+                result = run_driver("--compare-pe", self.fixture, mutant)
+                self.assertEqual(2, result.returncode)
+                self.assertIn(
+                    f"metadata table {table} has unsupported semantic GUID columns",
+                    result.stderr)
+
     def test_mvid_aliasing_enc_id_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)
