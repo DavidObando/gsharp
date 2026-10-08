@@ -429,9 +429,13 @@ The work lands in this order:
 7. Complete the fresh-clone cutover dry run required by #3501.
 8. Before any 0.5 package or extension can publish, make the release workflow
    require successful replacement-gate certification for the exact release
-   commit. The publish jobs MUST consume and verify that run's controller-owned
-   evidence identity. A missing, rejected, stale, or different-commit proof
-   MUST block publication.
+   commit. The controller MUST produce a release manifest that records the
+   identity and SHA-256 digest of every package and extension that may publish.
+   Each artifact MUST be produced by the certified run or have every input bound
+   to its accepted evidence. Before the first upload, the publish jobs MUST
+   verify the manifest, evidence identity, commit, and every artifact digest. A
+   missing, rejected, stale, different-commit, or different-byte proof MUST
+   block publication.
 
 The replacement MUST NOT claim that a normal self-migration nightly proves
 stage-2 equivalence. The nightly is a separate source-translation and behavior

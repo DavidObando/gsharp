@@ -38,6 +38,11 @@ Before any such package or extension can publish:
   certification evidence and the required fresh-clone cutover dry run;
 - the `publish` job MUST depend on the replacement certification job and verify
   the evidence commit and run identity;
+- the controller-owned release manifest MUST list the SHA-256 digest of every
+  package and extension to publish, and each artifact MUST be produced by the
+  certified run or have every input bound to accepted evidence;
+- before the first upload, the publish jobs MUST verify every artifact against
+  that manifest. Same-commit artifacts with different bytes MUST be rejected;
 - `publish-visual-studio-extension` MUST remain downstream of that gated
   `publish` job.
 
