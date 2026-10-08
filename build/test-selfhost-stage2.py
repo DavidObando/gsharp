@@ -348,6 +348,26 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("overlaps PE debug payload 0", result.stderr)
 
+    def test_mvid_aliasing_native_entrypoints_is_rejected(self) -> None:
+        layout = pe.inspect_layout(self.fixture.read_bytes())
+        for name, mutate_layout in (
+            ("pe", lambda data: struct.pack_into(
+                "<I", data, layout.optional_entrypoint_offset, layout.mvid_rva)),
+            ("clr", lambda data: (
+                struct.pack_into("<I", data, layout.clr_flags_offset, 0x10),
+                struct.pack_into(
+                    "<I", data, layout.clr_entrypoint_offset, layout.mvid_rva),
+            )),
+        ):
+            with self.subTest(entrypoint=name):
+                data = bytearray(self.fixture.read_bytes())
+                mutate_layout(data)
+                mutant = self.mutants / f"mvid-{name}-entrypoint-alias.dll"
+                mutant.write_bytes(data)
+                result = run_driver("--compare-pe", self.fixture, mutant)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("native entry point", result.stderr)
+
     def test_mvid_overlapping_field_rva_data_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)
@@ -1147,8 +1167,32 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         packages.mkdir()
         (output / "testhost.dll").write_bytes(b"locked test host")
         (packages / "testhost.dll").write_bytes(b"locked test host")
+        deps = json.dumps({
+            "targets": {
+                "net10.0": {
+                    "testhost/1.0": {
+                        "runtime": {
+                            "lib/net10.0/Microsoft.TestPlatform.Core.dll": {},
+                        },
+                    },
+                },
+            },
+        }).encode()
+        for name, content in (
+            ("testhost.deps.json", deps),
+            ("testhost.runtimeconfig.json", b"{}"),
+            ("Microsoft.TestPlatform.Core.dll", b"locked runtime"),
+        ):
+            (output / name).write_bytes(content)
+            (packages / name).write_bytes(content)
         approved = hashlib.sha256(b"locked test host").hexdigest()
         stage2.validate_vstest_extensions(output, set(), packages, {approved})
+        (output / "Microsoft.TestPlatform.Core.dll").write_bytes(b"forged runtime")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "runtime closure",
+        ):
+            stage2.validate_vstest_extensions(output, set(), packages, {approved})
+        (output / "Microsoft.TestPlatform.Core.dll").write_bytes(b"locked runtime")
         (output / "testhost.dll").write_bytes(b"other locked package")
         (packages / "other.dll").write_bytes(b"other locked package")
         with self.assertRaisesRegex(
@@ -1200,11 +1244,14 @@ class ToolchainManifestTests(unittest.TestCase):
     def tearDown(self) -> None:
         remove_tree(self.root)
 
-    def test_resolution_preserves_ordinary_and_isolated_contexts(self) -> None:
+    def test_resolution_normalizes_only_nested_build_scheduling(self) -> None:
         ordinary = {"BuildProjectReferences": "true"}
         isolated = {"BuildProjectReferences": "false"}
-        self.assertEqual(ordinary, stage2.resolution_properties(ordinary))
+        self.assertEqual(
+            {"BuildProjectReferences": "false"},
+            stage2.resolution_properties(ordinary))
         self.assertEqual(isolated, stage2.resolution_properties(isolated))
+        self.assertEqual({"BuildProjectReferences": "true"}, ordinary)
 
     def test_rebuilt_project_plan_cannot_replace_frozen_graph(self) -> None:
         frozen = {"Dependency.gsproj": {"inputs": ["before"]}}
