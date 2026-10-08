@@ -79,7 +79,8 @@ includes MSBuild evaluation and SDK resolution before the controller can reject
 an unsupported target, task, import, or graph. Either mechanism MUST provide one
 restricted command boundary. That boundary MUST:
 
-- allow reads only from the applicable immutable inputs and trusted toolchain;
+- allow reads only from the applicable immutable inputs, trusted toolchain, and
+  that command's declared writable roots;
 - allow writes only to the command's declared cache, intermediate, output, and
   test-scratch roots;
 - deny access to the caller tree, the other stage, controller state, evidence
@@ -287,11 +288,14 @@ builds MUST be disabled and revalidated as disabled.
 
 For each command, the supervisor MUST create and retain a fresh nonce and fresh
 controller-owned evidence destinations. The command MUST NOT receive the nonce,
-credentials, or destination paths. When in-process reporting is unavoidable,
-the command MAY receive only a pre-opened channel whose peer and process
-identity the supervisor authenticates. Channel messages are untrusted until the
-supervisor verifies them against its independent process and output
-observations. Evidence MUST bind:
+evidence-channel credentials, or destination paths. A restore command MAY
+receive required package-source credentials through a controller-provided
+ephemeral secret input. That input MUST follow the commitment and redaction
+rules in section 3 and MUST NOT grant evidence or controller access. When
+in-process reporting is unavoidable, the command MAY receive only a pre-opened
+channel whose peer and process identity the supervisor authenticates. Channel
+messages are untrusted until the supervisor verifies them against its
+independent process and output observations. Evidence MUST bind:
 
 - command identity and exact arguments;
 - process start and completion;
