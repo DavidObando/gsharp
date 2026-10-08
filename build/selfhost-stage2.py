@@ -772,8 +772,11 @@ def xml_definition_hash(element: ET.Element) -> str:
 
 
 def preprocessed_property_names(data: bytes) -> list[str]:
+    start = data.find(b"<Project")
+    if start < 0:
+        raise CertificationError("preprocessed output has no Project document")
     try:
-        root = ET.fromstring(data)
+        root = ET.fromstring(data[start:])
     except ET.ParseError as error:
         raise CertificationError(f"cannot inspect preprocessed property map: {error}") from error
     names = {
