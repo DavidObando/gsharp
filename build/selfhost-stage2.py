@@ -1073,11 +1073,22 @@ def bind_external_task_assembly(
     return {"path": str(path), "sha256": digest}
 
 
+def trusted_dotnet() -> Path:
+    for candidate in (
+        Path("/usr/share/dotnet/dotnet"),
+        Path("/usr/local/share/dotnet/dotnet"),
+        Path.home() / ".dotnet/dotnet",
+        Path("/usr/bin/dotnet"),
+        Path("/bin/dotnet"),
+    ):
+        executable = real(candidate)
+        if executable.is_file():
+            return executable
+    raise CertificationError("dotnet executable not found in a trusted location")
+
+
 def dotnet_root() -> Path:
-    executable = real(Path(shutil.which("dotnet") or ""))
-    if not executable.is_file():
-        raise CertificationError("dotnet executable not found")
-    return executable.parent
+    return trusted_dotnet().parent
 
 
 class Controller:
@@ -1101,7 +1112,7 @@ class Controller:
         self.logs = self.work / "logs"
         self.mutable = self.work / "mutable"
         self.toolchains = self.work / "toolchains"
-        self.dotnet = real(Path(shutil.which("dotnet") or ""))
+        self.dotnet = trusted_dotnet()
         self.bwrap = real(Path(shutil.which("bwrap", path=os.defpath) or ""))
         self.run_id = secrets.token_hex(16)
         self.report: dict[str, Any] = {
@@ -3052,7 +3063,7 @@ def main(argv: list[str]) -> int:
         try:
             work.mkdir(mode=0o700)
             result = subprocess.run([
-                str(real(Path(shutil.which("dotnet") or ""))), "run",
+                str(trusted_dotnet()), "run",
                 "--project", str(HERE / "selfhost" / "PackageContentHash.csproj"),
                 "--", str(real(Path(package_name))),
             ], capture_output=True, text=True)

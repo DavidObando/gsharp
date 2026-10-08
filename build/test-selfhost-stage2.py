@@ -1018,6 +1018,24 @@ class ToolchainManifestTests(unittest.TestCase):
     def tearDown(self) -> None:
         remove_tree(self.root)
 
+    def test_dotnet_root_ignores_caller_path(self) -> None:
+        attacker = self.root / "attacker"
+        attacker.mkdir()
+        fake = attacker / "dotnet"
+        fake.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+        fake.chmod(0o755)
+        environment = os.environ.copy()
+        environment["PATH"] = f"{attacker}{os.pathsep}{environment['PATH']}"
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                f"import runpy,sys; sys.path.insert(0,{str(DRIVER.parent)!r}); "
+                f"print(runpy.run_path({str(DRIVER)!r})['dotnet_root']())",
+            ],
+            cwd=REPO, text=True, capture_output=True, env=environment)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotEqual(attacker.resolve(), Path(result.stdout.strip()))
+
     def test_complete_toolchain_manifest_rejects_changed_bytes(self) -> None:
         executable = self.root / "dotnet"
         task = self.root / "sdk" / "MSBuild.dll"
