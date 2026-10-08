@@ -548,6 +548,42 @@ def git_snapshot_entries(
     )
     if sorted(index_entries) != expected_index:
         raise CertificationError("caller Git index differs from the recorded commit")
+    command, git_env = git_invocation(tree, "ls-files", "--debug", "-z")
+    debug_rows = subprocess.run(
+        command, capture_output=True, check=True, env=git_env).stdout
+    remaining = debug_rows
+    index_stats: dict[str, tuple[int, ...]] = {}
+    while remaining:
+        name, separator, remaining = remaining.partition(b"\0")
+        if not separator:
+            raise CertificationError("Git returned malformed index stat data")
+        match = re.match(
+            rb"  ctime: (\d+):(\d+)\n"
+            rb"  mtime: (\d+):(\d+)\n"
+            rb"  dev: (\d+)\tino: (\d+)\n"
+            rb"  uid: (\d+)\tgid: (\d+)\n"
+            rb"  size: (\d+)\tflags: \d+\n",
+            remaining)
+        if match is None:
+            raise CertificationError("Git returned malformed index stat data")
+        index_stats[os.fsdecode(name)] = tuple(map(int, match.groups()))
+        remaining = remaining[match.end():]
+    for relative, _, _ in entries:
+        info = (tree / relative).lstat()
+        actual = (
+            info.st_ctime_ns // 1_000_000_000,
+            info.st_ctime_ns % 1_000_000_000,
+            info.st_mtime_ns // 1_000_000_000,
+            info.st_mtime_ns % 1_000_000_000,
+            info.st_dev & 0xffffffff,
+            info.st_ino & 0xffffffff,
+            info.st_uid,
+            info.st_gid,
+            info.st_size,
+        )
+        if index_stats.get(relative) != actual:
+            raise CertificationError(
+                f"caller tracked path differs from the Git index: {relative}")
     command, git_env = git_invocation(
         tree, "ls-files", "--others", "--exclude-standard", "-z")
     untracked = subprocess.run(
