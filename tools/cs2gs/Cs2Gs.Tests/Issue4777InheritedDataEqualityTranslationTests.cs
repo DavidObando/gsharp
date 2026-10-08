@@ -189,15 +189,16 @@ public sealed class Issue4777InheritedDataEqualityTranslationTests
         {
             Assert.Equal(HandleKind.MemberReference, handle.Kind);
             var method = reader.GetMemberReference((MemberReferenceHandle)handle);
+            object genericContext = new object();
             owner = method.Parent.Kind switch
             {
                 HandleKind.TypeDefinition => provider.GetTypeFromDefinition(reader, (TypeDefinitionHandle)method.Parent, 0),
                 HandleKind.TypeReference => provider.GetTypeFromReference(reader, (TypeReferenceHandle)method.Parent, 0),
-                HandleKind.TypeSpecification => provider.GetTypeFromSpecification(reader, null, (TypeSpecificationHandle)method.Parent, 0),
+                HandleKind.TypeSpecification => provider.GetTypeFromSpecification(reader, genericContext, (TypeSpecificationHandle)method.Parent, 0),
                 _ => throw new InvalidOperationException("Unexpected equality declaration owner: " + method.Parent.Kind),
             };
             name = reader.GetString(method.Name);
-            signature = method.DecodeMethodSignature(provider, (object)null);
+            signature = method.DecodeMethodSignature(provider, genericContext);
         }
 
         return owner + "|" + name + "|" + signature.ReturnType + "("

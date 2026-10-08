@@ -3075,6 +3075,14 @@ public sealed partial class CSharpToGSharpTranslator
                 && ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
                     valueSymbol,
                     this.context.Compilation);
+            bool emittedNullableInvocationResult =
+                value is InvocationExpressionSyntax
+                && valueSymbol is IMethodSymbol
+                && (this.ShouldPromoteToNullableReference(valueSymbol)
+                    || ObliviousNullabilityAnalyzer.IsDirectlyNullable(
+                        this.context.SemanticModel.GetOperation(value),
+                        this.context.SemanticModel,
+                        respectNullGuards: true));
             bool emittedNullablePromotedLocal = !isFlowNarrowedLocal
                 && valueSymbol is ILocalSymbol local
                 && (this.ShouldPromoteToNullableReference(local)
@@ -3084,6 +3092,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.ShouldPromoteToNullableReference(valueSymbol);
             bool strictUseMayBeNullable = emittedNullablePromotedLocal
                 || emittedNullablePromotedStorage
+                || emittedNullableInvocationResult
                 || (!isFlowNarrowedLocal
                     && !nullableObservedLambdaResult
                     && (importedStatedNullableValue

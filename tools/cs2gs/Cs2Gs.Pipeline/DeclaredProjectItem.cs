@@ -321,7 +321,7 @@ internal static class DeclaredProjectItems
                 expression => $"'{expression}'"))}.");
     }
 
-    private static bool IsMsbuildExpression(string value) =>
+    private static bool IsMsbuildExpression(string? value) =>
         !string.IsNullOrEmpty(value)
         && (value.Contains("$(", StringComparison.Ordinal)
             || value.Contains("@(", StringComparison.Ordinal));

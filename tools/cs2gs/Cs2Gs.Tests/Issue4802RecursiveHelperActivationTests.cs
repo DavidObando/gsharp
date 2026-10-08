@@ -122,7 +122,7 @@ public sealed class Issue4802RecursiveHelperActivationTests
             File.WriteAllBytes(Path.Combine(directory, "native", "Native.pdb"), product);
             File.WriteAllText(Path.Combine(evidence, "existing.marker"), "root artifact");
             File.WriteAllText(Path.Combine(destination, "existing.log"), "previous artifact");
-            Exception failure = Record.Exception(() =>
+            var failure = Record.Exception(() =>
             {
                 try
                 {
