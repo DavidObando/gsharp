@@ -1170,6 +1170,7 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         (output / "testhost.dll").write_bytes(b"locked test host")
         (package / "testhost.dll").write_bytes(b"locked test host")
         deps = json.dumps({
+            "runtimeTarget": {"name": "net10.0"},
             "targets": {
                 "net10.0": {
                     "testhost/1.0": {
@@ -1249,6 +1250,7 @@ class RuntimeOutputBoundaryTests(unittest.TestCase):
         certified.write_bytes(b"certified")
         test_target.write_bytes(b"tests")
         test_target.with_suffix(".deps.json").write_text(json.dumps({
+            "runtimeTarget": {"name": "net10.0"},
             "targets": {
                 "net10.0": {
                     "Core/1.0": {
@@ -1264,6 +1266,21 @@ class RuntimeOutputBoundaryTests(unittest.TestCase):
         loaded.write_bytes(b"replacement")
         with self.assertRaisesRegex(
             stage2.CertificationError, "does not use the certified output",
+        ):
+            stage2.validate_certified_runtime_closure(
+                test_target, self.root, ["Core/GSharp.Core.dll"])
+        loaded.write_bytes(certified.read_bytes())
+        test_target.with_suffix(".deps.json").write_text(json.dumps({
+            "runtimeTarget": {"name": "active"},
+            "targets": {
+                "active": {"Tests/1.0": {"runtime": {"Tests.dll": {}}}},
+                "inactive": {
+                    "Core/1.0": {"runtime": {"GSharp.Core.dll": {}}},
+                },
+            },
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "contains no certified output",
         ):
             stage2.validate_certified_runtime_closure(
                 test_target, self.root, ["Core/GSharp.Core.dll"])
