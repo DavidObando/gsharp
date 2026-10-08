@@ -463,9 +463,13 @@ public static class NullAssertionPolishPass
                 if (resolved != null)
                 {
                     suffix.Reverse();
+                    string combined = resolved;
+                    foreach (string segment in suffix)
+                    {
+                        combined = Path.Combine(combined, segment);
+                    }
 
-                    // G# generic inference does not carry this null check into the accumulator seed.
-                    return suffix.Aggregate(resolved!, Path.Combine);
+                    return combined;
                 }
             }
 
@@ -477,7 +481,9 @@ public static class NullAssertionPolishPass
             }
 
             suffix.Add(name);
-            current = parent;
+
+            // The IsNullOrEmpty guard above establishes that parent is non-null.
+            current = parent!;
         }
 
         return directory;

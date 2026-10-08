@@ -3071,7 +3071,8 @@ public sealed partial class CSharpToGSharpTranslator
             bool nullableObservedLambdaResult =
                 this.LambdaResultFeedsNullableObservedInvocation(value);
             bool importedStatedNullableValue =
-                ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                value is InvocationExpressionSyntax
+                && ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
                     valueSymbol,
                     this.context.Compilation);
             bool emittedNullablePromotedLocal = !isFlowNarrowedLocal

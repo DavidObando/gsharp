@@ -3586,7 +3586,8 @@ public sealed class CSharpTypeMapper
                 array.ElementType);
             if (arraySymbol.ElementType.IsReferenceType)
             {
-                element = WithNullable(element, true);
+                // The self-migrated helper return is promoted, but this storage is non-null.
+                element = WithNullable(element, true)!;
             }
 
             return new ArrayTypeReference(element, array.Rank)
