@@ -410,6 +410,27 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertIn("secret-bearing restore configuration", result.stderr)
         self.assertNotIn(secret, result.stdout + result.stderr + evidence)
 
+    def test_package_source_uri_credentials_are_rejected_without_disclosure(self) -> None:
+        tree = self.tree()
+        secret = "NEVER-PRINT-ADR0198-URI-SECRET"
+        (tree / "NuGet.Config").write_text(
+            "<configuration><packageSources>"
+            f"<add key=\"private\" value=\"https://user:{secret}@example.invalid/v3/index.json\" />"
+            "</packageSources></configuration>",
+            encoding="utf-8")
+        self.commit_tree(tree)
+        work = self.root / "work"
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", work,
+            "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        evidence = "".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for root in ("evidence", "logs", "reports")
+            for path in (work / root).rglob("*") if path.is_file())
+        self.assertIn("secret-bearing restore configuration", result.stderr)
+        self.assertNotIn(secret, result.stdout + result.stderr + evidence)
+
     def test_versioned_project_sdk_override_is_rejected_by_real_driver(self) -> None:
         tree = self.tree()
         project = tree / "App.gsproj"
