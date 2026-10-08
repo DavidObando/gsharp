@@ -510,9 +510,13 @@ def validate_vstest_extensions(
             document = json.loads(deps.read_text(encoding="utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise CertificationError(f"invalid test host dependency manifest: {deps}") from error
+        target_name = document.get("runtimeTarget", {}).get("name")
+        target = document.get("targets", {}).get(target_name)
+        if not isinstance(target, dict):
+            raise CertificationError(
+                f"test host dependency manifest has no active runtime target: {deps}")
         runtime_assets = {
             Path(asset).name.casefold()
-            for target in document.get("targets", {}).values()
             for library in target.values()
             for group in ("runtime", "runtimeTargets", "native")
             for asset in library.get(group, {})
@@ -537,9 +541,13 @@ def validate_certified_runtime_closure(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CertificationError(
             f"test assembly has no valid runtime dependency graph: {deps}") from error
+    target_name = document.get("runtimeTarget", {}).get("name")
+    target = document.get("targets", {}).get(target_name)
+    if not isinstance(target, dict):
+        raise CertificationError(
+            f"test assembly has no active runtime target: {deps}")
     runtime_names = {
         Path(asset).name.casefold()
-        for target in document.get("targets", {}).values()
         for library in target.values()
         for group in ("runtime", "runtimeTargets")
         for asset in library.get(group, {})
