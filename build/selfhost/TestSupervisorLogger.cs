@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client;
@@ -12,12 +14,19 @@ namespace Adr0198;
 public sealed class TestSupervisorLogger : ITestLogger
 {
     private StreamWriter? writer;
+    private byte[]? key;
+    private long sequence;
 
     public void Initialize(TestLoggerEvents events, string testRunDirectory)
     {
         string value = Environment.GetEnvironmentVariable("ADR0198_TEST_EVENT_FD")
             ?? throw new InvalidOperationException("ADR0198_TEST_EVENT_FD is missing");
+        string keyValue = Environment.GetEnvironmentVariable("ADR0198_TEST_EVENT_KEY")
+            ?? throw new InvalidOperationException("ADR0198_TEST_EVENT_KEY is missing");
         int descriptor = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+        key = Convert.FromHexString(keyValue);
+        Environment.SetEnvironmentVariable("ADR0198_TEST_EVENT_FD", null);
+        Environment.SetEnvironmentVariable("ADR0198_TEST_EVENT_KEY", null);
         if (fcntl(descriptor, 2, 1) != 0)
         {
             throw new InvalidOperationException("cannot protect the supervisor event channel");
@@ -61,7 +70,17 @@ public sealed class TestSupervisorLogger : ITestLogger
 
     private void Write(object value)
     {
-        writer?.WriteLine(JsonSerializer.Serialize(value));
+        if (writer is null || key is null)
+        {
+            throw new InvalidOperationException("test supervisor is not initialized");
+        }
+
+        string payload = JsonSerializer.Serialize(value);
+        string signed = $"{sequence}\n{payload}";
+        string mac = Convert.ToHexString(
+            HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(signed))).ToLowerInvariant();
+        writer.WriteLine(JsonSerializer.Serialize(new { sequence, payload, mac }));
+        sequence++;
     }
 
     [DllImport("libc", SetLastError = true)]

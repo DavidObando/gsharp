@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+import base64
 import hashlib
+import hmac
 import importlib.util
 import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import stat
 import subprocess
@@ -111,6 +114,7 @@ class CommandResult:
     duration_seconds: float
     stdout_sha256: str
     events: str | None = None
+    event_key: bytes | None = None
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -123,6 +127,84 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def authenticated_events(data: bytes, key: bytes) -> list[dict[str, Any]]:
+    events = []
+    for expected_sequence, line in enumerate(data.splitlines()):
+        try:
+            envelope = json.loads(line)
+            sequence = int(envelope["sequence"])
+            payload_json = envelope["payload"]
+            mac = envelope["mac"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise CertificationError("invalid authenticated test event") from error
+        if not isinstance(payload_json, str):
+            raise CertificationError("invalid authenticated test event payload")
+        payload_bytes = payload_json.encode()
+        expected = hmac.new(
+            key, str(sequence).encode() + b"\n" + payload_bytes,
+            hashlib.sha256).hexdigest()
+        if sequence != expected_sequence or not hmac.compare_digest(mac, expected):
+            raise CertificationError("forged or replayed test supervisor event")
+        events.append(json.loads(payload_json))
+    return events
+
+
+def verify_receipt_set(
+    run_id: str, paths: list[Path],
+    expected_hashes: dict[str, str] | None = None,
+    expectations: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    seen_paths: set[Path] = set()
+    seen_nonces: set[str] = set()
+    for path in paths:
+        if path in seen_paths:
+            raise CertificationError(f"replayed command receipt: {path}")
+        seen_paths.add(path)
+        if not path.is_file():
+            raise CertificationError(f"command receipt is missing: {path}")
+        expected_hash = (expected_hashes or {}).get(str(path))
+        if expected_hash is not None and sha256_file(path) != expected_hash:
+            raise CertificationError(f"command receipt changed: {path}")
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        if receipt.get("runId") != run_id or receipt.get("exitCode") != 0:
+            raise CertificationError(f"stale or failed command receipt: {path}")
+        expected = (expectations or {}).get(str(path))
+        if expected is not None and any(
+                receipt.get(key) != value for key, value in expected.items()):
+            raise CertificationError(f"mismatched command receipt: {path}")
+        nonce = receipt.get("nonceCommitment")
+        if (not isinstance(nonce, str) or len(nonce) != 64
+                or nonce in seen_nonces):
+            raise CertificationError(f"replayed command receipt: {path}")
+        seen_nonces.add(nonce)
+        if (not isinstance(receipt.get("pid"), int) or receipt["pid"] <= 0
+                or not isinstance(receipt.get("arguments"), list)
+                or not receipt["arguments"]
+                or not receipt.get("sandboxArgumentsSha256")
+                or not receipt.get("graphIdentity")
+                or receipt.get("completedNs", 0) < receipt.get("startedNs", 0)):
+            raise CertificationError(f"incomplete command receipt: {path}")
+        stdout = receipt.get("stdout", {})
+        stdout_path = Path(stdout.get("path", ""))
+        if (not stdout_path.is_file()
+                or sha256_file(stdout_path) != stdout.get("sha256")):
+            raise CertificationError(f"command log changed: {stdout_path}")
+        for output in receipt.get("outputs", []):
+            target = Path(output["path"])
+            if (not target.is_file()
+                    or target.stat().st_size != output["size"]
+                    or sha256_file(target) != output["sha256"]):
+                raise CertificationError(
+                    f"receipt output changed after command: {target}")
+        events = receipt.get("events")
+        if events is not None:
+            event_path = Path(events["path"])
+            if (not event_path.is_file()
+                    or sha256_file(event_path) != events["sha256"]):
+                raise CertificationError(
+                    f"test supervisor evidence changed: {event_path}")
 
 
 def atomic_bytes(path: Path, data: bytes) -> None:
@@ -228,7 +310,11 @@ def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dic
 
 
 def verify_manifest(root: Path, expected: list[FileIdentity]) -> None:
-    actual = [identity(root, root / row.path) for row in expected]
+    try:
+        actual = [identity(root, root / row.path) for row in expected]
+    except OSError as error:
+        raise CertificationError(
+            f"immutable source manifest changed under {root}") from error
     if actual != expected:
         raise CertificationError(f"immutable source manifest changed under {root}")
 
@@ -254,6 +340,76 @@ def package_version(path: Path) -> str:
         return packer.package_version(path)
     except packer.SelfHostError as error:
         raise CertificationError(str(error)) from error
+
+
+def extract_verified_package(source: Path, destination: Path) -> Path:
+    nupkgs = list(source.glob("*.nupkg"))
+    hash_files = list(source.glob("*.nupkg.sha512"))
+    if len(nupkgs) != 1 or len(hash_files) != 1:
+        raise CertificationError(
+            f"package cache entry must contain one nupkg and hash: {source}")
+    package_hash = base64.b64encode(
+        hashlib.sha512(nupkgs[0].read_bytes()).digest()).decode()
+    if hash_files[0].read_text(encoding="utf-8").strip() != package_hash:
+        raise CertificationError(f"package archive hash is invalid: {source}")
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
+    with zipfile.ZipFile(nupkgs[0]) as archive:
+        for info in archive.infolist():
+            name = Path(packer.entry_name(info.filename))
+            if info.is_dir():
+                continue
+            if name.is_absolute() or ".." in name.parts:
+                raise CertificationError(f"unsafe package entry {info.filename}")
+            target = destination / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(archive.read(info))
+    atomic_bytes(destination / nupkgs[0].name, nupkgs[0].read_bytes())
+    atomic_bytes(
+        destination / hash_files[0].name, (package_hash + "\n").encode())
+    return nupkgs[0]
+
+
+def probe_sandbox(tree: Path, writable: Path, denied: list[Path]) -> None:
+    state = writable.parent / "controller-probe"
+    toolchain = state / "toolchains" / "probe"
+    offline_feed = state / "mutable" / "probe" / "offline-feed"
+    temp = state / "mutable" / "probe" / "runtime" / "temp"
+    for path in (writable, toolchain, offline_feed, temp):
+        path.mkdir(parents=True, exist_ok=True)
+    controller = object.__new__(Controller)
+    controller.mutable = state / "mutable"
+    controller.toolchains = state / "toolchains"
+    script = [
+        "set -eu",
+        f"! touch {shlex.quote(str(tree / 'forbidden-write'))}",
+        'test -z "${ADR0198_PROBE_SECRET-}"',
+        f"touch {shlex.quote(str(writable / 'allowed-write'))}",
+    ]
+    for path in denied:
+        script.append(f"test ! -e {shlex.quote(str(path))}")
+        script.append(f"! touch {shlex.quote(str(path))}")
+    script.append(
+        "! /usr/bin/python3 -c "
+        + shlex.quote(
+            "import socket; socket.create_connection(('1.1.1.1', 53), 0.2)"))
+    command = ["/bin/sh", "-c", "; ".join(script)]
+    env = {
+        "ADR0198_STAGE": "probe",
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(writable),
+        "TMPDIR": str(temp),
+        "TEMP": str(temp),
+        "TMP": str(temp),
+    }
+    result = subprocess.run(
+        controller.sandbox_command(tree, [writable], command, env),
+        capture_output=True, text=True, timeout=30,
+        env={**os.environ, "ADR0198_PROBE_SECRET": "must-not-cross"})
+    if result.returncode != 0:
+        raise CertificationError(
+            "sandbox probe failed:\n" + result.stdout + result.stderr)
 
 
 def package_payload_hash(path: Path) -> str:
@@ -438,13 +594,24 @@ class Controller:
         }
         self.stage_packages: dict[str, Path] = {}
         self.accepted_restore_outputs: dict[str, dict[str, str]] = {}
+        self.accepted_build_outputs: dict[str, dict[str, str]] = {}
         self.receipts: list[tuple[Path, str]] = []
+        self.receipt_expectations: dict[str, dict[str, Any]] = {}
 
     def preflight(self) -> None:
         if not self.caller.is_dir():
             raise CertificationError(f"caller tree does not exist: {self.caller}")
         if not self.bootstrap.is_file():
             raise CertificationError(f"bootstrap package does not exist: {self.bootstrap}")
+        bootstrap_version = package_version(self.bootstrap)
+        if self.args.stage1_version is not None:
+            if not packer.VERSION_RE.fullmatch(self.args.stage1_version):
+                raise CertificationError(
+                    f"--stage1-version {self.args.stage1_version!r} "
+                    "is not a valid package version")
+            if self.args.stage1_version == bootstrap_version:
+                raise CertificationError(
+                    "the stage-1 version must differ from the bootstrap version")
         if self.work.exists():
             raise CertificationError("--work must name a new controller-owned directory")
         if self.work.parent.is_symlink():
@@ -459,6 +626,18 @@ class Controller:
             raise CertificationError(f"package cache does not exist: {self.package_cache}")
         if shutil.which("bwrap") is None:
             raise CertificationError("bubblewrap is required for the ADR-0198 restricted boundary")
+        for name in self.report["assemblies"]:
+            path = Path(name)
+            if path.is_absolute() or not path.parts or ".." in path.parts:
+                raise CertificationError(
+                    f"assembly path must be relative to the stage output root: {name}")
+        for label, values in (
+            ("project", self.report["projects"]),
+            ("assembly", self.report["assemblies"]),
+            ("test", self.report["tests"]),
+        ):
+            if len(values) != len(set(values)):
+                raise CertificationError(f"repeated --{label} values are not allowed")
         self.work.mkdir(mode=0o700)
         for path in (self.evidence, self.reports, self.logs, self.mutable, self.toolchains):
             path.mkdir(mode=0o700)
@@ -467,11 +646,6 @@ class Controller:
         path = self.mutable / stage / purpose
         path.mkdir(parents=True, exist_ok=True)
         return path
-
-    def stage_writable_paths(self, stage: str) -> list[Path]:
-        root = self.mutable / stage
-        root.mkdir(parents=True, exist_ok=True)
-        return [root]
 
     def stage_toolchain(self, stage: str) -> Path:
         return self.toolchains / stage
@@ -498,9 +672,10 @@ class Controller:
     def sandbox_command(
         self, tree: Path, writable: list[Path], command: list[str],
         env: dict[str, str], network: bool = False,
+        read_only: list[Path] | None = None,
     ) -> list[str]:
         arguments = [
-            "bwrap", "--die-with-parent", "--new-session", "--unshare-user",
+            "bwrap", "--clearenv", "--die-with-parent", "--new-session", "--unshare-user",
             "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",
         ]
         if not network:
@@ -521,6 +696,8 @@ class Controller:
         test_supervisor = self.toolchains / "test-supervisor"
         if test_supervisor.is_dir():
             arguments.extend(("--ro-bind", str(test_supervisor), str(test_supervisor)))
+        for path in read_only or []:
+            arguments.extend(("--ro-bind", str(path), str(path)))
         for path in writable:
             arguments.extend(("--bind", str(path), str(path)))
         offline_feed = self.offline_feed(env["ADR0198_STAGE"])
@@ -538,6 +715,7 @@ class Controller:
         graph_identity: str, writable: list[Path], env: dict[str, str],
         outputs: list[Path] | None = None, network: bool = False,
         capture_test_events: bool = False,
+        read_only: list[Path] | None = None,
     ) -> CommandResult:
         nonce = secrets.token_hex(32)
         receipt_name = f"{stage}-{purpose}-{secrets.token_hex(8)}.json"
@@ -547,9 +725,12 @@ class Controller:
         read_fd = write_fd = -1
         command_env = dict(env)
         pass_fds: tuple[int, ...] = ()
+        event_key: bytes | None = None
         if capture_test_events:
             read_fd, write_fd = os.pipe()
+            event_key = secrets.token_bytes(32)
             command_env["ADR0198_TEST_EVENT_FD"] = str(write_fd)
+            command_env["ADR0198_TEST_EVENT_KEY"] = event_key.hex()
             pass_fds = (write_fd,)
 
             def read_events() -> None:
@@ -559,7 +740,8 @@ class Controller:
 
             event_reader = threading.Thread(target=read_events, daemon=True)
             event_reader.start()
-        sandboxed = self.sandbox_command(tree, writable, command, command_env, network)
+        sandboxed = self.sandbox_command(
+            tree, writable, command, command_env, network, read_only)
         started = time.time_ns()
         process = subprocess.Popen(
             sandboxed, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -613,6 +795,12 @@ class Controller:
         receipt_path = self.evidence / receipt_name
         atomic_json(receipt_path, receipt)
         self.receipts.append((receipt_path, sha256_file(receipt_path)))
+        self.receipt_expectations[str(receipt_path)] = {
+            key: receipt[key] for key in (
+                "nonceCommitment", "pid", "arguments", "sandboxArgumentsSha256",
+                "graphIdentity", "startedNs", "completedNs",
+            )
+        }
         if process.returncode != 0:
             tail = captured.decode(errors="replace").splitlines()[-40:]
             raise CertificationError(
@@ -622,7 +810,7 @@ class Controller:
             str(receipt_path), process.returncode,
             (completed - started) / 1_000_000_000,
             sha256_bytes(captured),
-            str(events_path) if events_path is not None else None,
+            str(events_path) if events_path is not None else None, event_key,
         )
 
     def environment(self, stage: str) -> tuple[dict[str, str], list[Path]]:
@@ -635,6 +823,8 @@ class Controller:
         for path in (home, temp, packages, http, plugins):
             path.mkdir(parents=True, exist_ok=True)
         env = {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
             "HOME": str(home),
             "TMPDIR": str(temp), "TEMP": str(temp), "TMP": str(temp),
             "DOTNET_CLI_HOME": str(home),
@@ -647,7 +837,18 @@ class Controller:
             "NUGET_CERT_REVOCATION_MODE": "offline",
             "ADR0198_STAGE": stage,
         }
-        return env, self.stage_writable_paths(stage)
+        return env, [home, temp, http, plugins]
+
+    def command_stdout(
+        self, stage: str, purpose: str, tree: Path, command: list[str],
+        graph_identity: str, writable: list[Path], env: dict[str, str],
+        read_only: list[Path] | None = None,
+    ) -> bytes:
+        result = self.command(
+            stage, purpose, tree, command, graph_identity, writable, env,
+            read_only=read_only)
+        receipt = json.loads(Path(result.receipt).read_text(encoding="utf-8"))
+        return Path(receipt["stdout"]["path"]).read_bytes()
 
     def seed_sdk_cache(self, stage: str, package: Path) -> dict[str, Any]:
         version = package_version(package)
@@ -756,18 +957,12 @@ class Controller:
                 raise CertificationError(
                     f"offline package cache lacks {package_id}/{version}")
             destination = destination_root / package_id / version
-            if destination.exists():
-                shutil.rmtree(destination)
-            shutil.copytree(source, destination)
-            nupkgs = list(source.glob("*.nupkg"))
-            if len(nupkgs) != 1:
-                raise CertificationError(
-                    f"package cache entry must contain one nupkg: {source}")
-            feed_package = self.offline_feed(stage) / nupkgs[0].name
-            if feed_package.exists() and sha256_file(feed_package) != sha256_file(nupkgs[0]):
+            nupkg = extract_verified_package(source, destination)
+            feed_package = self.offline_feed(stage) / nupkg.name
+            if feed_package.exists() and sha256_file(feed_package) != sha256_file(nupkg):
                 raise CertificationError(
                     f"ambiguous package bytes for {package_id}/{version}")
-            atomic_bytes(feed_package, nupkgs[0].read_bytes())
+            atomic_bytes(feed_package, nupkg.read_bytes())
             files = [
                 FileIdentity(
                     path.relative_to(destination_root).as_posix(),
@@ -817,6 +1012,12 @@ class Controller:
         properties["BuildProjectReferences"] = "false" if isolated else "true"
         property_args = [f"-p:{name}={value}" for name, value in sorted(properties.items())]
         env, writable = self.environment(stage)
+        obj = Path(properties["BaseIntermediateOutputPath"])
+        writable = [*writable, obj]
+        read_only = [
+            self.writable(stage, "packages"),
+            self.writable(stage, "out"),
+        ]
         get_command = [
             str(self.stage_dotnet(stage) / "dotnet"), "msbuild", str(relative), "-nologo",
             "-getProperty:MSBuildProjectFullPath,MSBuildAllProjects,MSBuildToolsPath,"
@@ -830,44 +1031,71 @@ class Controller:
         graph_hint = sha256_bytes(json.dumps({
             "project": str(relative), "properties": properties,
         }, sort_keys=True).encode())
-        sandboxed = self.sandbox_command(tree, writable, get_command, env)
+        suffix = f"{sha256_bytes(str(relative).encode())[:8]}-{'isolated' if isolated else 'ordinary'}"
+        evaluated_bytes = self.command_stdout(
+            stage, f"graph-evaluate-{suffix}", tree, get_command,
+            graph_hint, writable, env, read_only)
         try:
-            result = subprocess.run(
-                sandboxed, capture_output=True, timeout=self.args.command_timeout)
-        except subprocess.TimeoutExpired as error:
-            raise CertificationError(
-                f"MSBuild evaluation timed out for {relative}") from error
-        if result.returncode != 0:
-            raise CertificationError(
-                f"cannot evaluate {relative}:\n"
-                + (result.stdout + result.stderr).decode(errors="replace"))
-        try:
-            evaluated = json.loads(result.stdout)
+            evaluated = json.loads(evaluated_bytes)
         except json.JSONDecodeError as error:
             raise CertificationError(f"invalid MSBuild evaluation for {relative}: {error}") from error
         preprocess = [
             str(self.stage_dotnet(stage) / "dotnet"), "msbuild", str(relative), "-nologo", "-preprocess",
             *property_args, "-nodeReuse:false",
         ]
-        try:
-            preprocessed = subprocess.run(
-                self.sandbox_command(tree, writable, preprocess, env),
-                capture_output=True, timeout=self.args.command_timeout)
-        except subprocess.TimeoutExpired as error:
-            raise CertificationError(
-                f"MSBuild preprocessing timed out for {relative}") from error
-        if preprocessed.returncode != 0:
-            raise CertificationError(f"cannot preprocess {relative}")
+        preprocessed = self.command_stdout(
+            stage, f"graph-preprocess-{suffix}", tree, preprocess,
+            graph_hint, writable, env, read_only)
         imports = sorted({
             item.strip()
             for item in re.findall(
                 r"(?:^|\r?\n)[ \t]*([^\r\n]+)\r?\n[ \t]*={20,}(?:\r?\n|$)",
-                preprocessed.stdout.decode(errors="replace"))
+                preprocessed.decode(errors="replace"))
             if Path(item.strip()).is_absolute() and Path(item.strip()).is_file()
         })
+        properties_out = evaluated.get("Properties", {})
+        item_sets = {
+            name: list(evaluated.get("Items", {}).get(name, []))
+            for name in INPUT_ITEMS
+        }
+        assets = properties_out.get("ProjectAssetsFile")
+        if assets and Path(assets).is_file():
+            out_dir = Path(properties_out.get("OutDir", ""))
+            output_root = self.writable(stage, "out")
+            if not out_dir.is_absolute() or not contains(output_root, out_dir):
+                raise CertificationError(
+                    f"resolved output directory is outside controller storage: {out_dir}")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            resolved_names = (
+                "ReferencePath", "Analyzer", "GsharpCodeAnalyzer",
+                "AdditionalFiles", "EmbeddedResource", "Content",
+            )
+            resolve_properties = dict(properties)
+            resolve_properties["BuildProjectReferences"] = "false"
+            resolve_property_args = [
+                f"-p:{name}={value}"
+                for name, value in sorted(resolve_properties.items())
+            ]
+            resolve_command = [
+                str(self.stage_dotnet(stage) / "dotnet"), "msbuild",
+                str(relative), "-nologo", "-target:ResolveReferences",
+                "-getItem:" + ",".join(resolved_names),
+                *resolve_property_args, "-nodeReuse:false",
+            ]
+            resolved_bytes = self.command_stdout(
+                stage, f"graph-resolve-{suffix}", tree, resolve_command,
+                graph_hint, writable, env, read_only)
+            try:
+                resolved = json.loads(resolved_bytes)
+            except json.JSONDecodeError as error:
+                raise CertificationError(
+                    f"invalid resolved input inventory for {relative}: {error}") from error
+            for name in resolved_names:
+                item_sets.setdefault(name, []).extend(
+                    resolved.get("Items", {}).get(name, []))
         inputs: list[dict[str, str]] = []
-        for item_name in INPUT_ITEMS:
-            for item in evaluated.get("Items", {}).get(item_name, []):
+        for item_name, items in item_sets.items():
+            for item in items:
                 value = item.get("FullPath") or item.get("Identity")
                 if not value:
                     continue
@@ -875,12 +1103,22 @@ class Controller:
                 if not path.is_absolute():
                     path = project.parent / path
                 path = real(path)
-                if path.exists() and path.is_file():
+                producer_name = item.get("MSBuildSourceProjectFile")
+                producer = real(Path(producer_name)) if producer_name else None
+                if (producer is not None and producer.is_file()
+                        and contains(tree, producer) and producer != project):
+                    continue
+                elif path.exists() and path.is_file():
                     inputs.append({
                         "kind": item_name, "path": str(path),
                         "sha256": sha256_file(path),
                     })
-        properties_out = evaluated.get("Properties", {})
+                elif item_name in {
+                    "ReferencePath", "Analyzer", "GsharpCodeAnalyzer",
+                    "AdditionalFiles", "EmbeddedResource", "Content",
+                }:
+                    raise CertificationError(
+                        f"resolved compilation input is missing: {path}")
         if properties_out.get("TargetFrameworks"):
             raise CertificationError(f"{relative} is multitargeted")
         references = []
@@ -1070,7 +1308,7 @@ class Controller:
         return accepted
 
     def restore(self, stage: str, tree: Path, roots: list[str], plan: dict[str, Any]) -> None:
-        env, writable = self.environment(stage)
+        env, runtime_writable = self.environment(stage)
         for root in self.topological_order(plan):
             project = Path(root)
             properties = self.properties(stage, project)
@@ -1084,18 +1322,23 @@ class Controller:
                 "-p:NuGetAudit=false",
                 *[f"-p:{name}={value}" for name, value in sorted(properties.items())],
                 "--configfile", str(self.write_offline_config(stage)),
-                "--disable-build-servers", "--no-dependencies",
+                "--disable-build-servers", "--no-dependencies", "--locked-mode",
                 "-nodeReuse:false",
             ]
             assets = Path(plan["isolated"][root]["effectiveProperties"]["ProjectAssetsFile"])
+            writable = [
+                *runtime_writable,
+                self.writable(stage, "packages"),
+                Path(properties["BaseIntermediateOutputPath"]),
+            ]
             self.command(
                 stage, "restore", tree, command, plan["identity"], writable, env,
-                outputs=[assets])
+                outputs=[assets], read_only=[self.writable(stage, "out")])
 
     def build(
         self, stage: str, tree: Path, roots: list[str], plan: dict[str, Any],
     ) -> None:
-        env, writable = self.environment(stage)
+        env, runtime_writable = self.environment(stage)
         order = self.topological_order(plan)
         for root in order:
             self.revalidate(stage, tree, roots, plan, f"before-build-{sha256_bytes(root.encode())[:8]}")
@@ -1114,9 +1357,21 @@ class Controller:
             outputs = [self.planned_target(node)]
             if node.get("TargetRefPath"):
                 outputs.append(Path(node["TargetRefPath"]))
-            self.command(
+            writable = [
+                *runtime_writable,
+                Path(properties["BaseIntermediateOutputPath"]),
+                outputs[0].parent,
+            ]
+            receipt = self.command(
                 stage, "build", tree, command, plan["identity"], writable, env,
-                outputs=outputs)
+                outputs=outputs, read_only=[
+                    self.writable(stage, "packages"),
+                    self.writable(stage, "out"),
+                ])
+            document = json.loads(Path(receipt.receipt).read_text(encoding="utf-8"))
+            accepted = self.accepted_build_outputs.setdefault(stage, {})
+            for output in document["outputs"]:
+                accepted[output["path"]] = output["sha256"]
             self.revalidate(stage, tree, roots, plan, f"after-build-{sha256_bytes(root.encode())[:8]}")
 
     @staticmethod
@@ -1168,7 +1423,7 @@ class Controller:
         self, project: str, plan: dict[str, Any], destination: Path,
     ) -> None:
         stage = "stage-1"
-        env, writable = self.environment(stage)
+        env, runtime_writable = self.environment(stage)
         destination.mkdir(parents=True, exist_ok=True)
         properties = self.properties(stage, Path(project))
         properties.update({
@@ -1197,9 +1452,18 @@ class Controller:
             *[f"-p:{name}={value}" for name, value in sorted(properties.items())],
             "-nodeReuse:false",
         ]
+        writable = [
+            *runtime_writable,
+            Path(properties["BaseIntermediateOutputPath"]),
+            destination,
+        ]
         receipt = self.command(
             stage, "publish-" + Path(project).stem,
-            self.stage1, command, publish_plan["identity"], writable, env)
+            self.stage1, command, publish_plan["identity"], writable, env,
+            read_only=[
+                self.writable(stage, "packages"),
+                self.writable(stage, "out"),
+            ])
         published = [
             {"path": str(path), "size": path.stat().st_size, "sha256": sha256_file(path)}
             for path in sorted(destination.rglob("*")) if path.is_file()
@@ -1295,6 +1559,11 @@ class Controller:
         for name in self.report["assemblies"]:
             left = self.writable("stage-1", "out") / name
             right = self.writable("stage-2", "out") / name
+            for stage, path in (("stage-1", left), ("stage-2", right)):
+                expected = self.accepted_build_outputs.get(stage, {}).get(str(path))
+                if expected is None or not path.is_file() or sha256_file(path) != expected:
+                    raise CertificationError(
+                        f"selected PE is not an accepted build output: {path}")
             first, second, equal = compare_pe(left, right)
             rows.append({
                 "assembly": name,
@@ -1333,11 +1602,26 @@ class Controller:
                 },
                 "effectiveProperties": effective,
                 "references": node["references"],
+                "nonCompilingReferences": node["nonCompilingReferences"],
+                "imports": sorted((
+                    {
+                        "path": Path(row["path"]).relative_to(tree).as_posix(),
+                        "sha256": row["sha256"],
+                    }
+                    for row in node["imports"]
+                    if contains(tree, Path(row["path"]))
+                ), key=lambda row: row["path"]),
                 "inputs": sorted((
                     {
                         "kind": row["kind"],
                         "path": Path(row["path"]).relative_to(tree).as_posix(),
                         "sha256": row["sha256"],
+                        **({
+                            "logicalPath": "/".join(
+                                Path(row["logicalPath"]).parts[
+                                    Path(row["logicalPath"]).parts.index("out") + 1:])
+                        } if row.get("logicalPath")
+                             and "out" in Path(row["logicalPath"]).parts else {}),
                     }
                     for row in node["inputs"]
                     if row["kind"] != "ProjectReference"
@@ -1399,8 +1683,9 @@ class Controller:
                 "stage-2", tree, [project], test_properties)
             atomic_json(self.evidence / f"stage-2-test-{index}-plan.json", test_plan)
             self.revalidate(
-                "stage-2", tree, [project], test_plan, f"before-test-{index}")
-            env, writable = self.environment("stage-2")
+                "stage-2", tree, [project], test_plan, f"before-test-{index}",
+                test_properties)
+            env, runtime_writable = self.environment("stage-2")
             properties = self.properties("stage-2", Path(project))
             properties.update(test_properties)
             command = [
@@ -1420,7 +1705,11 @@ class Controller:
             }
             receipt = self.command(
                 "stage-2", "test", tree, command, test_plan["identity"],
-                [*writable, scratch], env, capture_test_events=True)
+                [*runtime_writable, scratch], env, capture_test_events=True,
+                read_only=[
+                    self.writable("stage-2", "packages"),
+                    self.writable("stage-2", "out"),
+                ])
             after = {
                 name: sha256_file(self.writable("stage-2", "out") / name)
                 for name in self.report["assemblies"]
@@ -1430,12 +1719,11 @@ class Controller:
             if receipt.events is None:
                 raise CertificationError("test command produced no supervisor events")
             try:
-                events = [
-                    json.loads(line)
-                    for line in Path(receipt.events).read_text(encoding="utf-8").splitlines()
-                    if line
-                ]
-            except (OSError, json.JSONDecodeError) as error:
+                if receipt.event_key is None:
+                    raise CertificationError("test command has no event authentication key")
+                events = authenticated_events(
+                    Path(receipt.events).read_bytes(), receipt.event_key)
+            except (OSError, CertificationError) as error:
                 raise CertificationError(f"invalid test supervisor evidence: {error}") from error
             starts = [event for event in events if event.get("type") == "started"]
             completed = [event for event in events if event.get("type") == "completed"]
@@ -1452,7 +1740,8 @@ class Controller:
                     f"test evidence is not a positive completed pass: "
                     f"total={total}, observed={len(results)}, failed={failed}")
             self.revalidate(
-                "stage-2", tree, [project], test_plan, f"after-test-{index}")
+                "stage-2", tree, [project], test_plan, f"after-test-{index}",
+                test_properties)
             rows.append({
                 "project": project, "filter": test_filter, "executed": total,
                 "failed": failed, "outcome": "Completed",
@@ -1463,30 +1752,10 @@ class Controller:
         return rows
 
     def verify_receipts(self) -> None:
-        seen_nonces: set[str] = set()
-        for path, expected_hash in self.receipts:
-            if not path.is_file() or sha256_file(path) != expected_hash:
-                raise CertificationError(f"command receipt changed: {path}")
-            receipt = json.loads(path.read_text(encoding="utf-8"))
-            if receipt.get("runId") != self.run_id or receipt.get("exitCode") != 0:
-                raise CertificationError(f"stale or failed command receipt: {path}")
-            nonce = receipt.get("nonceCommitment")
-            if not nonce or nonce in seen_nonces:
-                raise CertificationError(f"replayed command receipt: {path}")
-            seen_nonces.add(nonce)
-            for output in receipt.get("outputs", []):
-                target = Path(output["path"])
-                if (not target.is_file()
-                        or target.stat().st_size != output["size"]
-                        or sha256_file(target) != output["sha256"]):
-                    raise CertificationError(
-                        f"receipt output changed after command: {target}")
-            events = receipt.get("events")
-            if events is not None:
-                event_path = Path(events["path"])
-                if not event_path.is_file() or sha256_file(event_path) != events["sha256"]:
-                    raise CertificationError(
-                        f"test supervisor evidence changed: {event_path}")
+        hashes = {str(path): expected for path, expected in self.receipts}
+        verify_receipt_set(
+            self.run_id, [path for path, _ in self.receipts],
+            hashes, self.receipt_expectations)
 
     def certify(self) -> int:
         try:
@@ -1507,8 +1776,13 @@ class Controller:
             self.stage_packages["stage-1"] = self.bootstrap
             self.seed_sdk_cache("stage-1", self.bootstrap)
             self.seed_sdk_resolution("stage-1", self.bootstrap)
+            test_projects = [
+                specification.partition("::")[0]
+                for specification in self.args.test
+            ]
             roots = list(dict.fromkeys([
                 *self.report["projects"],
+                *test_projects,
                 *(str(path) for path in PACK_DEPENDENCIES if (self.stage1 / path).is_file()),
             ]))
             stage1_restore = self.graph("stage-1", self.stage1, roots)
@@ -1555,6 +1829,7 @@ class Controller:
             self.build("stage-2", self.stage2, roots, stage2_build)
 
             verify_manifest(self.source, manifest)
+            self.verify_receipts()
             self.report["comparison"] = self.compare_outputs()
             self.report["tests"] = self.run_tests(
                 self.stage2, stage2_build, roots)
@@ -1598,6 +1873,22 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--validate-project", nargs=2, metavar=("TREE", "PROJECT"), type=Path,
         help="run the controller's fail-closed project XML validation only")
+    parser.add_argument(
+        "--verify-receipts", nargs="+", metavar="VALUE",
+        help="verify a controller receipt set")
+    parser.add_argument(
+        "--sandbox-probe", nargs="+", type=Path,
+        metavar="PATH",
+        help="prove caller, controller, environment, and network isolation")
+    parser.add_argument(
+        "--verify-events", nargs=2, metavar=("KEY_HEX", "EVENTS"),
+        help="verify authenticated supervisor event evidence")
+    parser.add_argument(
+        "--verify-manifest", nargs=2, metavar=("ROOT", "MANIFEST"), type=Path,
+        help="verify a frozen boundary manifest")
+    parser.add_argument(
+        "--verify-package-cache", nargs=2, metavar=("SOURCE", "DESTINATION"),
+        type=Path, help="verify and extract one cached package archive")
     args = parser.parse_args(argv)
     if args.compare_pe:
         try:
@@ -1618,6 +1909,52 @@ def main(argv: list[str]) -> int:
                 raise CertificationError("project is outside the source tree")
             inspect_project_xml(tree, project)
         except (CertificationError, OSError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_receipts:
+        run_id, *receipt_names = args.verify_receipts
+        try:
+            verify_receipt_set(run_id, [real(Path(name)) for name in receipt_names])
+        except (CertificationError, OSError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.sandbox_probe:
+        if len(args.sandbox_probe) < 2:
+            parser.error("--sandbox-probe requires TREE WRITABLE [DENIED ...]")
+        tree, writable, *denied = (real(path) for path in args.sandbox_probe)
+        try:
+            probe_sandbox(tree, writable, denied)
+        except (CertificationError, OSError, subprocess.TimeoutExpired) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_events:
+        key_hex, event_name = args.verify_events
+        try:
+            authenticated_events(Path(event_name).read_bytes(), bytes.fromhex(key_hex))
+        except (CertificationError, OSError, ValueError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_manifest:
+        root, manifest_path = args.verify_manifest
+        try:
+            rows = [
+                FileIdentity(**row)
+                for row in json.loads(manifest_path.read_text(encoding="utf-8"))
+            ]
+            verify_manifest(real(root), rows)
+        except (CertificationError, OSError, TypeError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_package_cache:
+        source, destination = args.verify_package_cache
+        try:
+            extract_verified_package(real(source), destination.resolve())
+        except (CertificationError, OSError, zipfile.BadZipFile) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0

@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
+import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -226,6 +229,17 @@ static class Program
         result = run_driver("--compare-pe", self.fixture, mutant)
         self.assertEqual(2, result.returncode)
 
+    def test_stream_overlapping_metadata_headers_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        name = data.find(b"#GUID\0")
+        self.assertGreater(name, 8)
+        struct.pack_into("<I", data, name - 8, 0)
+        mutant = self.mutants / "guid-in-headers.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps", result.stderr)
+
 
 class ControllerBoundaryTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -345,6 +359,275 @@ class ControllerBoundaryTests(unittest.TestCase):
         result = run_driver("--validate-project", tree, project)
         self.assertEqual(2, result.returncode)
         self.assertIn("protected properties", result.stderr)
+
+    def test_stage1_version_path_escape_is_rejected(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--stage1-version", "../escape")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("not a valid package version", result.stderr)
+
+    def test_stage1_version_must_differ_from_bootstrap(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--stage1-version", "0.4.591")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("must differ", result.stderr)
+
+    def test_absolute_assembly_path_is_rejected(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--assembly", self.package)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("relative to the stage output root", result.stderr)
+
+    def test_repeated_roots_and_tests_are_rejected(self) -> None:
+        for arguments in (
+            ("--project", "App.gsproj", "--project", "App.gsproj"),
+            ("--test", "Tests.gsproj::A", "--test", "Tests.gsproj::A"),
+        ):
+            with self.subTest(arguments=arguments):
+                tree = self.tree()
+                result = run_driver(
+                    "--tree", tree, "--bootstrap", self.package,
+                    "--work", self.root / "work", *arguments)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("repeated --", result.stderr)
+                remove_tree(tree)
+                remove_tree(self.root / "work")
+
+    def test_sandbox_hides_secrets_caller_siblings_controller_and_network(self) -> None:
+        tree = self.tree()
+        writable = self.root / "allowed"
+        caller = self.root / "caller-tree" / "secret"
+        sibling = self.root / "sibling-stage" / "secret"
+        evidence = self.root / "evidence" / "receipt"
+        caller.parent.mkdir()
+        sibling.parent.mkdir()
+        evidence.parent.mkdir()
+        caller.write_text("caller", encoding="utf-8")
+        sibling.write_text("secret", encoding="utf-8")
+        evidence.write_text("evidence", encoding="utf-8")
+        result = run_driver(
+            "--sandbox-probe", tree, writable, caller, sibling, evidence)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue((writable / "allowed-write").is_file())
+        self.assertFalse((tree / "forbidden-write").exists())
+
+
+class ReceiptBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-receipt-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+        self.run_id = "run-adr0198"
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def receipt(self, name: str, nonce: str) -> Path:
+        log = self.root / f"{name}.log"
+        output = self.root / f"{name}.dll"
+        events = self.root / f"{name}.events"
+        log.write_text("log", encoding="utf-8")
+        output.write_bytes(b"output")
+        events.write_text("events", encoding="utf-8")
+        receipt = self.root / f"{name}.json"
+        receipt.write_text(json.dumps({
+            "runId": self.run_id,
+            "nonceCommitment": nonce,
+            "stage": "stage-2",
+            "purpose": "test",
+            "pid": 123,
+            "arguments": ["dotnet", "test"],
+            "sandboxArgumentsSha256": "b" * 64,
+            "graphIdentity": "c" * 64,
+            "startedNs": 1,
+            "completedNs": 2,
+            "exitCode": 0,
+            "stdout": {
+                "path": str(log),
+                "sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+            },
+            "outputs": [{
+                "path": str(output),
+                "size": output.stat().st_size,
+                "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+            }],
+            "events": {
+                "path": str(events),
+                "sha256": hashlib.sha256(events.read_bytes()).hexdigest(),
+            },
+        }), encoding="utf-8")
+        return receipt
+
+    def test_fresh_receipt_is_accepted(self) -> None:
+        receipt = self.receipt("one", "1" * 64)
+        result = run_driver("--verify-receipts", self.run_id, receipt)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_replayed_receipt_and_nonce_are_rejected(self) -> None:
+        first = self.receipt("one", "1" * 64)
+        second = self.receipt("two", "1" * 64)
+        for receipts in ((first, first), (first, second)):
+            with self.subTest(receipts=receipts):
+                result = run_driver(
+                    "--verify-receipts", self.run_id, *receipts)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("replayed", result.stderr)
+
+    def test_stale_or_mismatched_receipt_is_rejected(self) -> None:
+        receipt = self.receipt("one", "1" * 64)
+        result = run_driver("--verify-receipts", "other-run", receipt)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("stale", result.stderr)
+
+    def test_output_log_and_event_replacement_are_rejected(self) -> None:
+        for suffix in (".dll", ".log", ".events"):
+            with self.subTest(suffix=suffix):
+                receipt = self.receipt("one", "1" * 64)
+                (self.root / f"one{suffix}").write_text("replaced", encoding="utf-8")
+                result = run_driver(
+                    "--verify-receipts", self.run_id, receipt)
+                self.assertEqual(2, result.returncode)
+                remove_tree(self.root)
+                self.root.mkdir()
+
+    def test_forged_and_replayed_test_events_are_rejected(self) -> None:
+        key = bytes(range(32))
+        payload = json.dumps({"type": "started"}, separators=(",", ":"))
+        mac = hmac.new(
+            key, b"0\n" + payload.encode(), hashlib.sha256).hexdigest()
+        events = self.root / "events.jsonl"
+        events.write_text(json.dumps({
+            "sequence": 0, "payload": payload, "mac": mac}) + "\n",
+            encoding="utf-8")
+        valid = run_driver("--verify-events", key.hex(), events)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        for mutation in ("forged", "replayed"):
+            with self.subTest(mutation=mutation):
+                rows = events.read_text(encoding="utf-8")
+                if mutation == "forged":
+                    envelope = json.loads(rows)
+                    envelope["payload"] = json.dumps(
+                        {"type": "completed"}, separators=(",", ":"))
+                    rows = json.dumps(envelope) + "\n"
+                else:
+                    rows += rows
+                events.write_text(rows, encoding="utf-8")
+                result = run_driver("--verify-events", key.hex(), events)
+                self.assertEqual(2, result.returncode)
+                events.write_text(json.dumps({
+                    "sequence": 0, "payload": payload, "mac": mac}) + "\n",
+                    encoding="utf-8")
+
+
+class PostSetupMutationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-mutation-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def manifest(self, names: list[str]) -> Path:
+        rows = []
+        for name in names:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name, encoding="utf-8")
+            rows.append({
+                "path": name,
+                "mode": path.stat().st_mode & 0o7777,
+                "size": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            })
+        manifest = self.root.parent / f"{self.root.name}.json"
+        manifest.write_text(json.dumps(rows), encoding="utf-8")
+        self.addCleanup(manifest.unlink, missing_ok=True)
+        return manifest
+
+    def assert_mutation_rejected(self, name: str, delete: bool = False) -> None:
+        names = [
+            "App.gsproj", "hidden.targets", "reference.dll", "analyzer.dll",
+            "generated.g.cs", "compiler.dll", "task.dll", "package.nupkg",
+            "accepted-output.dll", "Tests.gsproj",
+        ]
+        manifest = self.manifest(names)
+        target = self.root / name
+        if delete:
+            target.unlink()
+        else:
+            target.write_text("mutated", encoding="utf-8")
+        result = run_driver("--verify-manifest", self.root, manifest)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("manifest changed", result.stderr)
+
+    def test_post_dependency_and_test_setup_graph_changes_are_rejected(self) -> None:
+        for name in ("App.gsproj", "hidden.targets", "Tests.gsproj"):
+            with self.subTest(name=name):
+                self.assert_mutation_rejected(name)
+                remove_tree(self.root)
+                self.root.mkdir()
+
+    def test_destroyed_explicit_and_isolated_compilation_inputs_are_rejected(self) -> None:
+        for name in ("reference.dll", "analyzer.dll", "generated.g.cs"):
+            with self.subTest(name=name):
+                self.assert_mutation_rejected(name, delete=True)
+                remove_tree(self.root)
+                self.root.mkdir()
+
+    def test_replaced_toolchain_package_and_output_are_rejected(self) -> None:
+        for name in (
+            "compiler.dll", "task.dll", "package.nupkg", "accepted-output.dll",
+        ):
+            with self.subTest(name=name):
+                self.assert_mutation_rejected(name)
+                remove_tree(self.root)
+                self.root.mkdir()
+
+
+class PackageCacheTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-package-test-{suffix}"
+        remove_tree(self.root)
+        self.source = self.root / "source"
+        self.destination = self.root / "destination"
+        self.source.mkdir(parents=True)
+        self.package = self.source / "example.1.0.0.nupkg"
+        with zipfile.ZipFile(self.package, "w") as archive:
+            archive.writestr("lib/net10.0/example.dll", b"accepted")
+        digest = base64.b64encode(
+            hashlib.sha512(self.package.read_bytes()).digest()).decode()
+        (self.source / "example.1.0.0.nupkg.sha512").write_text(
+            digest, encoding="utf-8")
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_verified_archive_replaces_untrusted_extracted_cache_files(self) -> None:
+        (self.source / "lib").mkdir()
+        (self.source / "lib" / "example.dll").write_bytes(b"forged")
+        result = run_driver(
+            "--verify-package-cache", self.source, self.destination)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            b"accepted",
+            (self.destination / "lib/net10.0/example.dll").read_bytes())
+
+    def test_changed_package_archive_commitment_is_rejected(self) -> None:
+        self.package.write_bytes(self.package.read_bytes() + b"changed")
+        result = run_driver(
+            "--verify-package-cache", self.source, self.destination)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("hash is invalid", result.stderr)
 
 
 if __name__ == "__main__":

@@ -149,6 +149,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         streams[name] = (start, size)
         stream_ranges.append((start, end))
 
+    if any(start < cursor for start, _ in stream_ranges):
+        raise PeError("metadata stream overlaps the metadata or stream headers")
     if "#GUID" not in streams:
         raise PeError("metadata has no #GUID stream")
     table_names = [name for name in ("#~", "#-") if name in streams]
