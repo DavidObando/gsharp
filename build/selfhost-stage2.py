@@ -230,6 +230,13 @@ def real(path: Path) -> Path:
     return Path(os.path.realpath(path))
 
 
+def reject_path_alias(label: str, path: Path) -> None:
+    lexical = Path(os.path.abspath(path))
+    for component in (lexical, *lexical.parents):
+        if component.is_symlink():
+            raise CertificationError(f"{label} uses a symbolic-link path: {component}")
+
+
 def contains(parent: Path, child: Path) -> bool:
     try:
         child.relative_to(parent)
@@ -572,6 +579,12 @@ def dotnet_root() -> Path:
 class Controller:
     def __init__(self, args: argparse.Namespace):
         self.args = args
+        self.lexical_roots = {
+            "caller tree": args.tree,
+            "bootstrap package": args.bootstrap,
+            "package cache": args.package_cache,
+            "controller work": args.work,
+        }
         self.caller = real(args.tree)
         self.bootstrap = real(args.bootstrap)
         self.package_cache = real(args.package_cache)
@@ -599,6 +612,8 @@ class Controller:
         self.receipt_expectations: dict[str, dict[str, Any]] = {}
 
     def preflight(self) -> None:
+        for label, path in self.lexical_roots.items():
+            reject_path_alias(label, path)
         if not self.caller.is_dir():
             raise CertificationError(f"caller tree does not exist: {self.caller}")
         if not self.bootstrap.is_file():
@@ -1419,6 +1434,13 @@ class Controller:
             raise CertificationError(f"accepted project output is missing: {path}")
         return path
 
+    def accepted_output_hash(self, stage: str, path: Path) -> str:
+        actual = sha256_file(path) if path.is_file() else None
+        expected = self.accepted_build_outputs.get(stage, {}).get(str(path))
+        if expected is None or actual != expected:
+            raise CertificationError(f"not an accepted {stage} build output: {path}")
+        return actual
+
     def publish_project(
         self, project: str, plan: dict[str, Any], destination: Path,
     ) -> None:
@@ -1699,6 +1721,8 @@ class Controller:
             ]
             if separator:
                 command.extend(("--filter", test_filter))
+            test_target = self.project_target(test_plan, project)
+            test_target_hash = self.accepted_output_hash("stage-2", test_target)
             before = {
                 name: sha256_file(self.writable("stage-2", "out") / name)
                 for name in self.report["assemblies"]
@@ -1716,6 +1740,8 @@ class Controller:
             }
             if before != after:
                 raise CertificationError("test execution changed a certified output")
+            if self.accepted_output_hash("stage-2", test_target) != test_target_hash:
+                raise CertificationError("test execution changed its accepted test assembly")
             if receipt.events is None:
                 raise CertificationError("test command produced no supervisor events")
             try:
@@ -1746,6 +1772,9 @@ class Controller:
                 "project": project, "filter": test_filter, "executed": total,
                 "failed": failed, "outcome": "Completed",
                 "assemblySha256": before, "receipt": receipt.receipt,
+                "testAssembly": {
+                    "path": str(test_target), "sha256": test_target_hash,
+                },
                 "eventSha256": sha256_file(Path(receipt.events)),
                 "loggerSha256": sha256_file(logger),
             })
