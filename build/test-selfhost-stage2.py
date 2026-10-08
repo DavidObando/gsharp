@@ -696,6 +696,66 @@ class ReceiptBoundaryTests(unittest.TestCase):
                     "sequence": 0, "payload": payload, "mac": mac}) + "\n",
                     encoding="utf-8")
 
+    def test_test_results_must_name_the_bound_test_assembly(self) -> None:
+        key = bytes(range(32))
+        accepted = self.root / "accepted.dll"
+        stale = self.root / "stale.dll"
+        accepted.write_bytes(b"accepted")
+        stale.write_bytes(b"stale")
+        events = self.root / "events.jsonl"
+
+        def write_events(source: Path) -> None:
+            rows = [
+                {"type": "started"},
+                {"type": "result", "name": "Fixture.Test",
+                 "source": str(source), "outcome": "Passed"},
+                {"type": "completed", "total": 1, "passed": 1, "failed": 0,
+                 "skipped": 0, "canceled": False, "aborted": False},
+            ]
+            envelopes = []
+            for sequence, row in enumerate(rows):
+                payload = json.dumps(row, separators=(",", ":"))
+                mac = hmac.new(
+                    key, f"{sequence}\n{payload}".encode(),
+                    hashlib.sha256).hexdigest()
+                envelopes.append(json.dumps({
+                    "sequence": sequence, "payload": payload, "mac": mac}))
+            events.write_text("\n".join(envelopes) + "\n", encoding="utf-8")
+
+        write_events(stale)
+        rejected = run_driver(
+            "--verify-test-events", key.hex(), events, accepted)
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("accepted test assembly", rejected.stderr)
+        write_events(accepted)
+        valid = run_driver(
+            "--verify-test-events", key.hex(), events, accepted)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+
+
+class ResolvedInputBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-input-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_existing_input_outside_trusted_roots_is_rejected(self) -> None:
+        trusted = self.root / "trusted"
+        trusted.mkdir()
+        accepted = trusted / "accepted.dll"
+        outside = self.root / "outside.dll"
+        accepted.write_bytes(b"accepted")
+        outside.write_bytes(b"outside")
+        valid = run_driver("--validate-input-root", trusted, accepted)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        rejected = run_driver("--validate-input-root", trusted, outside)
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("outside accepted roots", rejected.stderr)
+
 
 class PostSetupMutationTests(unittest.TestCase):
     def setUp(self) -> None:
