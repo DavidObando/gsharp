@@ -412,16 +412,27 @@ def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
     return actual
 
 
-def validate_vstest_extensions(root: Path, allowed_hashes: set[str]) -> None:
+def validate_vstest_extensions(
+    root: Path, allowed_hashes: set[str], package_root: Path | None = None,
+) -> None:
+    package_hashes = {
+        sha256_file(path)
+        for path in package_root.rglob("*")
+        if package_root is not None and path.is_file()
+    } if package_root is not None else set()
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         name = path.name.casefold()
         if name.endswith("testadapter.dll"):
             accepted_test_adapter(path, allowed_hashes)
+        elif name == "testhost.dll":
+            if sha256_file(path) not in package_hashes:
+                raise CertificationError(
+                    f"test host is not from the accepted package cache: {path}")
         elif name.endswith((
             "testlogger.dll", "datacollector.dll",
-            "testruntimeprovider.dll", "testhost.dll",
+            "testruntimeprovider.dll",
         )):
             raise CertificationError(
                 f"project-supplied VSTest extension is unsupported: {path}")
@@ -2681,7 +2692,8 @@ class Controller:
             test_target = self.project_target(test_plan, project)
             validate_vstest_extensions(
                 self.writable("stage-2", "out"),
-                set(self.args.test_adapter_sha256))
+                set(self.args.test_adapter_sha256),
+                self.writable("stage-2", "packages"))
             command = [
                 str(self.stage_dotnet("stage-2") / "dotnet"), "vstest",
                 str(test_target),

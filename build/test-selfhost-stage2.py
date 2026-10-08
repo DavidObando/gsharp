@@ -1048,6 +1048,20 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("project-supplied VSTest extension", result.stderr)
 
+    def test_locked_package_testhost_is_accepted(self) -> None:
+        output = self.root / "out"
+        packages = self.root / "packages"
+        output.mkdir()
+        packages.mkdir()
+        (output / "testhost.dll").write_bytes(b"locked test host")
+        (packages / "testhost.dll").write_bytes(b"locked test host")
+        stage2.validate_vstest_extensions(output, set(), packages)
+        (output / "testhost.dll").write_bytes(b"forged test host")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "not from the accepted package cache",
+        ):
+            stage2.validate_vstest_extensions(output, set(), packages)
+
 
 class RuntimeOutputBoundaryTests(unittest.TestCase):
     def setUp(self) -> None:
