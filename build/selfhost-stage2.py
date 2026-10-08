@@ -303,6 +303,16 @@ def accepted_input_hash(
     return actual
 
 
+def accepted_logical_path(path: Path, roots: list[tuple[str, Path]]) -> str:
+    path = real(path)
+    for label, root in roots:
+        root = real(root)
+        if contains(root, path):
+            relative = path.relative_to(root).as_posix()
+            return f"{label}/{relative}" if label else relative
+    raise CertificationError(f"input has no accepted logical root: {path}")
+
+
 def reject_root_collisions(named: dict[str, Path]) -> None:
     resolved = {name: real(path) for name, path in named.items()}
     for name, path in resolved.items():
@@ -1351,7 +1361,11 @@ class Controller:
             for name in resolved_names:
                 item_sets.setdefault(name, []).extend(
                     resolved.get("Items", {}).get(name, []))
-        inputs: list[dict[str, str]] = []
+        inputs: list[dict[str, str]] = [{
+            "kind": "Project",
+            "path": str(project),
+            "sha256": sha256_file(project),
+        }]
         for item_name, items in item_sets.items():
             for item in items:
                 value = item.get("FullPath") or item.get("Identity")
@@ -1551,6 +1565,7 @@ class Controller:
         self, stage: str, tree: Path, roots: list[str], frozen: dict[str, Any], boundary: str,
         extra_properties: dict[str, str] | None = None,
     ) -> None:
+        self.verify_plan_files(frozen)
         current = self.graph(stage, tree, roots, extra_properties)
         if current["identity"] != frozen["identity"]:
             raise CertificationError(f"{stage} graph changed at {boundary}")
@@ -1960,6 +1975,15 @@ class Controller:
                         "path": Path(row["path"]).relative_to(tree).as_posix(),
                         "sha256": row["sha256"],
                     })
+                else:
+                    logical_inputs.append({
+                        "kind": row["kind"],
+                        "path": accepted_logical_path(Path(row["path"]), [
+                            ("packages", self.writable(stage, "packages")),
+                            ("toolchain", self.stage_toolchain(stage)),
+                            ("stage", self.mutable / stage),
+                        ]),
+                    })
             logical[name] = {
                 "project": name,
                 "properties": {
@@ -2255,6 +2279,9 @@ def main(argv: list[str]) -> int:
         "--verify-manifest", nargs=2, metavar=("ROOT", "MANIFEST"), type=Path,
         help="verify a frozen boundary manifest")
     parser.add_argument(
+        "--verify-plan-files", metavar="PLAN", type=Path,
+        help="verify the real certification plan-file boundary")
+    parser.add_argument(
         "--verify-package-cache", nargs=2, metavar=("SOURCE", "DESTINATION"),
         type=Path, help="verify and extract one cached package archive")
     parser.add_argument(
@@ -2359,6 +2386,14 @@ def main(argv: list[str]) -> int:
                 for row in json.loads(manifest_path.read_text(encoding="utf-8"))
             ]
             verify_manifest(real(root), rows)
+        except (CertificationError, OSError, TypeError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_plan_files:
+        try:
+            Controller.verify_plan_files(json.loads(
+                args.verify_plan_files.read_text(encoding="utf-8")))
         except (CertificationError, OSError, TypeError, json.JSONDecodeError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2

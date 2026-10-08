@@ -39,7 +39,9 @@ python3 build/selfhost-stage2.py \
 Stage-2 v1 rejects symbolic links, hard links, dirty Git inputs, versioned
 project SDK overrides, multitargeting, context-changing or build-disabled
 references, secret-bearing restore configuration, and unmodeled project targets
-or tasks. It supports the current `Gsharp.Extensions` compile-item reset only.
+or tasks. The current-closure hash allowlist contains the
+`Gsharp.Extensions` compile-item reset, SDK packing targets, bootstrap imported
+targets, and the bootstrap imported task declaration only.
 Restore is offline inside the restricted boundary; required packages must
 already be available from the frozen local inputs.
 

@@ -767,7 +767,7 @@ class PostSetupMutationTests(unittest.TestCase):
     def tearDown(self) -> None:
         remove_tree(self.root)
 
-    def manifest(self, names: list[str]) -> Path:
+    def plan(self, names: list[str]) -> Path:
         rows = []
         for name in names:
             path = self.root / name
@@ -779,10 +779,12 @@ class PostSetupMutationTests(unittest.TestCase):
                 "size": path.stat().st_size,
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             })
-        manifest = self.root.parent / f"{self.root.name}.json"
-        manifest.write_text(json.dumps(rows), encoding="utf-8")
-        self.addCleanup(manifest.unlink, missing_ok=True)
-        return manifest
+        plan = self.root.parent / f"{self.root.name}.json"
+        plan.write_text(json.dumps({
+            "ordinary": {"fixture": {"inputs": rows, "imports": []}},
+        }), encoding="utf-8")
+        self.addCleanup(plan.unlink, missing_ok=True)
+        return plan
 
     def assert_mutation_rejected(self, name: str, delete: bool = False) -> None:
         names = [
@@ -790,15 +792,15 @@ class PostSetupMutationTests(unittest.TestCase):
             "generated.g.cs", "compiler.dll", "task.dll", "package.nupkg",
             "accepted-output.dll", "test-output.dll", "Tests.gsproj",
         ]
-        manifest = self.manifest(names)
+        plan = self.plan(names)
         target = self.root / name
         if delete:
             target.unlink()
         else:
             target.write_text("mutated", encoding="utf-8")
-        result = run_driver("--verify-manifest", self.root, manifest)
+        result = run_driver("--verify-plan-files", plan)
         self.assertEqual(2, result.returncode)
-        self.assertIn("manifest changed", result.stderr)
+        self.assertIn("frozen graph input changed", result.stderr)
 
     def test_post_dependency_and_test_setup_graph_changes_are_rejected(self) -> None:
         for name in ("App.gsproj", "hidden.targets", "Tests.gsproj"):
