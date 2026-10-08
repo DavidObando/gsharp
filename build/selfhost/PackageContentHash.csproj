@@ -8,7 +8,6 @@
     <RunAnalyzers>false</RunAnalyzers>
     <EnableNETAnalyzers>false</EnableNETAnalyzers>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <NuGetLockFilePath>$(BaseIntermediateOutputPath)packages.lock.json</NuGetLockFilePath>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="PackageContentHash.cs" />

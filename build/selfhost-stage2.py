@@ -1999,6 +1999,12 @@ class Controller:
         return rows
 
     def source_logical_graph(self, plan: dict[str, Any], tree: Path) -> dict[str, Any]:
+        if tree == self.stage1:
+            stage = "stage-1"
+        elif tree == self.stage2:
+            stage = "stage-2"
+        else:
+            raise CertificationError(f"source-logical graph uses an unknown stage tree: {tree}")
         logical: dict[str, Any] = {}
         for name, node in plan["ordinary"].items():
             effective = {
