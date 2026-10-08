@@ -269,11 +269,8 @@ def git_snapshot_paths(tree: Path) -> tuple[list[Path], dict[str, str] | None]:
         ["git", "-C", str(tree), "rev-parse", "--show-toplevel"],
         capture_output=True, text=True)
     if probe.returncode != 0 or real(Path(probe.stdout.strip())) != real(tree):
-        paths = [
-            path for path in tree.rglob("*")
-            if ".git" not in path.relative_to(tree).parts and path.is_file()
-        ]
-        return sorted(paths), None
+        raise CertificationError(
+            "caller tree must be the root of a clean Git worktree")
     status_result = subprocess.run(
         ["git", "-C", str(tree), "status", "--porcelain=v1", "--untracked-files=all"],
         capture_output=True, text=True, check=True)
@@ -615,6 +612,9 @@ def inspect_repository_import(
                 "assemblyFile": element.attrib.get("AssemblyFile", ""),
                 "assemblyName": element.attrib.get("AssemblyName", ""),
             })
+    if external and (inventory["targets"] or inventory["tasks"]):
+        raise CertificationError(
+            f"external custom targets and tasks are unsupported in v1: {relative}")
     return inventory
 
 
@@ -707,6 +707,9 @@ class Controller:
         if self.args.stage1_version == package_version(self.bootstrap):
             raise CertificationError(
                 "the stage-1 version must differ from the bootstrap version")
+        if not self.report["tests"]:
+            raise CertificationError(
+                "at least one --test is required for positive certification evidence")
 
     def freeze_bootstrap(self) -> None:
         source = self.bootstrap
@@ -1735,6 +1738,7 @@ class Controller:
         self.accepted_output_hash(stage, sdk_target)
         for path in sdk_target.parent.glob(sdk_target.stem + ".*"):
             if path.is_file():
+                owned_file(path, "package payload")
                 replacements["tools/task/" + path.name] = path.read_bytes()
         for project, prefix in (
             ("src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj", "tools/hotreload/"),
@@ -2254,7 +2258,7 @@ def main(argv: list[str]) -> int:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
-    if args.validate_package_component:
+    if args.validate_package_component is not None:
         try:
             package_component(args.validate_package_component, "component")
         except CertificationError as error:

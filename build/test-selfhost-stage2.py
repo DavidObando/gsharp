@@ -262,6 +262,20 @@ class ControllerBoundaryTests(unittest.TestCase):
             '{"msbuild-sdks":{"Gsharp.NET.Sdk":"0.4.591"}}\n', encoding="utf-8")
         return tree
 
+    @staticmethod
+    def commit_tree(tree: Path) -> None:
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "fixture"],
+            check=True, capture_output=True)
+
     def test_workspace_containing_source_is_rejected_without_mutation(self) -> None:
         tree = self.tree()
         original = (tree / "global.json").read_bytes()
@@ -285,9 +299,10 @@ class ControllerBoundaryTests(unittest.TestCase):
         target.write_bytes((tree / "global.json").read_bytes())
         (tree / "global.json").unlink()
         (tree / "global.json").symlink_to(target.name)
+        self.commit_tree(tree)
         result = run_driver(
             "--tree", tree, "--bootstrap", self.package,
-            "--work", self.root / "work")
+            "--work", self.root / "work", "--test", "Tests.gsproj::Smoke")
         self.assertEqual(2, result.returncode)
         self.assertEqual(
             b'{"msbuild-sdks":{"Gsharp.NET.Sdk":"0.4.591"}}\n',
@@ -298,9 +313,10 @@ class ControllerBoundaryTests(unittest.TestCase):
         target = tree / "other.json"
         os.link(tree / "global.json", target)
         original = target.read_bytes()
+        self.commit_tree(tree)
         result = run_driver(
             "--tree", tree, "--bootstrap", self.package,
-            "--work", self.root / "work")
+            "--work", self.root / "work", "--test", "Tests.gsproj::Smoke")
         self.assertEqual(2, result.returncode)
         self.assertEqual(original, target.read_bytes())
 
@@ -321,9 +337,11 @@ class ControllerBoundaryTests(unittest.TestCase):
         (tree / "NuGet.Config").write_text(
             f"<configuration><packageSourceCredentials><x><Password value=\"{secret}\" />"
             "</x></packageSourceCredentials></configuration>", encoding="utf-8")
+        self.commit_tree(tree)
         work = self.root / "work"
         result = run_driver(
-            "--tree", tree, "--bootstrap", self.package, "--work", work)
+            "--tree", tree, "--bootstrap", self.package, "--work", work,
+            "--test", "Tests.gsproj::Smoke")
         self.assertEqual(2, result.returncode)
         evidence = "".join(
             path.read_text(encoding="utf-8", errors="replace")
@@ -355,7 +373,7 @@ class ControllerBoundaryTests(unittest.TestCase):
                 self.assertIn("overrides the global SDK pin", result.stderr)
                 remove_tree(tree)
 
-    def test_external_import_custom_definitions_are_inventoried(self) -> None:
+    def test_external_import_custom_definitions_are_rejected(self) -> None:
         tree = self.tree()
         imported = tree / "package.targets"
         imported.write_text(
@@ -363,10 +381,8 @@ class ControllerBoundaryTests(unittest.TestCase):
             '<Target Name="ExampleTarget" /></Project>',
             encoding="utf-8")
         result = run_driver("--validate-import", tree, imported)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        inventory = json.loads(result.stdout)
-        self.assertEqual([{"name": "ExampleTarget"}], inventory["targets"])
-        self.assertEqual("Example.Task", inventory["tasks"][0]["name"])
+        self.assertEqual(2, result.returncode)
+        self.assertIn("external custom targets and tasks", result.stderr)
 
     def test_project_controlled_target_cannot_forge_receipts(self) -> None:
         tree = self.tree()
@@ -402,6 +418,22 @@ class ControllerBoundaryTests(unittest.TestCase):
                 result = run_driver("--validate-package-component", value)
                 self.assertEqual(2, result.returncode)
                 self.assertIn("unsafe package component", result.stderr)
+
+    def test_non_git_source_tree_is_rejected(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("root of a clean Git worktree", result.stderr)
+
+    def test_positive_test_selection_is_required(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("at least one --test", result.stderr)
 
     def test_stage1_version_must_differ_from_bootstrap(self) -> None:
         tree = self.tree()
