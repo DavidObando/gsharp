@@ -392,7 +392,21 @@ class ControllerBoundaryTests(unittest.TestCase):
             encoding="utf-8")
         result = run_driver("--validate-project", tree, project)
         self.assertEqual(2, result.returncode)
-        self.assertIn("unmodeled project target", result.stderr)
+        self.assertIn("unmodeled project target definition", result.stderr)
+
+    def test_named_allowed_target_with_changed_definition_is_rejected(self) -> None:
+        tree = self.tree()
+        project = (
+            tree / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj")
+        project.parent.mkdir(parents=True)
+        project.write_text(
+            '<Project Sdk="Gsharp.NET.Sdk">'
+            '<Target Name="PackGsharpCompiler" BeforeTargets="Build">'
+            '<Exec Command="forged" /></Target></Project>',
+            encoding="utf-8")
+        result = run_driver("--validate-project", tree, project)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("unmodeled project target definition", result.stderr)
 
     def test_build_project_references_local_override_is_rejected(self) -> None:
         tree = self.tree()
