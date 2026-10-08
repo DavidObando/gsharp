@@ -38,7 +38,8 @@ A stage-2 run MUST have one external certification controller. The controller
 MUST run outside the source and build trees. Projects and project-controlled
 MSBuild code are untrusted inputs.
 
-The controller MUST create and own these disjoint roots:
+The run MUST define these disjoint roots. The controller MUST create and own
+each root except the caller-owned caller tree:
 
 | Root | Ownership and use |
 | --- | --- |
@@ -232,31 +233,34 @@ in only one context MUST reject the plan.
 
 ### 4. Required graph revalidation
 
-The controller MUST evaluate and compare a fresh graph snapshot at these
-boundaries. Each evaluation MUST use the restricted command boundary in
-section 1 and return its snapshot through a one-command authenticated channel
-to the controller:
+The controller MUST perform these boundary checks. Each graph evaluation MUST
+use the restricted command boundary in section 1 and return its snapshot
+through a one-command authenticated channel to the controller:
 
 1. before any mutation, when the controller creates the common source manifest
    and stage-1 restore plan in the ordinary and isolated compilation contexts;
 2. after the matching pin and dependency setup, immediately before each restore
    command;
-3. after each restore and before its outputs are accepted, then again after
-   those outputs are hash-bound when the dependent build plan is frozen;
-4. after dependency builds and immediately before each stage build command;
-5. after test setup, including result-directory creation and receipt
+3. after each restore, without evaluating or importing generated outputs,
+   verify that the restore inputs are unchanged and that every declared output
+   exists only at its planned path with its recorded hash;
+4. after those restore outputs are accepted and hash-bound, evaluate and freeze
+   the dependent build plan;
+5. after dependency builds and immediately before each stage build command;
+6. after test setup, including result-directory creation and receipt
    invalidation, and immediately before each test command;
-6. after each build or test command and before outputs or test evidence are
+7. after each build or test command and before outputs or test evidence are
    accepted;
-7. immediately before the final certification verdict.
+8. immediately before the final certification verdict.
 
 Each new snapshot MUST equal the applicable frozen execution plan for all
 inputs, imports, references, toolchain selections, targets, tasks, and planned
 outputs. A restore command is compared with its restore plan. A build or test
 command is compared with its plan after that plan is frozen from accepted
-restore and upstream producer evidence. Generated restore files MAY enter a
-dependent plan only after the controller records their controller-owned
-locations and hashes.
+restore and upstream producer evidence. The post-restore check in boundary 3 is
+not a graph evaluation. Generated restore files MUST NOT be evaluated or
+imported until that check accepts them. They MAY enter the dependent plan only
+after the controller records their controller-owned locations and hashes.
 
 Any other graph change MUST fail the run. After a frozen plan begins execution,
 the controller MUST NOT repair, ignore, or relearn that plan. This prohibition
