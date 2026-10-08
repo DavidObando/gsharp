@@ -2116,12 +2116,19 @@ class Controller:
                     elif path.exists():
                         raise CertificationError(
                             f"producer input is not an accepted build output: {path}")
+                    producer_metadata = {
+                        key: value for key, value in metadata.items()
+                        if key not in {
+                            "AssemblyVersion", "FileVersion",
+                            "FusionName", "ResolvedFrom",
+                        }
+                    }
                     inputs.append({
                         "kind": item_name,
                         "path": str(path),
                         "producerProject": producer.relative_to(tree).as_posix(),
                         "logicalPath": path.relative_to(output_root).as_posix(),
-                        "metadata": metadata,
+                        "metadata": producer_metadata,
                     })
                     continue
                 if accepted is not None:
