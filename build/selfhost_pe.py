@@ -31,6 +31,9 @@ class PeLayout:
     guid_stream_size: int
     metadata_offset: int
     metadata_size: int
+    module_row_count_offset: int
+    enc_id_index_offset: int
+    enc_base_id_index_offset: int
 
 
 def _u16(data: bytes, offset: int) -> int:
@@ -162,8 +165,10 @@ def inspect_layout(data: bytes) -> PeLayout:
     valid = _u64(data, tables + 8)
     row_cursor = tables + 24
     row_counts: dict[int, int] = {}
+    row_count_offsets: dict[int, int] = {}
     for table in range(64):
         if valid & (1 << table):
+            row_count_offsets[table] = row_cursor
             row_counts[table] = _u32(data, row_cursor)
             row_cursor += 4
     if row_counts.get(0) != 1:
@@ -197,6 +202,9 @@ def inspect_layout(data: bytes) -> PeLayout:
         guid_stream_size=guid_size,
         metadata_offset=metadata,
         metadata_size=metadata_size,
+        module_row_count_offset=row_count_offsets[0],
+        enc_id_index_offset=mvid_index_offset + guid_index_size,
+        enc_base_id_index_offset=mvid_index_offset + 2 * guid_index_size,
     )
 
 

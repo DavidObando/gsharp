@@ -195,6 +195,16 @@ ALLOWED_EXTERNAL_DEFINITION_HASHES = frozenset({
     # Microsoft.NET.Test.Sdk 17.11.1
     "d074738813cee4241a75e35ae752e4c2c3a29c807e7e9b4297a171b55ccbeff5",
 })
+ALLOWED_EXTERNAL_TASK_ASSEMBLY_HASHES = frozenset({
+    # Microsoft.Build.Tasks.Git 10.0.401 tools/net
+    "2c3e4352ff8633fea685a2e04639b79d12949149214a7fb9d3005d5133b8bd92",
+    # Microsoft.SourceLink.Common 8.0.0 tools/core
+    "7df139c4969a6b46963042f1c4813a58850a8b2ce5f3f661f647ccea095c125d",
+    # Microsoft.SourceLink.GitHub 8.0.0 tools/core
+    "45ae5e7e07b60d3f0d500041833d9a294926b689ed6ce6088804c6c020bc6a95",
+    # Nerdbank.GitVersioning 3.11.13-beta MSBuildCore
+    "aead4ade4c2a30dc3e46ec290564db67a195f14352de09cf1d6ea151ef26a4f6",
+})
 
 
 class CertificationError(Exception):
@@ -702,13 +712,30 @@ def probe_sandbox(tree: Path, writable: Path, denied: list[Path]) -> None:
         "TEMP": str(temp),
         "TMP": str(temp),
     }
-    result = subprocess.run(
-        controller.sandbox_command(tree, [writable], command, env),
-        capture_output=True, text=True, timeout=30,
-        env={**os.environ, "ADR0198_PROBE_SECRET": "must-not-cross"})
-    if result.returncode != 0:
-        raise CertificationError(
-            "sandbox probe failed:\n" + result.stdout + result.stderr)
+    parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        child.set_inheritable(True)
+        env["ADR0198_TEST_EVENT_FD"] = str(child.fileno())
+        script.insert(
+            1,
+            "/usr/bin/python3 -c "
+            + shlex.quote(
+                "import os; os.write(int(os.environ['ADR0198_TEST_EVENT_FD']), b'ready\\n')"))
+        command = ["/bin/sh", "-c", "; ".join(script)]
+        result = subprocess.run(
+            controller.sandbox_command(tree, [writable], command, env),
+            capture_output=True, text=True, timeout=30,
+            env={**os.environ, "ADR0198_PROBE_SECRET": "must-not-cross"},
+            pass_fds=(child.fileno(),))
+        child.close()
+        parent.settimeout(5)
+        event = parent.recv(64)
+        if result.returncode != 0 or event != b"ready\n":
+            raise CertificationError(
+                "sandbox probe failed:\n" + result.stdout + result.stderr)
+    finally:
+        parent.close()
+        child.close()
 
 
 def package_payload_hash(path: Path) -> str:
@@ -932,6 +959,32 @@ def inspect_repository_import(
                 "definitionSha256": definition,
             })
     return inventory
+
+
+def bind_external_task_assembly(
+    value: str, properties: dict[str, Any], package_root: Path,
+) -> dict[str, str]:
+    by_name = {name.casefold(): str(value) for name, value in properties.items()}
+
+    def substitute(match: re.Match[str]) -> str:
+        name = match.group(1).casefold()
+        if name not in by_name:
+            raise CertificationError(
+                f"external task assembly uses unresolved property {match.group(0)}")
+        return by_name[name]
+
+    expanded = re.sub(r"\$\(([A-Za-z_][A-Za-z0-9_.]*)\)", substitute, value)
+    if "$(" in expanded:
+        raise CertificationError(f"external task assembly path is unresolved: {value}")
+    path = real(Path(expanded.replace("\\", os.sep)))
+    package_root = real(package_root)
+    if not contains(package_root, path) or not path.is_file():
+        raise CertificationError(
+            f"external task assembly is outside the accepted package root: {path}")
+    digest = sha256_file(path)
+    if digest not in ALLOWED_EXTERNAL_TASK_ASSEMBLY_HASHES:
+        raise CertificationError(f"external task assembly is not approved: {path}")
+    return {"path": str(path), "sha256": digest}
 
 
 def dotnet_root() -> Path:
@@ -1766,6 +1819,16 @@ class Controller:
             elif (contains(self.writable(stage, "packages"), path)
                   or accepted_restore):
                 definitions = inspect_repository_import(tree, path, external=True)
+                for task in definitions["tasks"]:
+                    assembly = bind_external_task_assembly(
+                        task["assemblyFile"], properties_out,
+                        self.writable(stage, "packages"))
+                    task["resolvedAssembly"] = assembly
+                    inputs.append({
+                        "kind": "UsingTask",
+                        "path": assembly["path"],
+                        "sha256": assembly["sha256"],
+                    })
             else:
                 definitions = {"targets": [], "tasks": []}
             import_rows.append({
