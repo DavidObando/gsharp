@@ -391,6 +391,27 @@ def owned_file(path: Path, label: str) -> os.stat_result:
     return info
 
 
+def output_inventory(roots: list[Path]) -> list[dict[str, Any]]:
+    rows = []
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink():
+                raise CertificationError(f"command output is aliased: {path}")
+            if path.is_file():
+                info = owned_file(path, "command output")
+                rows.append({
+                    "path": str(path), "size": info.st_size,
+                    "sha256": sha256_file(path),
+                })
+    return rows
+
+
+def verify_output_inventory(roots: list[Path], expected_hashes: dict[str, str]) -> None:
+    actual = {row["path"]: row["sha256"] for row in output_inventory(roots)}
+    if actual != expected_hashes:
+        raise CertificationError("accepted runtime output closure changed")
+
+
 def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dict[str, str] | None]:
     entries, git_identity = git_snapshot_entries(caller)
     snapshot.mkdir()
@@ -698,6 +719,15 @@ def inspect_repository_import(
         root = ET.parse(path).getroot()
     except (ET.ParseError, OSError) as error:
         raise CertificationError(f"cannot inspect import {relative}: {error}") from error
+    local = {
+        name.strip().casefold()
+        for name in root.attrib.get("TreatAsLocalProperty", "").split(";")
+        if name.strip()
+    }
+    forbidden = sorted(local & PROTECTED_PROPERTIES)
+    if forbidden:
+        raise CertificationError(
+            f"{relative} exempts protected properties: {', '.join(forbidden)}")
     inspect_sdk_declarations(relative, root)
     inventory: dict[str, list[dict[str, str]]] = {"targets": [], "tasks": []}
     for element in root.iter():
@@ -769,6 +799,7 @@ class Controller:
         self.stage_packages: dict[str, Path] = {}
         self.accepted_restore_outputs: dict[str, dict[str, str]] = {}
         self.accepted_build_outputs: dict[str, dict[str, dict[str, str]]] = {}
+        self.accepted_output_roots: dict[str, set[Path]] = {}
         self.receipts: list[tuple[Path, str]] = []
         self.receipt_expectations: dict[str, dict[str, Any]] = {}
 
@@ -909,7 +940,8 @@ class Controller:
     def command(
         self, stage: str, purpose: str, tree: Path, command: list[str],
         graph_identity: str, writable: list[Path], env: dict[str, str],
-        outputs: list[Path] | None = None, network: bool = False,
+        outputs: list[Path] | None = None, output_roots: list[Path] | None = None,
+        network: bool = False,
         capture_test_events: bool = False,
         read_only: list[Path] | None = None,
     ) -> CommandResult:
@@ -975,6 +1007,10 @@ class Controller:
                     "path": str(path), "size": info.st_size,
                     "sha256": sha256_file(path),
                 })
+            known = {row["path"] for row in output_rows}
+            for row in output_inventory(output_roots or []):
+                if row["path"] not in known:
+                    output_rows.append(row)
         receipt = {
             "runId": self.run_id,
             "nonceCommitment": sha256_bytes((self.run_id + nonce).encode()),
@@ -1670,20 +1706,26 @@ class Controller:
                 Path(properties["BaseIntermediateOutputPath"]),
                 outputs[0].parent,
             ]
+            output_root = outputs[0].parent
+            if output_root.exists() and output_inventory([output_root]):
+                raise CertificationError(
+                    f"build output root is not empty before execution: {output_root}")
             receipt = self.command(
                 stage, "build", tree, command, project_plan["identity"], writable, env,
-                outputs=outputs, read_only=[
+                outputs=outputs, output_roots=[output_root], read_only=[
                     self.writable(stage, "packages"),
                     self.writable(stage, "out"),
                 ])
             document = json.loads(Path(receipt.receipt).read_text(encoding="utf-8"))
             accepted = self.accepted_build_outputs.setdefault(stage, {})
+            self.accepted_output_roots.setdefault(stage, set()).add(output_root)
             for output in document["outputs"]:
                 accepted[output["path"]] = {
                     "sha256": output["sha256"],
                     "receipt": receipt.receipt,
                     "project": root,
                 }
+            self.verify_output_closure(stage)
             self.revalidate(
                 stage, tree, [root], project_plan,
                 f"after-build-{sha256_bytes(root.encode())[:8]}")
@@ -1759,6 +1801,15 @@ class Controller:
             raise CertificationError(f"not an accepted {stage} build output: {path}")
         return actual
 
+    def verify_output_closure(self, stage: str) -> None:
+        roots = sorted(self.accepted_output_roots.get(stage, set()))
+        accepted = self.accepted_build_outputs.get(stage, {})
+        expected = {
+            path: details["sha256"] for path, details in accepted.items()
+            if any(contains(root, Path(path)) for root in roots)
+        }
+        verify_output_inventory(roots, expected)
+
     def publish_project(
         self, project: str, plan: dict[str, Any], destination: Path,
     ) -> None:
@@ -1785,6 +1836,7 @@ class Controller:
         self.revalidate(
             stage, self.stage1, [project], publish_plan,
             f"before-publish-{token}", publish_properties)
+        self.verify_output_closure(stage)
         command = [
             str(self.stage_dotnet(stage) / "dotnet"), "publish", project,
             "--configuration", self.args.config, "--no-restore", "--no-build",
@@ -1816,6 +1868,7 @@ class Controller:
                 })
         if not published:
             raise CertificationError(f"publish produced no files for {project}")
+        self.verify_output_closure(stage)
         atomic_json(
             self.evidence / f"stage-1-publish-{token}-outputs.json",
             {"receipt": receipt.receipt, "files": published})
@@ -2083,6 +2136,7 @@ class Controller:
                 command.extend(("--filter", test_filter))
             test_target = self.project_target(test_plan, project)
             test_target_hash = self.accepted_output_hash("stage-2", test_target)
+            self.verify_output_closure("stage-2")
             before = {
                 name: sha256_file(self.writable("stage-2", "out") / name)
                 for name in self.report["assemblies"]
@@ -2102,6 +2156,7 @@ class Controller:
                 raise CertificationError("test execution changed a certified output")
             if self.accepted_output_hash("stage-2", test_target) != test_target_hash:
                 raise CertificationError("test execution changed its accepted test assembly")
+            self.verify_output_closure("stage-2")
             if receipt.events is None:
                 raise CertificationError("test command produced no supervisor events")
             try:
@@ -2282,6 +2337,9 @@ def main(argv: list[str]) -> int:
         "--verify-plan-files", metavar="PLAN", type=Path,
         help="verify the real certification plan-file boundary")
     parser.add_argument(
+        "--verify-output-closure", nargs=2, metavar=("ROOT", "MANIFEST"),
+        type=Path, help="verify the real runtime output boundary")
+    parser.add_argument(
         "--verify-package-cache", nargs=2, metavar=("SOURCE", "DESTINATION"),
         type=Path, help="verify and extract one cached package archive")
     parser.add_argument(
@@ -2395,6 +2453,16 @@ def main(argv: list[str]) -> int:
             Controller.verify_plan_files(json.loads(
                 args.verify_plan_files.read_text(encoding="utf-8")))
         except (CertificationError, OSError, TypeError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_output_closure:
+        root, manifest = args.verify_output_closure
+        try:
+            rows = json.loads(manifest.read_text(encoding="utf-8"))
+            verify_output_inventory(
+                [real(root)], {row["path"]: row["sha256"] for row in rows})
+        except (CertificationError, OSError, KeyError, TypeError, json.JSONDecodeError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
