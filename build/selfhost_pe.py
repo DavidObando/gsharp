@@ -44,6 +44,9 @@ class PeLayout:
     clr_resources_directory_offset: int
     debug_directory_offset: int
     debug_directory_size: int
+    field_rva_rows_offset: int
+    field_rva_row_size: int
+    method_data_section_offset: int
 
 
 def _u16(data: bytes, offset: int) -> int:
@@ -234,6 +237,8 @@ def inspect_layout(data: bytes) -> PeLayout:
         raise PeError("metadata stream overlaps the metadata or stream headers")
     if "#GUID" not in streams:
         raise PeError("metadata has no #GUID stream")
+    if "#Blob" not in streams:
+        raise PeError("metadata has no #Blob stream")
     table_names = [name for name in ("#~", "#-") if name in streams]
     if len(table_names) != 1:
         raise PeError("metadata must have exactly one table stream")
@@ -380,7 +385,10 @@ def inspect_layout(data: bytes) -> PeLayout:
         if max(mvid_offset, start) < min(mvid_end, end):
             raise PeError(f"Module.Mvid overlaps {label}")
 
+    method_data_section_offset = 0
+
     def method_body_range(rva: int) -> tuple[int, int]:
+        nonlocal method_data_section_offset
         start = rva_to_offset(rva, 1, "method body")
         first = data[start]
         if first & 0x03 == 0x02:
@@ -395,6 +403,8 @@ def inspect_layout(data: bytes) -> PeLayout:
             _range(start, header_size + code_size, len(data), "method body")
             if flags & 0x08:
                 cursor = (end + 3) & ~3
+                if not method_data_section_offset:
+                    method_data_section_offset = cursor
                 while True:
                     _range(cursor, 2, len(data), "method data section")
                     kind = data[cursor]
@@ -403,6 +413,8 @@ def inspect_layout(data: bytes) -> PeLayout:
                         size = int.from_bytes(data[cursor + 1:cursor + 4], "little")
                     else:
                         size = data[cursor + 1]
+                    if size < 4:
+                        raise PeError("invalid method data section size")
                     _range(cursor, size, len(data), "method data section")
                     end = cursor + size
                     if not kind & 0x80:
@@ -425,10 +437,93 @@ def inspect_layout(data: bytes) -> PeLayout:
         if max(mvid_offset, start) < min(mvid_end, end):
             raise PeError("Module.Mvid overlaps a method body")
     field_rva_rows = table_offsets.get(29, 0)
+    field_rva_row_size = row_sizes[29]
+    class_sizes: dict[int, int] = {}
+    class_layout_rows = table_offsets.get(15, 0)
+    for row in range(row_counts.get(15, 0)):
+        entry = class_layout_rows + row * row_sizes[15]
+        class_size = _u32(data, entry + 2)
+        parent = (_u32 if table_index(2) == 4 else _u16)(data, entry + 6)
+        if not parent or parent in class_sizes:
+            raise PeError("invalid ClassLayout parent")
+        class_sizes[parent] = class_size
+
+    blob_start, blob_size = streams["#Blob"]
+
+    def compressed_uint(offset: int, limit: int) -> tuple[int, int]:
+        _range(offset, 1, limit, "compressed metadata integer")
+        first = data[offset]
+        if first < 0x80:
+            return first, offset + 1
+        if first < 0xC0:
+            _range(offset, 2, limit, "compressed metadata integer")
+            return ((first & 0x3F) << 8) | data[offset + 1], offset + 2
+        if first < 0xE0:
+            _range(offset, 4, limit, "compressed metadata integer")
+            return (
+                ((first & 0x1F) << 24)
+                | (data[offset + 1] << 16)
+                | (data[offset + 2] << 8)
+                | data[offset + 3],
+                offset + 4,
+            )
+        raise PeError("invalid compressed metadata integer")
+
+    def field_data_size(field: int) -> int:
+        if field < 1 or field > row_counts.get(4, 0):
+            raise PeError("FieldRVA has an invalid Field index")
+        entry = table_offsets[4] + (field - 1) * row_sizes[4]
+        signature_index_offset = entry + 2 + string_index_size
+        signature_index = (
+            _u32 if blob_index_size == 4 else _u16)(
+                data, signature_index_offset)
+        if signature_index <= 0 or signature_index >= blob_size:
+            raise PeError("FieldRVA field has an invalid signature")
+        length, cursor = compressed_uint(
+            blob_start + signature_index, blob_start + blob_size)
+        end = cursor + length
+        _range(cursor, length, blob_start + blob_size, "field signature")
+        if cursor >= end or data[cursor] != 0x06:
+            raise PeError("FieldRVA field has a non-field signature")
+        cursor += 1
+        while cursor < end and data[cursor] in (0x1F, 0x20):
+            _, cursor = compressed_uint(cursor + 1, end)
+        if cursor >= end:
+            raise PeError("FieldRVA field has a truncated signature")
+        element = data[cursor]
+        cursor += 1
+        primitive_sizes = {
+            0x02: 1, 0x03: 2, 0x04: 1, 0x05: 1,
+            0x06: 2, 0x07: 2, 0x08: 4, 0x09: 4,
+            0x0A: 8, 0x0B: 8, 0x0C: 4, 0x0D: 8,
+            0x18: 8 if magic == 0x20B else 4,
+            0x19: 8 if magic == 0x20B else 4,
+        }
+        if element in primitive_sizes:
+            size = primitive_sizes[element]
+        elif element == 0x11:
+            encoded, cursor = compressed_uint(cursor, end)
+            if encoded & 0x03:
+                raise PeError("FieldRVA value type is not a local TypeDef")
+            size = class_sizes.get(encoded >> 2, 0)
+            if not size:
+                raise PeError("FieldRVA value type has no explicit size")
+        else:
+            raise PeError("unsupported FieldRVA field type")
+        if cursor != end:
+            raise PeError("FieldRVA field has trailing signature data")
+        return size
+
     for row in range(row_counts.get(29, 0)):
-        rva = _u32(data, field_rva_rows + row * row_sizes[29])
-        if rva and mvid_offset == rva_to_offset(rva, 1, "field RVA data"):
-            raise PeError("Module.Mvid aliases field RVA data")
+        entry = field_rva_rows + row * field_rva_row_size
+        rva = _u32(data, entry)
+        if not rva:
+            continue
+        field = (_u32 if table_index(4) == 4 else _u16)(data, entry + 4)
+        size = field_data_size(field)
+        start = rva_to_offset(rva, size, "field RVA data")
+        if max(mvid_offset, start) < min(mvid_end, start + size):
+            raise PeError("Module.Mvid overlaps field RVA data")
 
     return PeLayout(
         mvid_offset=mvid_offset,
@@ -451,6 +546,9 @@ def inspect_layout(data: bytes) -> PeLayout:
         clr_resources_directory_offset=clr + 24,
         debug_directory_offset=debug_directory_offset,
         debug_directory_size=debug_directory_size,
+        field_rva_rows_offset=field_rva_rows,
+        field_rva_row_size=field_rva_row_size,
+        method_data_section_offset=method_data_section_offset,
     )
 
 
