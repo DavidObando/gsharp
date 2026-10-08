@@ -2022,6 +2022,18 @@ class Controller:
         package = self.stage_packages.get(stage)
         if package is None:
             raise CertificationError(f"no accepted SDK package is bound to {stage}")
+        restore_roots = {}
+        for name, node in ordinary.items():
+            assets = node["effectiveProperties"].get("ProjectAssetsFile")
+            expected = real(Path(node["properties"]["MSBuildProjectExtensionsPath"]))
+            if not assets or real(Path(assets)).parent != expected:
+                raise CertificationError(
+                    f"{name} selected a restore output outside its controller-owned root")
+            restore_roots[name] = expected
+        reject_root_collisions({
+            f"restore outputs for {name}": root
+            for name, root in restore_roots.items()
+        })
         version = package_version(package)
         sdk_version = subprocess.run(
             [str(self.stage_dotnet(stage) / "dotnet"), "--version"],
