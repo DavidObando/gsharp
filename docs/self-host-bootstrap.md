@@ -18,6 +18,31 @@ except for the exact validated `Module.Mvid` GUID slot. Draft PR #4693 is an
 in-place prototype and discrimination inventory. It is not a landable
 certification gate.
 
+The replacement controller is `build/selfhost-stage2.py`. It creates a new
+controller-owned work root, freezes one source snapshot, derives separate stage
+trees, runs graph discovery, restore, build, pack, test, and output acceptance
+inside restricted command boundaries, and writes evidence outside both build
+trees. The work path must not exist before the run.
+
+```sh
+python3 build/selfhost-stage2.py \
+  --tree <prepared-migrated-tree> \
+  --bootstrap <stage-0-Gsharp.NET.Sdk.nupkg> \
+  --work <new-controller-root-under-cache> \
+  --project src/Core/Core.gsproj \
+  --project src/Compiler/Compiler.gsproj \
+  --assembly Core/GSharp.Core.dll \
+  --assembly Compiler/gsc.dll \
+  --test 'test/Core.Tests/Core.Tests.csproj::<filter>'
+```
+
+Stage-2 v1 rejects symbolic links, hard links, dirty Git inputs, versioned
+project SDK overrides, multitargeting, context-changing or build-disabled
+references, secret-bearing restore configuration, and unmodeled project targets
+or tasks. It supports the current `Gsharp.Extensions` compile-item reset only.
+Restore is offline inside the restricted boundary; required packages must
+already be available from the frozen local inputs.
+
 ## Packing stage 1
 
 ```sh
