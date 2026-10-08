@@ -33,7 +33,7 @@ public sealed class TestSupervisorLogger : ITestLogger
         {
             AutoFlush = true,
         };
-        Write(new { type = "ready", challenge });
+        Write(new { type = "ready", challenge, pid = Environment.ProcessId });
         events.TestRunStart += (_, _) => Write(new { type = "started" });
         events.TestResult += (_, args) => Write(new
         {

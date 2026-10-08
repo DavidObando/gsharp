@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import asdict, dataclass
@@ -875,6 +876,12 @@ def reject_secret_restore_configuration(tree: Path) -> None:
                     raise CertificationError(
                         "secret-bearing restore configuration is unsupported in v1: "
                         f"{path.relative_to(tree)}")
+                for value in element.attrib.values():
+                    parsed = urllib.parse.urlsplit(value)
+                    if parsed.username is not None or parsed.password is not None:
+                        raise CertificationError(
+                            "secret-bearing restore configuration is unsupported in v1: "
+                            f"{path.relative_to(tree)}")
 
 
 def inspect_sdk_declarations(relative: str, root: ET.Element) -> None:
@@ -1176,6 +1183,7 @@ class Controller:
         env: dict[str, str], network: bool = False,
         read_only: list[Path] | None = None,
         protected_read_only: list[Path] | None = None,
+        status_fd: int | None = None,
     ) -> list[str]:
         arguments = [
             "bwrap", "--clearenv", "--die-with-parent", "--new-session", "--unshare-user",
@@ -1211,6 +1219,8 @@ class Controller:
         sandbox_temp = self.mutable / env["ADR0198_STAGE"] / "runtime" / "temp"
         arguments.extend(("--bind", str(sandbox_temp), "/tmp"))
         arguments.extend(("--proc", "/proc", "--dev", "/dev", "--chdir", str(tree)))
+        if status_fd is not None:
+            arguments.extend(("--as-pid-1", "--json-status-fd", str(status_fd)))
         for name, value in sorted(env.items()):
             arguments.extend(("--setenv", name, value))
         arguments.extend(("--", *command))
@@ -1235,6 +1245,9 @@ class Controller:
         event_parent: socket.socket | None = None
         event_child: socket.socket | None = None
         event_challenge: str | None = None
+        command_host_pid: int | None = None
+        status_read: int | None = None
+        status_write: int | None = None
         command_env = dict(env)
         pass_fds: tuple[int, ...] = ()
         event_key: bytes | None = None
@@ -1246,14 +1259,16 @@ class Controller:
             event_child.set_inheritable(True)
             command_env["ADR0198_TEST_EVENT_FD"] = str(event_child.fileno())
             command_env["ADR0198_TEST_EVENT_CHALLENGE"] = event_challenge
-            pass_fds = (event_child.fileno(),)
+            status_read, status_write = os.pipe()
+            os.set_inheritable(status_write, True)
+            pass_fds = (event_child.fileno(), status_write)
 
             def read_events() -> None:
                 nonlocal event_process_pid
                 try:
                     assert event_parent is not None
                     event_parent.settimeout(self.args.command_timeout)
-                    event_process_pid = process.pid
+                    event_process_pid = command_host_pid
                     with event_parent.makefile("rb") as handle:
                         for sequence, line in enumerate(handle):
                             payload = line.rstrip(b"\n")
@@ -1261,9 +1276,10 @@ class Controller:
                             if sequence == 0 and (
                                 document.get("type") != "ready"
                                 or document.get("challenge") != event_challenge
+                                or document.get("pid") != 1
                             ):
                                 raise CertificationError(
-                                    "test supervisor challenge mismatch")
+                                    "test supervisor identity or challenge mismatch")
                             mac = hmac.new(
                                 event_key,
                                 str(sequence).encode() + b"\n" + payload,
@@ -1280,11 +1296,20 @@ class Controller:
             for path in self.accepted_restore_outputs.get(stage, {})
         ]
         sandboxed = self.sandbox_command(
-            tree, writable, command, command_env, network, read_only, protected)
+            tree, writable, command, command_env, network, read_only, protected,
+            status_write)
         started = time.time_ns()
         process = subprocess.Popen(
             sandboxed, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             start_new_session=True, pass_fds=pass_fds)
+        if status_write is not None:
+            os.close(status_write)
+            status_write = None
+            assert status_read is not None
+            status_document = json.loads(os.read(status_read, 4096))
+            os.close(status_read)
+            status_read = None
+            command_host_pid = int(status_document["child-pid"])
         if event_child is not None:
             event_child.close()
             event_reader = threading.Thread(target=read_events, daemon=True)
@@ -1297,6 +1322,10 @@ class Controller:
             atomic_bytes(log, captured)
             if event_parent is not None:
                 event_parent.close()
+            if status_read is not None:
+                os.close(status_read)
+            if status_write is not None:
+                os.close(status_write)
             raise CertificationError(
                 f"{stage} {purpose} exceeded {self.args.command_timeout} seconds; "
                 f"see {log}") from error
@@ -2448,9 +2477,24 @@ class Controller:
         else:
             raise CertificationError(f"source-logical graph uses an unknown stage tree: {tree}")
         logical: dict[str, Any] = {}
+        path_roots = (
+            (str(tree), "$TREE"),
+            (str(self.writable(stage, "packages")), "$PACKAGES"),
+            (str(self.stage_toolchain(stage)), "$TOOLCHAIN"),
+            (str(self.mutable / stage), "$STAGE"),
+        )
+
+        def logical_value(value: Any) -> Any:
+            if not isinstance(value, str):
+                return value
+            for root, token in path_roots:
+                value = value.replace(root, token)
+            return value
+
         for name, node in plan["ordinary"].items():
             effective = {
-                key: value for key, value in node["effectiveProperties"].items()
+                key: logical_value(value)
+                for key, value in node["effectiveProperties"].items()
                 if key.casefold() not in {
                     "buildprojectreferences", "baseoutputpath",
                     "baseintermediateoutputpath", "msbuildprojectextensionspath",
