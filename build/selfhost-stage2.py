@@ -2514,8 +2514,33 @@ class Controller:
             if output_root.exists() and output_inventory([output_root]):
                 raise CertificationError(
                     f"build output root is not empty before execution: {output_root}")
+            producer_evidence = []
+            accepted_inputs = self.accepted_build_outputs.get(stage, {})
+            for row in project_plan["isolated"][root]["inputs"]:
+                if not row.get("producerProject"):
+                    continue
+                accepted_input = accepted_inputs.get(row["path"])
+                if accepted_input is None:
+                    raise CertificationError(
+                        f"producer input has no accepted evidence: {row['path']}")
+                producer_evidence.append({
+                    "path": row["path"],
+                    "project": row["producerProject"],
+                    "sha256": accepted_input["sha256"],
+                    "receipt": accepted_input["receipt"],
+                    "receiptSha256": sha256_file(Path(accepted_input["receipt"])),
+                })
+            producer_evidence.sort(key=lambda row: (row["project"], row["path"]))
+            command_identity = sha256_bytes(json.dumps({
+                "planIdentity": project_plan["identity"],
+                "producerEvidence": producer_evidence,
+            }, sort_keys=True, separators=(",", ":")).encode())
+            atomic_json(
+                self.evidence
+                / f"{stage}-build-{sha256_bytes(root.encode())[:8]}-producers.json",
+                producer_evidence)
             receipt = self.command(
-                stage, "build", tree, command, project_plan["identity"], writable, env,
+                stage, "build", tree, command, command_identity, writable, env,
                 outputs=outputs, output_roots=[output_root], read_only=[
                     self.writable(stage, "packages"),
                     self.writable(stage, "out"),
