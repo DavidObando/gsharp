@@ -20,7 +20,9 @@ import re
 import secrets
 import shlex
 import shutil
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import threading
@@ -299,7 +301,9 @@ def verify_receipt_set(
         if events is not None:
             event_path = Path(events["path"])
             if (not event_path.is_file()
-                    or sha256_file(event_path) != events["sha256"]):
+                    or sha256_file(event_path) != events["sha256"]
+                    or not isinstance(events.get("processPid"), int)
+                    or events["processPid"] <= 0):
                 raise CertificationError(
                     f"test supervisor evidence changed: {event_path}")
 
@@ -462,6 +466,16 @@ def output_inventory(roots: list[Path]) -> list[dict[str, Any]]:
                     "path": str(path), "size": info.st_size,
                     "sha256": sha256_file(path),
                 })
+    return rows
+
+
+def directory_manifest(root: Path) -> list[FileIdentity]:
+    rows = []
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise CertificationError(f"toolchain contains a symbolic link: {path}")
+        if path.is_file():
+            rows.append(identity(root, path))
     return rows
 
 
@@ -753,10 +767,10 @@ def inspect_project_xml(tree: Path, path: Path) -> None:
         for name in root.attrib.get("TreatAsLocalProperty", "").split(";")
         if name.strip()
     }
-    forbidden = sorted(local & PROTECTED_PROPERTIES)
-    if forbidden:
+    if local:
         raise CertificationError(
-            f"{path.relative_to(tree)} exempts protected properties: {', '.join(forbidden)}")
+            f"{path.relative_to(tree)} exempts protected properties controlled by the controller: "
+            f"{', '.join(sorted(local))}")
     relative = path.relative_to(tree).as_posix()
     inspect_sdk_declarations(relative, root)
     for element in root.iter():
@@ -783,10 +797,10 @@ def inspect_repository_import(
         for name in root.attrib.get("TreatAsLocalProperty", "").split(";")
         if name.strip()
     }
-    forbidden = sorted(local & PROTECTED_PROPERTIES)
-    if forbidden:
+    if local:
         raise CertificationError(
-            f"{relative} exempts protected properties: {', '.join(forbidden)}")
+            f"{relative} exempts protected properties controlled by the controller: "
+            f"{', '.join(sorted(local))}")
     inspect_sdk_declarations(relative, root)
     inventory: dict[str, list[dict[str, str]]] = {"targets": [], "tasks": []}
     for element in root.iter():
@@ -859,6 +873,7 @@ class Controller:
         self.accepted_restore_outputs: dict[str, dict[str, str]] = {}
         self.accepted_build_outputs: dict[str, dict[str, dict[str, str]]] = {}
         self.accepted_output_roots: dict[str, set[Path]] = {}
+        self.toolchain_manifests: dict[str, list[FileIdentity]] = {}
         self.receipts: list[tuple[Path, str]] = []
         self.receipt_expectations: dict[str, dict[str, Any]] = {}
 
@@ -1009,26 +1024,54 @@ class Controller:
         capture_test_events: bool = False,
         read_only: list[Path] | None = None,
     ) -> CommandResult:
+        self.verify_toolchain(stage)
         nonce = secrets.token_hex(32)
         receipt_name = f"{stage}-{purpose}-{secrets.token_hex(8)}.json"
         log = self.logs / receipt_name.replace(".json", ".log")
         event_chunks: list[bytes] = []
         event_reader: threading.Thread | None = None
-        read_fd = write_fd = -1
+        event_errors: list[BaseException] = []
+        event_process_pid: int | None = None
+        event_server: socket.socket | None = None
+        event_socket_path: Path | None = None
         command_env = dict(env)
-        pass_fds: tuple[int, ...] = ()
         event_key: bytes | None = None
         if capture_test_events:
-            read_fd, write_fd = os.pipe()
             event_key = secrets.token_bytes(32)
-            command_env["ADR0198_TEST_EVENT_FD"] = str(write_fd)
-            command_env["ADR0198_TEST_EVENT_KEY"] = event_key.hex()
-            pass_fds = (write_fd,)
+            event_directory = self.writable(stage, "event-sockets")
+            event_socket_path = event_directory / f"{secrets.token_hex(8)}.sock"
+            event_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            event_server.bind(str(event_socket_path))
+            event_server.listen(1)
+            command_env["ADR0198_TEST_EVENT_SOCKET"] = str(event_socket_path)
+            writable = [*writable, event_directory]
 
             def read_events() -> None:
-                with os.fdopen(read_fd, "rb", closefd=True) as handle:
-                    for chunk in iter(lambda: handle.read(65536), b""):
-                        event_chunks.append(chunk)
+                nonlocal event_process_pid
+                try:
+                    assert event_server is not None
+                    event_server.settimeout(self.args.command_timeout)
+                    connection, _ = event_server.accept()
+                    with connection:
+                        credentials = connection.getsockopt(
+                            socket.SOL_SOCKET, socket.SO_PEERCRED,
+                            struct.calcsize("3i"))
+                        event_process_pid = struct.unpack("3i", credentials)[0]
+                        with connection.makefile("rb") as handle:
+                            for sequence, line in enumerate(handle):
+                                payload = line.rstrip(b"\n")
+                                json.loads(payload)
+                                mac = hmac.new(
+                                    event_key,
+                                    str(sequence).encode() + b"\n" + payload,
+                                    hashlib.sha256).hexdigest()
+                                event_chunks.append((json.dumps({
+                                    "sequence": sequence,
+                                    "payload": payload.decode(),
+                                    "mac": mac,
+                                }) + "\n").encode())
+                except BaseException as error:
+                    event_errors.append(error)
 
             event_reader = threading.Thread(target=read_events, daemon=True)
             event_reader.start()
@@ -1041,22 +1084,41 @@ class Controller:
         started = time.time_ns()
         process = subprocess.Popen(
             sandboxed, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            start_new_session=True, pass_fds=pass_fds)
-        if write_fd >= 0:
-            os.close(write_fd)
+            start_new_session=True)
         try:
             captured, _ = process.communicate(timeout=self.args.command_timeout)
         except subprocess.TimeoutExpired as error:
             process.kill()
             captured, _ = process.communicate()
             atomic_bytes(log, captured)
+            if event_server is not None:
+                event_server.close()
+            if event_socket_path is not None:
+                event_socket_path.unlink(missing_ok=True)
             raise CertificationError(
                 f"{stage} {purpose} exceeded {self.args.command_timeout} seconds; "
                 f"see {log}") from error
         if event_reader is not None:
             event_reader.join(timeout=10)
             if event_reader.is_alive():
+                if event_server is not None:
+                    event_server.close()
+                event_reader.join(timeout=1)
+            if event_reader.is_alive():
+                if event_socket_path is not None:
+                    event_socket_path.unlink(missing_ok=True)
                 raise CertificationError("test supervisor event channel did not close")
+            if event_errors:
+                if event_server is not None:
+                    event_server.close()
+                if event_socket_path is not None:
+                    event_socket_path.unlink(missing_ok=True)
+                raise CertificationError(
+                    f"test supervisor event channel failed: {event_errors[0]}")
+        if event_server is not None:
+            event_server.close()
+        if event_socket_path is not None:
+            event_socket_path.unlink(missing_ok=True)
         completed = time.time_ns()
         atomic_bytes(log, captured)
         events_path = None
@@ -1089,6 +1151,7 @@ class Controller:
             "events": ({
                 "path": str(events_path),
                 "sha256": sha256_file(events_path),
+                "processPid": event_process_pid,
             } if events_path is not None else None),
         }
         receipt_path = self.evidence / receipt_name
@@ -1217,10 +1280,25 @@ class Controller:
                 target.write_bytes(archive.read(info))
         payload = verify_resolved_sdk_payload(package, package_root)
         make_read_only(self.stage_toolchain(stage))
+        manifest = directory_manifest(self.stage_toolchain(stage))
+        self.toolchain_manifests[stage] = manifest
+        atomic_json(
+            self.evidence / f"{stage}-dotnet-toolchain.json",
+            [asdict(row) for row in manifest])
         return {
             "version": package_version(package), "root": str(package_root),
             "payloadSha256": payload,
+            "manifestSha256": sha256_bytes(json.dumps(
+                [asdict(row) for row in manifest],
+                sort_keys=True, separators=(",", ":")).encode()),
         }
+
+    def verify_toolchain(self, stage: str) -> None:
+        expected = self.toolchain_manifests.get(stage)
+        if expected is None:
+            raise CertificationError(f"{stage} toolchain has no frozen manifest")
+        if directory_manifest(self.stage_toolchain(stage)) != expected:
+            raise CertificationError(f"{stage} dotnet toolchain changed")
 
     def seed_locked_packages(
         self, stage: str, tree: Path, projects: list[str],
@@ -1657,6 +1735,9 @@ class Controller:
                 "resolved": str(resolved_sdk),
                 "compilerSha256": sha256_file(expected_compiler),
                 "taskSha256": sha256_file(expected_task),
+                "dotnetManifestSha256": sha256_bytes(json.dumps(
+                    [asdict(row) for row in self.toolchain_manifests[stage]],
+                    sort_keys=True, separators=(",", ":")).encode()),
             },
         }
         self.validate_output_ownership(stage, value)
@@ -1738,7 +1819,7 @@ class Controller:
             ]
             self.command(
                 stage, "restore", tree, command, plan["identity"], writable, env,
-                outputs=[assets], read_only=[
+                outputs=[assets], output_roots=[assets.parent], read_only=[
                     self.writable(stage, "packages"),
                     self.writable(stage, "out"),
                 ])
@@ -1919,6 +2000,7 @@ class Controller:
         receipt = self.command(
             stage, "publish-" + Path(project).stem,
             self.stage1, command, publish_plan["identity"], writable, env,
+            output_roots=[destination],
             read_only=[
                 self.writable(stage, "packages"),
                 self.writable(stage, "out"),
@@ -2039,8 +2121,10 @@ class Controller:
             for name, data in sorted(replacements.items()):
                 sink.writestr(name, data)
         os.replace(temporary, produced)
-        if packer.gsharp_provenance(produced).get("tools/compiler/gsc") != "gs":
-            raise CertificationError("produced stage-1 package lacks G# compiler provenance")
+        try:
+            packer.verify(produced, self.bootstrap)
+        except packer.SelfHostError as error:
+            raise CertificationError(str(error)) from error
         return produced
 
     def compare_outputs(self) -> list[dict[str, Any]]:
@@ -2180,34 +2264,21 @@ class Controller:
                 raise CertificationError(
                     f"test project is not in the frozen closure: {project}")
             scratch = self.writable("stage-2", f"test-{index}")
-            test_properties = {
-                "VSTestLogger": "ADR0198",
-                "VSTestTestAdapterPath": str(logger.parent),
-                "VSTestResultsDirectory": str(scratch),
-            }
-            if separator:
-                test_properties["VSTestTestCaseFilter"] = test_filter
-            test_plan = self.graph(
-                "stage-2", tree, [project], test_properties)
+            test_plan = self.graph("stage-2", tree, [project])
             atomic_json(self.evidence / f"stage-2-test-{index}-plan.json", test_plan)
             self.revalidate(
-                "stage-2", tree, [project], test_plan, f"before-test-{index}",
-                test_properties)
+                "stage-2", tree, [project], test_plan, f"before-test-{index}")
             env, runtime_writable = self.environment("stage-2")
-            properties = self.properties("stage-2", Path(project))
-            properties.update(test_properties)
+            test_target = self.project_target(test_plan, project)
             command = [
-                str(self.stage_dotnet("stage-2") / "dotnet"), "test", project,
-                "--configuration", self.args.config, "--no-restore", "--no-build",
-                "--logger", "ADR0198",
-                "--test-adapter-path", str(logger.parent),
-                "--results-directory", str(scratch),
-                *[f"-p:{name}={value}" for name, value in sorted(properties.items())],
-                "-nodeReuse:false",
+                str(self.stage_dotnet("stage-2") / "dotnet"), "vstest",
+                str(test_target),
+                "--Logger:ADR0198",
+                f"--TestAdapterPath:{logger.parent}",
+                f"--ResultsDirectory:{scratch}",
             ]
             if separator:
-                command.extend(("--filter", test_filter))
-            test_target = self.project_target(test_plan, project)
+                command.append(f"--TestCaseFilter:{test_filter}")
             test_target_hash = self.accepted_output_hash("stage-2", test_target)
             self.verify_output_closure("stage-2")
             before = {
@@ -2242,8 +2313,7 @@ class Controller:
             total = positive_test_count(events, test_target)
             failed = 0
             self.revalidate(
-                "stage-2", tree, [project], test_plan, f"after-test-{index}",
-                test_properties)
+                "stage-2", tree, [project], test_plan, f"after-test-{index}")
             rows.append({
                 "project": project, "filter": test_filter, "executed": total,
                 "failed": failed, "outcome": "Completed",
@@ -2418,6 +2488,9 @@ def main(argv: list[str]) -> int:
         "--verify-output-closure", nargs=2, metavar=("ROOT", "MANIFEST"),
         type=Path, help="verify the real runtime output boundary")
     parser.add_argument(
+        "--verify-directory-manifest", nargs=2, metavar=("ROOT", "MANIFEST"),
+        type=Path, help="verify a complete controller-owned directory manifest")
+    parser.add_argument(
         "--verify-package-cache", nargs=2, metavar=("SOURCE", "DESTINATION"),
         type=Path, help="verify and extract one cached package archive")
     parser.add_argument(
@@ -2549,6 +2622,19 @@ def main(argv: list[str]) -> int:
             verify_output_inventory(
                 [real(root)], {row["path"]: row["sha256"] for row in rows})
         except (CertificationError, OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_directory_manifest:
+        root, manifest = args.verify_directory_manifest
+        try:
+            expected = [
+                FileIdentity(**row)
+                for row in json.loads(manifest.read_text(encoding="utf-8"))
+            ]
+            if directory_manifest(real(root)) != expected:
+                raise CertificationError(f"directory manifest changed: {root}")
+        except (CertificationError, OSError, TypeError, json.JSONDecodeError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0

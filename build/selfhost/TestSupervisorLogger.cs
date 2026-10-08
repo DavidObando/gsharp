@@ -1,11 +1,9 @@
-using System.Runtime.InteropServices;
-using System.Security.Cryptography;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Logging;
-using Microsoft.Win32.SafeHandles;
 
 namespace Adr0198;
 
@@ -14,27 +12,15 @@ namespace Adr0198;
 public sealed class TestSupervisorLogger : ITestLogger
 {
     private StreamWriter? writer;
-    private byte[]? key;
-    private long sequence;
 
     public void Initialize(TestLoggerEvents events, string testRunDirectory)
     {
-        string value = Environment.GetEnvironmentVariable("ADR0198_TEST_EVENT_FD")
-            ?? throw new InvalidOperationException("ADR0198_TEST_EVENT_FD is missing");
-        string keyValue = Environment.GetEnvironmentVariable("ADR0198_TEST_EVENT_KEY")
-            ?? throw new InvalidOperationException("ADR0198_TEST_EVENT_KEY is missing");
-        int descriptor = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
-        key = Convert.FromHexString(keyValue);
-        Environment.SetEnvironmentVariable("ADR0198_TEST_EVENT_FD", null);
-        Environment.SetEnvironmentVariable("ADR0198_TEST_EVENT_KEY", null);
-        if (fcntl(descriptor, 2, 1) != 0)
-        {
-            throw new InvalidOperationException("cannot protect the supervisor event channel");
-        }
-
-        writer = new StreamWriter(
-            new FileStream(new SafeFileHandle((IntPtr)descriptor, ownsHandle: true), FileAccess.Write),
-            new System.Text.UTF8Encoding(false))
+        string path = Environment.GetEnvironmentVariable("ADR0198_TEST_EVENT_SOCKET")
+            ?? throw new InvalidOperationException("ADR0198_TEST_EVENT_SOCKET is missing");
+        Environment.SetEnvironmentVariable("ADR0198_TEST_EVENT_SOCKET", null);
+        Socket socket = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        socket.Connect(new UnixDomainSocketEndPoint(path));
+        writer = new StreamWriter(new NetworkStream(socket, ownsSocket: true), new UTF8Encoding(false))
         {
             AutoFlush = true,
         };
@@ -70,19 +56,11 @@ public sealed class TestSupervisorLogger : ITestLogger
 
     private void Write(object value)
     {
-        if (writer is null || key is null)
+        if (writer is null)
         {
             throw new InvalidOperationException("test supervisor is not initialized");
         }
 
-        string payload = JsonSerializer.Serialize(value);
-        string signed = $"{sequence}\n{payload}";
-        string mac = Convert.ToHexString(
-            HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(signed))).ToLowerInvariant();
-        writer.WriteLine(JsonSerializer.Serialize(new { sequence, payload, mac }));
-        sequence++;
+        writer.WriteLine(JsonSerializer.Serialize(value));
     }
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int fcntl(int descriptor, int command, int argument);
 }
