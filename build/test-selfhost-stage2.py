@@ -340,6 +340,34 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("overrides the global SDK pin", result.stderr)
 
+    def test_versioned_sdk_element_and_import_are_rejected(self) -> None:
+        for declaration in (
+            '<Sdk Name="Gsharp.NET.Sdk" Version="0.4.591" />',
+            '<Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk/0.4.591" />',
+        ):
+            with self.subTest(declaration=declaration):
+                tree = self.tree()
+                project = tree / "App.gsproj"
+                project.write_text(
+                    f"<Project>{declaration}</Project>", encoding="utf-8")
+                result = run_driver("--validate-project", tree, project)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("overrides the global SDK pin", result.stderr)
+                remove_tree(tree)
+
+    def test_external_import_custom_definitions_are_inventoried(self) -> None:
+        tree = self.tree()
+        imported = tree / "package.targets"
+        imported.write_text(
+            '<Project><UsingTask TaskName="Example.Task" AssemblyFile="task.dll" />'
+            '<Target Name="ExampleTarget" /></Project>',
+            encoding="utf-8")
+        result = run_driver("--validate-import", tree, imported)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        inventory = json.loads(result.stdout)
+        self.assertEqual([{"name": "ExampleTarget"}], inventory["targets"])
+        self.assertEqual("Example.Task", inventory["tasks"][0]["name"])
+
     def test_project_controlled_target_cannot_forge_receipts(self) -> None:
         tree = self.tree()
         project = tree / "App.gsproj"
@@ -615,10 +643,10 @@ class PackageCacheTests(unittest.TestCase):
         self.package = self.source / "example.1.0.0.nupkg"
         with zipfile.ZipFile(self.package, "w") as archive:
             archive.writestr("lib/net10.0/example.dll", b"accepted")
-        digest = base64.b64encode(
+        self.content_hash = base64.b64encode(
             hashlib.sha512(self.package.read_bytes()).digest()).decode()
         (self.source / "example.1.0.0.nupkg.sha512").write_text(
-            digest, encoding="utf-8")
+            self.content_hash, encoding="utf-8")
 
     def tearDown(self) -> None:
         remove_tree(self.root)
@@ -639,6 +667,18 @@ class PackageCacheTests(unittest.TestCase):
             "--verify-package-cache", self.source, self.destination)
         self.assertEqual(2, result.returncode)
         self.assertIn("hash is invalid", result.stderr)
+
+    def test_replaced_archive_and_sidecar_differ_from_lock_content_hash(self) -> None:
+        self.package.write_bytes(self.package.read_bytes() + b"changed")
+        replacement_hash = base64.b64encode(
+            hashlib.sha512(self.package.read_bytes()).digest()).decode()
+        (self.source / "example.1.0.0.nupkg.sha512").write_text(
+            replacement_hash, encoding="utf-8")
+        result = run_driver(
+            "--verify-package-content", self.package, self.content_hash,
+            self.root / "hash-work")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("differs from the lock", result.stderr)
 
 
 if __name__ == "__main__":
