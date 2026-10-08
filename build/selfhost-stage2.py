@@ -2104,6 +2104,26 @@ class Controller:
                 producer_name = item.get("MSBuildSourceProjectFile")
                 producer = real(Path(producer_name)) if producer_name else None
                 accepted = self.accepted_build_outputs.get(stage, {}).get(str(path))
+                if (producer is not None and producer.is_file()
+                        and contains(tree, producer) and producer != project):
+                    output_root = self.writable(stage, "out")
+                    if not contains(output_root, path):
+                        raise CertificationError(
+                            f"producer input is outside controller output storage: {path}")
+                    if accepted is not None:
+                        accepted_input_hash(
+                            path, [], {str(path): accepted["sha256"]})
+                    elif path.exists():
+                        raise CertificationError(
+                            f"producer input is not an accepted build output: {path}")
+                    inputs.append({
+                        "kind": item_name,
+                        "path": str(path),
+                        "producerProject": producer.relative_to(tree).as_posix(),
+                        "logicalPath": path.relative_to(output_root).as_posix(),
+                        "metadata": metadata,
+                    })
+                    continue
                 if accepted is not None:
                     actual = accepted_input_hash(
                         path, [], {str(path): accepted["sha256"]})
@@ -2117,13 +2137,7 @@ class Controller:
                         "metadata": metadata,
                     })
                     continue
-                if (producer is not None and producer.is_file()
-                        and contains(tree, producer) and producer != project):
-                    if not path.exists():
-                        continue
-                    raise CertificationError(
-                        f"producer input is not an accepted build output: {path}")
-                elif path.exists() and path.is_file():
+                if path.exists() and path.is_file():
                     if item_name == "TestAdapter":
                         accepted_test_adapter(
                             path, set(self.args.test_adapter_sha256))
@@ -2332,6 +2346,8 @@ class Controller:
     def verify_plan_files(plan: dict[str, Any]) -> None:
         for node in plan["ordinary"].values():
             for row in [*node["inputs"], *node["imports"]]:
+                if row.get("producerProject"):
+                    continue
                 path = Path(row["path"])
                 if not path.is_file() or sha256_file(path) != row["sha256"]:
                     raise CertificationError(f"frozen graph input changed: {path}")
