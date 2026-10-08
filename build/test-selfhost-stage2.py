@@ -642,6 +642,7 @@ class ReceiptBoundaryTests(unittest.TestCase):
             "events": {
                 "path": str(events),
                 "sha256": hashlib.sha256(events.read_bytes()).hexdigest(),
+                "processPid": 123,
             },
         }), encoding="utf-8")
         return receipt
@@ -808,6 +809,41 @@ class RuntimeOutputBoundaryTests(unittest.TestCase):
         (self.root / "forged.deps.json").write_bytes(b"forged")
         extra = run_driver("--verify-output-closure", self.root, manifest)
         self.assertEqual(2, extra.returncode)
+
+
+class ToolchainManifestTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-toolchain-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_complete_toolchain_manifest_rejects_changed_bytes(self) -> None:
+        executable = self.root / "dotnet"
+        task = self.root / "sdk" / "MSBuild.dll"
+        task.parent.mkdir()
+        executable.write_bytes(b"dotnet")
+        task.write_bytes(b"msbuild")
+        rows = []
+        for path in (executable, task):
+            rows.append({
+                "path": path.relative_to(self.root).as_posix(),
+                "mode": path.stat().st_mode & 0o7777,
+                "size": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            })
+        manifest = self.root.parent / f"{self.root.name}.json"
+        manifest.write_text(json.dumps(rows), encoding="utf-8")
+        self.addCleanup(manifest.unlink, missing_ok=True)
+        valid = run_driver("--verify-directory-manifest", self.root, manifest)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        task.write_bytes(b"changed")
+        rejected = run_driver("--verify-directory-manifest", self.root, manifest)
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("directory manifest changed", rejected.stderr)
 
 
 class PostSetupMutationTests(unittest.TestCase):
