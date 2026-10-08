@@ -1141,6 +1141,16 @@ class ToolchainManifestTests(unittest.TestCase):
         self.assertEqual(ordinary, stage2.resolution_properties(ordinary))
         self.assertEqual(isolated, stage2.resolution_properties(isolated))
 
+    def test_rebuilt_project_plan_cannot_replace_frozen_graph(self) -> None:
+        frozen = {"Dependency.gsproj": {"inputs": ["before"]}}
+        stage2.require_frozen_graph(dict(frozen), frozen, "before-build")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "frozen graph changed",
+        ):
+            stage2.require_frozen_graph(
+                {"Dependency.gsproj": {"inputs": ["after"]}},
+                frozen, "before-build")
+
     def test_sandbox_masks_host_dotnet_roots(self) -> None:
         controller = object.__new__(stage2.Controller)
         controller.bwrap = Path("/usr/bin/bwrap")
@@ -1186,7 +1196,13 @@ class ToolchainManifestTests(unittest.TestCase):
             [
                 sys.executable, "-c",
                 f"import runpy,sys; sys.path.insert(0,{str(DRIVER.parent)!r}); "
-                f"print(runpy.run_path({str(DRIVER)!r})['dotnet_root']())",
+                f"m=runpy.run_path({str(DRIVER)!r}); "
+                "print(m['trusted_dotnet']() if any("
+                "p.exists() for p in ("
+                "m['Path']('/usr/share/dotnet/dotnet'),"
+                "m['Path']('/usr/local/share/dotnet/dotnet'),"
+                "m['Path'](m['pwd'].getpwuid(m['os'].getuid()).pw_dir)/'.dotnet/dotnet'"
+                ")) else 'unavailable')",
             ],
             cwd=REPO, text=True, capture_output=True, env=environment)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
