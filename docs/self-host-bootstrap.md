@@ -18,6 +18,41 @@ except for the exact validated `Module.Mvid` GUID slot. Draft PR #4693 is an
 in-place prototype and discrimination inventory. It is not a landable
 certification gate.
 
+The replacement controller is `build/selfhost-stage2.py`. It creates a new
+controller-owned work root, freezes one source snapshot, derives separate stage
+trees, runs graph discovery, restore, build, pack, test, and output acceptance
+inside restricted command boundaries, and writes evidence outside both build
+trees. The work path must not exist before the run.
+
+```sh
+python3 build/selfhost-stage2.py \
+  --tree <prepared-migrated-tree> \
+  --bootstrap <stage-0-Gsharp.NET.Sdk.nupkg> \
+  --work <new-controller-root-under-cache> \
+  --project src/Core/Core.gsproj \
+  --project src/Compiler/Compiler.gsproj \
+  --assembly Core/GSharp.Core.dll \
+  --assembly Compiler/gsc.dll \
+  --test 'test/Core.Tests/Core.Tests.gsproj::<filter>' \
+  --test-adapter-sha256 c5ac41b36fac0fcef9714fb80fea0175913530fb53dd7bb8e5e1470339667100 \
+  --test-adapter-sha256 194458c816e0ea9ff0c5eac8896c52133fe9205661833b3d0f57e85a4e66936b \
+  --test-adapter-sha256 ec705ad62e33f31fc46ad5800c9b1694c02d0ec4e1ee704712da9f24ebbea22e \
+  --test-adapter-sha256 3166dc70323fb30ccf1cedb0fe86f2ad122c46d254542342d90386efc4c9285c
+```
+
+Stage-2 v1 rejects symbolic links, hard links, dirty Git inputs, versioned
+project SDK overrides, multitargeting, context-changing or build-disabled
+references, secret-bearing restore configuration, and unmodeled project targets
+or tasks. The current-closure hash allowlist contains the
+`Gsharp.Extensions` compile-item reset, SDK packing targets, bootstrap imported
+targets and task declaration, plus exact definitions from the pinned
+Nerdbank.GitVersioning, Microsoft.SourceLink, Microsoft.Build.Tasks.Git,
+Microsoft.NET.Test.Sdk, Microsoft.CodeAnalysis.Analyzers, and coverlet.collector
+packages, and Microsoft.CodeCoverage and Microsoft.Extensions.Logging.Abstractions
+and Microsoft.Extensions.Options packages.
+Restore is offline inside the restricted boundary; required packages must
+already be available from the frozen local inputs.
+
 ## Packing stage 1
 
 ```sh

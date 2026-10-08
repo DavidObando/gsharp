@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Adr0198.PackageContentHash</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RunAnalyzers>false</RunAnalyzers>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="PackageContentHash.cs" />
+    <Reference Include="NuGet.Common" HintPath="$(MSBuildToolsPath)/NuGet.Common.dll" />
+    <Reference Include="NuGet.Frameworks" HintPath="$(MSBuildToolsPath)/NuGet.Frameworks.dll" />
+    <Reference Include="NuGet.Packaging" HintPath="$(MSBuildToolsPath)/NuGet.Packaging.dll" />
+    <Reference Include="NuGet.Versioning" HintPath="$(MSBuildToolsPath)/NuGet.Versioning.dll" />
+  </ItemGroup>
+</Project>

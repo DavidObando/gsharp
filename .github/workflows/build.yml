@@ -213,6 +213,18 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Install stage-2 sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Verify isolated stage-2 certification contract
+        run: |
+          dotnet build build/selfhost/PackageContentHash.csproj --configuration Release --nologo
+          dotnet build build/selfhost/TestSupervisorLogger.csproj --configuration Release --nologo
+          python3 build/test-selfhost-stage2.py
+
       - name: Restore
         run: dotnet restore GSharp.sln --locked-mode
 

@@ -1,0 +1,1630 @@
+#!/usr/bin/env python3
+"""ADR-0154 regression tests for the ADR-0198 stage-2 controller."""
+
+from __future__ import annotations
+
+import importlib.util
+import base64
+import dataclasses
+import hashlib
+import hmac
+import json
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import unittest
+import zipfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+DRIVER = REPO / "build" / "selfhost-stage2.py"
+ARTIFACTS = REPO / "build" / ".stage2-test-artifacts"
+_PE_SPEC = importlib.util.spec_from_file_location("selfhost_pe", REPO / "build" / "selfhost_pe.py")
+if _PE_SPEC is None or _PE_SPEC.loader is None:
+    raise RuntimeError("cannot load build/selfhost_pe.py")
+pe = importlib.util.module_from_spec(_PE_SPEC)
+sys.modules[_PE_SPEC.name] = pe
+_PE_SPEC.loader.exec_module(pe)
+_DRIVER_SPEC = importlib.util.spec_from_file_location("selfhost_stage2", DRIVER)
+if _DRIVER_SPEC is None or _DRIVER_SPEC.loader is None:
+    raise RuntimeError("cannot load build/selfhost-stage2.py")
+stage2 = importlib.util.module_from_spec(_DRIVER_SPEC)
+sys.modules[_DRIVER_SPEC.name] = stage2
+_DRIVER_SPEC.loader.exec_module(stage2)
+
+
+def run_driver(
+    *arguments: object, env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(DRIVER), *(str(argument) for argument in arguments)],
+        cwd=REPO, text=True, capture_output=True, env=env)
+
+
+def mutate(source: Path, destination: Path, offset: int, value: int | None = None) -> None:
+    data = bytearray(source.read_bytes())
+    data[offset] = value if value is not None else data[offset] ^ 1
+    destination.write_bytes(data)
+
+
+def remove_tree(path: Path) -> None:
+    if path.exists():
+        for child in path.rglob("*"):
+            try:
+                os.chmod(child, 0o700 if child.is_dir() else 0o600)
+            except FileNotFoundError:
+                pass
+        os.chmod(path, 0o700)
+        shutil.rmtree(path)
+
+
+class PeComparisonTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        remove_tree(ARTIFACTS)
+        project = ARTIFACTS / "fixture"
+        project.mkdir(parents=True)
+        (project / "Fixture.csproj").write_text(
+            """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Optimize>true</Optimize>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="payload.bin" />
+  </ItemGroup>
+</Project>
+""", encoding="utf-8")
+        (project / "Program.cs").write_text(
+            """using System;
+
+[assembly: Bytes(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16)]
+
+[AttributeUsage(AttributeTargets.Assembly)]
+sealed class BytesAttribute(params byte[] value) : Attribute;
+
+static class Program
+{
+    static readonly byte[] Data =
+        [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16];
+
+    static int Fat(int value)
+    {
+        try
+        {
+            if (value == 0) throw new InvalidOperationException();
+            return value + 0x123456;
+        }
+        catch (InvalidOperationException)
+        {
+            return -1;
+        }
+        catch (SystemException)
+        {
+            return -2;
+        }
+    }
+
+    static int Main() => Fat(Data[0]);
+}
+""", encoding="utf-8")
+        (project / "payload.bin").write_bytes(b"ADR0198-MANAGED-RESOURCE-MARKER")
+        result = subprocess.run(
+            ["dotnet", "build", "Fixture.csproj", "-c", "Release", "--nologo",
+             "-p:ImportDirectoryBuildProps=false",
+             "-p:ImportDirectoryBuildTargets=false",
+             "-p:TreatWarningsAsErrors=false"],
+            cwd=project, text=True, capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stdout + result.stderr)
+        cls.fixture = project / "bin" / "Release" / "net10.0" / "Fixture.dll"
+        cls.mutants = ARTIFACTS / "mutants"
+        cls.mutants.mkdir()
+        helper = subprocess.run(
+            ["dotnet", "run", str(REPO / "build" / "selfhost" / "PeBodyMutations.cs"),
+             "--", str(cls.fixture), str(cls.mutants)],
+            cwd=REPO, text=True, capture_output=True)
+        if helper.returncode != 0:
+            raise RuntimeError(helper.stdout + helper.stderr)
+        helper = subprocess.run(
+            ["dotnet", "run", str(REPO / "build" / "selfhost" / "PeBodyMutations.cs"),
+             "--", str(cls.fixture), str(cls.mutants), "--runtime-header"],
+            cwd=REPO, text=True, capture_output=True)
+        if helper.returncode != 0:
+            raise RuntimeError(helper.stdout + helper.stderr)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        remove_tree(ARTIFACTS)
+
+    def assert_different(self, mutant: Path) -> None:
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertFalse(json.loads(result.stdout)["normalizedEqual"])
+
+    def test_same_complete_pe_is_equal(self) -> None:
+        result = run_driver("--compare-pe", self.fixture, self.fixture)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue(json.loads(result.stdout)["normalizedEqual"])
+
+    def test_only_structural_mvid_slot_is_ignored(self) -> None:
+        mutant = self.mutants / "mvid-only.dll"
+        layout = pe.inspect_layout(self.fixture.read_bytes())
+        mutate(self.fixture, mutant, layout.mvid_offset)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["normalizedEqual"])
+        self.assertFalse(report["rawEqual"])
+
+    def test_repeated_mvid_bytes_in_attribute_are_not_ignored(self) -> None:
+        marker = bytes(range(1, 17))
+        base = bytearray(self.fixture.read_bytes())
+        marker_offset = base.find(marker)
+        self.assertGreater(marker_offset, 0)
+        layout = pe.inspect_layout(base)
+        base[marker_offset:marker_offset + 16] = base[layout.mvid_offset:layout.mvid_offset + 16]
+        left = self.mutants / "attribute-mvid-left.dll"
+        right = self.mutants / "attribute-mvid-right.dll"
+        left.write_bytes(base)
+        base[marker_offset] ^= 1
+        right.write_bytes(base)
+        self.assert_different(right)
+        result = run_driver("--compare-pe", left, right)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+
+    def test_coff_machine_mutation_is_rejected(self) -> None:
+        data = self.fixture.read_bytes()
+        pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+        mutant = self.mutants / "machine.dll"
+        mutate(self.fixture, mutant, pe_offset + 4)
+        self.assert_different(mutant)
+
+    def test_section_raw_data_overlapping_pe_headers_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+        optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+        first_section = pe_offset + 24 + optional_size
+        struct.pack_into("<I", data, first_section + 20, 0)
+        mutant = self.mutants / "section-header-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("section raw data overlaps PE headers", result.stderr)
+
+    def test_managed_resource_mutation_is_rejected(self) -> None:
+        data = self.fixture.read_bytes()
+        offset = data.find(b"ADR0198-MANAGED-RESOURCE-MARKER")
+        self.assertGreater(offset, 0)
+        mutant = self.mutants / "resource.dll"
+        mutate(self.fixture, mutant, offset)
+        self.assert_different(mutant)
+
+    def test_non_mvid_metadata_mutation_is_rejected(self) -> None:
+        data = self.fixture.read_bytes()
+        offset = data.find(b"Fixture")
+        self.assertGreater(offset, 0)
+        mutant = self.mutants / "metadata.dll"
+        mutate(self.fixture, mutant, offset)
+        self.assert_different(mutant)
+
+    def test_method_header_mutation_is_rejected(self) -> None:
+        self.assert_different(self.mutants / "header-only.dll")
+
+    def test_exception_region_mutation_is_rejected(self) -> None:
+        self.assert_different(self.mutants / "eh-only.dll")
+
+    def test_clr_entrypoint_mutation_is_rejected(self) -> None:
+        self.assert_different(self.mutants / "entrypoint-only.dll")
+
+    def test_clr_flags_mutation_is_rejected(self) -> None:
+        self.assert_different(self.mutants / "flags-only.dll")
+
+    def test_zero_mvid_index_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        data[layout.mvid_index_offset:layout.mvid_index_offset + layout.guid_index_size] = \
+            bytes(layout.guid_index_size)
+        mutant = self.mutants / "zero-mvid.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("zero GUID index", result.stderr)
+
+    def test_out_of_range_mvid_index_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        invalid = layout.guid_stream_size // 16 + 2
+        data[layout.mvid_index_offset:layout.mvid_index_offset + layout.guid_index_size] = \
+            invalid.to_bytes(layout.guid_index_size, "little")
+        mutant = self.mutants / "range-mvid.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("outside the #GUID stream", result.stderr)
+
+    def test_duplicate_module_rows_are_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        struct.pack_into("<I", data, layout.module_row_count_offset, 2)
+        mutant = self.mutants / "duplicate-module.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("exactly one Module row", result.stderr)
+
+    def test_truncated_metadata_table_rows_are_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.type_def_row_count_offset, 0)
+        struct.pack_into("<I", data, layout.type_def_row_count_offset, 0xffffffff)
+        mutant = self.mutants / "truncated-table-rows.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("metadata table 2", result.stderr)
+
+    def test_mvid_overlapping_method_body_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.method_def_rows_offset, 0)
+        struct.pack_into(
+            "<I", data, layout.method_def_rows_offset, layout.mvid_rva)
+        mutant = self.mutants / "mvid-method-body-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps a method body", result.stderr)
+
+    def test_semantic_guid_metadata_tables_are_rejected(self) -> None:
+        for table in (48, 55):
+            with self.subTest(table=table):
+                data = bytearray(self.fixture.read_bytes())
+                layout = pe.inspect_layout(data)
+                valid = struct.unpack_from("<Q", data, layout.tables_valid_offset)[0]
+                struct.pack_into(
+                    "<Q", data, layout.tables_valid_offset, valid | (1 << table))
+                struct.pack_into("<I", data, layout.metadata_rows_offset, 1)
+                mutant = self.mutants / f"semantic-guid-table-{table}.dll"
+                mutant.write_bytes(data)
+                result = run_driver("--compare-pe", self.fixture, mutant)
+                self.assertEqual(2, result.returncode)
+                self.assertIn(
+                    f"metadata table {table} has unsupported semantic GUID columns",
+                    result.stderr)
+
+    def test_mvid_aliasing_enc_id_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        mvid_index = data[
+            layout.mvid_index_offset:
+            layout.mvid_index_offset + layout.guid_index_size]
+        data[
+            layout.enc_id_index_offset:
+            layout.enc_id_index_offset + layout.guid_index_size] = mvid_index
+        mutant = self.mutants / "aliased-mvid.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("aliases another semantic Module GUID", result.stderr)
+
+    def test_mvid_overlapping_pe_resource_directory_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        struct.pack_into(
+            "<II", data, layout.pe_resource_directory_offset,
+            layout.mvid_rva, 16)
+        mutant = self.mutants / "mvid-pe-resource-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps PE data directory 2", result.stderr)
+
+    def test_mvid_overlapping_clr_resource_directory_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        struct.pack_into(
+            "<II", data, layout.clr_resources_directory_offset,
+            layout.mvid_rva, 16)
+        mutant = self.mutants / "mvid-clr-resource-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps CLR managed resources", result.stderr)
+
+    def test_mvid_overlapping_indirect_native_resource_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        marker = data.find(b"ADR0198-MANAGED-RESOURCE-MARKER")
+        self.assertGreater(marker, 4)
+        resource = marker - 4
+        resource_rva = struct.unpack_from(
+            "<I", data, layout.clr_resources_directory_offset)[0]
+        data[resource:resource + 40] = bytes(40)
+        struct.pack_into("<H", data, resource + 14, 1)
+        struct.pack_into("<II", data, resource + 16, 1, 24)
+        struct.pack_into(
+            "<IIII", data, resource + 24, layout.mvid_rva, 16, 0, 0)
+        struct.pack_into(
+            "<II", data, layout.pe_resource_directory_offset,
+            resource_rva, 40)
+        mutant = self.mutants / "mvid-native-resource-payload.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps a PE resource payload", result.stderr)
+
+    def test_out_of_range_native_resource_name_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        marker = data.find(b"ADR0198-MANAGED-RESOURCE-MARKER")
+        self.assertGreater(marker, 4)
+        resource = marker - 4
+        resource_rva = struct.unpack_from(
+            "<I", data, layout.clr_resources_directory_offset)[0]
+        data[resource:resource + 40] = bytes(40)
+        struct.pack_into("<H", data, resource + 12, 1)
+        struct.pack_into("<II", data, resource + 16, 0x80000027, 24)
+        struct.pack_into("<IIII", data, resource + 24, 0, 0, 0, 0)
+        struct.pack_into(
+            "<II", data, layout.pe_resource_directory_offset,
+            resource_rva, 40)
+        mutant = self.mutants / "invalid-native-resource-name.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("PE resource directory name", result.stderr)
+
+    def test_mvid_overlapping_vtable_fixup_payload_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        marker = data.find(b"ADR0198-MANAGED-RESOURCE-MARKER")
+        self.assertGreater(marker, 4)
+        table = marker - 4
+        table_rva = struct.unpack_from(
+            "<I", data, layout.clr_resources_directory_offset)[0]
+        struct.pack_into("<IHH", data, table, layout.mvid_rva, 1, 1)
+        struct.pack_into(
+            "<II", data, layout.clr_resources_directory_offset + 24,
+            table_rva, 8)
+        mutant = self.mutants / "mvid-vtable-fixup-payload.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps a CLR vtable-fixup payload", result.stderr)
+
+    def test_mvid_overlapping_debug_payload_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreaterEqual(layout.debug_directory_size, 28)
+        struct.pack_into(
+            "<III", data, layout.debug_directory_offset + 16,
+            16, layout.mvid_rva, layout.mvid_offset)
+        mutant = self.mutants / "mvid-debug-payload-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps PE debug payload 0", result.stderr)
+
+    def test_mvid_aliasing_native_entrypoints_is_rejected(self) -> None:
+        layout = pe.inspect_layout(self.fixture.read_bytes())
+        for name, mutate_layout in (
+            ("pe", lambda data: struct.pack_into(
+                "<I", data, layout.optional_entrypoint_offset, layout.mvid_rva)),
+            ("clr", lambda data: (
+                struct.pack_into("<I", data, layout.clr_flags_offset, 0x10),
+                struct.pack_into(
+                    "<I", data, layout.clr_entrypoint_offset, layout.mvid_rva),
+            )),
+        ):
+            with self.subTest(entrypoint=name):
+                data = bytearray(self.fixture.read_bytes())
+                mutate_layout(data)
+                mutant = self.mutants / f"mvid-{name}-entrypoint-alias.dll"
+                mutant.write_bytes(data)
+                result = run_driver("--compare-pe", self.fixture, mutant)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("native entry point", result.stderr)
+
+    def test_mvid_aliasing_import_name_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.import_directory_offset, 0)
+        struct.pack_into(
+            "<I", data, layout.import_directory_offset + 12,
+            layout.mvid_rva)
+        mutant = self.mutants / "mvid-import-name-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("PE import", result.stderr)
+
+    def test_mvid_aliasing_import_address_thunk_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.import_directory_offset, 0)
+        struct.pack_into(
+            "<I", data, layout.import_directory_offset + 16,
+            layout.mvid_rva)
+        mutant = self.mutants / "mvid-import-address-thunk-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("PE import address thunk", result.stderr)
+
+    def test_mvid_aliasing_relocation_target_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.relocation_directory_offset, 0)
+        page = layout.mvid_rva & ~0xfff
+        entry = 0x3000 | (layout.mvid_rva - page)
+        struct.pack_into(
+            "<I", data, layout.relocation_directory_offset, page)
+        struct.pack_into(
+            "<H", data, layout.relocation_directory_offset + 8, entry)
+        mutant = self.mutants / "mvid-relocation-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps a PE relocation target", result.stderr)
+
+    def test_mvid_overlapping_field_rva_data_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.field_rva_rows_offset, 0)
+        struct.pack_into(
+            "<I", data, layout.field_rva_rows_offset, layout.mvid_rva - 1)
+        mutant = self.mutants / "mvid-field-rva-alias.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps field RVA data", result.stderr)
+
+    def test_zero_sized_method_data_section_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        self.assertGreater(layout.method_data_section_offset, 0)
+        data[
+            layout.method_data_section_offset + 1:
+            layout.method_data_section_offset + 4] = bytes(3)
+        mutant = self.mutants / "zero-method-data-section.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("invalid method data section size", result.stderr)
+
+    def test_truncated_guid_stream_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        name = data.find(b"#GUID\0")
+        self.assertGreater(name, 4)
+        struct.pack_into("<I", data, name - 4, layout.guid_stream_size - 1)
+        mutant = self.mutants / "truncated-guid.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("truncated #GUID stream", result.stderr)
+
+    def test_truncated_metadata_is_rejected(self) -> None:
+        mutant = self.mutants / "truncated.dll"
+        mutant.write_bytes(self.fixture.read_bytes()[:-32])
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+
+    def test_stream_overlapping_metadata_headers_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        name = data.find(b"#GUID\0")
+        self.assertGreater(name, 8)
+        struct.pack_into("<I", data, name - 8, 0)
+        mutant = self.mutants / "guid-in-headers.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overlaps", result.stderr)
+
+
+class ControllerBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-controller-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+        self.package = self.root / "Gsharp.NET.Sdk.0.4.591.nupkg"
+        with zipfile.ZipFile(self.package, "w") as archive:
+            archive.writestr("Gsharp.NET.Sdk.nuspec", "<package><metadata><id>Gsharp.NET.Sdk</id>"
+                             "<version>0.4.591</version></metadata></package>")
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def tree(self) -> Path:
+        tree = self.root / "tree"
+        tree.mkdir()
+        (tree / "global.json").write_text(
+            '{"msbuild-sdks":{"Gsharp.NET.Sdk":"0.4.591"}}\n', encoding="utf-8")
+        return tree
+
+    @staticmethod
+    def commit_tree(tree: Path) -> None:
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "fixture"],
+            check=True, capture_output=True)
+
+    def test_workspace_containing_source_is_rejected_without_mutation(self) -> None:
+        tree = self.tree()
+        original = (tree / "global.json").read_bytes()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", self.root)
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(original, (tree / "global.json").read_bytes())
+
+    def test_source_containing_workspace_is_rejected_without_mutation(self) -> None:
+        tree = self.tree()
+        original = (tree / "global.json").read_bytes()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", tree / "work")
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(original, (tree / "global.json").read_bytes())
+
+    @unittest.skipIf(not hasattr(os, "symlink"), "symlinks unsupported")
+    def test_aliased_global_json_is_rejected_without_mutation(self) -> None:
+        tree = self.tree()
+        target = tree / "other.json"
+        target.write_bytes((tree / "global.json").read_bytes())
+        (tree / "global.json").unlink()
+        (tree / "global.json").symlink_to(target.name)
+        self.commit_tree(tree)
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(
+            b'{"msbuild-sdks":{"Gsharp.NET.Sdk":"0.4.591"}}\n',
+            target.read_bytes())
+
+    def test_hardlinked_input_is_rejected_without_mutation(self) -> None:
+        tree = self.tree()
+        target = tree / "other.json"
+        os.link(tree / "global.json", target)
+        original = target.read_bytes()
+        self.commit_tree(tree)
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(original, target.read_bytes())
+
+    def test_existing_report_root_is_never_overwritten(self) -> None:
+        tree = self.tree()
+        work = self.root / "work"
+        work.mkdir()
+        sentinel = work / "stage2-report.json"
+        sentinel.write_text("project input", encoding="utf-8")
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", work)
+        self.assertEqual(2, result.returncode)
+        self.assertEqual("project input", sentinel.read_text(encoding="utf-8"))
+
+    def test_secret_restore_configuration_is_redacted_and_rejected(self) -> None:
+        tree = self.tree()
+        secret = "NEVER-PRINT-ADR0198-SECRET"
+        (tree / "NuGet.Config").write_text(
+            f"<configuration><packageSourceCredentials><x><Password value=\"{secret}\" />"
+            "</x></packageSourceCredentials></configuration>", encoding="utf-8")
+        self.commit_tree(tree)
+        work = self.root / "work"
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", work,
+            "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        evidence = "".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for root in ("evidence", "logs", "reports")
+            for path in (work / root).rglob("*") if path.is_file())
+        self.assertNotIn(secret, result.stdout + result.stderr + evidence)
+
+    def test_utf16_secret_restore_configuration_is_rejected(self) -> None:
+        tree = self.tree()
+        secret = "NEVER-PRINT-ADR0198-UTF16-SECRET"
+        (tree / "NuGet.Config").write_text(
+            "<?xml version=\"1.0\" encoding=\"utf-16\"?>"
+            "<configuration><packageSourceCredentials><x>"
+            f"<add key=\"Password\" value=\"{secret}\" />"
+            "</x></packageSourceCredentials></configuration>",
+            encoding="utf-16")
+        self.commit_tree(tree)
+        work = self.root / "work"
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", work,
+            "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        evidence = "".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for root in ("evidence", "logs", "reports")
+            for path in (work / root).rglob("*") if path.is_file())
+        self.assertIn("secret-bearing restore configuration", result.stderr)
+        self.assertNotIn(secret, result.stdout + result.stderr + evidence)
+
+    def test_package_source_uri_credentials_are_rejected_without_disclosure(self) -> None:
+        tree = self.tree()
+        secret = "NEVER-PRINT-ADR0198-URI-SECRET"
+        (tree / "NuGet.Config").write_text(
+            "<configuration><packageSources>"
+            f"<add key=\"private\" value=\"https://user:{secret}@example.invalid/v3/index.json\" />"
+            "</packageSources></configuration>",
+            encoding="utf-8")
+        self.commit_tree(tree)
+        work = self.root / "work"
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", work,
+            "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        evidence = "".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for root in ("evidence", "logs", "reports")
+            for path in (work / root).rglob("*") if path.is_file())
+        self.assertIn("secret-bearing restore configuration", result.stderr)
+        self.assertNotIn(secret, result.stdout + result.stderr + evidence)
+
+    def test_versioned_project_sdk_override_is_rejected_by_real_driver(self) -> None:
+        tree = self.tree()
+        project = tree / "App.gsproj"
+        project.write_text(
+            '<Project Sdk="Gsharp.NET.Sdk/0.4.591"></Project>', encoding="utf-8")
+        result = run_driver("--validate-project", tree, project)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("overrides the global SDK pin", result.stderr)
+
+    def test_versioned_sdk_element_and_import_are_rejected(self) -> None:
+        for declaration in (
+            '<Sdk Name="Gsharp.NET.Sdk" Version="0.4.591" />',
+            '<Import Project="Sdk.props" Sdk="Gsharp.NET.Sdk/0.4.591" />',
+        ):
+            with self.subTest(declaration=declaration):
+                tree = self.tree()
+                project = tree / "App.gsproj"
+                project.write_text(
+                    f"<Project>{declaration}</Project>", encoding="utf-8")
+                result = run_driver("--validate-project", tree, project)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("overrides the global SDK pin", result.stderr)
+                remove_tree(tree)
+
+    def test_external_import_custom_definitions_are_rejected(self) -> None:
+        tree = self.tree()
+        imported = tree / "package.targets"
+        imported.write_text(
+            '<Project><UsingTask TaskName="Example.Task" AssemblyFile="task.dll" />'
+            '<Target Name="ExampleTarget" /></Project>',
+            encoding="utf-8")
+        result = run_driver("--validate-import", tree, imported)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("unmodeled imported task definition", result.stderr)
+
+    def test_project_controlled_target_cannot_forge_receipts(self) -> None:
+        tree = self.tree()
+        project = tree / "App.gsproj"
+        project.write_text(
+            '<Project Sdk="Gsharp.NET.Sdk"><Target Name="ForgeReceipt" /></Project>',
+            encoding="utf-8")
+        result = run_driver("--validate-project", tree, project)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("unmodeled project target definition", result.stderr)
+
+    def test_named_allowed_target_with_changed_definition_is_rejected(self) -> None:
+        tree = self.tree()
+        project = (
+            tree / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj")
+        project.parent.mkdir(parents=True)
+        project.write_text(
+            '<Project Sdk="Gsharp.NET.Sdk">'
+            '<Target Name="PackGsharpCompiler" BeforeTargets="Build">'
+            '<Exec Command="forged" /></Target></Project>',
+            encoding="utf-8")
+        result = run_driver("--validate-project", tree, project)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("unmodeled project target definition", result.stderr)
+
+    def test_build_project_references_local_override_is_rejected(self) -> None:
+        tree = self.tree()
+        project = tree / "App.gsproj"
+        project.write_text(
+            '<Project Sdk="Gsharp.NET.Sdk" TreatAsLocalProperty="BuildProjectReferences" />',
+            encoding="utf-8")
+        result = run_driver("--validate-project", tree, project)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("protected properties", result.stderr)
+
+    def test_transitive_content_copy_local_override_is_rejected(self) -> None:
+        tree = self.tree()
+        project = tree / "App.gsproj"
+        project.write_text(
+            '<Project Sdk="Gsharp.NET.Sdk" '
+            'TreatAsLocalProperty="MSBuildCopyContentTransitively" />',
+            encoding="utf-8")
+        result = run_driver("--validate-project", tree, project)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("protected properties", result.stderr)
+
+    def test_imported_local_property_override_is_rejected(self) -> None:
+        tree = self.tree()
+        imported = tree / "package.props"
+        imported.write_text(
+            '<Project TreatAsLocalProperty="BuildProjectReferences;OutDir" />',
+            encoding="utf-8")
+        result = run_driver("--validate-import", tree, imported)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("protected properties", result.stderr)
+
+    def test_stage1_version_path_escape_is_rejected(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--stage1-version", "../escape")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("not a valid package version", result.stderr)
+
+    def test_configuration_property_injection_is_rejected(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work",
+            "--config", "Release;BuildProjectReferences=true")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("unsafe configuration name", result.stderr)
+
+    def test_complete_preprocessed_property_map_is_inventoried(self) -> None:
+        project = self.root / "preprocessed.xml"
+        project.write_text(
+            "<Project><PropertyGroup>"
+            "<DefineConstants>TRACE</DefineConstants>"
+            "<Optimize>true</Optimize>"
+            "</PropertyGroup></Project>",
+            encoding="utf-8")
+        result = run_driver("--preprocessed-properties", project)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            ["DefineConstants", "Optimize"], json.loads(result.stdout))
+
+    def test_package_path_components_cannot_escape_controller_roots(self) -> None:
+        for value in ("../victim", "a/b", r"a\b", ".", "..", "/rooted"):
+            with self.subTest(value=value):
+                result = run_driver("--validate-package-component", value)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("unsafe package component", result.stderr)
+
+    def test_non_git_source_tree_is_rejected(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("root of a clean Git worktree", result.stderr)
+
+    def test_positive_test_selection_is_required(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("at least one --test", result.stderr)
+
+    def test_snapshot_bytes_come_from_the_recorded_commit(self) -> None:
+        tree = self.tree()
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "filter.adr0198.clean",
+             "sed s/WORKTREE/COMMIT/g"], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "filter.adr0198.smudge",
+             "sed s/COMMIT/WORKTREE/g"], check=True)
+        (tree / ".gitattributes").write_text(
+            "payload.txt filter=adr0198\n", encoding="utf-8")
+        (tree / "payload.txt").write_text("WORKTREE\n", encoding="utf-8")
+        (tree / "nested").mkdir()
+        (tree / "nested" / "tracked.txt").write_text("nested\n", encoding="utf-8")
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "filtered fixture"],
+            check=True, capture_output=True)
+        self.assertEqual(
+            b"COMMIT\n",
+            subprocess.run(
+                ["git", "-C", tree, "show", "HEAD:payload.txt"],
+                check=True, capture_output=True).stdout)
+        self.assertEqual(b"WORKTREE\n", (tree / "payload.txt").read_bytes())
+        snapshot = self.root / "snapshot"
+        result = run_driver("--freeze-source", tree, snapshot)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(b"COMMIT\n", (snapshot / "payload.txt").read_bytes())
+        self.assertEqual(b"nested\n", (snapshot / "nested" / "tracked.txt").read_bytes())
+
+    def test_snapshot_rejects_unstaged_tracked_edits_without_filters(self) -> None:
+        tree = self.tree()
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        tracked = tree / "tracked.txt"
+        tracked.write_text("before\n", encoding="utf-8")
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "fixture"],
+            check=True, capture_output=True)
+        original = tracked.stat()
+        tracked.write_text("after!\n", encoding="utf-8")
+        os.utime(tracked, ns=(original.st_atime_ns, original.st_mtime_ns))
+        result = run_driver("--freeze-source", tree, self.root / "snapshot")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("tracked path differs from the Git index", result.stderr)
+
+    def test_snapshot_rejects_newlines_in_tracked_paths(self) -> None:
+        tree = self.tree()
+        (tree / "hidden\n.targets").write_text("<Project />", encoding="utf-8")
+        self.commit_tree(tree)
+        result = run_driver("--freeze-source", tree, self.root / "snapshot")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("snapshot paths cannot contain CR or LF", result.stderr)
+
+    def test_snapshot_ignores_caller_git_environment_and_fsmonitor(self) -> None:
+        tree = self.tree()
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        sentinel = self.root / "fsmonitor-ran"
+        fake_git_ran = self.root / "fake-git-ran"
+        monitor = self.root / "fsmonitor"
+        monitor.write_text(
+            f"#!/bin/sh\nprintf ran > {sentinel}\n", encoding="utf-8")
+        monitor.chmod(0o755)
+        subprocess.run(
+            ["git", "-C", tree, "config", "core.fsmonitor", str(monitor)],
+            check=True)
+        (tree / "payload.txt").write_text("trusted\n", encoding="utf-8")
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "git environment fixture"],
+            check=True, capture_output=True)
+        sentinel.unlink(missing_ok=True)
+        attacker_bin = self.root / "attacker-bin"
+        attacker_bin.mkdir()
+        fake_git = attacker_bin / "git"
+        fake_git.write_text(
+            f"#!/bin/sh\nprintf ran > {fake_git_ran}\nexit 99\n", encoding="utf-8")
+        fake_git.chmod(0o755)
+        environment = os.environ.copy()
+        environment.update({
+            "GIT_DIR": str(self.root / "attacker.git"),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.fsmonitor",
+            "GIT_CONFIG_VALUE_0": str(monitor),
+            "PATH": f"{attacker_bin}{os.pathsep}{environment['PATH']}",
+        })
+        snapshot = self.root / "snapshot"
+        result = run_driver("--freeze-source", tree, snapshot, env=environment)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(b"trusted\n", (snapshot / "payload.txt").read_bytes())
+        self.assertFalse(sentinel.exists())
+        self.assertFalse(fake_git_ran.exists())
+
+    def test_stage_trees_preserve_executable_file_modes(self) -> None:
+        tree = self.tree()
+        script = tree / "build.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        script.chmod(0o755)
+        self.commit_tree(tree)
+        work = self.root / "work"
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", work,
+            "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(0o755, (work / "stage-1" / "build.sh").stat().st_mode & 0o777)
+        self.assertEqual(0o755, (work / "stage-2" / "build.sh").stat().st_mode & 0o777)
+
+    def test_snapshot_ignores_git_replacement_objects(self) -> None:
+        tree = self.tree()
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        (tree / "payload.txt").write_text("ORIGINAL\n", encoding="utf-8")
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "replacement fixture"],
+            check=True, capture_output=True)
+        original = subprocess.run(
+            ["git", "-C", tree, "rev-parse", "HEAD:payload.txt"],
+            check=True, capture_output=True, text=True).stdout.strip()
+        replacement = subprocess.run(
+            ["git", "-C", tree, "hash-object", "-w", "--stdin"],
+            input=b"REPLACEMENT\n", check=True, capture_output=True).stdout.decode().strip()
+        subprocess.run(
+            ["git", "-C", tree, "replace", original, replacement], check=True)
+        self.assertEqual(
+            "",
+            subprocess.run(
+                ["git", "-C", tree, "status", "--porcelain=v1"],
+                check=True, capture_output=True, text=True).stdout)
+        snapshot = self.root / "snapshot"
+        result = run_driver("--freeze-source", tree, snapshot)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(b"ORIGINAL\n", (snapshot / "payload.txt").read_bytes())
+
+    def test_stage1_version_must_differ_from_bootstrap(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--stage1-version", "0.4.591")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("must differ", result.stderr)
+
+    def test_absolute_assembly_path_is_rejected(self) -> None:
+        tree = self.tree()
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package,
+            "--work", self.root / "work", "--assembly", self.package)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("relative to the stage output root", result.stderr)
+
+    def test_symbolic_link_root_is_rejected_before_resolution(self) -> None:
+        tree = self.tree()
+        alias = self.root / "tree-alias"
+        alias.symlink_to(tree, target_is_directory=True)
+        result = run_driver(
+            "--tree", alias, "--bootstrap", self.package,
+            "--work", self.root / "work")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("symbolic-link path", result.stderr)
+
+    def test_repeated_roots_and_tests_are_rejected(self) -> None:
+        for arguments in (
+            ("--project", "App.gsproj", "--project", "App.gsproj"),
+            ("--test", "Tests.gsproj::A", "--test", "Tests.gsproj::A"),
+        ):
+            with self.subTest(arguments=arguments):
+                tree = self.tree()
+                result = run_driver(
+                    "--tree", tree, "--bootstrap", self.package,
+                    "--work", self.root / "work", *arguments)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("repeated --", result.stderr)
+                remove_tree(tree)
+                remove_tree(self.root / "work")
+
+    def test_sandbox_hides_secrets_caller_siblings_controller_and_network(self) -> None:
+        tree = self.tree()
+        writable = self.root / "allowed"
+        caller = self.root / "caller-tree" / "secret"
+        sibling = self.root / "sibling-stage" / "secret"
+        evidence = self.root / "evidence" / "receipt"
+        caller.parent.mkdir()
+        sibling.parent.mkdir()
+        evidence.parent.mkdir()
+        caller.write_text("caller", encoding="utf-8")
+        sibling.write_text("secret", encoding="utf-8")
+        evidence.write_text("evidence", encoding="utf-8")
+        result = run_driver(
+            "--sandbox-probe", tree, writable, caller, sibling, evidence)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue((writable / "allowed-write").is_file())
+        self.assertFalse((tree / "forbidden-write").exists())
+
+
+class ReceiptBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-receipt-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+        self.run_id = "run-adr0198"
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def receipt(self, name: str, nonce: str) -> Path:
+        log = self.root / f"{name}.log"
+        output = self.root / f"{name}.dll"
+        events = self.root / f"{name}.events"
+        log.write_text("log", encoding="utf-8")
+        output.write_bytes(b"output")
+        events.write_text("events", encoding="utf-8")
+        receipt = self.root / f"{name}.json"
+        receipt.write_text(json.dumps({
+            "runId": self.run_id,
+            "nonceCommitment": nonce,
+            "stage": "stage-2",
+            "purpose": "test",
+            "pid": 123,
+            "arguments": ["dotnet", "test"],
+            "sandboxArgumentsSha256": "b" * 64,
+            "graphIdentity": "c" * 64,
+            "startedNs": 1,
+            "completedNs": 2,
+            "exitCode": 0,
+            "stdout": {
+                "path": str(log),
+                "sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+            },
+            "outputs": [{
+                "path": str(output),
+                "size": output.stat().st_size,
+                "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+            }],
+            "events": {
+                "path": str(events),
+                "sha256": hashlib.sha256(events.read_bytes()).hexdigest(),
+                "processPid": 123,
+                "challengeCommitment": "2" * 64,
+            },
+        }), encoding="utf-8")
+        return receipt
+
+    def test_fresh_receipt_is_accepted(self) -> None:
+        receipt = self.receipt("one", "1" * 64)
+        result = run_driver("--verify-receipts", self.run_id, receipt)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_replayed_receipt_and_nonce_are_rejected(self) -> None:
+        first = self.receipt("one", "1" * 64)
+        second = self.receipt("two", "1" * 64)
+        for receipts in ((first, first), (first, second)):
+            with self.subTest(receipts=receipts):
+                result = run_driver(
+                    "--verify-receipts", self.run_id, *receipts)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("replayed", result.stderr)
+
+    def test_stale_or_mismatched_receipt_is_rejected(self) -> None:
+        receipt = self.receipt("one", "1" * 64)
+        result = run_driver("--verify-receipts", "other-run", receipt)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("stale", result.stderr)
+
+    def test_output_log_and_event_replacement_are_rejected(self) -> None:
+        for suffix in (".dll", ".log", ".events"):
+            with self.subTest(suffix=suffix):
+                receipt = self.receipt("one", "1" * 64)
+                (self.root / f"one{suffix}").write_text("replaced", encoding="utf-8")
+                result = run_driver(
+                    "--verify-receipts", self.run_id, receipt)
+                self.assertEqual(2, result.returncode)
+                remove_tree(self.root)
+                self.root.mkdir()
+
+    def test_forged_and_replayed_test_events_are_rejected(self) -> None:
+        key = bytes(range(32))
+        payload = json.dumps({"type": "started"}, separators=(",", ":"))
+        mac = hmac.new(
+            key, b"0\n" + payload.encode(), hashlib.sha256).hexdigest()
+        events = self.root / "events.jsonl"
+        events.write_text(json.dumps({
+            "sequence": 0, "payload": payload, "mac": mac}) + "\n",
+            encoding="utf-8")
+        valid = run_driver("--verify-events", key.hex(), events)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        for mutation in ("forged", "replayed"):
+            with self.subTest(mutation=mutation):
+                rows = events.read_text(encoding="utf-8")
+                if mutation == "forged":
+                    envelope = json.loads(rows)
+                    envelope["payload"] = json.dumps(
+                        {"type": "completed"}, separators=(",", ":"))
+                    rows = json.dumps(envelope) + "\n"
+                else:
+                    rows += rows
+                events.write_text(rows, encoding="utf-8")
+                result = run_driver("--verify-events", key.hex(), events)
+                self.assertEqual(2, result.returncode)
+                events.write_text(json.dumps({
+                    "sequence": 0, "payload": payload, "mac": mac}) + "\n",
+                    encoding="utf-8")
+
+    def test_test_results_must_name_the_bound_test_assembly(self) -> None:
+        key = bytes(range(32))
+        accepted = self.root / "accepted.dll"
+        stale = self.root / "stale.dll"
+        accepted.write_bytes(b"accepted")
+        stale.write_bytes(b"stale")
+        events = self.root / "events.jsonl"
+
+        def write_events(source: Path) -> None:
+            rows = [
+                {"type": "started"},
+                {"type": "result", "name": "Fixture.Test",
+                 "source": str(source), "outcome": "Passed"},
+                {"type": "completed", "total": 1, "passed": 1, "failed": 0,
+                 "skipped": 0, "canceled": False, "aborted": False},
+            ]
+            envelopes = []
+            for sequence, row in enumerate(rows):
+                payload = json.dumps(row, separators=(",", ":"))
+                mac = hmac.new(
+                    key, f"{sequence}\n{payload}".encode(),
+                    hashlib.sha256).hexdigest()
+                envelopes.append(json.dumps({
+                    "sequence": sequence, "payload": payload, "mac": mac}))
+            events.write_text("\n".join(envelopes) + "\n", encoding="utf-8")
+
+        write_events(stale)
+        rejected = run_driver(
+            "--verify-test-events", key.hex(), events, accepted)
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("accepted test assembly", rejected.stderr)
+        write_events(accepted)
+        valid = run_driver(
+            "--verify-test-events", key.hex(), events, accepted)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+
+
+class ResolvedInputBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-input-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_existing_input_outside_trusted_roots_is_rejected(self) -> None:
+        trusted = self.root / "trusted"
+        trusted.mkdir()
+        accepted = trusted / "accepted.dll"
+        outside = self.root / "outside.dll"
+        accepted.write_bytes(b"accepted")
+        outside.write_bytes(b"outside")
+        valid = run_driver("--validate-input-root", trusted, accepted)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        rejected = run_driver("--validate-input-root", trusted, outside)
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("outside accepted roots", rejected.stderr)
+
+    def test_source_manifest_rejects_extra_files_and_aliases(self) -> None:
+        accepted = self.root / "accepted.txt"
+        accepted.write_bytes(b"accepted")
+        nested = self.root / "accepted" / "child.txt"
+        nested.parent.mkdir()
+        nested.write_bytes(b"nested")
+        expected = sorted(
+            (stage2.identity(self.root, accepted),
+             stage2.identity(self.root, nested)),
+            key=lambda row: row.path)
+        stage2.verify_manifest(self.root, expected)
+        extra = self.root / "extra.txt"
+        extra.write_bytes(b"extra")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "manifest changed",
+        ):
+            stage2.verify_manifest(self.root, expected)
+        extra.unlink()
+        (self.root / "alias.txt").symlink_to(accepted)
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "contains an alias",
+        ):
+            stage2.verify_manifest(self.root, expected)
+
+    def test_test_adapter_requires_an_exact_hash_allowlist(self) -> None:
+        adapter = self.root / "Fake.TestAdapter.dll"
+        adapter.write_bytes(b"synthetic passing adapter")
+        rejected = run_driver("--validate-test-adapter", adapter)
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("not hash-allowlisted", rejected.stderr)
+        digest = hashlib.sha256(adapter.read_bytes()).hexdigest()
+        caller_allowlisted = run_driver("--validate-test-adapter", adapter, digest)
+        self.assertEqual(2, caller_allowlisted.returncode)
+        self.assertIn("not hash-allowlisted", caller_allowlisted.stderr)
+
+    def test_adjacent_vstest_adapter_requires_an_exact_hash_allowlist(self) -> None:
+        output = self.root / "out"
+        output.mkdir()
+        adapter = output / "Synthetic.TestAdapter.dll"
+        adapter.write_bytes(b"synthetic passing adapter")
+        rejected = run_driver("--validate-vstest-extensions", output)
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("not hash-allowlisted", rejected.stderr)
+        digest = hashlib.sha256(adapter.read_bytes()).hexdigest()
+        caller_allowlisted = run_driver(
+            "--validate-vstest-extensions", output, digest)
+        self.assertEqual(2, caller_allowlisted.returncode)
+        self.assertIn("not hash-allowlisted", caller_allowlisted.stderr)
+
+    def test_adjacent_project_vstest_logger_is_rejected(self) -> None:
+        output = self.root / "out"
+        output.mkdir()
+        (output / "Forged.TestLogger.dll").write_bytes(b"forged logger")
+        result = run_driver("--validate-vstest-extensions", output)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("project-supplied VSTest extension", result.stderr)
+
+    def test_adjacent_adapter_dependency_is_hash_bound(self) -> None:
+        output = self.root / "out"
+        output.mkdir()
+        dependency = output / "xunit.runner.utility.netcoreapp10.dll"
+        dependency.write_bytes(b"forged adapter dependency")
+        digest = hashlib.sha256(dependency.read_bytes()).hexdigest()
+        result = run_driver(
+            "--validate-vstest-extensions", output, digest)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("not hash-allowlisted", result.stderr)
+
+    def test_locked_package_testhost_is_accepted(self) -> None:
+        output = self.root / "out"
+        packages = self.root / "packages"
+        output.mkdir()
+        package = packages / "microsoft.testplatform.testhost" / "1.0"
+        package.mkdir(parents=True)
+        (output / "testhost.dll").write_bytes(b"locked test host")
+        (package / "testhost.dll").write_bytes(b"locked test host")
+        deps = json.dumps({
+            "runtimeTarget": {"name": "net10.0"},
+            "targets": {
+                "net10.0": {
+                    "testhost/1.0": {
+                        "runtime": {
+                            "lib/net10.0/Microsoft.TestPlatform.Core.dll": {},
+                        },
+                    },
+                },
+            },
+        }).encode()
+        for name, content in (
+            ("testhost.deps.json", deps),
+            ("testhost.runtimeconfig.json", b"{}"),
+            ("Microsoft.TestPlatform.Core.dll", b"locked runtime"),
+        ):
+            (output / name).write_bytes(content)
+            (package / name).write_bytes(content)
+        approved = hashlib.sha256(b"locked test host").hexdigest()
+        package_manifest = hashlib.sha256(json.dumps([
+            dataclasses.asdict(row) for row in stage2.directory_manifest(package)
+        ], sort_keys=True).encode()).hexdigest()
+        stage2.validate_vstest_extensions(
+            output, set(), packages, {approved}, {package_manifest})
+        (output / "Microsoft.TestPlatform.Core.dll").write_bytes(b"forged runtime")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "runtime closure",
+        ):
+            stage2.validate_vstest_extensions(
+                output, set(), packages, {approved}, {package_manifest})
+        (output / "Microsoft.TestPlatform.Core.dll").write_bytes(b"locked runtime")
+        (output / "testhost.dll").write_bytes(b"other locked package")
+        (package / "other.dll").write_bytes(b"other locked package")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "not an approved package payload",
+        ):
+            stage2.validate_vstest_extensions(
+                output, set(), packages, {approved}, {package_manifest})
+
+
+class RuntimeOutputBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-output-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_changed_and_unbound_runtime_outputs_are_rejected(self) -> None:
+        target = self.root / "Tests.dll"
+        sidecar = self.root / "Tests.runtimeconfig.json"
+        target.write_bytes(b"target")
+        sidecar.write_bytes(b"sidecar")
+        rows = [{
+            "path": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        } for path in (target, sidecar)]
+        manifest = self.root.parent / f"{self.root.name}.json"
+        manifest.write_text(json.dumps(rows), encoding="utf-8")
+        self.addCleanup(manifest.unlink, missing_ok=True)
+        valid = run_driver("--verify-output-closure", self.root, manifest)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        sidecar.write_bytes(b"changed")
+        changed = run_driver("--verify-output-closure", self.root, manifest)
+        self.assertEqual(2, changed.returncode)
+        sidecar.write_bytes(b"sidecar")
+        (self.root / "forged.deps.json").write_bytes(b"forged")
+        extra = run_driver("--verify-output-closure", self.root, manifest)
+        self.assertEqual(2, extra.returncode)
+
+    def test_test_runtime_must_load_certified_product_bytes(self) -> None:
+        certified = self.root / "Core" / "GSharp.Core.dll"
+        test_target = self.root / "Core.Tests" / "Core.Tests.dll"
+        certified.parent.mkdir()
+        test_target.parent.mkdir()
+        certified.write_bytes(b"certified")
+        test_target.write_bytes(b"tests")
+        test_target.with_suffix(".deps.json").write_text(json.dumps({
+            "runtimeTarget": {"name": "net10.0"},
+            "targets": {
+                "net10.0": {
+                    "Core/1.0": {
+                        "runtime": {"GSharp.Core.dll": {}},
+                    },
+                },
+            },
+        }), encoding="utf-8")
+        loaded = test_target.parent / certified.name
+        loaded.write_bytes(certified.read_bytes())
+        stage2.validate_certified_runtime_closure(
+            test_target, self.root, ["Core/GSharp.Core.dll"])
+        loaded.write_bytes(b"replacement")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "does not use the certified output",
+        ):
+            stage2.validate_certified_runtime_closure(
+                test_target, self.root, ["Core/GSharp.Core.dll"])
+        loaded.write_bytes(certified.read_bytes())
+        test_target.with_suffix(".deps.json").write_text(json.dumps({
+            "runtimeTarget": {"name": "active"},
+            "targets": {
+                "active": {"Tests/1.0": {"runtime": {"Tests.dll": {}}}},
+                "inactive": {
+                    "Core/1.0": {"runtime": {"GSharp.Core.dll": {}}},
+                },
+            },
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "contains no certified output",
+        ):
+            stage2.validate_certified_runtime_closure(
+                test_target, self.root, ["Core/GSharp.Core.dll"])
+
+
+class ToolchainManifestTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-toolchain-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_resolution_normalizes_only_nested_build_scheduling(self) -> None:
+        ordinary = {"BuildProjectReferences": "true"}
+        isolated = {"BuildProjectReferences": "false"}
+        self.assertEqual(
+            {"BuildProjectReferences": "false"},
+            stage2.resolution_properties(ordinary))
+        self.assertEqual(isolated, stage2.resolution_properties(isolated))
+        self.assertEqual({"BuildProjectReferences": "true"}, ordinary)
+
+    def test_rebuilt_project_plan_cannot_replace_frozen_graph(self) -> None:
+        frozen = {"Dependency.gsproj": {"inputs": ["before"]}}
+        stage2.require_frozen_graph(dict(frozen), frozen, "before-build")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "frozen graph changed",
+        ):
+            stage2.require_frozen_graph(
+                {"Dependency.gsproj": {"inputs": ["after"]}},
+                frozen, "before-build")
+
+    def test_sandbox_masks_host_dotnet_roots(self) -> None:
+        controller = object.__new__(stage2.Controller)
+        controller.bwrap = Path("/usr/bin/bwrap")
+        controller.toolchains = self.root / "toolchains"
+        controller.mutable = self.root / "mutable"
+        tree = self.root / "tree"
+        writable = self.root / "writable"
+        toolchain = self.root / "stage-toolchain"
+        feed = self.root / "feed"
+        host_sdk = self.root / "host-sdk"
+        for path in (controller.toolchains, tree, writable, toolchain, feed, host_sdk):
+            path.mkdir(parents=True, exist_ok=True)
+        (controller.mutable / "stage-1/runtime/temp").mkdir(parents=True)
+        controller.stage_toolchain = lambda _: toolchain
+        controller.offline_feed = lambda _: feed
+        original = stage2.HOST_DOTNET_ROOTS
+        stage2.HOST_DOTNET_ROOTS = (host_sdk,)
+        try:
+            arguments = controller.sandbox_command(
+                tree, [writable], ["/bin/true"],
+                {"ADR0198_STAGE": "stage-1"})
+        finally:
+            stage2.HOST_DOTNET_ROOTS = original
+        hidden = controller.toolchains / "hidden-host-sdk"
+        self.assertIn(
+            ["--ro-bind", str(hidden), str(host_sdk)],
+            [arguments[index:index + 3] for index in range(len(arguments) - 2)])
+
+    def test_dotnet_root_ignores_caller_path(self) -> None:
+        attacker = self.root / "attacker"
+        attacker.mkdir()
+        fake = attacker / "dotnet"
+        fake.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+        fake.chmod(0o755)
+        environment = os.environ.copy()
+        environment["PATH"] = f"{attacker}{os.pathsep}{environment['PATH']}"
+        environment["HOME"] = str(attacker)
+        fake_home = attacker / ".dotnet"
+        fake_home.mkdir()
+        (fake_home / "dotnet").write_bytes(b"untrusted")
+        (fake_home / "dotnet").chmod(0o755)
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                f"import runpy,sys; sys.path.insert(0,{str(DRIVER.parent)!r}); "
+                f"m=runpy.run_path({str(DRIVER)!r}); "
+                "exec(\"try:\\n print(m['trusted_dotnet']())"
+                "\\nexcept m['CertificationError']:\\n print('unavailable')\")",
+            ],
+            cwd=REPO, text=True, capture_output=True, env=environment)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotEqual(attacker.resolve(), Path(result.stdout.strip()))
+
+    def test_complete_toolchain_manifest_rejects_changed_bytes(self) -> None:
+        executable = self.root / "dotnet"
+        task = self.root / "sdk" / "MSBuild.dll"
+        task.parent.mkdir()
+        executable.write_bytes(b"dotnet")
+        task.write_bytes(b"msbuild")
+        rows = []
+        for path in (executable, task):
+            rows.append({
+                "path": path.relative_to(self.root).as_posix(),
+                "mode": path.stat().st_mode & 0o7777,
+                "size": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            })
+        manifest = self.root.parent / f"{self.root.name}.json"
+        manifest.write_text(json.dumps(rows), encoding="utf-8")
+        self.addCleanup(manifest.unlink, missing_ok=True)
+        valid = run_driver("--verify-directory-manifest", self.root, manifest)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        task.write_bytes(b"changed")
+        rejected = run_driver("--verify-directory-manifest", self.root, manifest)
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("directory manifest changed", rejected.stderr)
+
+
+class PostSetupMutationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-mutation-test-{suffix}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def plan(self, names: list[str]) -> Path:
+        rows = []
+        for name in names:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name, encoding="utf-8")
+            rows.append({
+                "path": name,
+                "mode": path.stat().st_mode & 0o7777,
+                "size": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            })
+        plan = self.root.parent / f"{self.root.name}.json"
+        plan.write_text(json.dumps({
+            "ordinary": {"fixture": {"inputs": rows, "imports": []}},
+        }), encoding="utf-8")
+        self.addCleanup(plan.unlink, missing_ok=True)
+        return plan
+
+    def assert_mutation_rejected(self, name: str, delete: bool = False) -> None:
+        names = [
+            "App.gsproj", "hidden.targets", "reference.dll", "analyzer.dll",
+            "generated.g.cs", "compiler.dll", "task.dll", "package.nupkg",
+            "accepted-output.dll", "test-output.dll", "Tests.gsproj",
+        ]
+        plan = self.plan(names)
+        target = self.root / name
+        if delete:
+            target.unlink()
+        else:
+            target.write_text("mutated", encoding="utf-8")
+        result = run_driver("--verify-plan-files", plan)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("frozen graph input changed", result.stderr)
+
+    def test_post_dependency_and_test_setup_graph_changes_are_rejected(self) -> None:
+        for name in ("App.gsproj", "hidden.targets", "Tests.gsproj"):
+            with self.subTest(name=name):
+                self.assert_mutation_rejected(name)
+                remove_tree(self.root)
+                self.root.mkdir()
+
+    def test_destroyed_explicit_and_isolated_compilation_inputs_are_rejected(self) -> None:
+        for name in ("reference.dll", "analyzer.dll", "generated.g.cs"):
+            with self.subTest(name=name):
+                self.assert_mutation_rejected(name, delete=True)
+                remove_tree(self.root)
+                self.root.mkdir()
+
+    def test_replaced_toolchain_package_and_output_are_rejected(self) -> None:
+        for name in (
+            "compiler.dll", "task.dll", "package.nupkg", "accepted-output.dll",
+            "test-output.dll",
+        ):
+            with self.subTest(name=name):
+                self.assert_mutation_rejected(name)
+                remove_tree(self.root)
+                self.root.mkdir()
+
+
+class PackageCacheTests(unittest.TestCase):
+    def setUp(self) -> None:
+        suffix = self.id().rsplit(".", 1)[-1]
+        self.root = REPO / "build" / f".stage2-package-test-{suffix}"
+        remove_tree(self.root)
+        self.source = self.root / "source"
+        self.destination = self.root / "destination"
+        self.source.mkdir(parents=True)
+        self.package = self.source / "example.1.0.0.nupkg"
+        with zipfile.ZipFile(self.package, "w") as archive:
+            archive.writestr("lib/net10.0/example.dll", b"accepted")
+        self.content_hash = base64.b64encode(
+            hashlib.sha512(self.package.read_bytes()).digest()).decode()
+        (self.source / "example.1.0.0.nupkg.sha512").write_text(
+            self.content_hash, encoding="utf-8")
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_verified_archive_replaces_untrusted_extracted_cache_files(self) -> None:
+        (self.source / "lib").mkdir()
+        (self.source / "lib" / "example.dll").write_bytes(b"forged")
+        result = run_driver(
+            "--verify-package-cache", self.source, self.destination)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            b"accepted",
+            (self.destination / "lib/net10.0/example.dll").read_bytes())
+
+    def test_changed_package_archive_commitment_is_rejected(self) -> None:
+        self.package.write_bytes(self.package.read_bytes() + b"changed")
+        result = run_driver(
+            "--verify-package-cache", self.source, self.destination)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("hash is invalid", result.stderr)
+
+    def test_replaced_archive_and_sidecar_differ_from_lock_content_hash(self) -> None:
+        self.package.write_bytes(self.package.read_bytes() + b"changed")
+        replacement_hash = base64.b64encode(
+            hashlib.sha512(self.package.read_bytes()).digest()).decode()
+        (self.source / "example.1.0.0.nupkg.sha512").write_text(
+            replacement_hash, encoding="utf-8")
+        result = run_driver(
+            "--verify-package-content", self.package, self.content_hash,
+            self.root / "hash-work")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("differs from the lock", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
