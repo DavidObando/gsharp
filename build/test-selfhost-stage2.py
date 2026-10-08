@@ -500,6 +500,17 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("protected properties", result.stderr)
 
+    def test_transitive_content_copy_local_override_is_rejected(self) -> None:
+        tree = self.tree()
+        project = tree / "App.gsproj"
+        project.write_text(
+            '<Project Sdk="Gsharp.NET.Sdk" '
+            'TreatAsLocalProperty="MSBuildCopyContentTransitively" />',
+            encoding="utf-8")
+        result = run_driver("--validate-project", tree, project)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("protected properties", result.stderr)
+
     def test_imported_local_property_override_is_rejected(self) -> None:
         tree = self.tree()
         imported = tree / "package.props"
