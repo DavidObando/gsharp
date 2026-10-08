@@ -741,11 +741,28 @@ def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dic
 
 def verify_manifest(root: Path, expected: list[FileIdentity]) -> None:
     try:
-        actual = [identity(root, root / row.path) for row in expected]
+        expected_directories = {
+            parent.as_posix()
+            for row in expected
+            for parent in Path(row.path).parents
+            if parent != Path(".")
+        }
+        actual = []
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                raise CertificationError(
+                    f"immutable source manifest contains an alias: {relative}")
+            if path.is_dir():
+                if relative not in expected_directories:
+                    raise CertificationError(
+                        f"immutable source manifest has an extra directory: {relative}")
+                continue
+            actual.append(identity(root, path))
     except OSError as error:
         raise CertificationError(
             f"immutable source manifest changed under {root}") from error
-    if actual != expected:
+    if actual != sorted(expected, key=lambda row: row.path):
         raise CertificationError(f"immutable source manifest changed under {root}")
 
 

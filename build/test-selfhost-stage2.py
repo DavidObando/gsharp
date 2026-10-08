@@ -1042,6 +1042,24 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         self.assertEqual(2, rejected.returncode)
         self.assertIn("outside accepted roots", rejected.stderr)
 
+    def test_source_manifest_rejects_extra_files_and_aliases(self) -> None:
+        accepted = self.root / "accepted.txt"
+        accepted.write_bytes(b"accepted")
+        expected = [stage2.identity(self.root, accepted)]
+        stage2.verify_manifest(self.root, expected)
+        extra = self.root / "extra.txt"
+        extra.write_bytes(b"extra")
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "manifest changed",
+        ):
+            stage2.verify_manifest(self.root, expected)
+        extra.unlink()
+        (self.root / "alias.txt").symlink_to(accepted)
+        with self.assertRaisesRegex(
+            stage2.CertificationError, "contains an alias",
+        ):
+            stage2.verify_manifest(self.root, expected)
+
     def test_test_adapter_requires_an_exact_hash_allowlist(self) -> None:
         adapter = self.root / "Fake.TestAdapter.dll"
         adapter.write_bytes(b"synthetic passing adapter")
@@ -1197,12 +1215,8 @@ class ToolchainManifestTests(unittest.TestCase):
                 sys.executable, "-c",
                 f"import runpy,sys; sys.path.insert(0,{str(DRIVER.parent)!r}); "
                 f"m=runpy.run_path({str(DRIVER)!r}); "
-                "print(m['trusted_dotnet']() if any("
-                "p.exists() for p in ("
-                "m['Path']('/usr/share/dotnet/dotnet'),"
-                "m['Path']('/usr/local/share/dotnet/dotnet'),"
-                "m['Path'](m['pwd'].getpwuid(m['os'].getuid()).pw_dir)/'.dotnet/dotnet'"
-                ")) else 'unavailable')",
+                "exec(\"try:\\n print(m['trusted_dotnet']())"
+                "\\nexcept m['CertificationError']:\\n print('unavailable')\")",
             ],
             cwd=REPO, text=True, capture_output=True, env=environment)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
