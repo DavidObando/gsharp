@@ -432,31 +432,60 @@ def reject_root_collisions(named: dict[str, Path]) -> None:
                     f"{left_name} and {right_name} are not disjoint: {left} / {right}")
 
 
+def git_invocation(tree: Path, *arguments: str) -> tuple[list[str], dict[str, str]]:
+    executable = shutil.which("git", path=os.defpath)
+    if executable is None:
+        raise CertificationError("git executable not found")
+    command = [
+        executable,
+        "-c", "core.fsmonitor=false",
+        "-c", "core.hooksPath=/dev/null",
+        "-c", "maintenance.auto=false",
+        "-c", "fetch.autoMaintenance=false",
+        "-C", str(tree),
+        *arguments,
+    ]
+    environment = {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "LC_ALL": "C",
+        "PATH": os.defpath,
+    }
+    return command, environment
+
+
 def git_snapshot_entries(
     tree: Path,
 ) -> tuple[list[tuple[str, int, str]], dict[str, str]]:
-    git_env = os.environ.copy()
-    git_env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    command, git_env = git_invocation(tree, "rev-parse", "--show-toplevel")
     probe = subprocess.run(
-        ["git", "-C", str(tree), "rev-parse", "--show-toplevel"],
+        command,
         capture_output=True, text=True, env=git_env)
     if probe.returncode != 0 or real(Path(probe.stdout.strip())) != real(tree):
         raise CertificationError(
             "caller tree must be the root of a clean Git worktree")
+    command, git_env = git_invocation(
+        tree, "status", "--porcelain=v1", "--untracked-files=all")
     status_result = subprocess.run(
-        ["git", "-C", str(tree), "status", "--porcelain=v1", "--untracked-files=all"],
+        command,
         capture_output=True, text=True, check=True, env=git_env)
     if status_result.stdout:
         raise CertificationError(
             "caller tree is dirty or has untracked files:\n" + status_result.stdout.rstrip())
+    command, git_env = git_invocation(tree, "rev-parse", "HEAD")
     commit = subprocess.run(
-        ["git", "-C", str(tree), "rev-parse", "HEAD"],
+        command,
         capture_output=True, text=True, check=True, env=git_env).stdout.strip()
+    command, git_env = git_invocation(tree, "rev-parse", "HEAD^{tree}")
     git_tree = subprocess.run(
-        ["git", "-C", str(tree), "rev-parse", "HEAD^{tree}"],
+        command,
         capture_output=True, text=True, check=True, env=git_env).stdout.strip()
+    command, git_env = git_invocation(
+        tree, "ls-tree", "-rz", "--full-tree", "-r", commit)
     raw = subprocess.run(
-        ["git", "-C", str(tree), "ls-tree", "-rz", "--full-tree", "-r", commit],
+        command,
         capture_output=True, check=True, env=git_env).stdout
     entries = []
     for row in raw.split(b"\0"):
@@ -532,10 +561,11 @@ def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dic
     entries, git_identity = git_snapshot_entries(caller)
     snapshot.mkdir()
     manifest = []
+    command, git_env = git_invocation(caller, "cat-file", "--batch")
     process = subprocess.Popen(
-        ["git", "-C", str(caller), "cat-file", "--batch"],
+        command,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        env={**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"})
+        env=git_env)
     if process.stdin is None or process.stdout is None:
         raise CertificationError("cannot open Git object reader")
     try:
@@ -583,7 +613,7 @@ def make_read_only(root: Path) -> None:
 
 
 def clone_snapshot(snapshot: Path, destination: Path) -> None:
-    shutil.copytree(snapshot, destination, copy_function=shutil.copyfile)
+    shutil.copytree(snapshot, destination, copy_function=shutil.copy2)
     for path in [destination, *destination.rglob("*")]:
         if path.is_dir():
             os.chmod(path, path.stat().st_mode | stat.S_IWUSR)
@@ -776,10 +806,21 @@ def reject_secret_restore_configuration(tree: Path) -> None:
         re.IGNORECASE)
     for name in ("nuget.config", "NuGet.Config"):
         for path in tree.rglob(name):
-            text = path.read_text(encoding="utf-8-sig", errors="replace")
-            if secret_words.search(text):
+            try:
+                root = ET.parse(path).getroot()
+            except (ET.ParseError, OSError) as error:
                 raise CertificationError(
-                    f"secret-bearing restore configuration is unsupported in v1: {path.relative_to(tree)}")
+                    f"cannot inspect restore configuration: {path.relative_to(tree)}") from error
+            for element in root.iter():
+                fields = [
+                    element.tag.rsplit("}", 1)[-1],
+                    *element.attrib,
+                    *element.attrib.values(),
+                ]
+                if any(secret_words.search(field) for field in fields):
+                    raise CertificationError(
+                        "secret-bearing restore configuration is unsupported in v1: "
+                        f"{path.relative_to(tree)}")
 
 
 def inspect_sdk_declarations(relative: str, root: ET.Element) -> None:

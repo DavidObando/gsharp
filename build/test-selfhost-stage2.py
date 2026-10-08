@@ -28,10 +28,12 @@ sys.modules[_PE_SPEC.name] = pe
 _PE_SPEC.loader.exec_module(pe)
 
 
-def run_driver(*arguments: object) -> subprocess.CompletedProcess[str]:
+def run_driver(
+    *arguments: object, env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(DRIVER), *(str(argument) for argument in arguments)],
-        cwd=REPO, text=True, capture_output=True)
+        cwd=REPO, text=True, capture_output=True, env=env)
 
 
 def mutate(source: Path, destination: Path, offset: int, value: int | None = None) -> None:
@@ -361,6 +363,28 @@ class ControllerBoundaryTests(unittest.TestCase):
             for path in (work / root).rglob("*") if path.is_file())
         self.assertNotIn(secret, result.stdout + result.stderr + evidence)
 
+    def test_utf16_secret_restore_configuration_is_rejected(self) -> None:
+        tree = self.tree()
+        secret = "NEVER-PRINT-ADR0198-UTF16-SECRET"
+        (tree / "NuGet.Config").write_text(
+            "<?xml version=\"1.0\" encoding=\"utf-16\"?>"
+            "<configuration><packageSourceCredentials><x>"
+            f"<add key=\"Password\" value=\"{secret}\" />"
+            "</x></packageSourceCredentials></configuration>",
+            encoding="utf-16")
+        self.commit_tree(tree)
+        work = self.root / "work"
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", work,
+            "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        evidence = "".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for root in ("evidence", "logs", "reports")
+            for path in (work / root).rglob("*") if path.is_file())
+        self.assertIn("secret-bearing restore configuration", result.stderr)
+        self.assertNotIn(secret, result.stdout + result.stderr + evidence)
+
     def test_versioned_project_sdk_override_is_rejected_by_real_driver(self) -> None:
         tree = self.tree()
         project = tree / "App.gsproj"
@@ -528,6 +552,65 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual(b"COMMIT\n", (snapshot / "payload.txt").read_bytes())
         self.assertEqual(b"nested\n", (snapshot / "nested" / "tracked.txt").read_bytes())
+
+    def test_snapshot_ignores_caller_git_environment_and_fsmonitor(self) -> None:
+        tree = self.tree()
+        subprocess.run(["git", "init", "-b", "main", tree], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.email", "adr0198@example.invalid"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", tree, "config", "user.name", "ADR 0198 Test"],
+            check=True)
+        sentinel = self.root / "fsmonitor-ran"
+        fake_git_ran = self.root / "fake-git-ran"
+        monitor = self.root / "fsmonitor"
+        monitor.write_text(
+            f"#!/bin/sh\nprintf ran > {sentinel}\n", encoding="utf-8")
+        monitor.chmod(0o755)
+        subprocess.run(
+            ["git", "-C", tree, "config", "core.fsmonitor", str(monitor)],
+            check=True)
+        (tree / "payload.txt").write_text("trusted\n", encoding="utf-8")
+        subprocess.run(["git", "-C", tree, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", tree, "commit", "-m", "git environment fixture"],
+            check=True, capture_output=True)
+        sentinel.unlink(missing_ok=True)
+        attacker_bin = self.root / "attacker-bin"
+        attacker_bin.mkdir()
+        fake_git = attacker_bin / "git"
+        fake_git.write_text(
+            f"#!/bin/sh\nprintf ran > {fake_git_ran}\nexit 99\n", encoding="utf-8")
+        fake_git.chmod(0o755)
+        environment = os.environ.copy()
+        environment.update({
+            "GIT_DIR": str(self.root / "attacker.git"),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.fsmonitor",
+            "GIT_CONFIG_VALUE_0": str(monitor),
+            "PATH": f"{attacker_bin}{os.pathsep}{environment['PATH']}",
+        })
+        snapshot = self.root / "snapshot"
+        result = run_driver("--freeze-source", tree, snapshot, env=environment)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(b"trusted\n", (snapshot / "payload.txt").read_bytes())
+        self.assertFalse(sentinel.exists())
+        self.assertFalse(fake_git_ran.exists())
+
+    def test_stage_trees_preserve_executable_file_modes(self) -> None:
+        tree = self.tree()
+        script = tree / "build.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        script.chmod(0o755)
+        self.commit_tree(tree)
+        work = self.root / "work"
+        result = run_driver(
+            "--tree", tree, "--bootstrap", self.package, "--work", work,
+            "--test", "Tests.gsproj::Smoke")
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(0o755, (work / "stage-1" / "build.sh").stat().st_mode & 0o777)
+        self.assertEqual(0o755, (work / "stage-2" / "build.sh").stat().st_mode & 0o777)
 
     def test_snapshot_ignores_git_replacement_objects(self) -> None:
         tree = self.tree()
