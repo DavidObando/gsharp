@@ -1826,7 +1826,10 @@ public sealed partial class CSharpToGSharpTranslator
         // (`Identity<SyntaxNode>(x)`), a type parameter the result depends on
         // (`List<string> names = Wrap(x)`), and a CLASS type parameter
         // (`List<string>.Add(T)`), which the receiver fixes before the
-        // argument is seen.
+        // argument is seen. A constrained type parameter and a reduced
+        // extension invocation (whose `this` receiver is not in the parameter
+        // list) keep their bridge: gsc would reject a nullable type argument
+        // against the constraint, and the receiver's variance goes unexamined.
         private bool IsObliviousImportedInferredTypeParameterTarget(
             IParameterSymbol parameter,
             ExpressionSyntax argumentExpression)
@@ -1834,6 +1837,12 @@ public sealed partial class CSharpToGSharpTranslator
             if (parameter.OriginalDefinition is not { Type: ITypeParameterSymbol typeParameter } original
                 || typeParameter.TypeParameterKind != TypeParameterKind.Method
                 || original.ContainingSymbol is not IMethodSymbol method
+                || method.ReducedFrom != null
+                || typeParameter.HasReferenceTypeConstraint
+                || typeParameter.HasValueTypeConstraint
+                || typeParameter.HasNotNullConstraint
+                || typeParameter.HasConstructorConstraint
+                || typeParameter.ConstraintTypes.Length > 0
                 || !IsInferredGenericParameterTarget(parameter, argumentExpression)
                 || !this.TargetContractIsFrozenInMetadata(parameter))
             {

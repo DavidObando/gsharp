@@ -83,6 +83,45 @@ namespace Demo
             printed);
     }
 
+    [Fact]
+    public void Oblivious_NullForwardedToImportedMethodTypeParameter_KeepsBridgeOnlyWhenConstrained()
+    {
+        // `Accept<T>(T) where T : class` rejects a nullable inferred type
+        // argument, so its bridge must stay; the unconstrained, result-free
+        // `Free<T>(T)` is the exempt shape.
+        var tree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(
+            "namespace Lib { public static class Sink { public static void Accept<T>(T value) where T : class { } public static void Free<T>(T value) { } } }");
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+            "Issue4843.Lib",
+            new[] { tree },
+            CSharpProjectLoader.RuntimeReferences(),
+            new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+        using var stream = new MemoryStream();
+        var emitted = compilation.Emit(stream);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        var reference = Microsoft.CodeAnalysis.MetadataReference.CreateFromImage(stream.ToArray());
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", @"
+using Lib;
+namespace Demo
+{
+    public class C
+    {
+        public void Run() => Both(null);
+        public void Both(string s) { Sink.Accept(s); Sink.Free(s); }
+    }
+}") },
+            CSharpProjectLoader.RuntimeReferences().Append(reference).ToList());
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("Sink.Accept(s!!)", printed, StringComparison.Ordinal);
+        Assert.Contains("Sink.Free(s)", printed, StringComparison.Ordinal);
+    }
+
     private static string TranslateOblivious(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
