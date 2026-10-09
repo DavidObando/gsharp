@@ -52,6 +52,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (VariableDeclaratorSyntax declarator in declaration.Variables)
             {
+                bool localAcceptsNil = false;
                 GExpression initializer;
                 if (declarator.Initializer == null)
                 {
@@ -92,6 +93,15 @@ public sealed partial class CSharpToGSharpTranslator
                     && this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localTarget)
                 {
                     ITypeSymbol targetType = localTarget.Type;
+                    localAcceptsNil = this.LocalInitializerMakesStorageNullable(
+                        localTarget,
+                        initializerSyntax);
+                    if (localAcceptsNil)
+                    {
+                        targetType = targetType.WithNullableAnnotation(
+                            NullableAnnotation.Annotated);
+                    }
+
                     if (IsImplicitlyTypedLocal(localTarget)
                         && this.GetManagedReferenceArrayProjectedExpressionType(
                             initializerSyntax) is { } projectedType)
@@ -194,7 +204,8 @@ public sealed partial class CSharpToGSharpTranslator
                             this.context.GetTypeInfo(declarator.Initializer.Value).Type;
                         if (naturalType == null
                             || !SymbolEqualityComparer.Default.Equals(declaredType, naturalType)
-                            || IsAnnotatedNullableReference(declaredType))
+                            || IsAnnotatedNullableReference(declaredType)
+                            || localAcceptsNil)
                         {
                             emitType = true;
                         }
@@ -229,7 +240,9 @@ public sealed partial class CSharpToGSharpTranslator
                         // null-checked or null-assigned in its scope is really nullable.
                         if (this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol)
                         {
-                            type = declarator.Initializer?.Value is { } localInitializer
+                            type = localAcceptsNil
+                                ? MakeNullable(type)
+                                : declarator.Initializer?.Value is { } localInitializer
                                 && IsNullOrSuppressedNull(localInitializer)
                                 && localSymbol.Type.IsReferenceType
                                     ? MakeNullable(type)
@@ -345,6 +358,29 @@ public sealed partial class CSharpToGSharpTranslator
 
             return results;
         }
+
+        private bool LocalInitializerMakesStorageNullable(
+            ILocalSymbol local,
+            ExpressionSyntax initializer) =>
+            local.Type.IsReferenceType
+            && !this.context.SemanticModel
+                .GetNullableContext(initializer.SpanStart)
+                .HasFlag(NullableContext.AnnotationsEnabled)
+            && (this.context.GetTypeInfo(initializer)
+                    .Nullability.Annotation == NullableAnnotation.Annotated
+                || ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
+                    this.context.GetSymbolInfo(initializer).Symbol,
+                    this.context.Compilation)
+                || this.ShouldPromoteToNullableReference(
+                    this.context.GetSymbolInfo(initializer).Symbol))
+            && ObliviousNullabilityAnalyzer.IsSemanticallyNullableInitializer(
+                initializer,
+                this.context.SemanticModel);
+
+        private bool LocalInitializerMakesStorageNullable(ILocalSymbol local) =>
+            local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
+            && this.LocalInitializerMakesStorageNullable(local, initializer);
 
         /// <summary>
         /// Issue #1072/#2305/#3771/#4445: whether a <c>var</c> local's emitted G#

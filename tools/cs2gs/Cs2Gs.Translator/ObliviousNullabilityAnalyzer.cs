@@ -1092,6 +1092,24 @@ internal static class ObliviousNullabilityAnalyzer
             && IsDirectlyNullable(expression, model, respectNullGuards, readConversion: false);
     }
 
+    internal static bool IsSemanticallyNullableInitializer(
+        ExpressionSyntax expression,
+        SemanticModel model)
+    {
+        if (model.GetTypeInfo(expression).Nullability.FlowState
+                == NullableFlowState.NotNull
+            || IsNullGuardDominatedRead(expression, model))
+        {
+            return false;
+        }
+
+        ISymbol symbol = model.GetSymbolInfo(expression).Symbol;
+        return IsDirectlyNullable(expression, model, respectNullGuards: true)
+            || (symbol != null
+                && model.Compilation is CSharpCompilation compilation
+                && IsTainted(compilation, symbol));
+    }
+
     /// <summary>Reads the declared concrete-reference obliviousness used by imported contract readers.</summary>
     /// <param name="type">The original signature position, before type-argument substitution.</param>
     /// <returns>Whether the position is oblivious; open slots retain their type argument's contract.</returns>
@@ -1099,8 +1117,142 @@ internal static class ObliviousNullabilityAnalyzer
         type is { IsReferenceType: true } and not ITypeParameterSymbol
             && type.NullableAnnotation == NullableAnnotation.None;
 
+    // A disabled consumer reports every imported reference position as
+    // Annotation.None, including metadata that explicitly says `T?`. Read the
+    // top-level Nullable/NullableContext byte that gsc imports so ADR-0186's
+    // `T!` shortcut applies only to genuinely oblivious values.
+    internal static bool IsImportedStatedNullablePosition(
+        ISymbol symbol,
+        Compilation compilation)
+    {
+        if (symbol is IMethodSymbol constructorMethod
+            && constructorMethod.MethodKind == MethodKind.Constructor)
+        {
+            return false;
+        }
+
+        if (symbol is not (IMethodSymbol or IPropertySymbol or IFieldSymbol)
+            || SymbolEqualityComparer.Default.Equals(
+                symbol.ContainingAssembly,
+                compilation.Assembly))
+        {
+            return false;
+        }
+
+        if (IsDeclaredNullablePosition(EffectiveImportedPositionType(symbol)))
+        {
+            return true;
+        }
+
+        ImmutableArray<AttributeData> positionAttributes = symbol switch
+        {
+            IMethodSymbol method => method.GetReturnTypeAttributes(),
+            IPropertySymbol property => property.GetAttributes(),
+            IFieldSymbol field => field.GetAttributes(),
+            _ => default,
+        };
+        if (MetadataNullabilityFlag(
+                positionAttributes,
+                "System.Runtime.CompilerServices.NullableAttribute") is byte positionFlag)
+        {
+            return positionFlag == 2;
+        }
+
+        for (ISymbol current = symbol; current != null; current = current.ContainingSymbol)
+        {
+            if (MetadataNullabilityFlag(
+                    current.GetAttributes(),
+                    "System.Runtime.CompilerServices.NullableContextAttribute") is byte contextFlag)
+            {
+                return contextFlag == 2;
+            }
+        }
+
+        return false;
+    }
+
     internal static bool IsReturnSignatureFixedByAnotherDeclaration(IMethodSymbol method) =>
         IsSignatureFixedByAnotherDeclaration(method);
+
+    private static ITypeSymbol EffectiveImportedPositionType(ISymbol symbol)
+    {
+        ITypeSymbol type = symbol switch
+        {
+            IMethodSymbol method => method.ReturnType,
+            IPropertySymbol property => property.Type,
+            IFieldSymbol field => field.Type,
+            _ => null,
+        };
+        if (IsDeclaredNullablePosition(type))
+        {
+            return type;
+        }
+
+        ITypeSymbol originalType = symbol switch
+        {
+            IMethodSymbol method => method.OriginalDefinition.ReturnType,
+            IPropertySymbol property => property.OriginalDefinition.Type,
+            IFieldSymbol field => field.OriginalDefinition.Type,
+            _ => null,
+        };
+        if (originalType is not ITypeParameterSymbol parameter)
+        {
+            return type;
+        }
+
+        if (parameter.TypeParameterKind == TypeParameterKind.Method
+            && symbol is IMethodSymbol methodSymbol
+            && parameter.Ordinal < methodSymbol.TypeArguments.Length)
+        {
+            return methodSymbol.TypeArguments[parameter.Ordinal];
+        }
+
+        for (INamedTypeSymbol containingType = symbol.ContainingType;
+            containingType != null;
+            containingType = containingType.ContainingType)
+        {
+            if (parameter.TypeParameterKind == TypeParameterKind.Type
+                && SymbolEqualityComparer.Default.Equals(
+                    containingType.OriginalDefinition,
+                    parameter.ContainingSymbol)
+                && parameter.Ordinal < containingType.TypeArguments.Length)
+            {
+                return containingType.TypeArguments[parameter.Ordinal];
+            }
+        }
+
+        return type;
+    }
+
+    private static byte? MetadataNullabilityFlag(
+        ImmutableArray<AttributeData> attributes,
+        string attributeName)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        AttributeData attribute = attributes.FirstOrDefault(candidate =>
+            candidate.AttributeClass?.ToDisplayString() == attributeName);
+        if (attribute == null || attribute.ConstructorArguments.Length != 1)
+        {
+            return null;
+        }
+
+        TypedConstant argument = attribute.ConstructorArguments[0];
+        if (argument.Kind != TypedConstantKind.Array
+            && argument.Value is byte scalar)
+        {
+            return scalar;
+        }
+
+        return argument.Kind == TypedConstantKind.Array
+            && argument.Values.Length > 0
+            && argument.Values[0].Value is byte first
+                ? first
+                : null;
+    }
 
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
@@ -2666,6 +2818,37 @@ internal static class ObliviousNullabilityAnalyzer
         }
     }
 
+    private static bool IsUnreassignedNonNullLocal(ExpressionSyntax value, SemanticModel model)
+    {
+        if (value is not IdentifierNameSyntax identifier
+            || model.GetSymbolInfo(identifier).Symbol is not ILocalSymbol local
+            || local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                is not VariableDeclaratorSyntax declarator
+            || declarator.Initializer?.Value is not (
+                BaseObjectCreationExpressionSyntax
+                or ArrayCreationExpressionSyntax
+                or ImplicitArrayCreationExpressionSyntax
+                or AnonymousObjectCreationExpressionSyntax)
+            || GetResultConversion(
+                declarator.Initializer.Value,
+                model) is IConversionOperation { OperatorMethod: not null }
+            || declarator.SpanStart >= value.SpanStart)
+        {
+            return false;
+        }
+
+        SyntaxNode scope = value.Ancestors().FirstOrDefault(node =>
+            node is BaseMethodDeclarationSyntax or LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax);
+        if (scope == null || !scope.Span.Contains(declarator.Span))
+        {
+            return false;
+        }
+
+        return !scope.DescendantNodes().Any(node =>
+            node.SpanStart > declarator.Span.End
+            && CSharpToGSharpTranslator.SyntaxNodeWritesSymbol(node, local, model));
+    }
+
     // Parameters do not have documentation IDs of their own. The owning
     // method's ID includes its full parameter-type signature, and the ordinal
     // selects this declaration position without the overload ambiguity of the
@@ -2702,25 +2885,27 @@ internal static class ObliviousNullabilityAnalyzer
 
             ISymbol parameterSymbol = Canonical(parameter);
 
-            // Issue #3501: a local/parameter read that a syntactic null-check
-            // guard proves non-null at a CONSTRUCTOR argument does not carry
-            // its declaration's taint into the parameter. The canonical shape
-            // is Oahu's `if (prod is null) { continue; } pairs.Add(new(prod,
-            // comp))` — `prod` is declared nullable (its producer can return
-            // null) but is provably non-null at the creation, and tainting the
-            // record's positional parameter widened the DATA SHAPE (`Product`
-            // → `Product?` on the positional property) for every consumer,
+            // Issue #3501/#4816: a value that flow analysis proves non-null at
+            // a CONSTRUCTOR argument does not carry its declaration's taint
+            // into the parameter. This covers both a syntactic null guard and
+            // a nullable local reassigned before storage. Tainting the record's
+            // positional parameter would widen the DATA SHAPE (`Product` →
+            // `Product?` on the positional property) for every consumer,
             // including deconstruction locals whose dereferences are not
-            // receiver-bridged. gsc's own smart-cast narrows the same guarded
-            // read on the G# side, so the suppressed edge never reintroduces a
-            // `T? -> T` mismatch. Ordinary METHOD arguments keep the
-            // promotion-consolidation behavior (a tainted value symmetrically
-            // widens every sink it touches — see PromotionConsolidationTests):
-            // a method parameter is a local contract the forgiveness passes
-            // already manage, not a data shape.
-            bool guardedCreationArgument = call is BaseObjectCreationExpressionSyntax
-                && IsNullGuardDominatedRead(value, model);
-            if (!guardedCreationArgument)
+            // receiver-bridged. gsc's own smart-cast narrows the same value at
+            // the G# creation, so the suppressed edge never reintroduces a
+            // `T? -> T` mismatch. A syntactically guarded concrete-reference
+            // method argument is equally non-null at that call. Open type
+            // parameters retain promotion consolidation because G# cannot
+            // smart-cast them reliably (see PromotionConsolidationTests).
+            bool guardedArgument =
+                (call is BaseObjectCreationExpressionSyntax
+                    && (IsNullGuardDominatedRead(value, model)
+                        || IsUnreassignedNonNullLocal(value, model)))
+                || (parameter.Type is { IsReferenceType: true } and not ITypeParameterSymbol
+                    && (IsNullGuardDominatedRead(value, model)
+                        || IsNullGuardDominatedExpression(value, model)));
+            if (!guardedArgument)
             {
                 CollectScalarValueFlow(
                     parameterSymbol,
@@ -5800,6 +5985,122 @@ internal static class ObliviousNullabilityAnalyzer
         return false;
     }
 
+    private static bool IsNullGuardDominatedExpression(
+        ExpressionSyntax value,
+        SemanticModel model)
+    {
+        ExpressionSyntax stripped = value;
+        while (stripped is ParenthesizedExpressionSyntax parentheses)
+        {
+            stripped = parentheses.Expression;
+        }
+
+        if (stripped is not MemberAccessExpressionSyntax member
+            || model.GetSymbolInfo(member).Symbol is not IPropertySymbol { SetMethod: null } property
+            || !IsSourceGetOnlyAutoProperty(property))
+        {
+            return false;
+        }
+
+        for (SyntaxNode node = value; node != null; node = node.Parent)
+        {
+            if (node.Parent is ConditionalExpressionSyntax conditional
+                && node == conditional.WhenTrue
+                && IsNullTestOfExpression(conditional.Condition, member)
+                && MemberReceiverRemainsUnchanged(
+                    member,
+                    conditional.Condition,
+                    conditional.WhenTrue,
+                    model))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsSourceGetOnlyAutoProperty(IPropertySymbol property)
+    {
+        ImmutableArray<SyntaxReference> declarations = property.DeclaringSyntaxReferences;
+        if (declarations.IsDefaultOrEmpty
+            || property.IsAbstract
+            || property.IsVirtual
+            || property.IsOverride
+            || property.ContainingType.TypeKind == TypeKind.Interface)
+        {
+            return false;
+        }
+
+        foreach (SyntaxReference reference in declarations)
+        {
+            if (reference.GetSyntax() is not PropertyDeclarationSyntax declaration
+                || declaration.AccessorList is not { } accessorList
+                || accessorList.Accessors.Count != 1)
+            {
+                return false;
+            }
+
+            AccessorDeclarationSyntax getter = accessorList.Accessors[0];
+            if (!getter.IsKind(SyntaxKind.GetAccessorDeclaration)
+                || getter.Body != null
+                || getter.ExpressionBody != null
+                || !getter.SemicolonToken.IsKind(SyntaxKind.SemicolonToken))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool MemberReceiverRemainsUnchanged(
+        MemberAccessExpressionSyntax value,
+        ExpressionSyntax guard,
+        ExpressionSyntax region,
+        SemanticModel model)
+    {
+        ExpressionSyntax receiver = value.Expression;
+        while (receiver is ParenthesizedExpressionSyntax parentheses)
+        {
+            receiver = parentheses.Expression;
+        }
+
+        return receiver is IdentifierNameSyntax identifier
+            && model.GetSymbolInfo(identifier).Symbol is ISymbol symbol
+            && symbol is ILocalSymbol or IParameterSymbol
+            && GuardValueRemainsUnchanged(guard, region, identifier, symbol, model);
+    }
+
+    private static bool IsNullTestOfExpression(
+        ExpressionSyntax condition,
+        ExpressionSyntax value)
+    {
+        while (condition is ParenthesizedExpressionSyntax conditionParentheses)
+        {
+            condition = conditionParentheses.Expression;
+        }
+
+        while (value is ParenthesizedExpressionSyntax valueParentheses)
+        {
+            value = valueParentheses.Expression;
+        }
+
+        if (condition is BinaryExpressionSyntax conjunction
+            && conjunction.IsKind(SyntaxKind.LogicalAndExpression))
+        {
+            return IsNullTestOfExpression(conjunction.Left, value)
+                || IsNullTestOfExpression(conjunction.Right, value);
+        }
+
+        return condition is BinaryExpressionSyntax comparison
+            && comparison.IsKind(SyntaxKind.NotEqualsExpression)
+            && ((SyntaxFactory.AreEquivalent(comparison.Left, value)
+                    && comparison.Right.IsKind(SyntaxKind.NullLiteralExpression))
+                || (SyntaxFactory.AreEquivalent(comparison.Right, value)
+                    && comparison.Left.IsKind(SyntaxKind.NullLiteralExpression)));
+    }
+
     private static bool GuardValueRemainsUnchanged(
         SyntaxNode guard,
         SyntaxNode region,
@@ -6126,7 +6427,8 @@ internal static class ObliviousNullabilityAnalyzer
             _ => null,
         };
 
-        return IsDeclaredNullablePosition(symbolType ?? info.Type);
+        return IsImportedStatedNullablePosition(symbol, model.Compilation)
+            || IsDeclaredNullablePosition(symbolType ?? info.Type);
     }
 
     private static bool IsDeclaredNullablePosition(ITypeSymbol type) =>

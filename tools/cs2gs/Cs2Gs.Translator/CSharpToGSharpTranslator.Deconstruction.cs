@@ -1743,7 +1743,7 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression MakeDuplicationSafeTarget(
             GExpression target,
             List<GStatement> prologue,
-            ExpressionSyntax syntax = null)
+            ExpressionSyntax? syntax = null)
         {
             switch (target)
             {

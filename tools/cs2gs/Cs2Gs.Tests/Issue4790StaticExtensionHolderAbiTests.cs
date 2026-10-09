@@ -737,9 +737,10 @@ public class Issue4790StaticExtensionHolderAbiTests
                     .Where(attribute => attribute.AttributeType.FullName is
                         "System.Diagnostics.CodeAnalysis.NotNullWhenAttribute" or "Issue4790.Contracts.StampAttribute")
                     .Select(attribute => attribute.AttributeType.FullName + ":" +
-                        string.Join(",", attribute.ConstructorArguments.Select(argument => argument.Value)) + ":" +
+                        string.Join(",", attribute.ConstructorArguments.Select(argument =>
+                            FormatAttributeArgument(argument.Value))) + ":" +
                         string.Join(",", attribute.NamedArguments.Select(argument =>
-                            argument.MemberName + "=" + argument.TypedValue.Value)))
+                            argument.MemberName + "=" + FormatAttributeArgument(argument.TypedValue.Value))))
                     .OrderBy(value => value, StringComparer.Ordinal).ToArray();
                 Assert.Equal(Attributes(nativeParameters[index]), Attributes(emittedParameters[index]));
                 Assert.Equal(nativeParameters[index].Attributes, emittedParameters[index].Attributes);
@@ -748,6 +749,8 @@ public class Issue4790StaticExtensionHolderAbiTests
             Assert.Equal(expected, RunConsumer(emitted, consumer));
         }, source, consumerSource);
     }
+
+    private static string FormatAttributeArgument(object value) => value?.ToString() ?? string.Empty;
 
     [Theory]
     [InlineData(false)]

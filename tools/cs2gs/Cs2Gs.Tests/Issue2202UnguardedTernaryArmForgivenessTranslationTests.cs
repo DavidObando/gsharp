@@ -29,6 +29,57 @@ namespace Cs2Gs.Tests;
 /// </summary>
 public class Issue2202UnguardedTernaryArmForgivenessTranslationTests
 {
+    [Fact]
+    public void ReassignedGuardReceiver_DoesNotSuppressNullableArm()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public sealed class Holder
+    {
+        public string Value { get; }
+    }
+
+    public static class C
+    {
+        private static string Keep(string value) => value;
+
+        public static string Read(Holder holder, Holder other) =>
+            holder.Value != null && (holder = other) != null
+                ? Keep(holder.Value)
+                : """";
+    }
+}");
+
+        Assert.Contains("func Keep(value string?) string?", printed);
+    }
+
+    [Fact]
+    public void RepeatedPropertyRead_DoesNotSuppressNullableArm()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public sealed class Holder
+    {
+        private int reads;
+        public string Value { get => reads++ == 0 ? ""first"" : null; }
+    }
+
+    public static class C
+    {
+        private static string Keep(string value) => value;
+
+        public static string Read(Holder holder) =>
+            holder.Value != null
+                ? Keep(holder.Value)
+                : """";
+    }
+}");
+
+        Assert.Contains("func Keep(value string?) string?", printed);
+    }
+
     /// <summary>
     /// Positive test: mirrors the Oahu.Data `BookCommon` shape — an
     /// interface-implementing property with a ternary whose guarded arm (Book)

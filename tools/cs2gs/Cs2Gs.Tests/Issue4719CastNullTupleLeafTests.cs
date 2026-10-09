@@ -4,6 +4,7 @@
 
 using System;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -24,6 +25,12 @@ namespace Cs2Gs.Tests;
 
 public sealed class Issue4719CastNullTupleLeafTests : IDisposable
 {
+    private delegate bool TupleElementTaintQuery(
+        CSharpCompilation compilation,
+        ISymbol symbol,
+        IReadOnlyList<int> path,
+        [AllowNull] IReadOnlyList<CSharpCompilation> siblings);
+
     private readonly string fixtureDirectory = Path.Combine(
         AppContext.BaseDirectory,
         "issue4719-fixtures",
@@ -3476,7 +3483,7 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
             typeof(IReadOnlyList<CSharpCompilation>),
         });
         Assert.NotNull(method);
-        var query = method.CreateDelegate<Func<CSharpCompilation, ISymbol, IReadOnlyList<int>, IReadOnlyList<CSharpCompilation>, bool>>();
+        var query = (TupleElementTaintQuery)method.CreateDelegate(typeof(TupleElementTaintQuery));
         IReadOnlyList<CSharpCompilation> siblings = registerCurrent ? new[] { project.Compilation } : null;
         int[] path = { 0 };
         ISymbol contract = Assert.Single(project.Compilation.GetTypeByMetadataName("IRows").GetMembers("Read"));

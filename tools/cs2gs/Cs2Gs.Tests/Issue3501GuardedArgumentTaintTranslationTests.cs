@@ -3,11 +3,14 @@
 // </copyright>
 
 using System;
+using System.IO;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Symbols;
 using Microsoft.CodeAnalysis;
 using Xunit;
 
@@ -96,6 +99,108 @@ namespace Demo
 }");
 
         Assert.Contains("Pair(Name string?,", printed);
+    }
+
+    [Fact]
+    public void Oblivious_MutableCreationArguments_StillTaintPositionalParameters()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class C
+    {
+        private static void Clear(out object value) => value = null;
+
+        public void Run(bool repeat)
+        {
+            var loopValue = new object();
+            while (repeat)
+            {
+                _ = new LoopPair(loopValue);
+                loopValue = null;
+                repeat = false;
+            }
+
+            var outValue = new object();
+            Clear(out outValue);
+            _ = new OutPair(outValue);
+        }
+    }
+
+    public record LoopPair(object Value);
+    public record OutPair(object Value);
+}");
+
+        Assert.Contains("LoopPair(Value object?", printed);
+        Assert.Contains("OutPair(Value object?", printed);
+    }
+
+    [Fact]
+    public void Oblivious_UserDefinedCreationConversion_StillTaintsPositionalParameter()
+    {
+        string directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "issue3501-user-conversion",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            LoadedCSharpProject contracts = CSharpProjectLoader.LoadInMemory(new[]
+            {
+                ("Contracts.cs", """
+                    #nullable enable
+                    namespace Demo.Contracts;
+                    public sealed class Source { }
+                    public sealed class Target
+                    {
+                        public static implicit operator Target?(Source value) => null;
+                    }
+                    """),
+            });
+            string assemblyPath = Path.Combine(directory, "Contracts.dll");
+            var emitted = contracts.Compilation.Emit(assemblyPath);
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                new[]
+                {
+                    ("Consumer.cs", """
+                        #nullable disable
+                        using Demo.Contracts;
+                        namespace Demo.Consumer;
+                        public static class C
+                        {
+                            public static Pair Create()
+                            {
+                                Target value = new Source();
+                                return new Pair(value);
+                            }
+                        }
+                        public record Pair(Target Value);
+                        """),
+                },
+                CSharpProjectLoader.RuntimeReferences()
+                    .Append(MetadataReference.CreateFromFile(assemblyPath))
+                    .ToArray());
+            Assert.True(
+                project.BoundWithoutErrors,
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+            LoadedDocument document = Assert.Single(project.Documents);
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            string printed = GSharpPrinter.Print(
+                new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+            Assert.Contains("Pair(Value Target?", printed);
+            using var references = ReferenceResolver.WithReferences(new[] { assemblyPath });
+            TranslationTestValidation.AssertBinds(references, printed);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static string TranslateOblivious(string source)

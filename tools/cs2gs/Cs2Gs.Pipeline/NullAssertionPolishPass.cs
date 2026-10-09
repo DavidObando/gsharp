@@ -463,7 +463,13 @@ public static class NullAssertionPolishPass
                 if (resolved != null)
                 {
                     suffix.Reverse();
-                    return suffix.Aggregate(resolved, Path.Combine);
+                    string combined = resolved;
+                    foreach (string segment in suffix)
+                    {
+                        combined = Path.Combine(combined, segment);
+                    }
+
+                    return combined;
                 }
             }
 
@@ -475,7 +481,9 @@ public static class NullAssertionPolishPass
             }
 
             suffix.Add(name);
-            current = parent;
+
+            // The IsNullOrEmpty guard above establishes that parent is non-null.
+            current = parent!;
         }
 
         return directory;

@@ -3120,8 +3120,23 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IsNullableArrayElementAccess(ExpressionSyntax expression)
         {
-            return Unparenthesize(expression) is ElementAccessExpressionSyntax elementAccess
-                && this.ArrayExpressionHasNullableReferenceLikeElement(elementAccess.Expression);
+            expression = Unparenthesize(expression);
+            if (expression is not ElementAccessExpressionSyntax elementAccess)
+            {
+                return false;
+            }
+
+            if (this.ArrayExpressionHasNullableReferenceLikeElement(elementAccess.Expression))
+            {
+                return true;
+            }
+
+            ITypeSymbol projectedElement =
+                (this.GetManagedReferenceArrayProjectedExpressionType(
+                    elementAccess.Expression) as IArrayTypeSymbol)?.ElementType;
+            return projectedElement != null
+                && projectedElement.NullableAnnotation == NullableAnnotation.Annotated
+                && this.IsReferenceLikeOrManagedReference(projectedElement);
         }
 
         private bool ArrayExpressionHasNullableReferenceLikeElement(ExpressionSyntax expression)
@@ -3194,6 +3209,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
+            if (expression is MemberAccessExpressionSyntax member
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol property
+                && property.ContainingType.IsAnonymousType
+                && this.typeMapper.GetAnonymousPropertyType(
+                    property,
+                    this.context,
+                    member.GetLocation()) is ArrayTypeReference mergedArray)
+            {
+                return mergedArray.ElementType;
+            }
+
             if (!this.state.ManagedReferenceArrayNullable
                 .MappedArrayElementByElementType.TryGetValue(
                     array.ElementType,
@@ -3216,6 +3242,22 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol source,
             GTypeReference mapped)
         {
+            if (source is IArrayTypeSymbol sourceArray
+                && mapped is ArrayTypeReference mappedArray)
+            {
+                ITypeSymbol element = this.ApplyMappedArrayElementShape(
+                    sourceArray.ElementType,
+                    mappedArray.ElementType);
+                return this.context.Compilation.CreateArrayTypeSymbol(
+                    element,
+                    sourceArray.Rank,
+                    element.NullableAnnotation)
+                    .WithNullableAnnotation(
+                        mapped.IsNullable
+                            ? NullableAnnotation.Annotated
+                            : source.NullableAnnotation);
+            }
+
             if (source is INamedTypeSymbol { IsTupleType: true } tuple
                 && mapped is TupleTypeReference mappedTuple
                 && tuple.TupleElements.Length == mappedTuple.ElementTypes.Count)
@@ -3244,6 +3286,96 @@ public sealed partial class CSharpToGSharpTranslator
                     names,
                     default,
                     annotations);
+            }
+
+            if (source is INamedTypeSymbol named
+                && mapped is NamedTypeReference mappedNamed
+                && named.TypeArguments.Length == mappedNamed.TypeArguments.Count)
+            {
+                ImmutableArray<ITypeSymbol> arguments = named.TypeArguments
+                    .Select((argument, index) => this.ApplyMappedArrayElementShape(
+                        argument,
+                        mappedNamed.TypeArguments[index]))
+                    .ToImmutableArray();
+                ImmutableArray<NullableAnnotation> annotations = arguments
+                    .Select(argument => argument.NullableAnnotation)
+                    .ToImmutableArray();
+                INamedTypeSymbol definition = named.ConstructedFrom;
+                if (named.ContainingType != null
+                    && mappedNamed.ContainingType != null
+                    && this.ApplyMappedArrayElementShape(
+                        named.ContainingType,
+                        mappedNamed.ContainingType) is INamedTypeSymbol containingType)
+                {
+                    definition = containingType
+                        .GetTypeMembers(named.Name, named.Arity)
+                        .FirstOrDefault(candidate =>
+                            candidate.MetadataName == named.MetadataName)
+                        ?? definition;
+                }
+
+                INamedTypeSymbol projected = named.Arity == 0
+                    ? definition
+                    : definition.Construct(arguments, annotations);
+                return projected
+                    .WithNullableAnnotation(
+                        mapped.IsNullable
+                            ? NullableAnnotation.Annotated
+                            : source.NullableAnnotation);
+            }
+
+            if (source is INamedTypeSymbol delegateType
+                && delegateType.DelegateInvokeMethod is { } invoke
+                && mapped is ArrowTypeReference arrow)
+            {
+                var arguments = delegateType.TypeArguments.ToArray();
+                for (int index = 0; index < arguments.Length; index++)
+                {
+                    ITypeParameterSymbol parameter =
+                        delegateType.ConstructedFrom.TypeParameters[index];
+                    if (!invoke.ReturnsVoid
+                        && arrow.ReturnTypes.Count == 1
+                        && SymbolEqualityComparer.Default.Equals(
+                            invoke.OriginalDefinition.ReturnType,
+                            parameter))
+                    {
+                        arguments[index] = this.ApplyMappedArrayElementShape(
+                            arguments[index],
+                            arrow.ReturnTypes[0]);
+                        continue;
+                    }
+
+                    for (int parameterIndex = 0;
+                        parameterIndex < invoke.Parameters.Length
+                            && parameterIndex < arrow.ParameterTypes.Count;
+                        parameterIndex++)
+                    {
+                        if (SymbolEqualityComparer.Default.Equals(
+                            invoke.OriginalDefinition.Parameters[parameterIndex].Type,
+                            parameter))
+                        {
+                            arguments[index] = this.ApplyMappedArrayElementShape(
+                                arguments[index],
+                                arrow.ParameterTypes[parameterIndex]);
+                            break;
+                        }
+                    }
+                }
+
+                ImmutableArray<ITypeSymbol> immutableArguments =
+                    arguments.ToImmutableArray();
+                INamedTypeSymbol projected = delegateType.Arity == 0
+                    ? delegateType
+                    : delegateType.ConstructedFrom.Construct(
+                        immutableArguments,
+                        immutableArguments
+                            .Select(argument => argument.NullableAnnotation)
+                            .ToImmutableArray());
+                return projected
+                    .WithNullableAnnotation(
+                        mapped.IsNullable
+                            ? NullableAnnotation.Annotated
+                            : source.NullableAnnotation);
             }
 
             return mapped.IsNullable

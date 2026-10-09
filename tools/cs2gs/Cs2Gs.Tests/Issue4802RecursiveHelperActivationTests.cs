@@ -39,7 +39,7 @@ public sealed class Issue4802RecursiveHelperActivationTests
                 " SHA256=" + Convert.ToHexString(SHA256.HashData(
                     File.ReadAllBytes(typeof(CSharpToGSharpTranslator).Assembly.Location))));
             string source = File.ReadAllText(Path.Combine(
-                AppContext.BaseDirectory, "Fixtures", "Issue4802", "Activation.cs"));
+                AppContext.BaseDirectory, "Fixtures", "Issue4802", "Activation.cs.txt"));
             string nativeSource = Path.Combine(directory, "Activation.cs");
             File.WriteAllText(nativeSource, source);
             string projectPath = Path.Combine(directory, "Native.csproj");
@@ -122,7 +122,7 @@ public sealed class Issue4802RecursiveHelperActivationTests
             File.WriteAllBytes(Path.Combine(directory, "native", "Native.pdb"), product);
             File.WriteAllText(Path.Combine(evidence, "existing.marker"), "root artifact");
             File.WriteAllText(Path.Combine(destination, "existing.log"), "previous artifact");
-            Exception failure = Record.Exception(() =>
+            var failure = Record.Exception(() =>
             {
                 try
                 {
