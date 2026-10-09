@@ -176,7 +176,7 @@ Items found by the dry run that the plan did not list:
 | Added | Why | Script |
 |---|---|---|
 | Rewrite `<name>.csproj` to `.gsproj` in `e2etests/*.sh`, `.github/workflows/*.yml`, `build/*.sh|py`, `src/vscode-gsharp`, `website/scripts` | About 130 files name translated projects. Without it the e2e scripts and workflows break. Only names with a `.gsproj` twin and no `.csproj` twin are rewritten, so fixtures such as `App.csproj` are not touched. | 2b |
-| Regenerate `packages.lock.json` | The mirrored lock files do not match the translated projects: the locked-mode restore CI uses fails with NU1004 on the first test project. | 8 |
+| Regenerate `packages.lock.json` | Established from the mirror: the 35 translated product projects (src, test, tools) DO carry a `packages.lock.json`, copied from their C# projects, while samples and templates never had one. The copies are stale for the `.gsproj` projects: the locked-mode restore CI uses fails with NU1004 on the first test project. | 8 |
 | Keep untranslated C# the mirror drops | `ForeignCompile` and the Adr0169 fixtures would otherwise be deleted and their projects broken. | assemble |
 
 ## Validation sequence (what the script runs)
@@ -202,7 +202,9 @@ name parity against the tag's last C# nightly TRX files, the stage-2 job.
 ## Rollback
 
 - Any time before the first 0.5 tag: revert the squash commit. `cs2gs/csharp-0.4`
-  stays the source of truth and the `0.4.NNNN` pin stays valid.
+  stays the source of truth and the `0.4.NNNN` pin stays valid. The branch is
+  semi-frozen: it may receive occasional back-ports from G# to C# when useful to
+  exercise cs2gs, so rollback re-releases from its head, not necessarily the tag.
 - After the first 0.5 tag: re-release from `cs2gs/csharp-0.4` as `0.4.NNNN+k`;
   keep that branch buildable (its CI is the cs2gs gate that consumes it).
 - Nothing the rehearsal does touches `origin`: it clones, commits on a local
@@ -255,8 +257,9 @@ view of the same work, with the facts the dry run added.
       says it is the last C#-built release and names `cs2gs/csharp-0.4`; add the
       0.5 section (draft: `docs/release/release-notes-0.5-draft.md`).
 - [ ] Tag `v0.4.NNNN` on the freeze commit; `publish` fires. Owner action.
-- [ ] Create branch `cs2gs/csharp-0.4` **at the tag**, protect it, state the freeze
-      policy in its README (back-port only what cs2gs tests need).
+- [ ] Create branch `cs2gs/csharp-0.4` **at the tag**, protect it, state the policy
+      in its README: semi-frozen, no feature work; it may receive occasional back-ports
+      from G# to C# when useful to exercise cs2gs.
 - [ ] nuget.org resolvability from a clean machine: `Gsharp.NET.Sdk`, `Gsharp.Cs2Gs`
       and `Gsharp.Gsfmt` all at `0.4.NNNN`. Do not assume it: `Gsharp.Gsfmt` was
       published for `0.4.591` and `0.4.1150` only. `cutover.py dry-run --pin
