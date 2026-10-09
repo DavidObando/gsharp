@@ -27,7 +27,14 @@ internal static class SampleReferences
     /// <summary>Builds the resolver for a sample compilation.</summary>
     /// <returns>A resolver over the ref pack and the bundled G# runtime assemblies.</returns>
     internal static ReferenceResolver CreateResolver() =>
-        ReferenceResolver.WithReferences(ReferenceResolver.ResolveDriverReferencePaths(RefPackAssemblies()));
+        ReferenceResolver.WithReferences(
+            ReferenceResolver.ResolveDriverReferencePaths(RefPackAssemblies())
+                // Gsharp.Extensions is found only when the solution layout has been
+                // built, which would make the reference set depend on the build
+                // history. The baseline skips the samples that need it (see
+                // RefactoringBaselineTests.KnownCompileFailureSamples), so it is
+                // excluded to keep the set the same everywhere.
+                .Where(path => !string.Equals(Path.GetFileName(path), "Gsharp.Extensions.dll", StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>The <c>Microsoft.NETCore.App.Ref</c> facades matching the running runtime.</summary>
     /// <returns>The reference assembly paths, sorted.</returns>
