@@ -5,19 +5,20 @@ analyzers written in C#. They analyze C# syntax. Since the compiler became G#
 source they **do not run on `Core`** (a `.gsproj` of `.gs` files), so rules
 GSA0001-GSA0003 below are no longer enforced by the build.
 
-<!-- CUTOVER-VERIFY: owner decision. Either (a) the rules are ported to G#
-     analyzers (the repository already builds G# analyzers; see
-     e2etests/gsanalyzer-e2e.sh and ADR-0193 phases 2-3, which write GSA0007 and
-     GSA0008 in G#), and this page says "enforced by G# analyzers in <path>", or
-     (b) they are retired and remain review conventions, as written below.
-     Pick one, update the "Status" paragraph and delete this comment. -->
+## Status: retired at the cut-over
 
-## Status
+Owner decision (2026-10-09): GSA0001-GSA0003 are retired. They are not ported.
+The G# analyzers that replace the C# ones are GSA0007 and GSA0008 (ADR-0193
+phases 2-3), which enforce the nullability funnel, not these three rules.
 
-The three rules remain binding conventions for compiler source. Review for them
-by hand until they are ported to G# analyzers or formally retired. The C#
-analyzer project and its tests are kept as the reference implementation of each
-rule's detection logic.
+**Enforcement gap.** From the cut-over until someone writes G# equivalents, the
+three rules below are **not enforced by the build**. They stay as written
+conventions for compiler source and must be checked in review. Violating
+GSA0001 or GSA0002 produced real bugs (the GS0155/0158/0159 clusters); GSA0003
+caused CI out-of-memory failures. If one of them regresses, that is the signal
+to port it as a G# analyzer. The C# analyzer project and its tests stay in the
+repository as the reference for each rule's detection logic until the owner
+removes them.
 
 ## GSA0001: Struct field token reads
 

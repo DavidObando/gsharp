@@ -15,11 +15,14 @@ by cs2gs at the final C#-built release (`v0.4.NNNN`); see
 translation command and the path mapping. Three rules follow from that.
 
 - **Fixes happen in G#, on `main`.** Do not edit the C# branch
-  `cs2gs/csharp-0.4` to fix a bug. That branch is frozen: it holds the final C#
-  source and is the pinned C# corpus for cs2gs. The only changes allowed there
-  are (a) back-ports that cs2gs tests need, and (b) a security fix that must be
-  released as `0.4.NNNN+k`. Both need the maintainer's say-so. A fix found while
-  working on cs2gs is a fix in G#, or in cs2gs (which is also G#).
+  `cs2gs/csharp-0.4` to fix a bug. That branch is **semi-frozen**: it holds the
+  final C# source of the compiler and is a living C# corpus for cs2gs. It gets
+  no bug fixes and no features. It does get (a) code back-ported from G# to C#
+  when that code merits exercising cs2gs (new C# shapes for the nightly to
+  translate), and (b) a security fix that must be released as `0.4.NNNN+k`.
+  The cs2gs nightly pins a SHA of the branch, so a back-port is a branch commit
+  plus a pin bump in a `main` PR. A fix found while working on cs2gs is a fix in
+  G#, or in cs2gs (which is also G#).
 - **The N-1 rule: the repository builds with the previous released compiler.**
   The pin is `msbuild-sdks` in [`global.json`](global.json). The compiler's own
   source may use only language features that the pinned release supports. A PR
@@ -104,14 +107,19 @@ to translate. What gates a PR now:
   defect only visible when gsc compiles itself: treat it as P0, stop and
   diagnose; do not re-run until green. It runs nightly (`selfhost-stage2-nightly`)
   and in the PR checks that ADR-0198 defines.
-- **cs2gs gates** (`cs2gs-corpus`, `cs2gs-oahu`, `cs2gs-code-exploder`) still
-  guard cs2gs as a product. They consume C# inputs that are not this
-  repository's compiler source: the corpus under `tools/cs2gs/corpus`, and the
-  pinned Oahu and Code Exploder commits under `tools/cs2gs/external/`.
-- **cs2gs nightly monitor** (`cs2gs-monitor-nightly`) migrates the C# version
-  of G# (branch `cs2gs/csharp-0.4`, at a pinned SHA), Oahu and Code Exploder
-  every night. It is a regression monitor for cs2gs, not a gate on G# changes.
-  A red monitor means cs2gs regressed on real-world C#; fix cs2gs.
+- **`cs2gs-corpus`** still guards cs2gs as a product on every PR: it runs the
+  C# corpus under `tools/cs2gs/corpus` against the gap ledger.
+- **cs2gs apps nightly** (`cs2gs-apps-nightly`) is one nightly run over every
+  real-world app we cover: the C# version of G# (branch `cs2gs/csharp-0.4` at a
+  pinned SHA), Oahu and Code Exploder (pinned in `tools/cs2gs/external/`). Oahu
+  and Code Exploder no longer run on PRs and `publish` does not wait for them.
+  It is a regression monitor for cs2gs, not a gate on G# changes. When an app
+  goes red the `gate` job files, or updates, one GitHub issue per
+  gate/app/failure with the gate report, labeled `cs2gs-nightly`. The priority
+  follows the triage rule below: P0 only when an app that was previously green
+  on `main` (listed in `tools/cs2gs/apps-nightly-banked.json`) goes red,
+  otherwise P1. Fix cs2gs; don't edit the issue's priority down to make the
+  dashboard greener.
 - **`nullable-hygiene`** no longer runs `build/nullable_hygiene.py`. The job
   keeps its name because it also runs the release-version-reference check
   (`build/check-release-version-refs.py`). C#'s `!` is G#'s `!!`; see
@@ -120,17 +128,19 @@ to translate. What gates a PR now:
   (`__spill`, `__cast`, `__decon`, `__using`) in the committed `.gs` tree.
   If it fails, a new `.gs` file contains one: write the code without it. Don't
   weaken the test.
+- **`selfhost-windows`** (migrated Core.Tests on Windows) is parked: it runs,
+  but it does not gate anything.
 - **Windows and differential-conformance nightlies** may be red. Shipping with a
   red nightly is a maintainer judgment call; don't assume a red Windows
   nightly is yours, and don't assume it isn't. Show the evidence.
 - **Build docs** (`pages.yml`): the WebKit dark-theme accessibility check on
   `project/quality-dashboard` fails intermittently. When a PR doesn't touch
   that page, rerun it with `gh run rerun <run-id> --failed`.
-- **cs2gs-oahu** migrates Oahu at the commit pinned in
+- **The Oahu leg** of the apps nightly migrates Oahu at the commit pinned in
   `tools/cs2gs/external/oahu.json`.
   `JobSchedulerTests.Bounded_Concurrency_Limit_Is_Enforced` is a known flaky
   test (DavidObando/Oahu#71). Show that a failure isn't yours before
-  rerunning.
+  rerunning, and before closing an auto-filed issue as a flake.
 - **Flaky or not, check the logs first.** Pull the job log
   (`gh api repos/DavidObando/gsharp/actions/jobs/<id>/logs`) and show that
   the failure is unrelated, e.g. the same failure on `main` or on an
@@ -158,7 +168,7 @@ The compiler builds itself, so a gsc defect can break the build of gsc.
 - **Test scope:** run targeted `--filter` test runs locally. Full suites run
   on PR CI. Build with `dotnet build GSharp.slnx --configuration Release -graph`;
   test projects are `*.gsproj`.
-- **`/tmp` is a shared tmpfs of about 31 GB.** Stage-2 and cs2gs monitor runs
+- **`/tmp` is a shared tmpfs of about 31 GB.** Stage-2 and cs2gs apps runs
   fill it quickly, and when it fills every Bash command fails silently for
   everyone on the machine. Put their work roots (`--work`, `--out`,
   `--artifacts`, `TMPDIR`) under `~/.cache/<tag>/`, and delete them when

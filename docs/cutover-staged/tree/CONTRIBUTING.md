@@ -16,10 +16,12 @@ The compiler, language server, formatter and tools are G# source (`.gs`,
   `tools/cs2gs/corpus` and `*.cs.txt` source data). They are the C# the
   translator is tested against.
 
-The final C#-built release is `v0.4.NNNN`; its C# source of the compiler is
-frozen on branch `cs2gs/csharp-0.4`. **Fixes happen in G#, on `main`.** Do not
-open PRs against the C# branch. The exceptions (a back-port that cs2gs tests
-need, or a security fix released as `0.4.NNNN+k`) are made by the maintainer.
+The final C#-built release is `v0.4.NNNN`; its C# source of the compiler lives
+on branch `cs2gs/csharp-0.4`, which is **semi-frozen**: a living corpus for
+cs2gs. **Fixes happen in G#, on `main`.** Do not open bug-fix or feature PRs
+against the C# branch. It receives only code back-ported from G# to C# when that
+code merits exercising cs2gs, and a security fix released as `0.4.NNNN+k`. Both
+are made by the maintainer, and the cs2gs nightly pins a SHA of the branch.
 
 ## Prerequisites
 
