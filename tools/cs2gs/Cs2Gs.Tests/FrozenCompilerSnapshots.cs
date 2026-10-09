@@ -14,7 +14,7 @@ namespace Cs2Gs.Tests;
 /// are <c>.gs</c>, so each such input is pinned as a checked-in
 /// <c>Fixtures/FrozenCompiler/*.cs.txt</c> snapshot. While the live file is
 /// still C# the snapshot is compared against it (see
-/// <see cref="FindDrift"/>), so a snapshot cannot silently go stale; once the
+/// <see cref="LiveText"/>), so a snapshot cannot silently go stale; once the
 /// live file is gone the snapshot is the frozen input.
 /// </summary>
 internal static class FrozenCompilerSnapshots
@@ -76,9 +76,9 @@ internal static class FrozenCompilerSnapshots
     /// <summary>
     /// The live text a snapshot is compared with: the whole live file, or for a
     /// region snapshot the stretch of the live file that starts at the
-    /// snapshot's first line and is as long as the snapshot. A region that
-    /// cannot be found yields an empty text, which the golden comparison
-    /// reports as a mismatch at line 1.
+    /// snapshot's first line and is as long as the snapshot. A region whose
+    /// first line is not found throws, so a refresh can never write an empty
+    /// snapshot.
     /// </summary>
     /// <param name="snapshot">The snapshot text.</param>
     /// <param name="live">The live C# text.</param>
@@ -97,7 +97,8 @@ internal static class FrozenCompilerSnapshots
         int start = Array.IndexOf(liveLines, snapshotLines[0]);
         if (start < 0)
         {
-            return string.Empty;
+            throw new InvalidOperationException(
+                $"The first line of the region snapshot is not in the live file: '{snapshotLines[0]}'. Re-point the snapshot at the moved or edited region by hand.");
         }
 
         int count = Math.Min(snapshotLines.Length, liveLines.Length - start);

@@ -77,7 +77,7 @@ public sealed class Issue4661FrozenCompilerSnapshotTests
         Assert.Equal("a\nb\nc\nd\n", FrozenCompilerSnapshots.LiveText("anything", live, region: false));
         Assert.Equal("b\nc\n", FrozenCompilerSnapshots.LiveText("b\nc\n", live, region: true));
         Assert.Equal("b\nc\nd\n", FrozenCompilerSnapshots.LiveText("b\nX\nY\nZ\n", live, region: true));
-        Assert.Equal(string.Empty, FrozenCompilerSnapshots.LiveText("zzz\n", live, region: true));
+        Assert.Throws<InvalidOperationException>(() => FrozenCompilerSnapshots.LiveText("zzz\n", live, region: true));
     }
 
     /// <summary>
