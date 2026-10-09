@@ -21,7 +21,7 @@ This directory is not read by the website build (Docusaurus only reads
 | `tree/.github/workflows/cs2gs-apps-nightly.yml` | same | new; replaces `cs2gs-selfmig-nightly.yml`; one run over the C# version of G#, Oahu and Code Exploder, with a `gate` job that files or updates issues |
 | `tree/build/cs2gs-apps-gate-issues.py`, `tree/build/test-cs2gs-apps-gate-issues.py` | same | new; issue filing (dedup by gate/app/fingerprint; P0 only for a banked app red on main, else P1) and its test |
 | `tree/.github/workflows/selfhost-stage2-nightly.yml` | same | new; hook for the ADR-0198 controller (does not edit it) |
-| `cutover_edits.py` | n/a | exact-text edits: `build.yml` (drop the hot-core guard and its classifier, drop the hygiene script step (the job and the version-reference steps stay), remove the `cs2gs-oahu` and `cs2gs-code-exploder` jobs and their `publish` dependency, `.sln`/`.csproj` to `.slnx`/`.gsproj`), the other workflows, the CI-matrix scripts, `emit-pipeline.md`, `lsp.md`, `debug-info.md`, `compiler-architecture.md` |
+| `cutover_edits.py` | n/a | exact-text edits: `build.yml` (drop the hot-core guard and its classifier, scope the hygiene step to the remaining C# (all checks but `coverage`; the job and the version-reference steps stay), retarget `build/run-ilverify.sh` and `e2etests/*.sh` to `.slnx`/`.gsproj` for product projects only (fixture and host projects they generate stay C#), park `selfhost-windows.yml` (dispatch-only), remove the `cs2gs-oahu` and `cs2gs-code-exploder` jobs and their `publish` dependency, `.sln`/`.csproj` to `.slnx`/`.gsproj`), the other workflows, the CI-matrix scripts, `emit-pipeline.md`, `lsp.md`, `debug-info.md`, `compiler-architecture.md` |
 | `apply.sh` | n/a | runs the above, deletes `cs2gs-selfmig-nightly.yml` and the PR-guard scripts, reports doc paths that no longer exist |
 | `TRIAGE-CHECKLIST.md` | n/a | owner's `gh` commands for Phase 4 item 6 and the repository settings |
 
@@ -56,8 +56,10 @@ missing, which is expected before the translation.
 
 ## Verified facts the staged content relies on
 
-- `nullable-hygiene` also runs the release-version-reference checks, so the job
-  stays and only the script step goes.
+- `nullable-hygiene` also runs the release-version-reference checks, and
+  `src/vs-gsharp` (C#, nullable enabled) still needs the hygiene script, so the
+  job stays and the script runs with every check except `coverage` (which
+  asserts src/Core's C# shape).
 - `publish` depends on `cs2gs-corpus`, `cs2gs-oahu`, `cs2gs-code-exploder` but
   not on the hot-core guard. The staged edit drops the last two from `needs`
   together with their jobs.
@@ -91,8 +93,8 @@ missing, which is expected before the translation.
 5. **Lock files:** `--locked-mode` stays. The cut-over dry run confirms whether
    translated `.gsproj` files carry `packages.lock.json`; if not, the cut-over
    commits them. The marker in `CONTRIBUTING.md` stays until then.
-6. **`selfhost-windows.yml` is parked** (kept, not gating; the apply script only
-   renames its project paths). The stage-1 pack and TRX-compare contract checks
+6. **`selfhost-windows.yml` is parked** (kept, not gating; the apply script makes it
+   dispatch-only; it is not rewritten to .gsproj, and still needs repair against `cs2gs/csharp-0.4` before it can run). The stage-1 pack and TRX-compare contract checks
    in `test-partition` are retired once the #4842 controller is live: delete the
    steps `Verify self-host stage-1 packer contract` and `Verify the self-host
    TRX comparison` (and their `build/test-selfhost-*.py` scripts) in a follow-up
