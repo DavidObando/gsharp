@@ -1,0 +1,67 @@
+name: selfhost-stage2-nightly
+
+# Nightly hook for the stage-2 self-host certification (ADR-0198, plan item C5).
+# The certification controller itself is build/selfhost-stage2.py, added by
+# PR #4842; this workflow only schedules it and must not re-implement or loosen
+# it. Fill in STAGE2_ARGS from the invocation documented in
+# docs/self-host-bootstrap.md once #4842 has landed. The first step fails
+# loudly while STAGE2_ARGS is empty, so an unwired hook can never pass.
+#
+# After the cut-over, "stage 0" is the pinned SDK in global.json, stage 1 is the
+# repository built by it, and stage 2 is the repository rebuilt by stage 1.
+# Run it on the merged cut-over head immediately (plan Phase 3 step 6).
+
+on:
+  schedule:
+    - cron: '41 9 * * *'
+  workflow_dispatch:
+
+env:
+  NBGV_SetCloudBuildVersionVars: false
+  STAGE2_ARGS: ''
+
+concurrency:
+  group: selfhost-stage2-nightly
+  cancel-in-progress: false
+
+jobs:
+  stage2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Require a wired controller invocation
+        run: |
+          if [[ -z "$STAGE2_ARGS" ]]; then
+            echo "::error::STAGE2_ARGS is empty: wire the ADR-0198 controller invocation (build/selfhost-stage2.py) before enabling this job."
+            exit 1
+          fi
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Install stage-2 sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Certify stage 1 against stage 2
+        run: |
+          # The controller owns its isolated trees; keep them off tmpfs.
+          work="$RUNNER_TEMP/selfhost-stage2"
+          # shellcheck disable=SC2086
+          python3 build/selfhost-stage2.py --work "$work" $STAGE2_ARGS
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: selfhost-stage2-evidence
+          retention-days: 30
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/selfhost-stage2/**/*.json
