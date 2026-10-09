@@ -1,8 +1,3 @@
-using System;
-
-namespace Cs2Gs.Tests;
-
-// frozen-region-begin
 /// <summary>Imported static contextual method fixture.</summary>
 public static class ImportedContextualStatics
 {
@@ -58,4 +53,3 @@ public static class ImportedContextualStaticProperties
     /// <summary>Reserved invocation property.</summary>
     public static Func<int>? @nameof { get; } = () => 8;
 }
-// frozen-region-end

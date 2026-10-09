@@ -5,7 +5,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 
 namespace Cs2Gs.Tests;
 
@@ -20,12 +19,6 @@ namespace Cs2Gs.Tests;
 /// </summary>
 internal static class FrozenCompilerSnapshots
 {
-    /// <summary>Starts the part of a snapshot that must match the live file.</summary>
-    internal const string RegionBegin = "// frozen-region-begin";
-
-    /// <summary>Ends the part of a snapshot that must match the live file.</summary>
-    internal const string RegionEnd = "// frozen-region-end";
-
     private const string AnalyzersDirectory = "InternalAnalyzers/";
 
     /// <summary>
@@ -33,19 +26,19 @@ internal static class FrozenCompilerSnapshots
     /// with region markers is mirrored by the text between them (contained in
     /// the live file); one without is mirrored by the whole live file.
     /// </summary>
-    internal static readonly IReadOnlyList<(string Snapshot, string Live)> Manifest = new (string, string)[]
+    internal static readonly IReadOnlyList<(string Snapshot, string Live, bool Region)> Manifest = new (string, string, bool)[]
     {
-        (AnalyzersDirectory + "BaseClassCycleUnsafeWalkAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/BaseClassCycleUnsafeWalkAnalyzer.cs"),
-        (AnalyzersDirectory + "DiagnosticDescriptors.cs.txt", "src/Analyzers/InternalAnalyzers/DiagnosticDescriptors.cs"),
-        (AnalyzersDirectory + "EmitCacheKeyRemapScopeAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/EmitCacheKeyRemapScopeAnalyzer.cs"),
-        (AnalyzersDirectory + "ReflectionTypeComparisonAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/ReflectionTypeComparisonAnalyzer.cs"),
-        (AnalyzersDirectory + "RewriterClonePreservationAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/RewriterClonePreservationAnalyzer.cs"),
-        (AnalyzersDirectory + "StrongStaticReflectionCacheAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/StrongStaticReflectionCacheAnalyzer.cs"),
-        (AnalyzersDirectory + "StructFieldDefsReadAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/StructFieldDefsReadAnalyzer.cs"),
-        ("DocumentTranslationState.cs.txt", "tools/cs2gs/Cs2Gs.Translator/DocumentTranslationState.cs"),
-        ("Issue3461ContextualStatics.cs.txt", "tools/cs2gs/Cs2Gs.Tests/Issue3461IdentifierSanitizationTests.cs"),
-        ("Issue3466LateSignatureTypes.cs.txt", "tools/cs2gs/Cs2Gs.Tests/Issue3466LateSignatureTypes.cs"),
-        ("ManagedReferenceArrayNullableState.cs.txt", "tools/cs2gs/Cs2Gs.Translator/ManagedReferenceArrayNullableState.cs"),
+        (AnalyzersDirectory + "BaseClassCycleUnsafeWalkAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/BaseClassCycleUnsafeWalkAnalyzer.cs", false),
+        (AnalyzersDirectory + "DiagnosticDescriptors.cs.txt", "src/Analyzers/InternalAnalyzers/DiagnosticDescriptors.cs", false),
+        (AnalyzersDirectory + "EmitCacheKeyRemapScopeAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/EmitCacheKeyRemapScopeAnalyzer.cs", false),
+        (AnalyzersDirectory + "ReflectionTypeComparisonAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/ReflectionTypeComparisonAnalyzer.cs", false),
+        (AnalyzersDirectory + "RewriterClonePreservationAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/RewriterClonePreservationAnalyzer.cs", false),
+        (AnalyzersDirectory + "StrongStaticReflectionCacheAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/StrongStaticReflectionCacheAnalyzer.cs", false),
+        (AnalyzersDirectory + "StructFieldDefsReadAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/StructFieldDefsReadAnalyzer.cs", false),
+        ("DocumentTranslationState.cs.txt", "tools/cs2gs/Cs2Gs.Translator/DocumentTranslationState.cs", false),
+        ("Issue3461ContextualStatics.cs.txt", "tools/cs2gs/Cs2Gs.Tests/Issue3461IdentifierSanitizationTests.cs", true),
+        ("Issue3466LateSignatureTypes.cs.txt", "tools/cs2gs/Cs2Gs.Tests/Issue3466LateSignatureTypes.cs", false),
+        ("ManagedReferenceArrayNullableState.cs.txt", "tools/cs2gs/Cs2Gs.Translator/ManagedReferenceArrayNullableState.cs", false),
     };
 
     /// <summary>The snapshot text of one analyzer source under <c>src/Analyzers/InternalAnalyzers</c>.</summary>
@@ -81,48 +74,36 @@ internal static class FrozenCompilerSnapshots
             relativePath.Replace('/', System.IO.Path.DirectorySeparatorChar));
 
     /// <summary>
-    /// Compares a snapshot with the live file it mirrors.
+    /// The live text a snapshot is compared with: the whole live file, or for a
+    /// region snapshot the stretch of the live file that starts at the
+    /// snapshot's first line and is as long as the snapshot. A region that
+    /// cannot be found yields an empty text, which the golden comparison
+    /// reports as a mismatch at line 1.
     /// </summary>
     /// <param name="snapshot">The snapshot text.</param>
     /// <param name="live">The live C# text.</param>
-    /// <returns>A description of the drift, or <see langword="null"/> when the snapshot is honest.</returns>
-    internal static string FindDrift(string snapshot, string live)
+    /// <param name="region">Whether the snapshot mirrors only a region of the live file.</param>
+    /// <returns>The live text to compare.</returns>
+    internal static string LiveText(string snapshot, string live, bool region)
     {
         string normalizedLive = Normalize(live);
-        int begin = snapshot.IndexOf(RegionBegin, StringComparison.Ordinal);
-        int end = snapshot.IndexOf(RegionEnd, StringComparison.Ordinal);
-        if (begin < 0 && end < 0)
+        if (!region)
         {
-            return string.Equals(Normalize(snapshot), normalizedLive, StringComparison.Ordinal)
-                ? null
-                : "the snapshot differs from the whole live file";
+            return normalizedLive;
         }
 
-        if (begin < 0 || end < begin)
+        string[] snapshotLines = Normalize(snapshot).TrimEnd('\n').Split('\n');
+        string[] liveLines = normalizedLive.TrimEnd('\n').Split('\n');
+        int start = Array.IndexOf(liveLines, snapshotLines[0]);
+        if (start < 0)
         {
-            throw new InvalidOperationException(
-                $"A snapshot region needs '{RegionBegin}' followed by '{RegionEnd}'.");
+            return string.Empty;
         }
 
-        string region = Normalize(snapshot.Substring(begin + RegionBegin.Length, end - begin - RegionBegin.Length));
-        if (region.Trim().Length == 0)
-        {
-            throw new InvalidOperationException("A snapshot region must not be empty.");
-        }
-
-        return normalizedLive.Contains(region, StringComparison.Ordinal)
-            ? null
-            : "the snapshot region is not contained in the live file";
+        int count = Math.Min(snapshotLines.Length, liveLines.Length - start);
+        return string.Join("\n", liveLines, start, count) + "\n";
     }
 
-    private static string Normalize(string text)
-    {
-        var builder = new StringBuilder();
-        foreach (string line in text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
-        {
-            builder.Append(line.TrimEnd()).Append('\n');
-        }
-
-        return builder.ToString().Trim('\n') + "\n";
-    }
+    private static string Normalize(string text) =>
+        text.ReplaceLineEndings("\n");
 }

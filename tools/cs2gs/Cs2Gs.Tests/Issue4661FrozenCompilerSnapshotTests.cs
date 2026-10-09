@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -19,18 +20,22 @@ namespace Cs2Gs.Tests;
 public sealed class Issue4661FrozenCompilerSnapshotTests
 {
     public static IEnumerable<object[]> ManifestEntries() =>
-        FrozenCompilerSnapshots.Manifest.Select(entry => new object[] { entry.Snapshot, entry.Live });
+        FrozenCompilerSnapshots.Manifest.Select(entry => new object[] { entry.Snapshot, entry.Live, entry.Region });
 
     /// <summary>
-    /// While the compiler is C#, the snapshot equals (or is contained in) the
-    /// live file. After the cut-over the live file is gone by design and the
-    /// snapshot is the frozen input; it must still be there and non-empty.
+    /// While the compiler is C#, the snapshot equals the live file (or the live
+    /// region it mirrors), compared with the shared <c>GoldenFile</c> workflow:
+    /// first differing line, a <c>.actual</c> file, and
+    /// <c>GSHARP_UPDATE_GOLDENS=1</c> to refresh the snapshot. After the
+    /// cut-over the live file is gone by design and the snapshot is the frozen
+    /// input; it must still be there and non-empty.
     /// </summary>
     /// <param name="snapshot">The snapshot path under Fixtures/FrozenCompiler.</param>
     /// <param name="live">The repository-relative live C# file.</param>
+    /// <param name="region">Whether the snapshot mirrors only a region of the live file.</param>
     [Theory]
     [MemberData(nameof(ManifestEntries))]
-    public void Snapshot_MatchesTheLiveFile_WhileItIsCSharp(string snapshot, string live)
+    public void Snapshot_MatchesTheLiveFile_WhileItIsCSharp(string snapshot, string live, bool region)
     {
         string text = FrozenCompilerSnapshots.Read(snapshot);
         if (SelfMigratedCompilerSource.IsGSharp)
@@ -40,12 +45,10 @@ public sealed class Issue4661FrozenCompilerSnapshotTests
         }
 
         string livePath = TestFixtureSource.Resolve(live.Split('/'));
-        string drift = FrozenCompilerSnapshots.FindDrift(text, File.ReadAllText(livePath));
-        Assert.True(
-            drift == null,
-            $"Frozen snapshot 'Fixtures/FrozenCompiler/{snapshot}' has drifted from '{live}': {drift}. " +
-            "Update the snapshot to the live text (for a whole-file snapshot, copy the file over it; " +
-            "for a region snapshot, replace the text between the frozen-region markers) and re-run.");
+        GoldenFile.AssertMatches(
+            FrozenCompilerSnapshots.Path(snapshot),
+            FrozenCompilerSnapshots.LiveText(text, File.ReadAllText(livePath), region),
+            $"The frozen snapshot has drifted from '{live}'.");
     }
 
     [Fact]
@@ -53,6 +56,7 @@ public sealed class Issue4661FrozenCompilerSnapshotTests
     {
         string directory = TestFixtureSource.Resolve("tools", "cs2gs", "Cs2Gs.Tests", "Fixtures", "FrozenCompiler");
         var onDisk = Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+            .Where(path => !path.EndsWith(".actual", StringComparison.Ordinal))
             .Select(path => Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '/'))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToList();
@@ -66,21 +70,14 @@ public sealed class Issue4661FrozenCompilerSnapshotTests
     }
 
     [Fact]
-    public void FindDrift_JudgesWholeFilesAndRegions()
+    public void LiveText_SelectsTheWholeFileOrTheMirroredRegion()
     {
-        string live = "a\r\nb  \r\nc\r\n";
+        string live = "a\r\nb\r\nc\r\nd\r\n";
 
-        Assert.Null(FrozenCompilerSnapshots.FindDrift("a\nb\nc\n", live));
-        Assert.NotNull(FrozenCompilerSnapshots.FindDrift("a\nb\nX\n", live));
-        Assert.NotNull(FrozenCompilerSnapshots.FindDrift("a\nb\n", live));
-
-        string region = "using X;\n" + FrozenCompilerSnapshots.RegionBegin + "\nb\nc\n" + FrozenCompilerSnapshots.RegionEnd + "\n";
-        Assert.Null(FrozenCompilerSnapshots.FindDrift(region, live));
-        Assert.NotNull(FrozenCompilerSnapshots.FindDrift(region.Replace("c\n", "d\n", StringComparison.Ordinal), live));
-        Assert.Throws<InvalidOperationException>(
-            () => FrozenCompilerSnapshots.FindDrift(FrozenCompilerSnapshots.RegionBegin + "\nb\n", live));
-        Assert.Throws<InvalidOperationException>(
-            () => FrozenCompilerSnapshots.FindDrift(FrozenCompilerSnapshots.RegionBegin + "\n" + FrozenCompilerSnapshots.RegionEnd, live));
+        Assert.Equal("a\nb\nc\nd\n", FrozenCompilerSnapshots.LiveText("anything", live, region: false));
+        Assert.Equal("b\nc\n", FrozenCompilerSnapshots.LiveText("b\nc\n", live, region: true));
+        Assert.Equal("b\nc\nd\n", FrozenCompilerSnapshots.LiveText("b\nX\nY\nZ\n", live, region: true));
+        Assert.Equal(string.Empty, FrozenCompilerSnapshots.LiveText("zzz\n", live, region: true));
     }
 
     /// <summary>
