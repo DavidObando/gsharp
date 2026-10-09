@@ -150,6 +150,27 @@ def workflows(root: Path) -> None:
         "        run: python3 build/test-cs2gs-apps-gate-issues.py\n\n"
         "      - name: Verify the self-host compiler benchmark gate\n",
     )
+    # 2d. Fail closed: a tag must not publish unless the exact tagged commit has
+    #     a successful stage-2 certification run (ADR-0198 section 11). The
+    #     evidence/artifact-digest verification belongs to the controller; this
+    #     is the minimum gate in the publish job itself.
+    replace(
+        root,
+        build,
+        "    permissions:\n      contents: write\n\n    steps:\n      - name: Download NuGet packages\n",
+        "    permissions:\n      contents: write\n      actions: read\n\n    steps:\n"
+        "      - name: Require stage-2 certification of the tagged commit\n"
+        "        env:\n"
+        "          GH_TOKEN: ${{ github.token }}\n"
+        "        run: |\n"
+        "          ok=$(gh run list --repo \"$GITHUB_REPOSITORY\" --workflow selfhost-stage2-nightly.yml \\\n"
+        "            --commit \"$GITHUB_SHA\" --status success --json databaseId --jq 'length')\n"
+        "          if [[ \"$ok\" == \"0\" ]]; then\n"
+        "            echo \"::error::No successful selfhost-stage2-nightly run for $GITHUB_SHA. Dispatch it on the tagged commit first (ADR-0198).\"\n"
+        "            exit 1\n"
+        "          fi\n\n"
+        "      - name: Download NuGet packages\n",
+    )
     # 3. Oahu and Code Exploder move out of PR/official builds into the
     #    cs2gs-apps-nightly workflow; `publish` no longer waits for them.
     text = read(root, build)
@@ -227,7 +248,8 @@ def scripts(root: Path) -> None:
     CSharpApp.csproj, inspect.csproj, SampleAnalyzer.csproj) are C# on purpose.
     """
     for rel in ["build/run-ilverify.sh", "build/selfmig-common.sh",
-                "build/run-go2gs-prerequisite-spike.py", "build/generate-quality-dashboard.py", *sorted(p.relative_to(root).as_posix() for p in (root / "e2etests").glob("*.sh"))]:
+                "build/run-go2gs-prerequisite-spike.py", "build/generate-quality-dashboard.py",
+                "tools/cs2gs/scripts/migrate-l1.sh", *sorted(p.relative_to(root).as_posix() for p in (root / "e2etests").glob("*.sh"))]:
         text = read(root, rel)
         new = SCRIPT_PRODUCT.sub(lambda m: m.group(1) + ".gsproj", text).replace("GSharp.sln", "GSharp.slnx")
         if new != text:
@@ -246,6 +268,8 @@ def scripts(root: Path) -> None:
 # (file, old, new). Paths ending in .cs inside backticks become .gs separately.
 DOC_EDITS = [
     ("docs/lsp.md", "GSharp.LanguageServer (C#)", "GSharp.LanguageServer (G#)"),
+    ("tools/cs2gs/README.md", "dotnet build GSharp.sln -c Release -graph --no-restore",
+     "dotnet build GSharp.slnx -c Release -graph --no-restore"),
     (
         "docs/emit-pipeline.md",
         "are now enforced at\nbuild time by the internal Roslyn analyzers in\n"
