@@ -21,8 +21,10 @@ contract is [ADR-0198](adr/0198-isolated-stage-2-self-host-certification.md).
 
 ## Mapping rules
 
-- Paths map 1:1: `X.cs` becomes `X.gs` and `X.csproj` becomes `X.gsproj`,
-  except for the files cs2gs splits (list them here after the translation).
+- For translated paths, files map 1:1: `X.cs` becomes `X.gs` and `X.csproj`
+  becomes `X.gsproj`, except for the files cs2gs splits (list them here after the
+  translation). `src/vs-gsharp` and the intentional C# fixtures and inputs keep
+  their `.cs`/`.csproj` files.
 - Static members are regrouped into a trailing `shared { }` block, so member
   order differs from the C# source. This is by design.
 - License headers are preserved. `#region`, `#pragma` and in-body blank lines
