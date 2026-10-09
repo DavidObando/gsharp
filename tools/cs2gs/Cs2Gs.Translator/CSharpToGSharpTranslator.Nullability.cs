@@ -1831,7 +1831,8 @@ public sealed partial class CSharpToGSharpTranslator
             IParameterSymbol parameter,
             ExpressionSyntax argumentExpression)
         {
-            if (parameter.OriginalDefinition is not { Type: ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Method } typeParameter } original
+            if (parameter.OriginalDefinition is not { Type: ITypeParameterSymbol typeParameter } original
+                || typeParameter.TypeParameterKind != TypeParameterKind.Method
                 || original.ContainingSymbol is not IMethodSymbol method
                 || !IsInferredGenericParameterTarget(parameter, argumentExpression)
                 || !this.TargetContractIsFrozenInMetadata(parameter))
