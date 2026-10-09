@@ -2829,6 +2829,9 @@ internal static class ObliviousNullabilityAnalyzer
                 or ArrayCreationExpressionSyntax
                 or ImplicitArrayCreationExpressionSyntax
                 or AnonymousObjectCreationExpressionSyntax)
+            || GetResultConversion(
+                declarator.Initializer.Value,
+                model) is IConversionOperation { OperatorMethod: not null }
             || declarator.SpanStart >= value.SpanStart)
         {
             return false;
@@ -6020,18 +6023,35 @@ internal static class ObliviousNullabilityAnalyzer
     private static bool IsSourceGetOnlyAutoProperty(IPropertySymbol property)
     {
         ImmutableArray<SyntaxReference> declarations = property.DeclaringSyntaxReferences;
-        return !declarations.IsDefaultOrEmpty
-            && !property.IsAbstract
-            && !property.IsVirtual
-            && !property.IsOverride
-            && property.ContainingType.TypeKind != TypeKind.Interface
-            && declarations.All(reference =>
-                reference.GetSyntax() is PropertyDeclarationSyntax declaration
-                && declaration.AccessorList?.Accessors is [{ } getter]
-                && getter.IsKind(SyntaxKind.GetAccessorDeclaration)
-                && getter.Body is null
-                && getter.ExpressionBody is null
-                && getter.SemicolonToken.IsKind(SyntaxKind.SemicolonToken));
+        if (declarations.IsDefaultOrEmpty
+            || property.IsAbstract
+            || property.IsVirtual
+            || property.IsOverride
+            || property.ContainingType.TypeKind == TypeKind.Interface)
+        {
+            return false;
+        }
+
+        foreach (SyntaxReference reference in declarations)
+        {
+            if (reference.GetSyntax() is not PropertyDeclarationSyntax declaration
+                || declaration.AccessorList is not { } accessorList
+                || accessorList.Accessors.Count != 1)
+            {
+                return false;
+            }
+
+            AccessorDeclarationSyntax getter = accessorList.Accessors[0];
+            if (!getter.IsKind(SyntaxKind.GetAccessorDeclaration)
+                || getter.Body != null
+                || getter.ExpressionBody != null
+                || !getter.SemicolonToken.IsKind(SyntaxKind.SemicolonToken))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool MemberReceiverRemainsUnchanged(
