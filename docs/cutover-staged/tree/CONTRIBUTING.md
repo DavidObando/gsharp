@@ -7,11 +7,14 @@ and scope are settled before code is written.
 ## The repository is built with G#
 
 The compiler, language server, formatter and tools are G# source (`.gs`,
-`.gsproj`). Two parts of the repository are deliberately still C#:
+`.gsproj`). Three parts of the repository are deliberately still C#:
 
 - `src/vs-gsharp` (the Visual Studio extension). It targets .NET Framework and
   keeps its `#if NETFRAMEWORK` directives. It builds on Windows only and
   references the G# language server.
+- `build/selfhost/*.csproj` (the ADR-0198 stage-2 controller's helper projects,
+  `PackageContentHash` and `TestSupervisorLogger`). The controller builds those
+  exact paths; do not translate or rename them.
 - Test fixtures and cs2gs inputs that are C# on purpose (for example
   `tools/cs2gs/corpus` and `*.cs.txt` source data). They are the C# the
   translator is tested against.

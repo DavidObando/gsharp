@@ -31,7 +31,8 @@ contract is [ADR-0198](adr/0198-isolated-stage-2-self-host-certification.md).
   are not. `#if` was removed from the codebase before translation; cs2gs
   reports it as an error.
 - C# `!` became `!!`, a runtime check. Trimming redundant ones is ongoing.
-- The Visual Studio extension (`src/vs-gsharp`) was not translated.
+- The Visual Studio extension (`src/vs-gsharp`) and the stage-2 controller's C#
+  helper projects (`build/selfhost/*.csproj`) were not translated.
 - `GSharp.sln` was replaced by the generated `GSharp.slnx`.
 
 ## Hand fixes applied after translation

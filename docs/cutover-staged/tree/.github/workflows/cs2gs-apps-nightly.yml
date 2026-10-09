@@ -52,6 +52,12 @@ env:
 permissions:
   contents: read
 
+# Issue deduplication is search-then-create, so overlapping runs could file
+# duplicates. Serialize runs.
+concurrency:
+  group: cs2gs-apps-nightly
+  cancel-in-progress: false
+
 jobs:
   app:
     name: app (${{ matrix.app }})
@@ -172,7 +178,8 @@ jobs:
           print("### cs2gs apps nightly")
           print("| app | status | summary |\n|---|---|---|")
           seen = {}
-          for p in sorted(glob.glob("results/result-*.json")):
+          # Artifacts extract relative to their common ancestor, so results can be nested.
+          for p in sorted(glob.glob("results/**/result-*.json", recursive=True)):
               r = json.load(open(p))
               seen[r["app"]] = r
           for app in ("gsharp-csharp", "oahu", "code-exploder"):

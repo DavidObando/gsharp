@@ -47,7 +47,9 @@ def sub_dotnet_lines(root: Path, rel: str) -> None:
     """
     out = []
     for line in read(root, rel).split("\n"):
-        if "vs-gsharp" not in line and "VsGsharp" not in line:
+        # The Visual Studio extension and the ADR-0198 controller's C# helper
+        # projects (build/selfhost/*.csproj) stay C# on purpose.
+        if "vs-gsharp" not in line and "VsGsharp" not in line and "build/selfhost/" not in line:
             line = line.replace("GSharp.sln", "GSharp.slnx")
             if "dotnet" in line or "csproj" in line:
                 line = re.sub(r"\.csproj\b", ".gsproj", line)
@@ -175,6 +177,26 @@ SCRIPT_PRODUCT = re.compile(
 )
 
 
+def stage2_controller(root: Path) -> None:
+    """Retarget the one product project the ADR-0198 controller names.
+
+    build/selfhost-stage2.py arrives with PR #4842 and is not edited there. Its
+    C# helper projects (build/selfhost/PackageContentHash.csproj and
+    TestSupervisorLogger.csproj) stay C#. Audit the controller for any other
+    product .csproj path with: grep -n 'csproj' build/selfhost-stage2.py
+    """
+    rel = "build/selfhost-stage2.py"
+    if not (root / rel).exists():
+        print(f"note: {rel} not present; apply this edit after PR #4842 lands", file=sys.stderr)
+        return
+    text = read(root, rel)
+    old = "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj"
+    if old not in text:
+        problems.append(f"{rel}: expected {old} not found")
+        return
+    put(root, rel, text.replace(old, old[: -len(".csproj")] + ".gsproj"))
+
+
 def scripts(root: Path) -> None:
     """Retarget the active shell scripts to the solution and product projects.
 
@@ -276,7 +298,7 @@ def main() -> int:
     ap.add_argument("--root", type=Path, required=True)
     ap.add_argument("--check", action="store_true")
     a = ap.parse_args()
-    for step in (workflows, scripts, docs):
+    for step in (workflows, scripts, stage2_controller, docs):
         step(a.root)
     for rel_path in writes:
         pass
