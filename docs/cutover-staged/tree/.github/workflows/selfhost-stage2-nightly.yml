@@ -7,6 +7,13 @@ name: selfhost-stage2-nightly
 # docs/self-host-bootstrap.md once #4842 has landed. The first step fails
 # loudly while STAGE2_ARGS is empty, so an unwired hook can never pass.
 #
+# Wiring also means preparing the controller's inputs, which this skeleton does
+# NOT do: restore the repository's packages into the controller's package cache
+# and materialize the pinned stage-0 Gsharp.NET.Sdk nupkg (the release named in
+# global.json). The controller rejects a missing bootstrap nupkg or cache. See
+# docs/self-host-bootstrap.md and ADR-0198, then add those steps before the
+# controller step.
+#
 # After the cut-over, "stage 0" is the pinned SDK in global.json, stage 1 is the
 # repository built by it, and stage 2 is the repository rebuilt by stage 1.
 # Run it on the merged cut-over head immediately (plan Phase 3 step 6).
@@ -36,7 +43,7 @@ jobs:
       - name: Require a wired controller invocation
         run: |
           if [[ -z "$STAGE2_ARGS" ]]; then
-            echo "::error::STAGE2_ARGS is empty: wire the ADR-0198 controller invocation (build/selfhost-stage2.py) before enabling this job."
+            echo "::error::STAGE2_ARGS is empty: wire the ADR-0198 controller invocation (build/selfhost-stage2.py) and its bootstrap-nupkg and package-cache preparation before enabling this job."
             exit 1
           fi
 

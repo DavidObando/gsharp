@@ -167,8 +167,9 @@ merged and `main` is green.
      --input <protection json file>
    ```
 
-4. Enable the new required check `selfhost-stage2` once ADR-0198 lands its PR
-   job (the nightly is not a required check).
+4. Do not add `selfhost-stage2` as a required check: it is a nightly (schedule and
+   dispatch only). Keep `test-partition` required. Add a required context only
+   after a PR-triggered stage-2 job exists.
 5. Create the label the apps nightly files issues under, and remove the two
    retired contexts from the required checks if present:
 

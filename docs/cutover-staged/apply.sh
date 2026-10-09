@@ -106,6 +106,9 @@ for p in sorted(files):
     for name in deleted:
         if name in text and rel not in ("docs/release/final-csharp-release.md", "docs/self-migration-policy.md"):
             print(f"  {rel}: mentions removed {name!r}"); found += 1
+for p in sorted(root.rglob("*.gs")):
+    if "GSharp.sln\"" in p.read_text(encoding="utf-8", errors="replace"):
+        print(f"  {p.relative_to(root)}: still probes for GSharp.sln"); found += 1
 print("  none" if not found else f"  {found} finding(s)")
 PY
 
