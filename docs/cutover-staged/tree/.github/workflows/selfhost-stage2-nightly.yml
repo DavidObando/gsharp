@@ -64,4 +64,7 @@ jobs:
           name: selfhost-stage2-evidence
           retention-days: 30
           if-no-files-found: ignore
-          path: ${{ runner.temp }}/selfhost-stage2/**/*.json
+          path: |
+            ${{ runner.temp }}/selfhost-stage2/**/*.json
+            ${{ runner.temp }}/selfhost-stage2/**/*.jsonl
+            ${{ runner.temp }}/selfhost-stage2/**/*.log

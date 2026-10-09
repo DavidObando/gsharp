@@ -10,7 +10,8 @@ Input is a directory of per-app result files written by the nightly's app legs
 
 Deduplication: every issue body carries a hidden marker
 `<!-- cs2gs-gate-fp:<sha1> -->` where the hash covers gate, app and failure
-fingerprint (the first error line with digits removed when the result gives
+fingerprint (the first error line with volatile standalone numbers removed,
+keeping digits inside identifiers such as GS0154, when the result gives
 none). A red app whose marker matches an OPEN issue adds a comment to that
 issue; otherwise a new issue is filed. Green apps never touch issues.
 

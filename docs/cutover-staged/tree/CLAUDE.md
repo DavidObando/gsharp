@@ -130,8 +130,9 @@ to translate. What gates a PR now:
   (`__spill`, `__cast`, `__decon`, `__using`) in the committed `.gs` tree.
   If it fails, a new `.gs` file contains one: write the code without it. Don't
   weaken the test.
-- **`selfhost-windows`** (migrated Core.Tests on Windows) is parked: it runs,
-  but it does not gate anything.
+- **`selfhost-windows`** (migrated Core.Tests on Windows) is parked and
+  unavailable until repaired: it is dispatch-only, not gating, and still expects
+  artifacts that no longer exist. Don't dispatch it expecting a result.
 - **Windows and differential-conformance nightlies** may be red. Shipping with a
   red nightly is a maintainer judgment call; don't assume a red Windows
   nightly is yours, and don't assume it isn't. Show the evidence.
