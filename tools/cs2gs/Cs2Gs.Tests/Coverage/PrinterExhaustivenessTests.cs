@@ -170,7 +170,13 @@ public class PrinterExhaustivenessTests
     {
     }
 
+    // Concrete and unsealed. It needs a subclass: cs2gs infers `open` from one,
+    // and a leaf class migrates to a sealed G# class.
     private class MigratedOpenConcreteNode : MigratedAbstractNode
+    {
+    }
+
+    private sealed class MigratedOpenConcreteLeaf : MigratedOpenConcreteNode
     {
     }
 }
