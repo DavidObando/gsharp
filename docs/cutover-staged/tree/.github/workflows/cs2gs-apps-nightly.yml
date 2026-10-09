@@ -4,14 +4,21 @@ name: cs2gs-apps-nightly
 # Phase 4 item 4; owner decisions D9 and the 2026-10-09 follow-ups).
 # Nothing on `main` is C# compiler source any more, so there is nothing to
 # self-migrate. This one nightly keeps the regression signal: cs2gs is run over
-# every real-world app we cover, in ONE run with one end-of-run report:
+# every real-world app we cover, in ONE run with one end-of-run report.
 #
-#   gsharp-csharp  branch cs2gs/csharp-0.4 at the SHA pinned in
-#                  tools/cs2gs/external/gsharp-csharp.json. The branch is
-#                  semi-frozen: a living corpus that gets back-ports from G# when
-#                  they exercise cs2gs. Bump the pin in the same PR.
-#   oahu           tools/cs2gs/external/oahu.json
-#   code-exploder  tools/cs2gs/external/code-exploder.json
+# The tool under test is cs2gs as built from the checked-out MAIN tree (the
+# migrator is G# now), built with the pinned toolchain from global.json. The
+# apps are its INPUT:
+#
+#   gsharp-csharp  C# input: branch cs2gs/csharp-0.4 at the SHA pinned in
+#                  tools/cs2gs/external/gsharp-csharp.json, checked out beside
+#                  main and passed as SELFMIG_SOURCE_ROOT. The branch is
+#                  semi-frozen: a living corpus that gets back-ports from G#
+#                  when they exercise cs2gs (bump the pin in the same PR). The
+#                  translated output IS the G# compiler tree; it is compiled,
+#                  ILVerified and parity-tested.
+#   oahu           C# input: tools/cs2gs/external/oahu.json
+#   code-exploder  C# input: tools/cs2gs/external/code-exploder.json
 #
 # Oahu and Code Exploder used to be PR jobs in build.yml (and `publish`
 # dependencies). They run only here now, so they no longer slow or block PRs.
@@ -73,7 +80,7 @@ jobs:
       - name: Build cs2gs (Release)
         run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
 
-      - name: Check out the C# version of G# (pinned)
+      - name: Check out the C# input (cs2gs/csharp-0.4, pinned) as the source corpus
         if: matrix.app == 'gsharp-csharp'
         run: |
           pinned=$(jq -r '.commit' tools/cs2gs/external/gsharp-csharp.json)
