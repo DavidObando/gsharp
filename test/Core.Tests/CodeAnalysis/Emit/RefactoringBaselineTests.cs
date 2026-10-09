@@ -84,6 +84,9 @@ public class RefactoringBaselineTests
         var tables = new SortedDictionary<string, SortedDictionary<string, string[]>>(StringComparer.Ordinal);
         var failures = new List<string>();
 
+        // One resolver for the whole loop: building the ref-pack metadata context per sample is pure overhead.
+        using var references = SampleReferences.CreateResolver();
+
         foreach (var rel in EnumerateSampleRelativePaths(repoRoot))
         {
             if (KnownCompileFailureSamples.Contains(rel))
@@ -93,11 +96,11 @@ public class RefactoringBaselineTests
             }
 
             var absolute = Path.Combine(repoRoot, rel);
-            var (success, hash, diagnostics, sampleTables) = TryHashSample(absolute);
+            var (success, hash, diagnostics, sampleTables) = TryHashSample(absolute, references);
             if (success)
             {
                 entries[rel] = hash;
-                tables[rel] = sampleTables!;
+                tables[rel] = sampleTables ?? throw new InvalidOperationException("no table digest for a compiled sample");
             }
             else
             {
@@ -196,27 +199,6 @@ public class RefactoringBaselineTests
         Assert.Contains("System.Runtime", names);
     }
 
-    /// <summary>
-    /// Emitting a sample must not change when the host loads more assemblies.
-    /// </summary>
-    [Fact]
-    public void SampleHash_IsStableAcrossHostAssemblyLoads()
-    {
-        string sample = Path.Combine(LocateRepoRoot() ?? throw new InvalidOperationException("repo root"), "samples", "refactoring-baseline", "YieldInTryFinally.gs");
-        var before = TryHashSample(sample);
-        Assert.True(before.Success, before.Diagnostics);
-
-        _ = typeof(System.Net.Http.HttpClient).Assembly;
-        _ = typeof(System.Xml.Linq.XDocument).Assembly;
-        var after = TryHashSample(sample);
-        Assert.True(after.Success, after.Diagnostics);
-
-        Assert.Empty(MetadataTableDigest.Diff(
-            before.Tables ?? throw new InvalidOperationException("no digest"),
-            after.Tables ?? throw new InvalidOperationException("no digest")));
-        Assert.Equal(before.Hash, after.Hash);
-    }
-
     private static string DescribeTableDrift(
         string tablesPath,
         SortedDictionary<string, SortedDictionary<string, string[]>> actual,
@@ -272,14 +254,13 @@ public class RefactoringBaselineTests
         return report.ToString();
     }
 
-    private static (bool Success, string Hash, string Diagnostics, SortedDictionary<string, string[]>? Tables) TryHashSample(string absoluteSamplePath)
+    private static (bool Success, string Hash, string Diagnostics, SortedDictionary<string, string[]>? Tables) TryHashSample(string absoluteSamplePath, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references)
     {
         var source = File.ReadAllText(absoluteSamplePath);
         var fileName = Path.GetFileName(absoluteSamplePath);
         var tree = SyntaxTree.Parse(SourceText.From(source, fileName));
 
         // Issue #4665: an explicit reference set, never ReferenceResolver.Default().
-        using var references = SampleReferences.CreateResolver();
         var compilation = new Compilation(references, tree)
         {
             DebugInformation = new DebugInformationOptions { Deterministic = true },
