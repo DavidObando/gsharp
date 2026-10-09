@@ -215,6 +215,28 @@ DOC_EDITS = [
         " G# equivalents exist. See",
     ),
     (
+        "docs/self-host-bootstrap.md",
+        "The compiler is moving to G# source.",
+        "The compiler is written in G# source since the 0.5 cut-over "
+        "(see [`self-migration-cutover.md`](self-migration-cutover.md)).",
+    ),
+    (
+        "docs/self-host-bootstrap.md",
+        "(today this repository's nupkg; at the cut-over the final released 0.4.x)",
+        "(the release pinned in `global.json`; at the cut-over, the final released 0.4.x)",
+    ),
+    (
+        "docs/self-host-bootstrap.md",
+        "| the cs2gs-migrated G# tree | stage 0 |",
+        "| the repository's G# source | stage 0 |",
+    ),
+    (
+        "docs/self-host-bootstrap.md",
+        "(manual dispatch; it also runs on pull requests that change it) does the following:",
+        "(parked at the cut-over: manual dispatch only, not gating; the steps below describe the "
+        "pre-cut-over procedure and need repair against `cs2gs/csharp-0.4` before reuse) does the following:",
+    ),
+    (
         "docs/emit-pipeline.md",
         "The emit path does **not** depend on Roslyn",
         "The compiler is itself written in G# and builds with the previous released compiler "

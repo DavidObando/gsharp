@@ -11,7 +11,7 @@
 > 2026-10-01) are recorded below as decided. Remaining `(Confirm ...)` and
 > placeholder items must be resolved before publishing. At the cut-over the
 > final text moves to `website/docs/release-notes.md` (see
-> [`docs/cutover-staged/README.md`](../cutover-staged/README.md)).
+> `docs/cutover-staged/README.md`, which is deleted once applied).
 > The stage-2 shipping rule follows the owner decision recorded in #4631.
 > `0.4.NNNN` is the final C#-built release; `0.5.x` is the first 0.5 version
 > number NBGV produces.
