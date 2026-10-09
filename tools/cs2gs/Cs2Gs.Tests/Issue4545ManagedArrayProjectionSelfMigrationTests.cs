@@ -20,22 +20,34 @@ public sealed class Issue4545ManagedArrayProjectionSelfMigrationTests
     [Fact]
     public async Task ProjectionStateTranslatesWithExplicitNullableStorage()
     {
-        // The state file is pinned as a frozen C# snapshot (#4661), so the
-        // translator regression it guards survives the compiler becoming G#.
+        // The state file and its owner (DocumentTranslationState) are pinned as
+        // frozen C# snapshots (#4661), so the translator regression they guard
+        // survives the compiler becoming G#.
+        string[] snapshots = { "DocumentTranslationState", "ManagedReferenceArrayNullableState" };
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("ManagedReferenceArrayNullableState.cs", FrozenCompilerSnapshots.Read("ManagedReferenceArrayNullableState.cs.txt")) });
+            snapshots.Select(name => (name + ".cs", FrozenCompilerSnapshots.Read(name + ".cs.txt"))).ToArray());
         Assert.True(
             project.BoundWithoutErrors,
             string.Join(Environment.NewLine, project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(
-            project.Compilation,
-            document.SemanticModel,
-            document.FilePath);
-        string translatedState = GSharpPrinter.Print(
-            new CSharpToGSharpTranslator(preservePartialParts: true)
-                .TranslateDocument(document, context));
-        Assert.DoesNotContain(context.Diagnostics, d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+        Assert.Equal(2, project.Documents.Count);
+        var translatedByName = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (LoadedDocument document in project.Documents)
+        {
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            translatedByName[Path.GetFileNameWithoutExtension(document.FilePath)] = GSharpPrinter.Print(
+                new CSharpToGSharpTranslator(preservePartialParts: true)
+                    .TranslateDocument(document, context));
+            Assert.DoesNotContain(context.Diagnostics, d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
+        }
+
+        Assert.Contains(
+            "ManagedReferenceArrayNullable",
+            SelfMigratedCompilerSource.Compact(translatedByName["DocumentTranslationState"]),
+            StringComparison.Ordinal);
+        string translatedState = translatedByName["ManagedReferenceArrayNullableState"];
 
         string state = translatedState
             .Replace(
@@ -79,6 +91,9 @@ public sealed class Issue4545ManagedArrayProjectionSelfMigrationTests
                 "tools/cs2gs/Cs2Gs.Translator",
                 preservePartialParts: true,
                 "CSharpToGSharpTranslator.Invocations");
+        Assert.DoesNotContain(
+            own["CSharpToGSharpTranslator.Invocations"].Diagnostics,
+            d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
         string invocations = SelfMigratedCompilerSource.Compact(own["CSharpToGSharpTranslator.Invocations"].Text);
         int recordTypeParameters =
             invocations.IndexOf("letRecordWidenedTypeParameters", StringComparison.Ordinal);

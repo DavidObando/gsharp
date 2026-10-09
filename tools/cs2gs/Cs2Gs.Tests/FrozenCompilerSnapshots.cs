@@ -42,6 +42,7 @@ internal static class FrozenCompilerSnapshots
         (AnalyzersDirectory + "RewriterClonePreservationAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/RewriterClonePreservationAnalyzer.cs"),
         (AnalyzersDirectory + "StrongStaticReflectionCacheAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/StrongStaticReflectionCacheAnalyzer.cs"),
         (AnalyzersDirectory + "StructFieldDefsReadAnalyzer.cs.txt", "src/Analyzers/InternalAnalyzers/StructFieldDefsReadAnalyzer.cs"),
+        ("DocumentTranslationState.cs.txt", "tools/cs2gs/Cs2Gs.Translator/DocumentTranslationState.cs"),
         ("Issue3461ContextualStatics.cs.txt", "tools/cs2gs/Cs2Gs.Tests/Issue3461IdentifierSanitizationTests.cs"),
         ("Issue3466LateSignatureTypes.cs.txt", "tools/cs2gs/Cs2Gs.Tests/Issue3466LateSignatureTypes.cs"),
         ("ManagedReferenceArrayNullableState.cs.txt", "tools/cs2gs/Cs2Gs.Translator/ManagedReferenceArrayNullableState.cs"),
