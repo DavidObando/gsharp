@@ -1846,29 +1846,36 @@ public sealed partial class CSharpToGSharpTranslator
             // argument. A covariant or array position (`Assert.Contains<T>(T,
             // IEnumerable<T>)`) lets the value widen the element instead, so
             // those keep their bridge.
-            return !TypeMentionsTypeParameter(method.ReturnType, typeParameter)
+            return !MentionsTypeParameter(method.ReturnType, typeParameter)
                 && method.Parameters.All(other =>
                     SymbolEqualityComparer.Default.Equals(other, original)
-                    || !TypeMentionsTypeParameter(other.Type, typeParameter)
-                    || TypeMentionsTypeParameterOnlyInvariantly(other.Type, typeParameter));
+                    || !MentionsTypeParameter(other.Type, typeParameter)
+                    || MentionsTypeParameterOnlyInvariantly(other.Type, typeParameter));
         }
 
-        private static bool TypeMentionsTypeParameterOnlyInvariantly(ITypeSymbol type, ITypeParameterSymbol typeParameter)
+        private static bool MentionsTypeParameterOnlyInvariantly(ITypeSymbol type, ITypeParameterSymbol typeParameter)
         {
             switch (type)
             {
                 case INamedTypeSymbol { IsGenericType: true } named:
+                    // A nested type also carries its containing types' type
+                    // parameters, which no variance annotation covers.
+                    if (MentionsTypeParameter(named.ContainingType, typeParameter))
+                    {
+                        return false;
+                    }
+
                     for (int i = 0; i < named.TypeArguments.Length; i++)
                     {
                         ITypeSymbol argument = named.TypeArguments[i];
-                        if (!TypeMentionsTypeParameter(argument, typeParameter))
+                        if (!MentionsTypeParameter(argument, typeParameter))
                         {
                             continue;
                         }
 
                         if (named.TypeParameters[i].Variance != VarianceKind.None
                             || (argument is not ITypeParameterSymbol
-                                && !TypeMentionsTypeParameterOnlyInvariantly(argument, typeParameter)))
+                                && !MentionsTypeParameterOnlyInvariantly(argument, typeParameter)))
                         {
                             return false;
                         }
@@ -1876,18 +1883,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                     return true;
                 default:
-                    return !TypeMentionsTypeParameter(type, typeParameter);
+                    return !MentionsTypeParameter(type, typeParameter);
             }
         }
-
-        private static bool TypeMentionsTypeParameter(ITypeSymbol type, ITypeParameterSymbol typeParameter) => type switch
-        {
-            ITypeParameterSymbol candidate => SymbolEqualityComparer.Default.Equals(candidate, typeParameter),
-            IArrayTypeSymbol array => TypeMentionsTypeParameter(array.ElementType, typeParameter),
-            IPointerTypeSymbol pointer => TypeMentionsTypeParameter(pointer.PointedAtType, typeParameter),
-            INamedTypeSymbol named => named.TypeArguments.Any(argument => TypeMentionsTypeParameter(argument, typeParameter)),
-            _ => false,
-        };
 
         // Issue #3886: whether <paramref name="symbol"/> is a parameter that
         // `TranslateParameter` emits as an ADR-0173 variadic carrier (`...T` /
