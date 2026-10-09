@@ -103,7 +103,7 @@ public class EmitDeterminismRegressionTests
     private static string CompileAndHash(string source, string fileName)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source, fileName));
-        var compilation = new Compilation(tree)
+        var compilation = new Compilation(SampleReferences.CreateResolver(), tree)
         {
             DebugInformation = new DebugInformationOptions { Deterministic = true },
         };
