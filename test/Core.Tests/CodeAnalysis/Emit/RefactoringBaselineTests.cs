@@ -233,7 +233,7 @@ public class RefactoringBaselineTests
         var expectedHashes = JsonSerializer.Deserialize<Dictionary<string, string?>>(File.ReadAllText(baselinePath))
             ?? new();
         var report = new System.Text.StringBuilder("Metadata tables that moved, per sample (a change confined to "
-            + "AssemblyRef/TypeRef/MemberRef with unchanged MethodBodies is a reference-set difference, not codegen):\n");
+            + "AssemblyRef/TypeRef/MemberRef with unchanged MethodBodies is LIKELY a reference-set difference; inspect the rows, since a metadata-only emitter change can also retarget them):\n");
         int reported = 0;
         foreach (var (rel, hash) in entries)
         {
@@ -248,9 +248,17 @@ public class RefactoringBaselineTests
             }
             else
             {
-                foreach (string line in MetadataTableDigest.Diff(oldTables, actual[rel]))
+                var moved = MetadataTableDigest.Diff(oldTables, actual[rel]);
+                foreach (string line in moved)
                 {
                     report.Append("  ").Append(rel).Append(" ").Append(line).Append('\n');
+                }
+
+                if (moved.Count == 0)
+                {
+                    // Fail-safe: the hash moved but no tracked table did, so the
+                    // digest is missing a column. Say so rather than print nothing.
+                    report.Append("  ").Append(rel).Append(": hash changed but no tracked table moved (digest gap)\n");
                 }
             }
 

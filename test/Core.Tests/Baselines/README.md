@@ -41,9 +41,12 @@ today:
 `refactoring-baseline-tables.json` holds, per sample, the full `AssemblyRef`
 list and a row count plus digest for `TypeRef`, `TypeDef`, `MemberRef`,
 `MethodDef`, `FieldDef` and `MethodBodies`. When the hash gate fails, the
-message lists which tables moved. A change confined to
-`AssemblyRef`/`TypeRef`/`MemberRef` with identical `MethodBodies` is a
-reference-set difference; a `MethodBodies` change is codegen. Regenerate both
+message lists which tables moved. Treat this
+as a triage hint, not proof: a change confined to
+`AssemblyRef`/`TypeRef`/`MemberRef` with identical `MethodBodies` is likely a
+reference-set difference, but a metadata-only emitter change can retarget those
+rows too, so inspect the changed rows. A `MethodBodies` change is codegen. If the
+hash changed but no table is listed, the digest has a gap and needs a column. Regenerate both
 files together with `GSHARP_UPDATE_GOLDENS=1`.
 
 ## When to regenerate

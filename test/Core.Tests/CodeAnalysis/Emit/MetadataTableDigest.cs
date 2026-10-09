@@ -17,10 +17,12 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 /// <summary>
 /// Issue #4665: a per-table summary of an emitted assembly, so that when the
-/// sample IL hash changes the failure says WHICH part changed. A change
-/// confined to <c>AssemblyRef</c>/<c>TypeRef</c>/<c>MemberRef</c> with
-/// identical <c>MethodBodies</c> is a reference-set difference; a change in
-/// <c>MethodBodies</c> is codegen.
+/// sample IL hash changes the failure says WHICH part changed. This is a
+/// triage hint, not a classification: a change confined to
+/// <c>AssemblyRef</c>/<c>TypeRef</c>/<c>MemberRef</c> with identical
+/// <c>MethodBodies</c> is LIKELY a reference-set difference, but a metadata-only
+/// emitter change can retarget those rows too, so inspect the changed rows.
+/// A hash change that moves no tracked table means this digest has a gap.
 /// </summary>
 internal static class MetadataTableDigest
 {
@@ -39,13 +41,14 @@ internal static class MetadataTableDigest
 
         tables[AssemblyRef] = md.AssemblyReferences
             .Select(h => md.GetAssemblyReference(h))
-            .Select(a => $"{md.GetString(a.Name)}, {a.Version}, {Hex(md.GetBlobBytes(a.PublicKeyOrToken))}")
+            .Select(a => $"{md.GetString(a.Name)}, {a.Version}, {Hex(md.GetBlobBytes(a.PublicKeyOrToken))}, flags={(int)a.Flags}, "
+                + $"culture={(a.Culture.IsNil ? string.Empty : md.GetString(a.Culture))}, hash={Hex(md.GetBlobBytes(a.HashValue))}")
             .ToArray();
 
         tables["TypeRef"] = Summarise(md.TypeReferences.Select(h =>
         {
             TypeReference t = md.GetTypeReference(h);
-            return $"{ScopeName(md, t.ResolutionScope)}|{md.GetString(t.Namespace)}.{md.GetString(t.Name)}";
+            return $"{ScopeName(md, t.ResolutionScope)}#{Token(t.ResolutionScope)}|{md.GetString(t.Namespace)}.{md.GetString(t.Name)}";
         }));
 
         // Every row column is part of the digest, with handles as tokens, so a
