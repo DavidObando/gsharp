@@ -171,7 +171,7 @@ def workflows(root: Path) -> None:
 
 
 SCRIPT_PRODUCT = re.compile(
-    r"(src/(?:Sdk|Compiler|Core|Formatting|LanguageServer|Repl|GeneratorHost)/[A-Za-z0-9_./-]*?)\.csproj"
+    r"((?:src/(?:Sdk|Compiler|Core|Formatting|LanguageServer|Repl|GeneratorHost)|tools/(?:cs2gs|gsgen))/[A-Za-z0-9_./-]*?)\.csproj"
 )
 
 
@@ -194,7 +194,8 @@ def scripts(root: Path) -> None:
         "build/verify-ci-test-partition.py",
     ):
         text = read(root, rel)
-        text = text.replace("GSharp.sln", "GSharp.slnx").replace(".Tests.csproj", ".Tests.gsproj")
+        # Includes the lowercase predicate in generate-ci-test-matrix.py.
+        text = text.replace("GSharp.sln", "GSharp.slnx").replace(".csproj", ".gsproj").replace(".tests.csproj", ".tests.gsproj")
         put(root, rel, text)
 
 

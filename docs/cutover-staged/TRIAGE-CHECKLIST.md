@@ -48,7 +48,7 @@ test pins it.
 
 ```sh
 grep -n 'SpreadElementSyntax' tools/cs2gs/Cs2Gs.Translator/CSharpToGSharpTranslator.Patterns.cs
-grep -rln 'GetManagedReferenceArrayProjectedCollectionType\|\[\.\.widened\]' tools/cs2gs/Cs2Gs.Tests | head
+grep -rlnE 'GetManagedReferenceArrayProjectedCollectionType\|\[\.\.widened\]' tools/cs2gs/Cs2Gs.Tests | head
 ```
 
 If there is no test with a spread element (`[..widened]` style), add one before
