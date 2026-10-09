@@ -44,7 +44,7 @@ the draft banner. The website compiler-architecture page edit is in
    those workflow lines unchanged.
 2. Resolve the `CUTOVER-VERIFY` markers (restore command and lock files, see
    decision 5; the facts in `docs/self-migration-cutover.md`) or run with `--allow-markers` and resolve after.
-3. `docs/cutover-staged/apply.sh --check`, then `docs/cutover-staged/apply.sh`.
+3. `docs/cutover-staged/apply.sh --final-version 0.4.NNNN --check` (use the real final release number), then the same without `--check`.
    It refuses to run unless `src/Core/Core.gsproj` exists and no `Core.csproj`.
 4. Review the git diff, fix the listed doc paths, and do the manual steps the
    script prints.

@@ -93,7 +93,7 @@ def process(results: list[dict], banked: set[str], ref: str, gh: Gh) -> int:
         prio = priority(r, banked, ref)
         found = json.loads(
             gh.run("issue", "list", "--state", "open", "--label", LABEL, "--search",
-                   f"cs2gs-gate-fp:{fp} in:body", "--json", "number,labels", read=True) or "[]"
+                   f'"cs2gs-gate-fp:{fp}" in:body', "--json", "number,labels", read=True) or "[]"
         )
         if found:
             n = str(found[0]["number"])

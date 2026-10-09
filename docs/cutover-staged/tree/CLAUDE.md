@@ -107,8 +107,10 @@ to translate. What gates a PR now:
   and `gsc.dll` (except the validated `Module.Mvid` slot), and that the Core
   and Compiler test suites pass under stage 2. A stage-2 failure is a compiler
   defect only visible when gsc compiles itself: treat it as P0, stop and
-  diagnose; do not re-run until green. It runs nightly (`selfhost-stage2-nightly`)
-  and in the PR checks that ADR-0198 defines.
+  diagnose; do not re-run until green. It runs nightly (`selfhost-stage2-nightly`),
+  not on pull requests: a PR only runs the controller's contract tests in
+  `test-partition`, which are not certification. A release tag additionally
+  requires a successful stage-2 run on the tagged commit.
 - **`cs2gs-corpus`** still guards cs2gs as a product on every PR: it runs the
   C# corpus under `tools/cs2gs/corpus` against the gap ledger.
 - **cs2gs apps nightly** (`cs2gs-apps-nightly`) runs cs2gs as built from `main`

@@ -15,9 +15,11 @@ class FakeGh(gate.Gh):
         super().__init__(True)
         self.existing = existing
         self.writes = []
+        self.reads = []
 
     def run(self, *args, read=False):
         if read:
+            self.reads.append(list(args))
             return json.dumps(self.existing)
         self.writes.append(list(args))
         return ""
@@ -32,6 +34,11 @@ def main():
     g = FakeGh([])
     gate.process([red("oahu")], {"oahu"}, "main", g)
     assert g.writes[0][:2] == ["issue", "create"] and "P0" in g.writes[0], g.writes
+    # The marker is quoted in the search so the colon is not read as a qualifier.
+    g = FakeGh([])
+    gate.process([red("oahu")], set(), "main", g)
+    query = g.reads[0][g.reads[0].index("--search") + 1]
+    assert query.startswith('"cs2gs-gate-fp:') and query.endswith('" in:body'), query
     # Not banked, or banked but not on main: P1.
     g = FakeGh([])
     gate.process([red("oahu")], set(), "main", g)
