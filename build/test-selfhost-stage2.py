@@ -768,6 +768,18 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("protected properties", result.stderr)
 
+    def test_imported_runtime_path_override_is_rejected(self) -> None:
+        tree = self.tree()
+        imported = tree / "package.props"
+        imported.write_text(
+            '<Project TreatAsLocalProperty="'
+            'GsharpChannelsRuntimeAssemblyFullPath;GsharpNoChannelsRuntime;'
+            'GsharpNoExtensions;GenerateDependencyFile;DebugType" />',
+            encoding="utf-8")
+        result = run_driver("--validate-import", tree, imported)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("protected properties", result.stderr)
+
     def test_stage1_version_path_escape_is_rejected(self) -> None:
         tree = self.tree()
         result = run_driver(

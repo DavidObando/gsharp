@@ -104,6 +104,14 @@ INPUT_ITEMS = (
 PROTECTED_PROPERTIES = {
     "buildprojectreferences", "customaftermicrosoftcommontargets",
     "gsharpcompilerfullpath", "gsharptoolfullpath",
+    "gsharpchannelsruntimeassemblyfullpath",
+    "gsharpextensionsassemblyfullpath", "gsharpnoextensions",
+    "gsharphotreloadruntimeassemblyfullpath",
+    "gsharpnochannelsruntime", "gsharpnovaluesruntime",
+    "gsharpvaluesruntimeassemblyfullpath",
+    "generatedependencyfile",
+    "debugsymbols", "debugtype",
+    "pdbfile",
     "baseoutputpath", "baseintermediateoutputpath",
     "outdir", "outputpath", "intermediateoutputpath",
     "msbuildprojectextensionspath", "restorepackagespath",
@@ -589,7 +597,9 @@ def require_frozen_graph(
         name: frozen[name] for name in current if name in frozen
     }
     if current != expected:
-        raise CertificationError(f"frozen graph changed at {boundary}")
+        raise CertificationError(
+            f"frozen graph changed at {boundary}: "
+            f"{first_difference(current, expected)}")
 
 
 def msbuild_property_arg(name: str, value: Any) -> str:
@@ -1438,7 +1448,16 @@ class Controller:
         )
         for name in helper_files:
             atomic_bytes(helper_source / name, (HERE / "selfhost" / name).read_bytes())
-        helper_manifest = directory_manifest(helper_source)
+        atomic_bytes(inputs / "Adr0198.Pdb.targets", b"""<Project>
+  <Target Name="_Adr0198CanonicalPdb" BeforeTargets="CoreCompile">
+    <ItemGroup Condition="'$(DebugType)' != 'none'">
+      <_DebugSymbolsIntermediatePath Remove="@(_DebugSymbolsIntermediatePath)" />
+      <_DebugSymbolsIntermediatePath Include="$(PdbFile)" />
+    </ItemGroup>
+  </Target>
+</Project>
+""")
+        helper_manifest = directory_manifest(inputs)
         make_read_only(inputs)
         self.bootstrap = destination
         self.report["bootstrap"] = {
@@ -1509,8 +1528,21 @@ class Controller:
             if path.exists():
                 arguments.extend(("--ro-bind", str(path), str(path)))
         arguments.extend(("--ro-bind", str(tree), str(tree)))
+        canonical_build = len(command) > 1 and command[1] == "build"
+        if canonical_build:
+            arguments.extend((
+                "--dir", "/adr0198",
+                "--ro-bind", str(tree), "/adr0198/tree",
+                "--dir", "/adr0198/pdb",
+                "--bind", str(self.writable(env["ADR0198_STAGE"], "pdb")),
+                "/adr0198/pdb",
+            ))
         toolchain = self.stage_toolchain(env["ADR0198_STAGE"])
         arguments.extend(("--ro-bind", str(toolchain), str(toolchain)))
+        controller_inputs = self.toolchains / "controller-inputs"
+        if controller_inputs.is_dir():
+            arguments.extend((
+                "--ro-bind", str(controller_inputs), str(controller_inputs)))
         test_supervisor = self.toolchains / "test-supervisor"
         if (test_supervisor.is_dir()
                 and all(real(path) != real(test_supervisor) for path in writable)):
@@ -1525,7 +1557,10 @@ class Controller:
         arguments.extend(("--ro-bind", str(offline_feed), str(offline_feed)))
         sandbox_temp = self.mutable / env["ADR0198_STAGE"] / "runtime" / "temp"
         arguments.extend(("--bind", str(sandbox_temp), "/tmp"))
-        arguments.extend(("--proc", "/proc", "--dev", "/dev", "--chdir", str(tree)))
+        arguments.extend((
+            "--proc", "/proc", "--dev", "/dev", "--chdir",
+            "/adr0198/tree" if canonical_build else str(tree),
+        ))
         if status_fd is not None:
             arguments.extend(("--as-pid-1", "--json-status-fd", str(status_fd)))
         for name, value in sorted(env.items()):
@@ -2002,7 +2037,13 @@ class Controller:
         output = self.writable(stage, "out")
         obj = self.writable(stage, "obj") / key
         obj.mkdir(parents=True, exist_ok=True)
-        return {
+        relative = project.as_posix()
+        use_app_host = relative.endswith((
+            "src/Compiler/Compiler.gsproj",
+            "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj",
+            "tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj",
+        ))
+        properties = {
             "Configuration": self.args.config,
             "Platform": "AnyCPU",
             "BaseOutputPath": str(output) + os.sep,
@@ -2011,6 +2052,12 @@ class Controller:
             "DocumentationFile": str(obj / f"{project.stem}.xml"),
             "ErrorLog": str(obj / f"{project.stem}.sarif"),
             "ProduceReferenceAssembly": "false",
+            "DebugSymbols": "true",
+            "DebugType": "portable",
+            "PdbFile": f"/adr0198/pdb/{key}/{project.stem}.pdb",
+            "CustomAfterMicrosoftCommonTargets": str(
+                self.toolchains / "controller-inputs" / "Adr0198.Pdb.targets"),
+            "UseAppHost": str(use_app_host).lower(),
             "RestorePackagesPath": str(self.writable(stage, "packages")),
             "RestoreConfigFile": str(self.write_offline_config(stage)),
             "BuildProjectReferences": "false",
@@ -2018,6 +2065,24 @@ class Controller:
             "RestoreProjectReferences": "false",
             "RestoreRecursive": "false",
         }
+        if relative.endswith((
+                "src/Compiler/Compiler.gsproj",
+                "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj",
+                "src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj",
+                "src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj",
+        )):
+            properties.update({
+                "GsharpNoChannelsRuntime": "true",
+                "GsharpNoValuesRuntime": "true",
+            })
+        if relative.endswith((
+                "src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj",
+                "src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj",
+        )):
+            properties["GenerateDependencyFile"] = "false"
+        if relative.endswith("src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj"):
+            properties["GsharpNoExtensions"] = "true"
+        return properties
 
     def evaluate_one(
         self, stage: str, tree: Path, project: Path, isolated: bool,
@@ -2419,7 +2484,9 @@ class Controller:
         self.verify_plan_files(frozen)
         current = self.graph(stage, tree, roots, extra_properties)
         if current["identity"] != frozen["identity"]:
-            raise CertificationError(f"{stage} graph changed at {boundary}")
+            raise CertificationError(
+                f"{stage} graph changed at {boundary}: "
+                f"{first_difference(current, frozen)}")
         atomic_json(self.evidence / f"{stage}-{boundary}-graph.json", current)
 
     @staticmethod
@@ -2668,6 +2735,7 @@ class Controller:
         properties.update({
             "PublishDir": str(destination) + os.sep,
             "SelfContained": "false",
+            "UseAppHost": "true",
             "PublishReadyToRun": "false",
             "PublishSingleFile": "false",
         })
@@ -2866,10 +2934,18 @@ class Controller:
         )
 
         def logical_value(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {
+                    key: logical_value(item)
+                    for key, item in value.items()
+                }
+            if isinstance(value, list):
+                return [logical_value(item) for item in value]
             if not isinstance(value, str):
                 return value
             for root, token in path_roots:
                 value = value.replace(root, token)
+                value = value.replace(root.lstrip(os.sep), token)
             return value
 
         for name, node in plan["isolated"].items():
@@ -2894,14 +2970,14 @@ class Controller:
                         "kind": row["kind"],
                         "path": row["logicalPath"],
                         "producerProject": row["producerProject"],
-                        "metadata": row.get("metadata", {}),
+                        "metadata": logical_value(row.get("metadata", {})),
                     })
                 elif contains(tree, Path(row["path"])):
                     logical_inputs.append({
                         "kind": row["kind"],
                         "path": Path(row["path"]).relative_to(tree).as_posix(),
                         "sha256": row["sha256"],
-                        "metadata": row.get("metadata", {}),
+                        "metadata": logical_value(row.get("metadata", {})),
                     })
                 else:
                     logical_inputs.append({
@@ -2911,7 +2987,7 @@ class Controller:
                             ("toolchain", self.stage_toolchain(stage)),
                             ("stage", self.mutable / stage),
                         ]),
-                        "metadata": row.get("metadata", {}),
+                        "metadata": logical_value(row.get("metadata", {})),
                     })
             logical[name] = {
                 "project": name,
