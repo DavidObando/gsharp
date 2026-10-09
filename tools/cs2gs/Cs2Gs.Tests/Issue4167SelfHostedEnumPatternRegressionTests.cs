@@ -88,12 +88,13 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
         // The fixed call site now spells this as a separate `.TypeKind !=`
         // comparison after a plain designated `is INamedTypeSymbol enumType`,
         // so this substring must not appear anywhere in the translated file.
-        const string buggyShape = "INamedTypeSymbol { TypeKind: TypeKind.Enum";
+        const string buggyShape = "INamedTypeSymbol{TypeKind:TypeKind.Enum";
+        typesGs = SelfMigratedCompilerSource.Compact(typesGs);
         Assert.DoesNotContain(buggyShape, typesGs, StringComparison.Ordinal);
 
         // And the decomposed replacement is actually present, so this guard
         // cannot pass merely because the whole feature was deleted.
-        Assert.Contains("enumType.TypeKind != TypeKind.Enum", typesGs, StringComparison.Ordinal);
+        Assert.Contains("enumType.TypeKind!=TypeKind.Enum", typesGs, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -127,7 +128,7 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
 
             foreach (string sourcePath in Directory.EnumerateFiles(
                          projectDirectory,
-                         "*.cs",
+                         SelfMigratedCompilerSource.IsGSharp ? "*.gs" : "*.cs",
                          SearchOption.AllDirectories))
             {
                 // Build output (obj/**/GeneratedAssemblyInfo.cs, ...) is not a
@@ -145,7 +146,7 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
         }
 
         // Issue #4656: a `*.cs` glob over a tree with no C# would check nothing.
-        Assert.True(scannedSources > 0, "no cs2gs C# sources were scanned under " + cs2gsRoot);
+        Assert.True(scannedSources > 0, "no committed cs2gs sources were scanned under " + cs2gsRoot);
 
         string invocationsGs = translated["CSharpToGSharpTranslator.Invocations.cs"];
         string compactInvocations = string.Concat(invocationsGs.Where(c => !char.IsWhiteSpace(c)));
@@ -181,30 +182,17 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
             string.Empty,
             RegexOptions.CultureInvariant | RegexOptions.Singleline);
 
+    // G# translated from the committed C# until the cut-over, and the committed
+    // .gs after it (#4661). Empty fileNames means every file of the project.
     private static async Task<IReadOnlyDictionary<string, string>> TranslateOwnFiles(
         string projectDirName,
         params string[] fileNames)
     {
-        string projectPath = TestFixtureSource.Resolve(
-            "tools", "cs2gs", projectDirName, projectDirName + ".csproj");
-        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-
-        IEnumerable<LoadedDocument> documents = fileNames.Length == 0
-            ? project.Documents
-            : fileNames.Select(fileName => Assert.Single(
-                project.Documents,
-                d => d.FilePath.EndsWith(fileName, StringComparison.Ordinal)));
-        var translated = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (LoadedDocument document in documents)
-        {
-            string fileName = Path.GetFileName(document.FilePath);
-            var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-            CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-            translated.Add(fileName, GSharpPrinter.Print(unit));
-        }
-
-        return translated;
+        var files = await SelfMigratedCompilerSource.LoadAsync(
+            "tools/cs2gs/" + projectDirName,
+            preservePartialParts: true,
+            fileNames.Select(Path.GetFileNameWithoutExtension).ToArray());
+        return files.ToDictionary(pair => pair.Key + ".cs", pair => pair.Value.Text, StringComparer.Ordinal);
     }
 
     /// <summary>

@@ -76,30 +76,27 @@ public sealed class Issue4045SelfHostedPatternMatchRegressionTests
         // The fixed call sites now spell this as a separate `.TypeKind ==`/`!=`
         // comparison after a plain designated `is INamedTypeSymbol name`, so
         // this substring must not appear anywhere in either translated file.
-        const string buggyShape = "INamedTypeSymbol { TypeKind: TypeKind.Delegate";
+        const string buggyShape = "INamedTypeSymbol{TypeKind:TypeKind.Delegate";
         Assert.DoesNotContain(buggyShape, typeMapperGs, StringComparison.Ordinal);
         Assert.DoesNotContain(buggyShape, constructorsGs, StringComparison.Ordinal);
 
         // And the decomposed replacement is actually present, so this guard
         // cannot pass merely because the whole feature was deleted.
-        Assert.Contains("leftDelegate.TypeKind != TypeKind.Delegate", typeMapperGs, StringComparison.Ordinal);
-        Assert.Contains("named.TypeKind == TypeKind.Delegate", typeMapperGs, StringComparison.Ordinal);
-        Assert.Contains("namedParameterType.TypeKind == TypeKind.Delegate", constructorsGs, StringComparison.Ordinal);
+        Assert.Contains("leftDelegate.TypeKind!=TypeKind.Delegate", typeMapperGs, StringComparison.Ordinal);
+        Assert.Contains("named.TypeKind==TypeKind.Delegate", typeMapperGs, StringComparison.Ordinal);
+        Assert.Contains("namedParameterType.TypeKind==TypeKind.Delegate", constructorsGs, StringComparison.Ordinal);
     }
 
+    // G# translated from the committed C# until the cut-over, the committed .gs
+    // after it (#4661); compacted so G# layout cannot decide the assertions.
     private static async Task<string> TranslateOwnFile(string projectDirName, string fileName)
     {
-        string projectPath = TestFixtureSource.Resolve(
-            "tools", "cs2gs", projectDirName, projectDirName + ".csproj");
-        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-
-        LoadedDocument document = Assert.Single(
-            project.Documents,
-            d => d.FilePath.EndsWith(fileName, StringComparison.Ordinal));
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        return GSharpPrinter.Print(unit);
+        string stem = Path.GetFileNameWithoutExtension(fileName);
+        var files = await SelfMigratedCompilerSource.LoadAsync(
+            "tools/cs2gs/" + projectDirName,
+            preservePartialParts: true,
+            stem);
+        return SelfMigratedCompilerSource.Compact(files[stem].Text);
     }
 
     /// <summary>

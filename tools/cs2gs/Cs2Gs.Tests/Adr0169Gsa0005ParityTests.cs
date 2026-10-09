@@ -268,12 +268,10 @@ class ViaBaseResult : BoundTreeRewriter
     /// <returns>The analyzer assembly path.</returns>
     private string CompileTranslatedGsa0005()
     {
-        string repoRoot = Adr0169TranslatedAnalyzerHarness.FindRepoRoot();
-        string analyzerDirectory = Path.Combine(repoRoot, "src", "Analyzers", "InternalAnalyzers");
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
-            ("RewriterClonePreservationAnalyzer.cs", File.ReadAllText(Path.Combine(analyzerDirectory, "RewriterClonePreservationAnalyzer.cs"))),
-            ("DiagnosticDescriptors.cs", File.ReadAllText(Path.Combine(analyzerDirectory, "DiagnosticDescriptors.cs"))),
+            ("RewriterClonePreservationAnalyzer.cs", FrozenCompilerSnapshots.Analyzer("RewriterClonePreservationAnalyzer.cs")),
+            ("DiagnosticDescriptors.cs", FrozenCompilerSnapshots.Analyzer("DiagnosticDescriptors.cs")),
         });
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
         Assert.True(AnalyzerProjectDetector.IsAnalyzerProject(project.Compilation));

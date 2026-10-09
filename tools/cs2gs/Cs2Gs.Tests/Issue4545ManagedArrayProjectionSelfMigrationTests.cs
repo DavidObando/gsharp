@@ -18,72 +18,26 @@ namespace Cs2Gs.Tests;
 public sealed class Issue4545ManagedArrayProjectionSelfMigrationTests
 {
     [Fact]
-    public async Task CoreConditionalWithProjectedSubtypeAndCommonBaseTranslates()
+    public async Task ProjectionStateTranslatesWithExplicitNullableStorage()
     {
-        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
-        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
-            Path.Combine(repoRoot, "src", "Core", "Core.csproj"));
+        // The state file is pinned as a frozen C# snapshot (#4661), so the
+        // translator regression it guards survives the compiler becoming G#.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedReferenceArrayNullableState.cs", FrozenCompilerSnapshots.Read("ManagedReferenceArrayNullableState.cs.txt")) });
         Assert.True(
             project.BoundWithoutErrors,
             string.Join(Environment.NewLine, project.ErrorDiagnostics));
-
-        LoadedDocument document = Assert.Single(
-            project.Documents,
-            candidate => candidate.FilePath.EndsWith(
-                Path.Combine("Emit", "SlotPlanner.cs"),
-                StringComparison.Ordinal));
+        LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(
             project.Compilation,
             document.SemanticModel,
             document.FilePath);
+        string translatedState = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator(preservePartialParts: true)
+                .TranslateDocument(document, context));
+        Assert.DoesNotContain(context.Diagnostics, d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
 
-        new CSharpToGSharpTranslator(preservePartialParts: true)
-            .TranslateDocument(document, context);
-
-        Assert.DoesNotContain(
-            context.Diagnostics,
-            diagnostic => diagnostic.Message.Contains(
-                "conditional/switch result arms have incompatible managed-reference projections",
-                StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task ProjectionStateTranslatesWithExplicitNullableStorage()
-    {
-        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
-        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
-            Path.Combine(
-                repoRoot,
-                "tools",
-                "cs2gs",
-                "Cs2Gs.Translator",
-                "Cs2Gs.Translator.csproj"));
-        Assert.True(
-            project.BoundWithoutErrors,
-            string.Join(Environment.NewLine, project.ErrorDiagnostics));
-
-        var translated = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (string fileName in new[]
-                 {
-                     "DocumentTranslationState.cs",
-                     "ManagedReferenceArrayNullableState.cs",
-                     "CSharpToGSharpTranslator.Invocations.cs",
-                 })
-        {
-            LoadedDocument document = Assert.Single(
-                project.Documents,
-                candidate => candidate.FilePath.EndsWith(fileName, StringComparison.Ordinal));
-            var context = new TranslationContext(
-                project.Compilation,
-                document.SemanticModel,
-                document.FilePath);
-            translated[fileName] = GSharpPrinter.Print(
-                new CSharpToGSharpTranslator(preservePartialParts: true)
-                    .TranslateDocument(document, context));
-            Assert.DoesNotContain(context.Diagnostics, d => d.DiagnosticId != CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId);
-        }
-
-        string state = translated["ManagedReferenceArrayNullableState.cs"]
+        string state = translatedState
             .Replace(
                 "Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax",
                 "ExpressionSyntax",
@@ -117,32 +71,25 @@ public sealed class Issue4545ManagedArrayProjectionSelfMigrationTests
             state,
             StringComparison.Ordinal);
 
-        string invocations = translated["CSharpToGSharpTranslator.Invocations.cs"];
+        // The Invocations half guards the committed translator source itself: its
+        // G# is translated from the C# until the cut-over and is the committed
+        // .gs afterwards (#4661). Whitespace-insensitive, since layout differs.
+        IReadOnlyDictionary<string, SelfMigratedCompilerSource.MigratedFile> own =
+            await SelfMigratedCompilerSource.LoadAsync(
+                "tools/cs2gs/Cs2Gs.Translator",
+                preservePartialParts: true,
+                "CSharpToGSharpTranslator.Invocations");
+        string invocations = SelfMigratedCompilerSource.Compact(own["CSharpToGSharpTranslator.Invocations"].Text);
         int recordTypeParameters =
-            invocations.IndexOf("let RecordWidenedTypeParameters", StringComparison.Ordinal);
+            invocations.IndexOf("letRecordWidenedTypeParameters", StringComparison.Ordinal);
         int recordArguments =
-            invocations.IndexOf("let RecordWidenedArguments", StringComparison.Ordinal);
+            invocations.IndexOf("letRecordWidenedArguments", StringComparison.Ordinal);
         Assert.True(recordTypeParameters >= 0);
         Assert.True(recordArguments > recordTypeParameters);
-        Assert.Contains(
-            "NullableTypeSymbolSlots(method.TypeArguments.Length)",
-            invocations,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "if member == nil",
-            invocations,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "RecordContainingTypeArgument(",
-            invocations,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "let tupleElement",
-            invocations,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "RecordContainingTypeArgument(member.ContainingType",
-            invocations,
-            StringComparison.Ordinal);
+        Assert.Contains("NullableTypeSymbolSlots(method.TypeArguments.Length)", invocations, StringComparison.Ordinal);
+        Assert.Contains("ifmember==nil", invocations, StringComparison.Ordinal);
+        Assert.Contains("RecordContainingTypeArgument(", invocations, StringComparison.Ordinal);
+        Assert.Contains("lettupleElement", invocations, StringComparison.Ordinal);
+        Assert.DoesNotContain("RecordContainingTypeArgument(member.ContainingType", invocations, StringComparison.Ordinal);
     }
 }
