@@ -43,12 +43,16 @@ name `.gs` documents and no `.cs` ones).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import uuid
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
@@ -61,8 +65,8 @@ CORE_PROJECT = Path("src/Core/Core.gsproj")
 # effect from its solution-wide restore.
 NESTED_PROJECTS = ("src/Compiler/Compiler.gsproj", "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj",
                    "tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj", "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj")
-SIBLING_PACKAGES = ("GSharp.CodeAnalysis.Analyzers.Testing",)
-VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$")
+ANALYZER_VERIFIER_ID = "GSharp.CodeAnalysis.Analyzers.Testing"
+VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+){2,3}(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?")
 # Only the Project element's own Sdk attribute; never an <Import Sdk=...>.
 PROJECT_SDK_RE = re.compile(r'(<Project\b[^>]*?\bSdk=")([^"]*)(")', re.DOTALL)
 # Directories whose project files the SDK package (transitively) builds.
@@ -80,18 +84,124 @@ class SelfHostError(Exception):
     """A precondition or verification failure; reported, never swallowed."""
 
 
+def publication_target(path: Path):
+    for directory in path.parents:
+        if stat.S_ISLNK(directory.lstat().st_mode):
+            raise SelfHostError(f"{path}: publication through symlinked directory {directory} is unsupported")
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise SelfHostError(f"{path}: publication requires a single-link regular file")
+    return info
+
+
+def atomic_publish(target: Path, content: bytes | Path) -> None:
+    """Publishes only a complete, closed, metadata-ready sibling file."""
+    original = publication_target(target)
+    temporary = target.with_name(f".{target.name}.publish-{uuid.uuid4().hex}")
+    created = published = False
+    try:
+        try:
+            with temporary.open("xb"):
+                created = True
+            if isinstance(content, Path):
+                shutil.copy2(content, temporary)
+            else:
+                temporary.write_bytes(content)
+                if original is not None:
+                    written = temporary.stat()
+                    shutil.copystat(target, temporary)
+                    # Keep normal write timestamps so incremental builds see changed text.
+                    os.utime(temporary, ns=(written.st_atime_ns, written.st_mtime_ns))
+            if original is not None:
+                staged = temporary.stat()
+                if (staged.st_uid, staged.st_gid) != (original.st_uid, original.st_gid):
+                    os.chown(temporary, original.st_uid, original.st_gid)
+                    os.chmod(temporary, stat.S_IMODE(staged.st_mode))
+            publication_target(target)
+            temporary.replace(target)
+            published = True
+        finally:
+            if created and not published:
+                temporary.unlink(missing_ok=True)
+    except OSError as error:
+        raise OSError(f"{target}: atomic publication failed: {error}") from error
+
+
+def nuget_version(version: str) -> str:
+    """Canonical NuGet identity within the supported literal domain."""
+    if not VERSION_RE.fullmatch(version):
+        raise SelfHostError(f"{version!r} is not a supported literal package version")
+    numeric, separator, release = version.partition("-")
+    parts = [part.lstrip("0") or "0" for part in numeric.split(".")]
+    if any(len(part) > 10 or (len(part) == 10 and part > "2147483647") for part in parts):
+        raise SelfHostError(f"{version!r}: NuGet numeric components exceed Int32")
+    if any(re.fullmatch(r"0[0-9]+", label) for label in release.split(".")):
+        raise SelfHostError(f"{version!r}: NuGet numeric prerelease labels cannot have leading zeros")
+    if len(parts) == 4 and parts[-1] == "0":
+        parts.pop()
+    return ".".join(parts) + (separator + release.lower() if separator else "")
+
+
 def package_version(nupkg: Path, package_id: str = SDK_ID) -> str:
     name = nupkg.name
     prefix = package_id + "."
     if not name.startswith(prefix) or not name.endswith(".nupkg"):
         raise SelfHostError(f"{nupkg} is not a {package_id} package")
     version = name[len(prefix):-len(".nupkg")]
-    if not VERSION_RE.match(version):
+    if not VERSION_RE.fullmatch(version):
         raise SelfHostError(f"cannot read a version from {nupkg.name}")
+    nuget_version(version)
     return version
 
 
+def archive_version(nupkg: Path, package_id: str = SDK_ID) -> str:
+    filename_version = package_version(nupkg, package_id)
+    try:
+        with zipfile.ZipFile(nupkg) as archive:
+            manifests = [name for name in archive.namelist() if name.endswith(".nuspec")]
+            if len(manifests) != 1:
+                raise SelfHostError(f"{nupkg}: expected exactly one nuspec")
+            root = ET.fromstring(archive.read(manifests[0]))
+    except (zipfile.BadZipFile, ET.ParseError) as error:
+        raise SelfHostError(f"{nupkg}: invalid package metadata: {error}") from error
+    metadata = [item for item in root if item.tag.rsplit("}", 1)[-1] == "metadata"]
+    ids = [item.text or "" for item in metadata[0] if item.tag.rsplit("}", 1)[-1] == "id"] if len(metadata) == 1 else []
+    versions = [item.text or "" for item in metadata[0] if item.tag.rsplit("}", 1)[-1] == "version"] if len(metadata) == 1 else []
+    if len(ids) != 1 or ids[0].lower() != package_id.lower() or len(versions) != 1:
+        raise SelfHostError(f"{nupkg}: nuspec must identify {package_id} with one literal version")
+    if nuget_version(versions[0]) != nuget_version(filename_version):
+        raise SelfHostError(f"{nupkg}: filename/nuspec version identity mismatch ({versions[0]!r})")
+    return versions[0]
+
+
+def find_archive(directory: Path, package_id: str, version: str, replacing: Path | None = None) -> Path | None:
+    normalized = nuget_version(version)
+    matches = []
+    for path in sorted(directory.glob(f"{package_id}.*.nupkg")):
+        if path == replacing:
+            continue
+        candidate = package_version(path, package_id)
+        if nuget_version(candidate) != normalized:
+            continue
+        actual = archive_version(path, package_id)
+        if nuget_version(actual) != normalized:
+            raise SelfHostError(f"{path}: package identity does not match {package_id}/{version}")
+        matches.append(path)
+    if not matches:
+        return None
+    hashes = {hashlib.sha256(path.read_bytes()).digest() for path in matches}
+    if len(hashes) != 1:
+        raise SelfHostError(f"{package_id}/{version}: ambiguous NuGet-equivalent archives: "
+                            + ", ".join(path.name for path in matches))
+    canonical = directory / f"{package_id}.{normalized}.nupkg"
+    return canonical if canonical in matches else matches[0]
+
+
 def default_stage1_version(bootstrap_version: str) -> str:
+    nuget_version(bootstrap_version)
     base = bootstrap_version.split("-", 1)[0]
     return base + "-stage1"
 
@@ -101,15 +211,15 @@ def project_sdk(text: str) -> str | None:
     return match.group(2) if match else None
 
 
-def project_files(tree: Path):
-    for pattern in ("*.gsproj", "*.csproj"):
+def project_files(tree: Path, patterns=("*.gsproj", "*.csproj")):
+    for pattern in patterns:
         for path in tree.rglob(pattern):
             if any(part in ("bin", "obj", "node_modules", ".git") for part in path.relative_to(tree).parts):
                 continue
             yield path
 
 
-def normalize_pins(tree: Path) -> list[str]:
+def normalize_pins(tree: Path, rewritten: list[str] | None = None) -> list[str]:
     """Rewrites the generated per-project pin to the bare SDK name.
 
     Returns the tree-relative paths rewritten (empty for a global-json tree).
@@ -123,15 +233,16 @@ def normalize_pins(tree: Path) -> list[str]:
     if generated == SDK_ID:
         return []
 
-    rewritten = []
-    for path in sorted(project_files(tree)):
+    rewritten = [] if rewritten is None else rewritten
+    # Core carries the generated pin needed to retry after another project's I/O failure.
+    for path in sorted(project_files(tree), key=lambda path: (path == core, path)):
         raw = path.read_bytes()
         bom = raw.startswith(b"\xef\xbb\xbf")
         text = raw.decode("utf-8-sig")
         if project_sdk(text) != generated:
             continue
         text = PROJECT_SDK_RE.sub(lambda m: m.group(1) + SDK_ID + m.group(3), text, count=1)
-        path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8"))
+        atomic_publish(path, (b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8"))
         rewritten.append(path.relative_to(tree).as_posix())
     return rewritten
 
@@ -152,6 +263,13 @@ def check_no_versioned_toolchain_pins(tree: Path) -> None:
             + "\n  ".join(sorted(offenders)))
 
 
+def block_comment_end(text: str, start: int) -> int:
+    end = text.find("*/", start + 2)
+    if end < 0:
+        raise json.JSONDecodeError("Unterminated block comment", text, start)
+    return end + 2
+
+
 def closes_next(text: str, start: int) -> bool:
     """Whether the next token after `start`, skipping whitespace and comments, closes an object or array."""
     i = start
@@ -162,8 +280,7 @@ def closes_next(text: str, start: int) -> bool:
             end = text.find("\n", i)
             i = len(text) if end < 0 else end + 1
         elif text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            i = len(text) if end < 0 else end + 2
+            i = block_comment_end(text, i)
         else:
             return text[i] in "}]"
     return False
@@ -188,8 +305,7 @@ def strip_json_comments(text: str) -> str:
                 i += 1
             continue
         elif text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            i = len(text) if end < 0 else end + 2
+            i = block_comment_end(text, i)
             continue
         elif c == "," and closes_next(text, i + 1):
             # A trailing comma (outside any string): drop it.
@@ -204,7 +320,10 @@ def pin_global_json(tree: Path, version: str) -> bool:
     path = tree / "global.json"
     raw = path.read_bytes() if path.exists() else b""
     bom = raw.startswith(b"\xef\xbb\xbf")
-    document = json.loads(strip_json_comments(raw.decode("utf-8-sig"))) if path.exists() else {}
+    try:
+        document = json.loads(strip_json_comments(raw.decode("utf-8-sig"))) if path.exists() else {}
+    except json.JSONDecodeError as error:
+        raise SelfHostError(f"{path}: invalid JSON: {error}") from error
     if not isinstance(document, dict):
         raise SelfHostError(f"{path} is not a JSON object")
     sdks = document.setdefault("msbuild-sdks", {})
@@ -218,59 +337,151 @@ def pin_global_json(tree: Path, version: str) -> bool:
     updated = (b"\xef\xbb\xbf" if bom else b"") + (json.dumps(document, indent=2) + "\n").encode("utf-8")
     changed = updated != raw
     if changed:
-        path.write_bytes(updated)
+        atomic_publish(path, updated)
     return changed
 
 
-def stage_feed(tree: Path, nupkgs: list[Path]) -> list[dict]:
+def stage_feed(tree: Path, nupkgs: list[Path], staged: list[dict] | None = None) -> list[dict]:
     """Copies `nupkgs` into the tree's .nugs feed; returns what was staged and whether it replaced a file."""
+    selected = {}
+    for nupkg in nupkgs:
+        package_id = next((name for name in (SDK_ID, ANALYZER_VERIFIER_ID)
+                           if nupkg.name.startswith(name + ".")), None)
+        if package_id is None:
+            raise SelfHostError(f"{nupkg}: unsupported staged package ID")
+        identity = (package_id, nuget_version(archive_version(nupkg, package_id)))
+        if identity in selected and selected[identity].read_bytes() != nupkg.read_bytes():
+            raise SelfHostError(f"{nupkg}: ambiguous NuGet-equivalent staged archives")
+        selected.setdefault(identity, nupkg)
     feed = tree / ".nugs"
     feed.mkdir(exist_ok=True)
-    staged = []
-    for nupkg in nupkgs:
+    staged = [] if staged is None else staged
+    for (package_id, version), nupkg in selected.items():
         target = feed / nupkg.name
-        replaced = target.exists()
+        alias = find_archive(feed, package_id, version, replacing=target)
+        if alias is not None and alias.read_bytes() != nupkg.read_bytes():
+            raise SelfHostError(f"{alias}: ambiguous NuGet-equivalent archive already in the feed")
+        replaced = publication_target(target) is not None
         # A bootstrap already in the tree's feed (a natural input) is the target itself.
         if not (replaced and target.samefile(nupkg)):
-            shutil.copy2(nupkg, target)
+            atomic_publish(target, nupkg)
         staged.append({"package": nupkg.name, "replacedExisting": replaced})
     return staged
 
 
-def sibling_nupkgs(bootstrap: Path, version: str) -> list[Path]:
-    found = [bootstrap]
-    for package_id in SIBLING_PACKAGES:
-        candidate = bootstrap.with_name(f"{package_id}.{version}.nupkg")
-        if candidate.exists():
-            found.append(candidate)
-    return found
+def analyzer_verifier_versions(tree: Path) -> list[str]:
+    """Read literal, unconditional references; never guess an evaluated MSBuild version."""
+    versions = set()
+    unevaluated_defaults = []
+    documents = []
+    aliases = {}
+    for path in sorted(project_files(tree, ("*.gsproj", "*.csproj", "*.props", "*.targets"))):
+        try:
+            root = ET.parse(path).getroot()
+        except ET.ParseError as error:
+            raise SelfHostError(f"{path.relative_to(tree)}: invalid project XML: {error}") from error
+        documents.append((path, root))
+        for item in root.iter():
+            tag = item.tag.rsplit("}", 1)[-1]
+            if tag != "PackageReference" and any(name in item.attrib for name in ("Include", "Update", "Remove")):
+                aliases.setdefault(tag.lower(), []).append(item.get("Include", ""))
+    for path, root in documents:
+        parents = {child: parent for parent in root.iter() for child in parent}
+        for item in root.iter():
+            tag = item.tag.rsplit("}", 1)[-1]
+            if tag == "ManagePackageVersionsCentrally" and (item.text or "").strip().lower() != "false":
+                unevaluated_defaults.append(f"{path.relative_to(tree)}: central package versions are unsupported")
+            if tag != "PackageReference":
+                continue
+            identifiers = [item.get(name, "") for name in ("Include", "Update", "Remove")]
+            if not any(identifiers):
+                unevaluated_defaults.append(
+                    f"{path.relative_to(tree)}: PackageReference defaults without an identity are unsupported")
+                continue
+            for index, value in enumerate(identifiers):
+                if not any(token in value for token in ("$(", "@(", "%(")):
+                    continue
+                alias = re.fullmatch(r"@\(([A-Za-z_][\w.]*)\)", value)
+                values = aliases.get(alias.group(1).lower(), []) if alias else []
+                # The repository uses item aliases for unrelated package IDs.
+                # Admit only their literal identities, not MSBuild expressions or verifier versions.
+                if values and all(v and not any(token in v for token in ("$(", "@(", "%(")) for v in values):
+                    identifiers[index] = ";".join(values)
+                else:
+                    raise SelfHostError(
+                        f"{path.relative_to(tree)}: unresolved PackageReference identity; "
+                        f"cannot determine whether it requires {ANALYZER_VERIFIER_ID}")
+            if not any(ANALYZER_VERIFIER_ID.lower() in (part.strip().lower() for part in value.split(";"))
+                       for value in identifiers):
+                continue
+            problem = (
+                f"{path.relative_to(tree)}: {ANALYZER_VERIFIER_ID} requires an unconditional "
+                "PackageReference Include with one literal Version; "
+                "Update/Remove, central/property versions and conditional contexts are unsupported")
+            if (item.get("Include", "").lower() != ANALYZER_VERIFIER_ID.lower()
+                    or item.get("Update") is not None or item.get("Remove") is not None
+                    or item.get("VersionOverride") is not None):
+                raise SelfHostError(problem)
+            current = item
+            while current is not None:
+                if (current.get("Condition") is not None
+                        or current.tag.rsplit("}", 1)[-1] in ("Target", "Choose", "When", "Otherwise")):
+                    raise SelfHostError(problem)
+                current = parents.get(current)
+            metadata = [child for child in item if child.tag.rsplit("}", 1)[-1] == "Version"]
+            values = ([item.get("Version")] if item.get("Version") is not None else []) + [
+                child.text or "" for child in metadata]
+            if (len(values) != 1 or not VERSION_RE.fullmatch(values[0])
+                    or any(child.attrib for child in metadata)
+                    or any(child.tag.rsplit("}", 1)[-1] == "VersionOverride" for child in item)):
+                raise SelfHostError(problem)
+            nuget_version(values[0])
+            versions.add(values[0])
+    if versions and unevaluated_defaults:
+        raise SelfHostError(f"{ANALYZER_VERIFIER_ID}: " + "; ".join(unevaluated_defaults))
+    return sorted(versions)
 
 
-def missing_siblings(bootstrap: Path, version: str) -> list[str]:
-    """The sibling packages expected beside the bootstrap that are absent.
+def prepare_tree(tree: Path, bootstrap: Path, report: dict | None = None) -> dict:
+    """Prepares the tree; records each mutation into `report` as it completes.
 
-    Optional: a tree without an analyzer test project never restores them.
+    A failure part-way (a leftover versioned pin, a missing sibling) therefore
+    still leaves an audit trail of what was already changed.
     """
-    return [f"{package_id}.{version}.nupkg" for package_id in SIBLING_PACKAGES
-            if not bootstrap.with_name(f"{package_id}.{version}.nupkg").exists()]
-
-
-def prepare_tree(tree: Path, bootstrap: Path) -> dict:
-    version = package_version(bootstrap)
+    report = {} if report is None else report
+    version = archive_version(bootstrap)
+    find_archive(bootstrap.parent, SDK_ID, version)
     if not (tree / SDK_PROJECT).is_file():
         raise SelfHostError(f"{tree / SDK_PROJECT} not found; is {tree} a migrated repository?")
-    rewritten = normalize_pins(tree)
-    global_json_updated = pin_global_json(tree, version)
+    report["bootstrapVersion"] = version
+    report["bootstrapIdentity"] = nuget_version(version)
+    report["rewrittenPins"] = []
+    normalize_pins(tree, report["rewrittenPins"])
+    report["globalJsonUpdated"] = pin_global_json(tree, version)
     check_no_versioned_toolchain_pins(tree)
-    staged = stage_feed(tree, sibling_nupkgs(bootstrap, version))
-    return {
-        "bootstrapVersion": version,
-        "rewrittenPins": rewritten,
-        "globalJsonUpdated": global_json_updated,
-        "feed": str(tree / ".nugs"),
-        "stagedPackages": staged,
-        "missingSiblings": missing_siblings(bootstrap, version),
-    }
+    required_versions = analyzer_verifier_versions(tree)
+    report["requiredAnalyzerVerifierVersions"] = required_versions
+    # With no reference, keep the bootstrap-version sibling optional as before.
+    siblings, missing, identities = [], [], set()
+    for requested in (required_versions or [version]):
+        identity = nuget_version(requested)
+        if identity in identities:
+            continue
+        identities.add(identity)
+        sibling = find_archive(bootstrap.parent, ANALYZER_VERIFIER_ID, requested)
+        if sibling is None:
+            missing.append(f"{ANALYZER_VERIFIER_ID}.{nuget_version(requested)}.nupkg")
+        else:
+            siblings.append(sibling)
+    report["missingSiblings"] = missing
+    if missing and required_versions:
+        raise SelfHostError(
+            f"{ANALYZER_VERIFIER_ID} is referenced as a PackageReference in the tree but "
+            f"{', '.join(missing)} is not beside the bootstrap {bootstrap.name}")
+    report["feed"] = str(tree / ".nugs")
+    report["stagedPackages"] = []
+    stage_feed(tree, [bootstrap] + siblings, report["stagedPackages"])
+    return report
 
 
 def entry_name(name: str) -> str:
@@ -305,6 +516,8 @@ def gsharp_provenance(nupkg: Path) -> dict[str, str]:
 
 
 def verify(stage1: Path, bootstrap: Path) -> dict:
+    if nuget_version(archive_version(stage1)) == nuget_version(archive_version(bootstrap)):
+        raise SelfHostError("the stage-1 version must differ from the bootstrap NuGet identity")
     expected = payload(bootstrap)
     actual = payload(stage1)
     missing = sorted(name for name in expected - actual if not name.endswith(".xml"))
@@ -358,6 +571,7 @@ def pack(tree: Path, version: str, out: Path, work: Path, config: str) -> Path:
     produced = sorted(pack_out.glob(SDK_ID + ".*.nupkg"))
     if len(produced) != 1:
         raise SelfHostError(f"dotnet pack succeeded but produced {len(produced)} {SDK_ID} packages in {pack_out}")
+    archive_version(produced[0])
     return reversion(produced[0], version, out)
 
 
@@ -370,7 +584,7 @@ def reversion(nupkg: Path, version: str, out: Path | None = None) -> Path:
     stage-0 build (package caches are keyed by id+version), so the version
     is stamped after packing. Assembly versions inside are untouched.
     """
-    target = (out or nupkg.parent) / f"{SDK_ID}.{version}.nupkg"
+    target = (out or nupkg.parent) / f"{SDK_ID}.{nuget_version(version)}.nupkg"
     # Always stamp, even when the file name already matches: the name alone
     # says nothing about the nuspec inside.
     stamp_package(nupkg, target, version, required=True)
@@ -405,7 +619,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--tree", required=True, type=Path, help="migrated repository tree (modified in place)")
     parser.add_argument("--bootstrap", required=True, type=Path, help="stage-0 Gsharp.NET.Sdk.<v>.nupkg")
-    parser.add_argument("--version", help="stage-1 package version (default <major.minor.patch>-stage1)")
+    parser.add_argument("--version", help="stage-1 package version (default <bootstrap numeric version>-stage1)")
     parser.add_argument("--out", required=True, type=Path, help="directory to write the stage-1 nupkg into")
     parser.add_argument("--work", type=Path, help="scratch root for logs and the isolated package cache (default <out>/work)")
     parser.add_argument("--config", default="Release")
@@ -420,20 +634,21 @@ def main(argv: list[str]) -> int:
     try:
         if not bootstrap.is_file():
             raise SelfHostError(f"{bootstrap} does not exist")
-        bootstrap_version = package_version(bootstrap)
+        bootstrap_version = archive_version(bootstrap)
         version = args.version or default_stage1_version(bootstrap_version)
-        if not VERSION_RE.match(version):
+        if not VERSION_RE.fullmatch(version):
             raise SelfHostError(f"--version {version!r} is not a valid package version")
-        if version == bootstrap_version:
+        if nuget_version(version) == nuget_version(bootstrap_version):
             raise SelfHostError("the stage-1 version must differ from the bootstrap version "
                                 "(package caches are keyed by id+version)")
-        report.update({"tree": str(tree), "bootstrap": str(bootstrap), "stage1Version": version})
-        report.update(prepare_tree(tree, bootstrap))
+        report.update({"tree": str(tree), "bootstrap": str(bootstrap), "stage1Version": version,
+                       "stage1Identity": nuget_version(version)})
+        prepare_tree(tree, bootstrap, report)
         if not args.prepare_only:
             nupkg = pack(tree, version, out, work, args.config)
             report["stage1Package"] = str(nupkg)
             report.update(verify(nupkg, bootstrap))
-    except SelfHostError as error:
+    except (SelfHostError, OSError, UnicodeError) as error:
         # The tree may already be modified; the report still records how.
         report["error"] = str(error)
         print(f"selfhost-pack-stage1: {error}", file=sys.stderr)
