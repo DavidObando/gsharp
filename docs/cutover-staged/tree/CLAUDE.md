@@ -109,8 +109,8 @@ to translate. What gates a PR now:
   and in the PR checks that ADR-0198 defines.
 - **`cs2gs-corpus`** still guards cs2gs as a product on every PR: it runs the
   C# corpus under `tools/cs2gs/corpus` against the gap ledger.
-- **cs2gs apps nightly** (`cs2gs-apps-nightly`) is one nightly run over every
-  real-world app we cover: the C# version of G# (branch `cs2gs/csharp-0.4` at a
+- **cs2gs apps nightly** (`cs2gs-apps-nightly`) runs cs2gs as built from `main`
+  (G#, pinned toolchain) over every real-world C# app we cover, in one run: the C# version of G# (branch `cs2gs/csharp-0.4` at a
   pinned SHA), Oahu and Code Exploder (pinned in `tools/cs2gs/external/`). Oahu
   and Code Exploder no longer run on PRs and `publish` does not wait for them.
   It is a regression monitor for cs2gs, not a gate on G# changes. When an app

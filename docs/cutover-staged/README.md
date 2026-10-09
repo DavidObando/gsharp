@@ -78,11 +78,15 @@ missing, which is expected before the translation.
    CLR `Type` reference comparisons (GSA0002) and strong static reflection
    caches (GSA0003) are caught only in review. `docs/internal-analyzers.md`
    states this. If one of those bug classes recurs, port that rule.
-2. **The C# branch is semi-frozen, and "stages 1 and 2" is neither cs2gs
-   pipeline stages nor self-host stages.** The nightly's C# leg runs cs2gs over
-   `cs2gs/csharp-0.4`, a living corpus: no fixes or features, but code is
-   back-ported from G# to C# when it merits exercising cs2gs. Policy docs say
-   so. Self-host stage 2 is the separate `selfhost-stage2-nightly`.
+2. **What the apps nightly tests, and the C# branch policy.** The tool under
+   test is cs2gs built from the checked-out `main` tree (G# source, pinned
+   toolchain). Its inputs are C# programs: `cs2gs/csharp-0.4` at a pinned SHA
+   (the `gsharp-csharp` leg, passed as `SELFMIG_SOURCE_ROOT`; its translated
+   output is the G# compiler tree, which is compiled, ILVerified and
+   parity-tested), Oahu and Code Exploder. The branch is semi-frozen: no fixes
+   or features, but code is back-ported from G# to C# when it merits
+   exercising cs2gs. There are no "stages" in this nightly; self-host stage 2
+   is the separate `selfhost-stage2-nightly`.
 3. **Oahu and Code Exploder moved out of PR and official builds** into
    `cs2gs-apps-nightly` (build.yml jobs and the `publish` dependency removed by
    `cutover_edits.py`). All three apps are legs of one run; the `gate` job

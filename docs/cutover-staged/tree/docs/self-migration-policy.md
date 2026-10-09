@@ -28,6 +28,9 @@ found a real defect.**
 
 ## What the gates consume
 
+The tool under test is cs2gs built from `main` (it is G# now). The inputs
+below are C#.
+
 - `tools/cs2gs/corpus`: C# programs with expected outputs.
 - `tools/cs2gs/external/*.json`: pinned third-party apps (Oahu, Code Exploder).
 - Branch `cs2gs/csharp-0.4` at a pinned SHA: the C# source of the G# compiler,
