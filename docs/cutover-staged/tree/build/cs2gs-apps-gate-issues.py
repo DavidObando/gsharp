@@ -44,7 +44,10 @@ def fingerprint(result: dict) -> str:
     key = result.get("fingerprint")
     if not key:
         first = next((l for l in result.get("log_tail", "").splitlines() if re.search(r"error|fail", l, re.I)), result.get("summary", ""))
-        key = re.sub(r"\d+", "", first).strip()
+        # Drop only volatile numbers (line/column, counts, durations). Digits
+        # that are part of an identifier such as GS0154 or CS8600 are kept, so
+        # different diagnostics get different fingerprints.
+        key = re.sub(r"(?<![A-Za-z0-9_])\d+", "", first).strip()
     raw = "|".join((result.get("gate", "cs2gs-apps-nightly"), result["app"], key))
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
@@ -95,10 +98,13 @@ def process(results: list[dict], banked: set[str], ref: str, gh: Gh) -> int:
             n = str(found[0]["number"])
             current = {l["name"] for l in found[0].get("labels", [])} & set(PRIORITIES)
             gh.run("issue", "comment", n, "--body", f"Still failing.\n\n{body_for(r, fp, prio)}")
-            if prio == "P0" and "P0" not in current:
-                for old in sorted(current):
-                    gh.run("issue", "edit", n, "--remove-label", old)
-                gh.run("issue", "edit", n, "--add-label", "P0")
+            # Exactly one priority label, never lowered: the highest of the
+            # existing labels and this run's priority (P0 is highest).
+            target = min(current | {prio}, key=PRIORITIES.index)
+            for old in sorted(current - {target}):
+                gh.run("issue", "edit", n, "--remove-label", old)
+            if target not in current:
+                gh.run("issue", "edit", n, "--add-label", target)
         else:
             gh.run("issue", "create", "--title", f"cs2gs apps nightly: {r['app']} is red",
                    "--label", LABEL, "--label", "bug", "--label", prio,

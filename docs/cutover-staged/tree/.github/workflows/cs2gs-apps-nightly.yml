@@ -96,7 +96,10 @@ jobs:
         env:
           APP: ${{ matrix.app }}
           SELFMIG_SOURCE_ROOT: ${{ runner.temp }}/csharp-0.4
-          SELFMIG_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate
+          # Every leg writes under the one directory the upload step collects.
+          SELFMIG_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/gsharp-csharp
+          OAHU_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/oahu
+          CODE_EXPLODER_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/code-exploder
         run: |
           set +e
           case "$APP" in
@@ -132,6 +135,10 @@ jobs:
           path: |
             ${{ runner.temp }}/results/result-*.json
             ${{ runner.temp }}/gsharp-cs2gs-gate/**/*.json
+            ${{ runner.temp }}/gsharp-cs2gs-gate/**/*.log
+            ${{ runner.temp }}/gsharp-cs2gs-gate/**/report.html
+            ${{ runner.temp }}/gsharp-cs2gs-gate/oahu/smoke/*
+            ${{ runner.temp }}/gsharp-cs2gs-gate/code-exploder/smoke/*
 
   gate:
     name: gate report
@@ -160,9 +167,13 @@ jobs:
           import glob, json
           print("### cs2gs apps nightly")
           print("| app | status | summary |\n|---|---|---|")
+          seen = {}
           for p in sorted(glob.glob("results/result-*.json")):
               r = json.load(open(p))
-              print(f"| {r['app']} | {r['status']} | {r.get('summary','')} |")
+              seen[r["app"]] = r
+          for app in ("gsharp-csharp", "oahu", "code-exploder"):
+              r = seen.get(app) or {"status": "red", "summary": "no result: the leg crashed before reporting"}
+              print(f"| {app} | {r['status']} | {r.get('summary','')} |")
           PY
           python3 build/cs2gs-apps-gate-issues.py \
             --results results \

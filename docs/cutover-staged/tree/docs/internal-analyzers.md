@@ -16,9 +16,9 @@ three rules below are **not enforced by the build**. They stay as written
 conventions for compiler source and must be checked in review. Violating
 GSA0001 or GSA0002 produced real bugs (the GS0155/0158/0159 clusters); GSA0003
 caused CI out-of-memory failures. If one of them regresses, that is the signal
-to port it as a G# analyzer. The C# analyzer project and its tests stay in the
-repository as the reference for each rule's detection logic until the owner
-removes them.
+to port it as a G# analyzer. The analyzer project and its tests are translated to G# with the rest of the
+repository (they are still Roslyn analyzers over C# syntax) and stay as the
+reference for each rule's detection logic until the owner removes them.
 
 ## GSA0001: Struct field token reads
 

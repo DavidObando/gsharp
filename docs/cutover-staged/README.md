@@ -17,7 +17,8 @@ This directory is not read by the website build (Docusaurus only reads
 | `tree/CLAUDE.md` | `CLAUDE.md` | replaced |
 | `tree/CONTRIBUTING.md` | `CONTRIBUTING.md` | replaced |
 | `tree/docs/self-migration-policy.md` | `docs/self-migration-policy.md` | replaced; re-scoped to the cs2gs product and gates (the old fixture-provenance section is in git history) |
-| `tree/docs/internal-analyzers.md` | `docs/internal-analyzers.md` | replaced; contains a decision marker |
+| `tree/docs/self-migration-cutover.md` | `docs/self-migration-cutover.md` | new; the record CLAUDE.md and the policy link to; fill the facts in the cut-over PR (marker) |
+| `tree/docs/internal-analyzers.md` | `docs/internal-analyzers.md` | replaced (retired rules, enforcement gap stated) |
 | `tree/.github/workflows/cs2gs-apps-nightly.yml` | same | new; replaces `cs2gs-selfmig-nightly.yml`; one run over the C# version of G#, Oahu and Code Exploder, with a `gate` job that files or updates issues |
 | `tree/build/cs2gs-apps-gate-issues.py`, `tree/build/test-cs2gs-apps-gate-issues.py` | same | new; issue filing (dedup by gate/app/fingerprint; P0 only for a banked app red on main, else P1) and its test |
 | `tree/.github/workflows/selfhost-stage2-nightly.yml` | same | new; hook for the ADR-0198 controller (does not edit it) |
@@ -41,8 +42,8 @@ the draft banner. The website compiler-architecture page edit is in
    LanguageServer project, which becomes a `.gsproj`). It builds on Windows only
    (`visual-studio-extension` job, `windows-latest`); the apply script leaves
    those workflow lines unchanged.
-2. Resolve the `CUTOVER-VERIFY` marker (restore command and lock files, see
-   decision 5) or run with `--allow-markers` and resolve after.
+2. Resolve the `CUTOVER-VERIFY` markers (restore command and lock files, see
+   decision 5; the facts in `docs/self-migration-cutover.md`) or run with `--allow-markers` and resolve after.
 3. `docs/cutover-staged/apply.sh --check`, then `docs/cutover-staged/apply.sh`.
    It refuses to run unless `src/Core/Core.gsproj` exists and no `Core.csproj`.
 4. Review the git diff, fix the listed doc paths, and do the manual steps the
