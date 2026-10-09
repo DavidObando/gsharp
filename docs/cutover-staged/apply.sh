@@ -6,7 +6,8 @@
 #
 # --root          checkout to modify (default: the repository containing this script)
 # --check         run the edit script in check mode only; copy nothing
-# --allow-markers proceed although staged files still contain CUTOVER-VERIFY markers
+# --final-version V  the final C# release (for example 0.4.1234); replaces the 0.4.NNNN placeholder
+# --allow-markers proceed although staged files still contain CUTOVER-VERIFY markers or the placeholder
 # --force-layout  skip the "main is G#" guard (used by the dry run on a copy)
 #
 # Run it in the cut-over PR AFTER the translation and the hand-fix list, on a
@@ -16,12 +17,13 @@ set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd "$here/../.." && pwd)
-check=0 markers=0 force=0
+check=0 markers=0 force=0 final_version=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root) root=$(cd "$2" && pwd); shift 2 ;;
     --check) check=1; shift ;;
     --allow-markers) markers=1; shift ;;
+    --final-version) final_version="$2"; shift 2 ;;
     --force-layout) force=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -41,6 +43,11 @@ if [[ $markers -eq 0 ]] && grep -rIl 'CUTOVER-VERIFY' "$here/tree" >/dev/null; t
   exit 1
 fi
 
+if [[ $markers -eq 0 && -z "$final_version" ]] && grep -rIl '0\.4\.NNNN' "$here/tree" >/dev/null; then
+  echo "Staged files contain the 0.4.NNNN placeholder: pass --final-version <final C# release> (or --allow-markers)." >&2
+  exit 1
+fi
+
 python3 "$here/cutover_edits.py" --root "$root" --check
 
 if [[ $check -eq 1 ]]; then
@@ -54,6 +61,14 @@ fi
   cp "$here/tree/$f" "$root/$f"
   echo "wrote $f"
 done
+
+# 1b. Resolve the release placeholder in the files just copied.
+if [[ -n "$final_version" ]]; then
+  next="${final_version%.*}.$(( ${final_version##*.} + 1 ))"
+  (cd "$here/tree" && find . -type f \( -name '*.md' -o -name '*.yml' \) -print0) | while IFS= read -r -d '' f; do
+    sed -i -e "s/0\.4\.NNNN+k/${next}/g" -e "s/0\.4\.NNNN/${final_version}/g" "$root/$f"
+  done
+fi
 
 # 2. Mechanical edits (workflows, CI-matrix scripts, stale docs).
 python3 "$here/cutover_edits.py" --root "$root"
