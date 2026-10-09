@@ -45,7 +45,7 @@ message lists which tables moved. Treat this
 as a triage hint, not proof: a change confined to
 `AssemblyRef`/`TypeRef`/`MemberRef` with identical `MethodBodies` is likely a
 reference-set difference, but a metadata-only emitter change can retarget those
-rows too, so inspect the changed rows. A `MethodBodies` change is codegen. If the
+rows too, so inspect the changed rows. A `MethodBodies` change usually means codegen, but token allocation can also move with the reference set (two samples' bodies differ only in `MethodSpec` tokens between reference sets, #4845), so inspect it too. If the
 hash changed but no table is listed, the digest has a gap and needs a column. Regenerate both
 files together with `GSHARP_UPDATE_GOLDENS=1`.
 

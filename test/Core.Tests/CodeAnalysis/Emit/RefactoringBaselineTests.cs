@@ -127,9 +127,8 @@ public class RefactoringBaselineTests
         }
         catch (GoldenFileException ex)
         {
-            // Issue #4665: say which metadata tables moved, so a reference-set
-            // difference (AssemblyRef/TypeRef/MemberRef with identical
-            // MethodBodies) is not triaged as a codegen regression.
+            // Issue #4665: say which metadata tables moved, as a triage aid. The
+            // pattern only suggests a cause; the rows still need inspecting.
             throw new GoldenFileException(
                 ex.Message + "\n" + DescribeTableDrift(tablesPath, tables, entries, baselinePath));
         }
@@ -144,8 +143,9 @@ public class RefactoringBaselineTests
     }
 
     /// <summary>
-    /// Pins the contract that the table diff separates a reference-set change
-    /// from a codegen change.
+    /// Pins the triage output: the table diff names exactly the tables that moved.
+    /// It reports which tables changed; it does not decide whether the cause is
+    /// the reference set or codegen.
     /// </summary>
     [Fact]
     public void MetadataTableDiff_NamesTheTablesThatMoved()
@@ -156,22 +156,22 @@ public class RefactoringBaselineTests
             ["TypeRef"] = new[] { "rows=3 sha256=AA" },
             [MetadataTableDigest.MethodBodies] = new[] { "rows=2 sha256=BB" },
         };
-        var referenceDrift = new SortedDictionary<string, string[]>(baseline)
+        var referenceTablesMoved = new SortedDictionary<string, string[]>(baseline)
         {
             [MetadataTableDigest.AssemblyRef] = new[] { "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A" },
             ["TypeRef"] = new[] { "rows=3 sha256=CC" },
         };
-        var codegenDrift = new SortedDictionary<string, string[]>(baseline)
+        var bodiesMoved = new SortedDictionary<string, string[]>(baseline)
         {
             [MetadataTableDigest.MethodBodies] = new[] { "rows=2 sha256=DD" },
         };
 
         Assert.Equal(
             new[] { "AssemblyRef", "TypeRef" },
-            MetadataTableDigest.Diff(baseline, referenceDrift).Select(l => l.Split(':')[0]));
+            MetadataTableDigest.Diff(baseline, referenceTablesMoved).Select(l => l.Split(':')[0]));
         Assert.Equal(
             new[] { "MethodBodies" },
-            MetadataTableDigest.Diff(baseline, codegenDrift).Select(l => l.Split(':')[0]));
+            MetadataTableDigest.Diff(baseline, bodiesMoved).Select(l => l.Split(':')[0]));
         Assert.Empty(MetadataTableDigest.Diff(baseline, new SortedDictionary<string, string[]>(baseline)));
     }
 
