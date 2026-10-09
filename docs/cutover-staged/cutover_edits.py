@@ -197,6 +197,27 @@ def stage2_controller(root: Path) -> None:
     put(root, rel, text.replace(old, old[: -len(".csproj")] + ".gsproj"))
 
 
+REPO_ROOT_PROBE = '"GSharp.sln"'
+
+
+def repo_root_probes(root: Path) -> None:
+    """Repo-root anchors embedded in source: GSharp.sln no longer exists.
+
+    Tests and cs2gs flows locate the repository by looking for the solution
+    file. Rewrite the string literal in translated .gs files and in the
+    Visual Studio extension's C# tests (which still run from the same root).
+    """
+    skip = {"out", "node_modules", "website", ".git", "bin", "obj"}
+    files = [p for p in root.rglob("*.gs") if not skip & set(p.relative_to(root).parts)]
+    vs = root / "src" / "vs-gsharp"
+    if vs.exists():
+        files += [p for p in vs.rglob("*.cs") if not skip & set(p.relative_to(root).parts)]
+    for p in files:
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if REPO_ROOT_PROBE in text:
+            put(root, p.relative_to(root).as_posix(), text.replace(REPO_ROOT_PROBE, '"GSharp.slnx"'))
+
+
 def scripts(root: Path) -> None:
     """Retarget the active shell scripts to the solution and product projects.
 
@@ -205,7 +226,8 @@ def scripts(root: Path) -> None:
     rewritten: fixture and host projects the scripts generate (Host.csproj,
     CSharpApp.csproj, inspect.csproj, SampleAnalyzer.csproj) are C# on purpose.
     """
-    for rel in ["build/run-ilverify.sh", "build/selfmig-common.sh", *sorted(p.relative_to(root).as_posix() for p in (root / "e2etests").glob("*.sh"))]:
+    for rel in ["build/run-ilverify.sh", "build/selfmig-common.sh",
+                "build/run-go2gs-prerequisite-spike.py", "build/generate-quality-dashboard.py", *sorted(p.relative_to(root).as_posix() for p in (root / "e2etests").glob("*.sh"))]:
         text = read(root, rel)
         new = SCRIPT_PRODUCT.sub(lambda m: m.group(1) + ".gsproj", text).replace("GSharp.sln", "GSharp.slnx")
         if new != text:
@@ -298,7 +320,7 @@ def main() -> int:
     ap.add_argument("--root", type=Path, required=True)
     ap.add_argument("--check", action="store_true")
     a = ap.parse_args()
-    for step in (workflows, scripts, stage2_controller, docs):
+    for step in (workflows, scripts, stage2_controller, repo_root_probes, docs):
         step(a.root)
     for rel_path in writes:
         pass
