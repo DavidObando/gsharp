@@ -59,7 +59,7 @@ done
 python3 "$here/cutover_edits.py" --root "$root"
 
 # 3. Retired files. Only the PR guard and the self-migration nightly workflow;
-#    run-cs2gs-selfmig-{migrate,validate,gate}.sh stay because the cs2gs monitor
+#    run-cs2gs-selfmig-{migrate,validate,gate}.sh stay because the cs2gs apps nightly
 #    reuses them (they need a source-root parameter, see the README).
 for f in \
   .github/workflows/cs2gs-selfmig-nightly.yml \
@@ -93,12 +93,15 @@ Manual steps that remain (see docs/cutover-staged/README.md):
      before writing when the text moved).
   2. Rebalance the CI shards in build/generate-ci-test-matrix.py with real G#
      timings; run build/verify-ci-test-partition.py.
-  3. Decide the GSA0001-GSA0003 analyzers (docs/internal-analyzers.md).
-  4. Add the SELFMIG_SOURCE_ROOT parameter to build/selfmig-common.sh and
-     tools/cs2gs/external/gsharp-csharp.json for the cs2gs monitor.
+  3. GSA0001-GSA0003 are retired (docs/internal-analyzers.md states the gap);
+     decide whether to delete src/Analyzers/InternalAnalyzers and its tests.
+  4. Add SELFMIG_SOURCE_ROOT to build/selfmig-common.sh, plus
+     tools/cs2gs/external/gsharp-csharp.json, tools/cs2gs/apps-nightly-banked.json
+     and the cs2gs-nightly label, for cs2gs-apps-nightly.
   5. Wire STAGE2_ARGS in .github/workflows/selfhost-stage2-nightly.yml.
   6. Merge website/docs/release-notes.md text from
      docs/release/release-notes-0.5-draft.md.
   7. Run docs/cutover-staged/TRIAGE-CHECKLIST.md (owner).
-  8. Delete docs/cutover-staged/ once applied.
+  8. After #4842 merges: delete the stage-1 pack/compare steps from test-partition.
+  9. Delete docs/cutover-staged/ once applied.
 EOF

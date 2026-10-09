@@ -83,6 +83,16 @@ def workflows(root: Path) -> None:
         problems.append(f"{build}: hot-core guard block not found")
     else:
         put(root, build, text[:start] + text[end + 1 :])
+    # 3. Oahu and Code Exploder move out of PR/official builds into the
+    #    cs2gs-apps-nightly workflow; `publish` no longer waits for them.
+    text = read(root, build)
+    start = text.find("\n  cs2gs-oahu:\n")
+    end = text.find("\n  vscode-extension:\n")
+    if start < 0 or end < 0 or end < start:
+        problems.append(f"{build}: cs2gs-oahu/cs2gs-code-exploder block not found")
+    else:
+        put(root, build, text[:start] + text[end:])
+    replace(root, build, "cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix", "cs2gs-corpus, vsix")
     sub_dotnet_lines(root, build)
     for wf in (
         "pages.yml",
@@ -119,7 +129,8 @@ DOC_EDITS = [
         "were enforced at\nbuild time by the internal Roslyn analyzers in\n"
         "[`src/Analyzers/InternalAnalyzers`](../src/Analyzers/InternalAnalyzers) while\n"
         "the compiler was C#. Those analyzers read C# syntax and do not run on the\n"
-        "G# source of `Core`, so the rules are currently review conventions. See",
+        "G# source of `Core`, so the rules were retired at the cut-over and are review conventions until"
+        " G# equivalents exist. See",
     ),
     (
         "docs/emit-pipeline.md",
@@ -136,7 +147,7 @@ DOC_EDITS = [
         "website/docs/tooling/compiler-architecture.md",
         "## No Roslyn dependency in the emit path",
         "## The compiler is written in G#\n\n"
-        "From 0.5 the compiler, language server, formatter and tools are G# source. cs2gs translated them from the C# source of the final C#-built release, and that C# source is kept, frozen, on the `cs2gs/csharp-0.4` branch. The repository builds with the previous released compiler, pinned in `global.json` (the N-1 rule: repository source uses only language features the pinned release supports). A stage-2 check rebuilds the compiler with the stage-1 compiler and requires identical `GSharp.Core.dll` and `gsc.dll`, so the shipped compiler is the self-built one. The Visual Studio extension stays C#.\n\n"
+        "From 0.5 the compiler, language server, formatter and tools are G# source. cs2gs translated them from the C# source of the final C#-built release, and that C# source is kept on the semi-frozen `cs2gs/csharp-0.4` branch, a living C# corpus for cs2gs (no fixes or features; occasional back-ports from G# when they exercise cs2gs). The repository builds with the previous released compiler, pinned in `global.json` (the N-1 rule: repository source uses only language features the pinned release supports). A stage-2 check rebuilds the compiler with the stage-1 compiler and requires identical `GSharp.Core.dll` and `gsc.dll`, so the shipped compiler is the self-built one. The Visual Studio extension stays C#.\n\n"
         "## No Roslyn dependency in the emit path",
     ),
 ]

@@ -1,8 +1,8 @@
 # cs2gs migration policy: what to do when a cs2gs gate is red
 
 Applies to cs2gs as a product and to the gates that keep it honest: the
-`cs2gs-corpus`, `cs2gs-oahu` and `cs2gs-code-exploder` jobs and the
-`cs2gs-monitor-nightly` workflow. The C# to G# self-migration of this
+`cs2gs-corpus` PR job and the `cs2gs-apps-nightly` workflow (the C# version of
+G#, Oahu and Code Exploder in one run). The C# to G# self-migration of this
 repository ([#3501](https://github.com/DavidObando/gsharp/issues/3501)) is
 complete: the compiler source on `main` is G#, and the translation guard that
 this document used to govern (`cs2gs-pr-guard`, `hot-core translation guard`,
@@ -30,15 +30,18 @@ found a real defect.**
 
 - `tools/cs2gs/corpus`: C# programs with expected outputs.
 - `tools/cs2gs/external/*.json`: pinned third-party apps (Oahu, Code Exploder).
-- Branch `cs2gs/csharp-0.4` at a pinned SHA: the final C# source of the G#
-  compiler, kept as a large real-world corpus. The branch is frozen; see
-  [CLAUDE.md](../CLAUDE.md) for the back-port exception.
+- Branch `cs2gs/csharp-0.4` at a pinned SHA: the C# source of the G# compiler,
+  kept as a large real-world corpus. The branch is semi-frozen: no bug fixes and
+  no features, but code is back-ported from G# to C# when it merits exercising
+  cs2gs. A back-port is a branch commit plus a pin bump on `main`.
 
 ## The rule
 
-**A red cs2gs gate blocks the PR. It is never advisory.** The nightly monitor
-is not a PR gate; a red monitor opens a P1 (P0 if it is a silent semantic
-change) and the fix is to cs2gs or gsc, in G#.
+**A red `cs2gs-corpus` PR gate blocks the PR. It is never advisory.** The apps
+nightly is not a PR gate. When an app goes red the nightly files (or updates)
+one issue per gate, app and failure fingerprint, with the gate report. The
+issue is P0 only when an app that was previously green on `main` goes red, and
+P1 otherwise. The fix is to cs2gs or gsc, in G#.
 
 ## What to do, in order
 

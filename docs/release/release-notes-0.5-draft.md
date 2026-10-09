@@ -51,13 +51,14 @@ had suggested shipping stage 1 first):
 Where the C# source went (owner decision D2):
 
 - The C# source of 0.4.NNNN stays on branch `cs2gs/csharp-0.4`. The branch is
-  **frozen**. The only changes are back-ports that cs2gs tests need, and a
-  security fix if one is ever required, released as `0.4.NNNN+k`. No features
-  are back-ported.
+  **semi-frozen**: it gets no bug fixes and no features. It is a living C#
+  corpus for cs2gs, so code is occasionally back-ported from G# to C# when it
+  merits exercising cs2gs, and a security fix, if one is ever required, is
+  released as `0.4.NNNN+k`.
 - All development, including fixes, happens in G# on `main`, never on the C#
   branch.
-- The branch also serves cs2gs as a pinned C# corpus, which cs2gs's nightly
-  monitor migrates.
+- cs2gs's nightly run migrates a pinned commit of the branch, together with
+  Oahu and Code Exploder.
 - The Visual Studio extension (`src/vs-gsharp`) is still C#; it is not part of
   the translation.
 

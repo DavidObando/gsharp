@@ -124,7 +124,7 @@ done
 ```
 
 Keep any issue whose synthetic name is still produced by cs2gs for NEW
-translations (monitor it via the nightly cs2gs monitor) open as a cs2gs
+translations (monitor it via the cs2gs apps nightly) open as a cs2gs
 readability gap.
 
 ### One-time cleanup PR
@@ -169,9 +169,19 @@ merged and `main` is green.
 
 4. Enable the new required check `selfhost-stage2` once ADR-0198 lands its PR
    job (the nightly is not a required check).
-5. Run the nightly stage-2 job and the cs2gs monitor on the merged head:
+5. Create the label the apps nightly files issues under, and remove the two
+   retired contexts from the required checks if present:
+
+   ```sh
+   gh label create cs2gs-nightly --repo DavidObando/gsharp --color 5319E7 \
+     --description "Filed automatically by cs2gs-apps-nightly"
+   gh api repos/DavidObando/gsharp/branches/main/protection/required_status_checks --jq '.contexts'
+   gh api -X DELETE repos/DavidObando/gsharp/branches/main/protection/required_status_checks/contexts \
+     -f 'contexts[]=cs2gs-oahu' -f 'contexts[]=cs2gs-code-exploder'
+   ```
+6. Run the nightly stage-2 job and the apps nightly on the merged head:
 
    ```sh
    gh workflow run selfhost-stage2-nightly.yml --repo DavidObando/gsharp --ref main
-   gh workflow run cs2gs-monitor-nightly.yml --repo DavidObando/gsharp --ref main
+   gh workflow run cs2gs-apps-nightly.yml --repo DavidObando/gsharp --ref main
    ```
