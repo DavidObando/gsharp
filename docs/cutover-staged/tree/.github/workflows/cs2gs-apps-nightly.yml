@@ -152,6 +152,9 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download results
+        # If every leg failed before uploading, the download finds nothing and
+        # errors. Continue so --expect below files the missing-result issues.
+        continue-on-error: true
         uses: actions/download-artifact@v5
         with:
           pattern: cs2gs-apps-*
@@ -163,6 +166,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          mkdir -p results
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import glob, json
           print("### cs2gs apps nightly")

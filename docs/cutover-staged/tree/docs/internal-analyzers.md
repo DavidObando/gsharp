@@ -1,7 +1,8 @@
 # Internal analyzers
 
 `GSharp.InternalAnalyzers` (`src/Analyzers/InternalAnalyzers`) is a set of Roslyn
-analyzers written in C#. They analyze C# syntax. Since the compiler became G#
+analyzers (translated to G# at the cut-over, like the rest of the repository).
+They analyze C# syntax. Since the compiler became G#
 source they **do not run on `Core`** (a `.gsproj` of `.gs` files), so rules
 GSA0001-GSA0003 below are no longer enforced by the build.
 
