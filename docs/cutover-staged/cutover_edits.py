@@ -171,7 +171,7 @@ def workflows(root: Path) -> None:
 
 
 SCRIPT_PRODUCT = re.compile(
-    r"((?:src/(?:Sdk|Compiler|Core|Formatting|LanguageServer|Repl|GeneratorHost)|tools/(?:cs2gs|gsgen))/[A-Za-z0-9_./-]*?)\.csproj"
+    r"((?:src/(?:Sdk|Compiler|Core|Formatting|LanguageServer|Repl|GeneratorHost|Analyzers)|tools/(?:cs2gs|gsgen))/[A-Za-z0-9_./-]*?)\.csproj"
 )
 
 
@@ -183,7 +183,7 @@ def scripts(root: Path) -> None:
     rewritten: fixture and host projects the scripts generate (Host.csproj,
     CSharpApp.csproj, inspect.csproj, SampleAnalyzer.csproj) are C# on purpose.
     """
-    for rel in ["build/run-ilverify.sh", *sorted(p.relative_to(root).as_posix() for p in (root / "e2etests").glob("*.sh"))]:
+    for rel in ["build/run-ilverify.sh", "build/selfmig-common.sh", *sorted(p.relative_to(root).as_posix() for p in (root / "e2etests").glob("*.sh"))]:
         text = read(root, rel)
         new = SCRIPT_PRODUCT.sub(lambda m: m.group(1) + ".gsproj", text).replace("GSharp.sln", "GSharp.slnx")
         if new != text:

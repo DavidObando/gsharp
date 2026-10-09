@@ -23,7 +23,7 @@ This directory is not read by the website build (Docusaurus only reads
 | `tree/build/cs2gs-apps-gate-issues.py`, `tree/build/test-cs2gs-apps-gate-issues.py` | same | new; issue filing (dedup by gate/app/fingerprint; P0 only for a banked app red on main, else P1) and its test |
 | `tree/.github/workflows/selfhost-stage2-nightly.yml` | same | new; hook for the ADR-0198 controller (does not edit it) |
 | `cutover_edits.py` | n/a | exact-text edits: `build.yml` (drop the hot-core guard and its classifier, scope the hygiene step to the remaining C# (all checks but `coverage`; the job and the version-reference steps stay), retarget `build/run-ilverify.sh` and `e2etests/*.sh` to `.slnx`/`.gsproj` for product projects only (fixture and host projects they generate stay C#), park `selfhost-windows.yml` (dispatch-only), remove the `cs2gs-oahu` and `cs2gs-code-exploder` jobs and their `publish` dependency, `.sln`/`.csproj` to `.slnx`/`.gsproj`), the other workflows, the CI-matrix scripts, `emit-pipeline.md`, `lsp.md`, `debug-info.md`, `compiler-architecture.md` |
-| `apply.sh` | n/a | runs the above, deletes `cs2gs-selfmig-nightly.yml` and the PR-guard scripts, reports doc paths that no longer exist |
+| `apply.sh` | n/a | runs the above, deletes `cs2gs-selfmig-nightly.yml` and the PR-guard scripts, audits all Markdown (except ADRs, which are historical records and keep their old links) for broken links, missing paths and mentions of removed workflows/scripts, e.g. `tools/cs2gs/README.md`; report only, fix by hand |
 | `TRIAGE-CHECKLIST.md` | n/a | owner's `gh` commands for Phase 4 item 6 and the repository settings |
 
 Release notes: the text is `docs/release/release-notes-0.5-draft.md` (updated in
