@@ -48,7 +48,8 @@ internal static class SampleReferences
         {
             versions.AddRange(Directory.EnumerateDirectories(packs, major + ".*")
                 .Select(d => Path.GetFileName(d))
-                .OrderByDescending(n => n, StringComparer.Ordinal));
+                .OrderByDescending(n => ParseVersion(n))
+                .ThenByDescending(n => n, StringComparer.Ordinal));
         }
 
         string? directory = versions
@@ -63,5 +64,14 @@ internal static class SampleReferences
         }
 
         return Directory.EnumerateFiles(directory, "*.dll").OrderBy(p => p, StringComparer.Ordinal).ToList();
+    }
+
+    // Semantic order: "10.0.10" is newer than "10.0.9", which ordinal string
+    // order gets backwards. Unparseable names (previews) sort below releases.
+    private static Version ParseVersion(string name)
+    {
+        int dash = name.IndexOf('-');
+        string core = dash < 0 ? name : name.Substring(0, dash);
+        return Version.TryParse(core, out Version? version) ? version : new Version(0, 0);
     }
 }

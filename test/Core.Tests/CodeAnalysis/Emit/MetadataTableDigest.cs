@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
@@ -47,34 +48,58 @@ internal static class MetadataTableDigest
             return $"{ScopeName(md, t.ResolutionScope)}|{md.GetString(t.Namespace)}.{md.GetString(t.Name)}";
         }));
 
+        // Every row column is part of the digest, with handles as tokens, so a
+        // change of base type, parent or member ownership moves the table.
         tables["TypeDef"] = Summarise(md.TypeDefinitions.Select(h =>
         {
             TypeDefinition t = md.GetTypeDefinition(h);
-            return $"{md.GetString(t.Namespace)}.{md.GetString(t.Name)}|{(int)t.Attributes}";
+            return $"{md.GetString(t.Namespace)}.{md.GetString(t.Name)}|{(int)t.Attributes}|base={Token(t.BaseType)}"
+                + $"|fields={string.Join(",", t.GetFields().Select(x => Token(x)))}"
+                + $"|methods={string.Join(",", t.GetMethods().Select(x => Token(x)))}"
+                + $"|layout={t.GetLayout().Size}/{t.GetLayout().PackingSize}|decl={Token(t.GetDeclaringType())}";
         }));
 
         tables["MemberRef"] = Summarise(md.MemberReferences.Select(h =>
         {
             MemberReference m = md.GetMemberReference(h);
-            return $"{md.GetString(m.Name)}|{Hex(md.GetBlobBytes(m.Signature))}";
+            return $"parent={Token(m.Parent)}|{md.GetString(m.Name)}|{Hex(md.GetBlobBytes(m.Signature))}";
         }));
 
         tables["MethodDef"] = Summarise(md.MethodDefinitions.Select(h =>
         {
             MethodDefinition m = md.GetMethodDefinition(h);
-            return $"{md.GetString(m.Name)}|{(int)m.Attributes}|{Hex(md.GetBlobBytes(m.Signature))}";
+            return $"{md.GetString(m.Name)}|{(int)m.Attributes}|{(int)m.ImplAttributes}|{Hex(md.GetBlobBytes(m.Signature))}"
+                + $"|params={string.Join(",", m.GetParameters().Select(x => Token(x)))}"
+                + $"|generics={string.Join(",", m.GetGenericParameters().Select(x => Token(x)))}|decl={Token(m.GetDeclaringType())}"
+                + $"|body={(m.RelativeVirtualAddress == 0 ? "none" : "il")}";
         }));
 
         tables["FieldDef"] = Summarise(md.FieldDefinitions.Select(h =>
         {
             FieldDefinition f = md.GetFieldDefinition(h);
-            return $"{md.GetString(f.Name)}|{(int)f.Attributes}|{Hex(md.GetBlobBytes(f.Signature))}";
+            return $"{md.GetString(f.Name)}|{(int)f.Attributes}|{Hex(md.GetBlobBytes(f.Signature))}|decl={Token(f.GetDeclaringType())}";
         }));
 
+        // The whole body: header (max stack, init-locals, local signature and
+        // its blob) and exception regions as well as the IL.
         tables[MethodBodies] = Summarise(md.MethodDefinitions.Select(h =>
         {
             int rva = md.GetMethodDefinition(h).RelativeVirtualAddress;
-            return rva == 0 ? string.Empty : Hex(pe.GetMethodBody(rva).GetILBytes() ?? Array.Empty<byte>());
+            if (rva == 0)
+            {
+                return string.Empty;
+            }
+
+            MethodBodyBlock body = pe.GetMethodBody(rva);
+            string locals = body.LocalSignature.IsNil
+                ? "none"
+                : Hex(md.GetBlobBytes(md.GetStandaloneSignature(body.LocalSignature).Signature));
+            string regions = string.Join(
+                ";",
+                body.ExceptionRegions.Select(r =>
+                    $"{r.Kind}:{r.TryOffset}+{r.TryLength}:{r.HandlerOffset}+{r.HandlerLength}:{Token(r.CatchType)}:{r.FilterOffset}"));
+            return $"max={body.MaxStack}|init={body.LocalVariablesInitialized}|locals={locals}|eh={regions}"
+                + $"|il={Hex(body.GetILBytes() ?? Array.Empty<byte>())}";
         }));
 
         return tables;
@@ -119,6 +144,8 @@ internal static class MetadataTableDigest
         HandleKind.ModuleReference => "module",
         _ => scope.Kind.ToString(),
     };
+
+    private static string Token(EntityHandle handle) => handle.IsNil ? "nil" : MetadataTokens.GetToken(handle).ToString("X8");
 
     private static string Hex(byte[] bytes) => Convert.ToHexString(bytes);
 }

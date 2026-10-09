@@ -190,7 +190,8 @@ public class RefactoringBaselineTests
             GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.Default().Assemblies,
             a => a.GetName().Name == HostOnly);
 
-        var names = SampleReferences.CreateResolver().Assemblies.Select(a => a.GetName().Name).ToList();
+        using var resolver = SampleReferences.CreateResolver();
+        var names = resolver.Assemblies.Select(a => a.GetName().Name).ToList();
         Assert.DoesNotContain(HostOnly, names);
         Assert.Contains("System.Runtime", names);
     }
@@ -201,7 +202,7 @@ public class RefactoringBaselineTests
     [Fact]
     public void SampleHash_IsStableAcrossHostAssemblyLoads()
     {
-        string sample = Path.Combine(LocateRepoRoot()!, "samples", "refactoring-baseline", "YieldInTryFinally.gs");
+        string sample = Path.Combine(LocateRepoRoot() ?? throw new InvalidOperationException("repo root"), "samples", "refactoring-baseline", "YieldInTryFinally.gs");
         var before = TryHashSample(sample);
         Assert.True(before.Success, before.Diagnostics);
 
@@ -210,7 +211,9 @@ public class RefactoringBaselineTests
         var after = TryHashSample(sample);
         Assert.True(after.Success, after.Diagnostics);
 
-        Assert.Empty(MetadataTableDigest.Diff(before.Tables!, after.Tables!));
+        Assert.Empty(MetadataTableDigest.Diff(
+            before.Tables ?? throw new InvalidOperationException("no digest"),
+            after.Tables ?? throw new InvalidOperationException("no digest")));
         Assert.Equal(before.Hash, after.Hash);
     }
 
@@ -268,7 +271,8 @@ public class RefactoringBaselineTests
         var tree = SyntaxTree.Parse(SourceText.From(source, fileName));
 
         // Issue #4665: an explicit reference set, never ReferenceResolver.Default().
-        var compilation = new Compilation(SampleReferences.CreateResolver(), tree)
+        using var references = SampleReferences.CreateResolver();
+        var compilation = new Compilation(references, tree)
         {
             DebugInformation = new DebugInformationOptions { Deterministic = true },
         };
