@@ -162,6 +162,15 @@ class TreeTests(unittest.TestCase):
             problems = cutover.apply_hand_fixes(tree, "9.9.9", None, lambda _: None)
             self.assertTrue(any("versioned pin" in p for p in problems), problems)
 
+    def test_work_root_overlapping_the_checkout_or_foreign_is_refused(self):
+        for root in (REPO, REPO.parent, REPO / "src"):
+            with self.assertRaises(cutover.CutoverError, msg=str(root)):
+                cutover.Run(cutover.argparse.Namespace(work_root=str(root)))
+        with tempfile.TemporaryDirectory(dir=Path.home()) as tmp:
+            Path(tmp, "precious.txt").write_text("x")
+            with self.assertRaises(cutover.CutoverError):
+                cutover.Run(cutover.argparse.Namespace(work_root=tmp))
+
     def test_work_root_under_tmp_is_refused(self):
         args = cutover.argparse.Namespace(work_root="/tmp/x")
         with self.assertRaises(cutover.CutoverError):

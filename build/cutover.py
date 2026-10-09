@@ -46,6 +46,10 @@ ALWAYS_KEEP_CSHARP = ("src/vs-gsharp",)
 SDK_PROJECT = "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"
 EXTENSIONS_PROJECT = "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+WORK_ROOT_MARKER = ".cutover-work-root"
+LOCK_REGEN = ["dotnet", "restore", "GSharp.slnx", "--force-evaluate"]
+NUGET_ORG_CONFIG = ('<?xml version="1.0" encoding="utf-8"?>\n<configuration><packageSources><clear />'
+                    '<add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>\n')
 SKIP_DIRS = {".git", "bin", "obj", "node_modules", "TestResults"}
 
 
@@ -361,7 +365,18 @@ class Run:
         self.root = Path(args.work_root).expanduser().resolve()
         if str(self.root).startswith("/tmp") or str(self.root) == "/":
             raise CutoverError("the work root must not be under /tmp (shared tmpfs); use ~/.cache/<tag>/")
+        # The stages delete and recreate src/, tools/, migrated/ and runs/ below the root, so the root must
+        # be a directory of its own: never this checkout (or one containing it), never a repository.
+        checkout = Path(__file__).resolve().parent.parent
+        if self.root == checkout or self.root in checkout.parents or checkout in self.root.parents:
+            raise CutoverError(f"the work root {self.root} overlaps the checkout {checkout}")
+        marker = self.root / WORK_ROOT_MARKER
+        if (self.root / ".git").exists():
+            raise CutoverError(f"the work root {self.root} is a repository")
+        if self.root.exists() and any(self.root.iterdir()) and not marker.is_file():
+            raise CutoverError(f"the work root {self.root} is not empty and was not created by cutover.py")
         self.root.mkdir(parents=True, exist_ok=True)
+        marker.write_text("created by build/cutover.py; safe to delete\n")
         self.src = self.root / "src"
         self.tools = self.root / "tools"
         self.pkgs = self.root / "packages"
@@ -460,9 +475,13 @@ class Run:
         self.record["facts"].update({"sdk_pin": pin, "cs2gs_version": cs2gs_version})
         if self.tools.exists():
             shutil.rmtree(self.tools)
+        # A config of our own (<clear/> + nuget.org): no feed from the caller's checkout or user config can
+        # satisfy these installs, so the rehearsal is nuget.org-only.
+        config = self.root / "nuget.config"
+        config.write_text(NUGET_ORG_CONFIG)
         for package, version in ((CS2GS_ID, cs2gs_version), (GSFMT_ID, pin)):
             self.sh("tools", ["dotnet", "tool", "install", package, "--version", version, "--tool-path",
-                              self.tools, "--add-source", "https://api.nuget.org/v3/index.json"])
+                              self.tools, "--configfile", config], cwd=self.root)
         nupkg = self.download(SDK_ID, pin, self.pkgs / f"{SDK_ID}.{pin}.nupkg")
         with zipfile.ZipFile(nupkg) as z:
             z.extractall(self.pkgs / "sdk")
@@ -524,7 +543,8 @@ class Run:
             raise CutoverError(f"cs2gs migrate exited {rc} and wrote no run.json; see {self.logs / 'translate.log'}")
         run = json.loads(run_jsons[-1].read_text())
         apps = run.get("apps", [])
-        failed = [a.get("appId") for a in apps if not a.get("succeeded")]
+        # An app that passed with `unverified` set skipped a stage it needed: not green for a rehearsal.
+        failed = [a.get("appId") for a in apps if not a.get("succeeded") or a.get("unverified")]
         facts["translate"] = {"apps": len(apps), "failed": failed, "exit": rc}
         status = "passed" if rc == 0 and not failed else "failed"
         return status, f"{len(apps) - len(failed)}/{len(apps)} apps green, cs2gs exit {rc}; failed: {failed}"
@@ -583,7 +603,7 @@ class Run:
         (self.logs / "hand-fix.log").write_text("\n".join(notes + ["PROBLEMS:"] + problems) + "\n")
         # 8. the mirrored packages.lock.json files describe the C# projects; regenerate them so the
         #    locked-mode restore CI uses can pass (found by the first dry run: NU1004).
-        rc = self.sh("hand-fix", ["dotnet", "restore", "GSharp.slnx", "--force-evaluate"], cwd=self.src, check=False)
+        rc = self.sh("hand-fix", LOCK_REGEN, cwd=self.src, check=False)
         if rc != 0:
             problems.append(f"lock-file regeneration (dotnet restore --force-evaluate) exited {rc}; see hand-fix.log")
         self.sh("hand-fix", ["git", "add", "-A"], cwd=self.src)
@@ -669,6 +689,10 @@ def main(argv=None) -> int:
         if args.command == "hand-fix":
             sln = Path(args.original_sln).read_text(encoding="utf-8-sig") if args.original_sln else None
             problems = apply_hand_fixes(Path(args.tree), args.sdk_version, sln, print)
+            # hand-fix 8, shared with the dry run: the mirrored lock files describe the C# projects.
+            rc = subprocess.run(LOCK_REGEN, cwd=args.tree).returncode
+            if rc != 0:
+                problems.append(f"lock-file regeneration ({' '.join(LOCK_REGEN)}) exited {rc}")
             for line in problems:
                 print("PROBLEM:", line)
             return 1 if problems else 0
