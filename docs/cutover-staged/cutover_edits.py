@@ -57,8 +57,8 @@ def sub_dotnet_lines(root: Path, rel: str) -> None:
 
 def workflows(root: Path) -> None:
     build = ".github/workflows/build.yml"
-    # 1. nullable-hygiene keeps its name (required-check context) but loses the
-    #    hygiene script; the release-version-reference steps stay.
+    # 1. nullable-hygiene keeps its name (required-check context) but keeps the C#-scoped
+    #    hygiene script (minus the Core coverage check) and the release-version steps.
     replace(
         root,
         build,
@@ -68,10 +68,17 @@ def workflows(root: Path) -> None:
             --base "origin/${{ github.base_ref || 'main' }}"
 
       # Shares this job""",
-        """      # The C# nullable-hygiene script (ADR-0155) is retired with the C#
-      # compiler source: G# has no `!` suppression operator, and `!!` is a
-      # runtime check reviewed like any other code. The job keeps its name so
-      # the required status check context does not change.
+        """      - name: Run nullable hygiene gate (remaining C# only)
+        # After the cut-over the only production C# is src/vs-gsharp (plus test
+        # fixtures and cs2gs inputs), which still enables nullable analysis.
+        # Every check that scans tracked C# keeps running; `coverage` is
+        # skipped because it asserts the shape of src/Core's C# files.
+        run: |
+          python3 build/nullable_hygiene.py \\
+            --base "origin/${{ github.base_ref || 'main' }}" \\
+            --check classify --check no-escapes --check suppressions \\
+            --check null-bang --check arg-null-bang --check forgiving \\
+            --check guard-added
 
       # Shares this job""",
     )
@@ -83,6 +90,30 @@ def workflows(root: Path) -> None:
         problems.append(f"{build}: hot-core guard block not found")
     else:
         put(root, build, text[:start] + text[end + 1 :])
+    # Park selfhost-windows: dispatch-only. Its migrated-tree source (the
+    # cs2gs-selfmig-nightly artifact) and its C# baseline no longer exist on
+    # main, so it must neither run on PRs nor be rewritten to .gsproj.
+    sw = ".github/workflows/selfhost-windows.yml"
+    replace(
+        root,
+        sw,
+        """  pull_request:
+    paths:
+      - '.github/workflows/selfhost-windows.yml'
+      - 'build/selfhost-compare-trx.py'
+      - 'build/test-selfhost-compare-trx.py'
+""",
+        "",
+    )
+    replace(
+        root,
+        sw,
+        "name: selfhost-windows\n",
+        "name: selfhost-windows\n\n# PARKED at the cut-over (owner decision 2026-10-09): dispatch-only, not gating.\n"
+        "# It still expects a cs2gs-selfmig-nightly migrated tree and a C# Core.Tests\n"
+        "# baseline, neither of which exists on main; repair it against branch\n"
+        "# cs2gs/csharp-0.4 before relying on it.\n",
+    )
     # 3. Oahu and Code Exploder move out of PR/official builds into the
     #    cs2gs-apps-nightly workflow; `publish` no longer waits for them.
     text = read(root, build)
@@ -96,7 +127,6 @@ def workflows(root: Path) -> None:
     sub_dotnet_lines(root, build)
     for wf in (
         "pages.yml",
-        "selfhost-windows.yml",
         "macos-nightly.yml",
         "windows-nightly.yml",
         "differential-conformance-nightly.yml",
@@ -106,7 +136,24 @@ def workflows(root: Path) -> None:
         sub_dotnet_lines(root, f".github/workflows/{wf}")
 
 
+SCRIPT_PRODUCT = re.compile(
+    r"(src/(?:Sdk|Compiler|Core|Formatting|LanguageServer|Repl|GeneratorHost)/[A-Za-z0-9_./-]*?)\.csproj"
+)
+
+
 def scripts(root: Path) -> None:
+    """Retarget the active shell scripts to the solution and product projects.
+
+    RepositoryMirror copies non-source files verbatim, so these still name
+    .csproj/.sln after translation. Only product projects under src/ are
+    rewritten: fixture and host projects the scripts generate (Host.csproj,
+    CSharpApp.csproj, inspect.csproj, SampleAnalyzer.csproj) are C# on purpose.
+    """
+    for rel in ["build/run-ilverify.sh", *sorted(p.relative_to(root).as_posix() for p in (root / "e2etests").glob("*.sh"))]:
+        text = read(root, rel)
+        new = SCRIPT_PRODUCT.sub(lambda m: m.group(1) + ".gsproj", text).replace("GSharp.sln", "GSharp.slnx")
+        if new != text:
+            put(root, rel, new)
     for rel in (
         "build/generate-ci-test-matrix.py",
         "build/test-ci-test-matrix.py",
