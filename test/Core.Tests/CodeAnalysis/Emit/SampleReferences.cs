@@ -49,6 +49,7 @@ internal static class SampleReferences
             versions.AddRange(Directory.EnumerateDirectories(packs, major + ".*")
                 .Select(d => Path.GetFileName(d))
                 .OrderByDescending(n => ParseVersion(n))
+                .ThenByDescending(n => !n.Contains('-'))
                 .ThenByDescending(n => n, StringComparer.Ordinal));
         }
 

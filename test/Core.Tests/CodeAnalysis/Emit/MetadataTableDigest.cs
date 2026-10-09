@@ -93,7 +93,7 @@ internal static class MetadataTableDigest
             MethodBodyBlock body = pe.GetMethodBody(rva);
             string locals = body.LocalSignature.IsNil
                 ? "none"
-                : Hex(md.GetBlobBytes(md.GetStandaloneSignature(body.LocalSignature).Signature));
+                : Token(body.LocalSignature) + ":" + Hex(md.GetBlobBytes(md.GetStandaloneSignature(body.LocalSignature).Signature));
             string regions = string.Join(
                 ";",
                 body.ExceptionRegions.Select(r =>
