@@ -13,7 +13,7 @@ as it did before the extraction. Any diff blocks the PR.
 
 For each `samples/*.gs` and `samples/refactoring-baseline/*.gs`:
 
-1. Parses the source and constructs a `Compilation`.
+1. Parses the source and constructs a `Compilation` over an explicit reference set (the `Microsoft.NETCore.App.Ref` pack plus the bundled G# runtime assemblies, as the SDK passes to gsc), never `ReferenceResolver.Default()`, so the hash does not depend on which assemblies the test host loaded (#4665).
 2. Sets `DebugInformation.Deterministic = true`.
 3. Calls `compilation.Emit(...)` with a fixed assembly name + version.
 4. Hashes the parts of the PE that the gate pins:
@@ -35,6 +35,19 @@ today:
   gate doesn't fail on a missing fixture. The per-sample rationale lives
   in `samples/refactoring-baseline/README.md`. The list lives in
   `RefactoringBaselineTests.KnownCompileFailureSamples`.
+
+## Triaging a mismatch
+
+`refactoring-baseline-tables.json` holds, per sample, the full `AssemblyRef`
+list and a row count plus digest for `TypeRef`, `TypeDef`, `MemberRef`,
+`MethodDef`, `FieldDef` and `MethodBodies`. When the hash gate fails, the
+message lists which tables moved. Treat this
+as a triage hint, not proof: a change confined to
+`AssemblyRef`/`TypeRef`/`MemberRef` with identical `MethodBodies` is likely a
+reference-set difference, but a metadata-only emitter change can retarget those
+rows too, so inspect the changed rows. A `MethodBodies` change usually means codegen, but token allocation can also move with the reference set (two samples' bodies differ only in `MethodSpec` tokens between reference sets, #4845), so inspect it too. If the
+hash changed but no table is listed, the digest has a gap and needs a column. Regenerate both
+files together with `GSHARP_UPDATE_GOLDENS=1`.
 
 ## When to regenerate
 

@@ -41,6 +41,14 @@ public class RefactoringBaselineTests
 {
     private const string BaselineFileName = "refactoring-baseline.json";
 
+    private const string TablesFileName = "refactoring-baseline-tables.json";
+
+    private static readonly JsonSerializerOptions SerializerOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     /// <summary>
     /// Samples that currently fail to compile on main. Recorded with a
     /// <c>null</c> baseline; documented in
@@ -73,7 +81,11 @@ public class RefactoringBaselineTests
             ?? throw new InvalidOperationException("Could not locate repository root.");
 
         var entries = new SortedDictionary<string, string?>(StringComparer.Ordinal);
+        var tables = new SortedDictionary<string, SortedDictionary<string, string[]>>(StringComparer.Ordinal);
         var failures = new List<string>();
+
+        // One resolver for the whole loop: building the ref-pack metadata context per sample is pure overhead.
+        using var references = SampleReferences.CreateResolver();
 
         foreach (var rel in EnumerateSampleRelativePaths(repoRoot))
         {
@@ -84,10 +96,11 @@ public class RefactoringBaselineTests
             }
 
             var absolute = Path.Combine(repoRoot, rel);
-            var (success, hash, diagnostics) = TryHashSample(absolute);
+            var (success, hash, diagnostics, sampleTables) = TryHashSample(absolute, references);
             if (success)
             {
                 entries[rel] = hash;
+                tables[rel] = sampleTables ?? throw new InvalidOperationException("no table digest for a compiled sample");
             }
             else
             {
@@ -106,20 +119,149 @@ public class RefactoringBaselineTests
             "Core.Tests",
             "Baselines",
             BaselineFileName);
+        string tablesPath = Path.Combine(Path.GetDirectoryName(baselinePath) ?? throw new InvalidOperationException("The baseline path has no directory."), TablesFileName);
+        try
+        {
+            GoldenFile.AssertMatches(
+                baselinePath,
+                SerializeBaseline(entries),
+                "IL byte-identical gate failed. Investigate unintended emit drift; "
+                + "accept and commit a regenerated baseline only for an intentional IL change.");
+        }
+        catch (GoldenFileException ex)
+        {
+            // Issue #4665: say which metadata tables moved, as a triage aid. The
+            // pattern only suggests a cause; the rows still need inspecting.
+            throw new GoldenFileException(
+                ex.Message + "\n" + DescribeTableDrift(tablesPath, tables, entries, baselinePath));
+        }
+
+        // The table digests accompany the hashes: written together under
+        // GSHARP_UPDATE_GOLDENS, and a mismatch here means the digests were not
+        // regenerated with the baseline.
         GoldenFile.AssertMatches(
-            baselinePath,
-            SerializeBaseline(entries),
-            "IL byte-identical gate failed. Investigate unintended emit drift; "
-            + "accept and commit a regenerated baseline only for an intentional IL change.");
+            tablesPath,
+            JsonSerializer.Serialize(tables, SerializerOptions) + "\n",
+            "The per-table digests behind the IL baseline are stale; regenerate them with the baseline.");
     }
 
-    private static (bool Success, string Hash, string Diagnostics) TryHashSample(string absoluteSamplePath)
+    /// <summary>
+    /// Pins the triage output: the table diff names exactly the tables that moved.
+    /// It reports which tables changed; it does not decide whether the cause is
+    /// the reference set or codegen.
+    /// </summary>
+    [Fact]
+    public void MetadataTableDiff_NamesTheTablesThatMoved()
+    {
+        var baseline = new SortedDictionary<string, string[]>
+        {
+            [MetadataTableDigest.AssemblyRef] = new[] { "System.Private.CoreLib, 10.0.0.0, 7CEC85D7BEA7798E" },
+            ["TypeRef"] = new[] { "rows=3 sha256=AA" },
+            [MetadataTableDigest.MethodBodies] = new[] { "rows=2 sha256=BB" },
+        };
+        var referenceTablesMoved = new SortedDictionary<string, string[]>(baseline)
+        {
+            [MetadataTableDigest.AssemblyRef] = new[] { "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A" },
+            ["TypeRef"] = new[] { "rows=3 sha256=CC" },
+        };
+        var bodiesMoved = new SortedDictionary<string, string[]>(baseline)
+        {
+            [MetadataTableDigest.MethodBodies] = new[] { "rows=2 sha256=DD" },
+        };
+
+        Assert.Equal(
+            new[] { "AssemblyRef", "TypeRef" },
+            MetadataTableDigest.Diff(baseline, referenceTablesMoved).Select(l => l.Split(':')[0]));
+        Assert.Equal(
+            new[] { "MethodBodies" },
+            MetadataTableDigest.Diff(baseline, bodiesMoved).Select(l => l.Split(':')[0]));
+        Assert.Empty(MetadataTableDigest.Diff(baseline, new SortedDictionary<string, string[]>(baseline)));
+    }
+
+    /// <summary>
+    /// The sample compilations must not see which assemblies the test host
+    /// loaded: the resolver has to be the ref pack plus the bundled G# runtime,
+    /// with none of the host's test-only assemblies in it.
+    /// </summary>
+    [Fact]
+    public void SampleResolver_DoesNotContainHostLoadedAssemblies()
+    {
+        const string HostOnly = "GSharp.Core.Tests";
+
+        // Control: the default resolver is built from the host's loaded assemblies.
+        Assert.Contains(
+            GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.Default().Assemblies,
+            a => a.GetName().Name == HostOnly);
+
+        using var resolver = SampleReferences.CreateResolver();
+        var names = resolver.Assemblies.Select(a => a.GetName().Name).ToList();
+        Assert.DoesNotContain(HostOnly, names);
+        Assert.Contains("System.Runtime", names);
+    }
+
+    private static string DescribeTableDrift(
+        string tablesPath,
+        SortedDictionary<string, SortedDictionary<string, string[]>> actual,
+        SortedDictionary<string, string?> entries,
+        string baselinePath)
+    {
+        if (!File.Exists(tablesPath) || !File.Exists(baselinePath))
+        {
+            return "No committed table digests to diff against.";
+        }
+
+        var expectedTables = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, string[]>>>(
+            File.ReadAllText(tablesPath)) ?? new();
+        var expectedHashes = JsonSerializer.Deserialize<Dictionary<string, string?>>(File.ReadAllText(baselinePath))
+            ?? new();
+        var report = new System.Text.StringBuilder("Metadata tables that moved, per sample (a change confined to "
+            + "AssemblyRef/TypeRef/MemberRef with unchanged MethodBodies is LIKELY a reference-set difference; inspect the rows, since a metadata-only emitter change can also retarget them):\n");
+        int reported = 0;
+        foreach (var (rel, hash) in entries)
+        {
+            if (hash is null || (expectedHashes.TryGetValue(rel, out var old) && string.Equals(old, hash, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            if (!expectedTables.TryGetValue(rel, out var oldTables))
+            {
+                report.Append("  ").Append(rel).Append(": no committed digest\n");
+            }
+            else
+            {
+                var moved = MetadataTableDigest.Diff(oldTables, actual[rel]);
+                foreach (string line in moved)
+                {
+                    report.Append("  ").Append(rel).Append(" ").Append(line).Append('\n');
+                }
+
+                if (moved.Count == 0)
+                {
+                    // Fail-safe: the hash moved but no tracked table did, so the
+                    // digest is missing a column. Say so rather than print nothing.
+                    report.Append("  ").Append(rel).Append(": hash changed but no tracked table moved (digest gap)\n");
+                }
+            }
+
+            if (++reported >= 10)
+            {
+                report.Append("  ... (further samples elided; fix the ones above and rerun for the rest)\n");
+                break;
+            }
+        }
+
+        return report.ToString();
+    }
+
+    private static (bool Success, string Hash, string Diagnostics, SortedDictionary<string, string[]>? Tables) TryHashSample(string absoluteSamplePath, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references)
     {
         var source = File.ReadAllText(absoluteSamplePath);
         var fileName = Path.GetFileName(absoluteSamplePath);
         var tree = SyntaxTree.Parse(SourceText.From(source, fileName));
 
-        var compilation = new Compilation(tree)
+        // Issue #4665: an explicit reference set, never ReferenceResolver.Default().
+        var compilation = new Compilation(references, tree)
         {
             DebugInformation = new DebugInformationOptions { Deterministic = true },
         };
@@ -135,12 +277,12 @@ public class RefactoringBaselineTests
         if (!result.Success)
         {
             var diagnostics = string.Join("; ", result.Diagnostics.Select(d => d.Message));
-            return (false, string.Empty, diagnostics);
+            return (false, string.Empty, diagnostics, null);
         }
 
         var bytes = peStream.ToArray();
         var hash = HashEmittedContent(bytes);
-        return (true, hash, string.Empty);
+        return (true, hash, string.Empty, MetadataTableDigest.Compute(bytes));
     }
 
     /// <summary>

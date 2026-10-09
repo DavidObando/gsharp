@@ -50,8 +50,9 @@ public class EmitDeterminismRegressionTests
             Assert.True(File.Exists(absolutePath), $"Sample file not found: {absolutePath}");
 
             var source = File.ReadAllText(absolutePath);
-            var hash1 = CompileAndHash(source, Path.GetFileName(absolutePath));
-            var hash2 = CompileAndHash(source, Path.GetFileName(absolutePath));
+            using var references = SampleReferences.CreateResolver();
+            var hash1 = CompileAndHash(source, Path.GetFileName(absolutePath), references);
+            var hash2 = CompileAndHash(source, Path.GetFileName(absolutePath), references);
 
             Assert.True(
                 string.Equals(hash1, hash2, StringComparison.OrdinalIgnoreCase),
@@ -85,10 +86,11 @@ public class EmitDeterminismRegressionTests
             Assert.True(File.Exists(absolutePath), $"Sample file not found: {absolutePath}");
 
             var source = File.ReadAllText(absolutePath);
+            using var references = SampleReferences.CreateResolver();
             var hashes = new string[5];
             for (int i = 0; i < 5; i++)
             {
-                hashes[i] = CompileAndHash(source, Path.GetFileName(absolutePath));
+                hashes[i] = CompileAndHash(source, Path.GetFileName(absolutePath), references);
             }
 
             var distinct = hashes.Distinct().ToArray();
@@ -100,10 +102,10 @@ public class EmitDeterminismRegressionTests
         }
     }
 
-    private static string CompileAndHash(string source, string fileName)
+    private static string CompileAndHash(string source, string fileName, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source, fileName));
-        var compilation = new Compilation(tree)
+        var compilation = new Compilation(references, tree)
         {
             DebugInformation = new DebugInformationOptions { Deterministic = true },
         };
