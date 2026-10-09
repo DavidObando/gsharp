@@ -114,6 +114,40 @@ def workflows(root: Path) -> None:
         "# baseline, neither of which exists on main; repair it against branch\n"
         "# cs2gs/csharp-0.4 before relying on it.\n",
     )
+    # 2b. cs2gs-nightly (strict corpus ledger) loses its Oahu legs: Oahu runs
+    #     only in cs2gs-apps-nightly, and a legacy Oahu result must not keep
+    #     this nightly red.
+    cn = ".github/workflows/cs2gs-nightly.yml"
+    text = read(root, cn)
+    s1, e1 = text.find("      - name: Migrate and run pinned Oahu\n"), text.find("      - name: File issues for new gaps")
+    s2, e2 = text.find("            cs2gs-oahu-pinned.log\n"), text.find("\n      - name: Report advisory and enforce gate outcome")
+    s3 = text.find("      - name: Report advisory and enforce gate outcome")
+    if min(s1, e1, s2, e2, s3) < 0 or not (s1 < e1 < s2 < e2 <= s3):
+        problems.append(f"{cn}: Oahu blocks not found")
+    else:
+        tail_end = text.find("            exit 1\n          fi\n", s3)
+        if tail_end < 0:
+            problems.append(f"{cn}: gate outcome step not found")
+        else:
+            tail_end += len("            exit 1\n          fi\n")
+            gate = (
+                "      - name: Enforce gate outcome\n"
+                "        run: |\n"
+                "          if [[ \"${{ steps.migrate.outputs.migrate_exit }}\" != \"0\" ]]; then\n"
+                "            exit 1\n"
+                "          fi\n"
+            )
+            text = text[:s1] + text[e1:s2] + text[e2:s3] + gate + text[tail_end:]
+            put(root, cn, text)
+    # 2c. Run the apps-gate issue test in the PR checks.
+    replace(
+        root,
+        build,
+        "      - name: Verify the self-host compiler benchmark gate\n",
+        "      - name: Verify the cs2gs apps gate issue logic\n"
+        "        run: python3 build/test-cs2gs-apps-gate-issues.py\n\n"
+        "      - name: Verify the self-host compiler benchmark gate\n",
+    )
     # 3. Oahu and Code Exploder move out of PR/official builds into the
     #    cs2gs-apps-nightly workflow; `publish` no longer waits for them.
     text = read(root, build)
