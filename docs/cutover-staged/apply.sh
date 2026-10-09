@@ -72,18 +72,42 @@ for f in \
   fi
 done
 
-# 4. Report documentation paths that no longer exist (the 1:1 .cs -> .gs
-#    mapping has exceptions: split files).
+# 4. Audit every Markdown file (except ADRs, which are historical records and
+#    keep their links) for links to files that no longer exist, and for mentions
+#    of files this script deleted. Report only; fix by hand. The 1:1 .cs -> .gs
+#    mapping has exceptions (split files).
 echo
-echo "Documentation references to missing files (fix by hand):"
-missing=0
-for doc in docs/emit-pipeline.md docs/debug-info.md docs/lsp.md docs/sdk-usage.md \
-           website/docs/tooling/compiler-architecture.md; do
-  while IFS= read -r p; do
-    if [[ ! -e "$root/$p" ]]; then echo "  $doc: $p"; missing=1; fi
-  done < <(grep -oE '`(src|test|tools|build|e2etests)/[A-Za-z0-9_./-]+\.[a-z]+`' "$root/$doc" | tr -d '`' | sort -u)
-done
-[[ $missing -eq 0 ]] && echo "  none"
+echo "Documentation audit (fix by hand):"
+python3 - "$root" <<'PY'
+import re, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+deleted = ["cs2gs-selfmig-nightly", "run-cs2gs-selfmig-pr-guard", "test-cs2gs-selfmig-pr-guard",
+           "cs2gs-pr-guard-control", "hot-core translation guard", "hot-core guard"]
+link = re.compile(r"\]\(([^)#\s]+)")
+tick = re.compile(r"`((?:src|test|tools|build|e2etests)/[A-Za-z0-9_./-]+\.[a-z]+)`")
+found = 0
+files = [p for d in ("docs", "website/docs") for p in (root / d).rglob("*.md")] + [root / "tools/cs2gs/README.md"]
+for p in sorted(files):
+    rel = p.relative_to(root).as_posix()
+    if rel.startswith(("docs/adr/", "docs/cutover-staged/", "website/versioned_docs/")) or not p.exists():
+        continue
+    text = p.read_text(encoding="utf-8", errors="replace")
+    for m in link.finditer(text):
+        l = m.group(1)
+        if l.startswith(("http", "mailto:", "/")) or not re.search(r"[A-Za-z0-9_]\.[A-Za-z0-9]+$|/", l):
+            continue
+        if not (p.parent / l).resolve().exists():
+            print(f"  {rel}: broken link {l}"); found += 1
+    for m in tick.finditer(text):
+        if not (root / m.group(1)).exists():
+            print(f"  {rel}: missing path {m.group(1)}"); found += 1
+    for name in deleted:
+        if name in text and rel not in ("docs/release/final-csharp-release.md", "docs/self-migration-policy.md"):
+            print(f"  {rel}: mentions removed {name!r}"); found += 1
+print("  none" if not found else f"  {found} finding(s)")
+PY
 
 cat <<'EOF'
 
