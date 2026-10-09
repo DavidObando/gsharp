@@ -246,7 +246,7 @@ public class RefactoringBaselineTests
 
             if (++reported >= 10)
             {
-                report.Append("  ... (further samples elided; see the .actual file)\n");
+                report.Append("  ... (further samples elided; fix the ones above and rerun for the rest)\n");
                 break;
             }
         }
