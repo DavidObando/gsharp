@@ -122,7 +122,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--expect", default="", help="comma-separated apps that must have a result; a missing one counts as red")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
-    results = [json.loads(p.read_text()) for p in sorted(a.results.glob("result-*.json"))]
+    results = [json.loads(p.read_text()) for p in sorted(a.results.rglob("result-*.json"))]
     if not results and not a.expect:
         print("no result-*.json files found: refusing to report a vacuous green", file=sys.stderr)
         return 2

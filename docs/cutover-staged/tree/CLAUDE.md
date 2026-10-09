@@ -34,6 +34,8 @@ translation command and the path mapping. Three rules follow from that.
   migration target and keeps its `#if NETFRAMEWORK` directives. It builds on
   Windows only and references the G# language server; don't translate it, and
   don't treat a C# file there as a missed migration.
+- **`build/selfhost/*.csproj` stays C#.** The stage-2 controller builds those
+  exact helper projects; never translate or rename them.
 - **Do not hand-edit pinned state to get green.** Never change the pin to a
   locally built or unreleased SDK in a PR, and never exclude a file to dodge a
   gsc defect. A gsc defect found while building the repository is a bug to fix
