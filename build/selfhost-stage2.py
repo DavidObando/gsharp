@@ -1343,6 +1343,51 @@ def trusted_dotnet() -> Path:
     raise CertificationError("approved dotnet executable not found")
 
 
+def is_sandbox_vstest_process(root_host_pid: int | None, claimed: Any) -> bool:
+    """True when `claimed` is the in-sandbox PID of vstest.console.
+
+    The logger runs in vstest.console, a descendant of the sandbox's PID 1
+    launcher (`dotnet vstest`), so the claimed PID must resolve to a live host
+    process in that namespace whose ancestry reaches the launcher.
+    """
+    if (root_host_pid is None or not isinstance(claimed, int)
+            or isinstance(claimed, bool) or claimed <= 1):
+        return False
+
+    def status(pid: int) -> dict[str, str]:
+        rows = {}
+        try:
+            for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+                key, _, value = line.partition(":")
+                rows[key] = value.strip()
+        except OSError:
+            pass
+        return rows
+
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        fields = status(int(entry.name))
+        namespaces = fields.get("NSpid", "").split()
+        if len(namespaces) < 2 or namespaces[-1] != str(claimed):
+            continue
+        try:
+            command_line = Path(f"/proc/{entry.name}/cmdline").read_bytes()
+        except OSError:
+            continue
+        if b"vstest.console.dll" not in command_line:
+            continue
+        pid = int(entry.name)
+        for _ in range(64):
+            if pid == root_host_pid:
+                return True
+            parent = status(pid).get("PPid", "")
+            if not parent.isdigit() or int(parent) <= 1:
+                break
+            pid = int(parent)
+    return False
+
+
 def dotnet_root() -> Path:
     return trusted_dotnet().parent
 
@@ -1641,10 +1686,16 @@ class Controller:
                             if sequence == 0 and (
                                 document.get("type") != "ready"
                                 or document.get("challenge") != event_challenge
-                                or document.get("pid") != 1
+                                or not is_sandbox_vstest_process(
+                                    command_host_pid, document.get("pid"))
                             ):
-                                raise CertificationError(
-                                    "test supervisor identity or challenge mismatch")
+                                # Keep draining so a rejected stream cannot
+                                # block the test host; fail after it exits.
+                                event_errors.append(CertificationError(
+                                    "test supervisor identity or challenge mismatch"))
+                                for _ in handle:
+                                    pass
+                                return
                             mac = hmac.new(
                                 event_key,
                                 str(sequence).encode() + b"\n" + payload,
@@ -1672,8 +1723,8 @@ class Controller:
             status_write = None
             assert status_read is not None
             status_document = json.loads(os.read(status_read, 4096))
-            os.close(status_read)
-            status_read = None
+            # Keep the read end open until the command exits: bwrap writes its
+            # exit status there, and a closed pipe would kill it with SIGPIPE.
             command_host_pid = int(status_document["child-pid"])
         if event_child is not None:
             event_child.close()
@@ -1694,6 +1745,9 @@ class Controller:
             raise CertificationError(
                 f"{stage} {purpose} exceeded {self.args.command_timeout} seconds; "
                 f"see {log}") from error
+        if status_read is not None:
+            os.close(status_read)
+            status_read = None
         if event_reader is not None:
             event_reader.join(timeout=10)
             if event_reader.is_alive():

@@ -790,6 +790,15 @@ class ControllerBoundaryTests(unittest.TestCase):
         unrelated = stage2.Controller.project_reference_closure(tree, Path("src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj"))
         self.assertNotIn("src/Repl/Repl.gsproj", unrelated)
 
+    def test_supervisor_identity_requires_a_vstest_console_descendant(self) -> None:
+        check = stage2.is_sandbox_vstest_process
+        self.assertFalse(check(None, 5))
+        self.assertFalse(check(os.getpid(), 1))
+        self.assertFalse(check(os.getpid(), True))
+        self.assertFalse(check(os.getpid(), "5"))
+        # This test process is neither vstest.console nor in a nested PID namespace.
+        self.assertFalse(check(os.getppid(), os.getpid()))
+
     def test_imported_runtime_path_override_is_rejected(self) -> None:
         tree = self.tree()
         imported = tree / "package.props"
