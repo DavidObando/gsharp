@@ -93,11 +93,16 @@ public sealed class Issue4861RepositoryRootMarkerTests : IDisposable
             spellings);
 
         // The retained-C# Visual Studio test island carries its own copy rather than linking the shared file.
-        string island = SourceOf(Path.Combine(repo, "src", "vs-gsharp", "test", "VsGsharp.UnitTests", "RepositoryRootMarker"));
-        Assert.Equal(
-            spellings,
-            Regex.Matches(island, "\"(GSharp\\.slnx?)\"").Select(m => m.Groups[1].Value)
-                .OrderBy(s => s, StringComparer.Ordinal).ToArray());
+        // It is excluded from self-migration by policy, so a migrated tree has neither spelling of it (#4878);
+        // the C# checkout (the normal CI run) always has it, and that is where this half is enforced.
+        string islandPath = Path.Combine(repo, "src", "vs-gsharp", "test", "VsGsharp.UnitTests", "RepositoryRootMarker.cs");
+        if (File.Exists(islandPath))
+        {
+            Assert.Equal(
+                spellings,
+                Regex.Matches(File.ReadAllText(islandPath), "\"(GSharp\\.slnx?)\"").Select(m => m.Groups[1].Value)
+                    .OrderBy(s => s, StringComparer.Ordinal).ToArray());
+        }
     }
 
     /// <summary>
@@ -142,6 +147,41 @@ public sealed class Issue4861RepositoryRootMarkerTests : IDisposable
     {
         string relative = Path.GetRelativePath(repo, file).Replace('\\', '/');
         return relative.Substring(0, relative.LastIndexOf('.'));
+    }
+
+    /// <summary>
+    /// Issue #4878: <c>test/Shared/RepositoryRootMarker.cs</c> is linked into test projects whose
+    /// <c>&lt;Nullable&gt;</c> settings differ, and <c>TranslateStage</c> rejects a linked source that
+    /// translates differently per project (the whole-repository translate pass crashed with
+    /// "translates differently in multiple projects"; one project printed
+    /// <c>directory string?</c> with <c>directory!!</c>, another plain <c>directory string</c>). The
+    /// divergence only appears across the whole repository, so it cannot be reproduced on one file;
+    /// the file therefore pins its own nullable context, and this test keeps the pin (and every
+    /// copy of it) from being dropped. <c>migrate --translate-only</c> is the end-to-end check.
+    /// </summary>
+    [Fact]
+    public void LinkedMarker_PinsItsOwnNullableContext()
+    {
+        string repo = LocateRepoRoot();
+        string[] copies =
+        {
+            Path.Combine(repo, "test", "Shared", "RepositoryRootMarker"),
+            Path.Combine(repo, "src", "vs-gsharp", "test", "VsGsharp.UnitTests", "RepositoryRootMarker"),
+        };
+        foreach (string copy in copies)
+        {
+            string path = copy + ".cs";
+            if (!File.Exists(path) && !File.Exists(copy + ".gs"))
+            {
+                continue; // policy-excluded from self-migration (see SharedTestCopy_NamesTheSameSolutionFiles)
+            }
+
+            // A migrated .gs has no #nullable directive: only the C# source is checked.
+            if (File.Exists(path))
+            {
+                Assert.Contains("#nullable enable annotations", File.ReadAllText(path), StringComparison.Ordinal);
+            }
+        }
     }
 
     private static string SourceOf(string withoutExtension)

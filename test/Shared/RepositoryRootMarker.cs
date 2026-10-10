@@ -2,6 +2,10 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+// Annotations on, flow analysis off, whatever the linking project sets: this file is linked into
+// projects with different <Nullable> settings and cs2gs requires one identical translation (#4878).
+#nullable enable annotations
+
 using System.Collections.Generic;
 using System.IO;
 
