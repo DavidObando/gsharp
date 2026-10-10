@@ -151,7 +151,7 @@ internal static class CoverageCommand
 
     /// <summary>
     /// Walks up from the current directory to the directory containing
-    /// <c>GSharp.sln</c>.
+    /// <c>GSharp.sln</c> or <c>GSharp.slnx</c>.
     /// </summary>
     /// <returns>The repo root, or <see langword="null"/> when not found.</returns>
     private static string LocateRepoRoot()

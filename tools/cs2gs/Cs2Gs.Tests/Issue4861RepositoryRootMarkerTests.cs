@@ -18,7 +18,7 @@ namespace Cs2Gs.Tests;
 /// text. There is now one rule, <see cref="RepositoryRootMarker"/>, accepting
 /// either spelling. These tests fail if the rule stops accepting the
 /// <c>.slnx</c>, if the test-side copy drifts from it, or if a new literal
-/// probe appears.
+/// literal appears.
 /// </summary>
 public sealed class Issue4861RepositoryRootMarkerTests : IDisposable
 {
@@ -94,23 +94,33 @@ public sealed class Issue4861RepositoryRootMarkerTests : IDisposable
     }
 
     /// <summary>
-    /// No source file may probe a literal <c>GSharp.sln</c> (or
-    /// <c>GSharp.slnx</c>) with <c>Path.Combine</c>; it must go through
-    /// <see cref="RepositoryRootMarker"/>, so the cut-over needs no rewrite.
-    /// Writing a fixture solution is fine and is not matched.
+    /// No source file may spell the solution name as a string literal, because
+    /// any probe built from one (<c>File.Exists</c>, <c>FileInfo.Exists</c>,
+    /// <c>Path.Join</c>, <c>Directory.GetFiles</c>, ...) would anchor the root
+    /// on a single spelling again. Root discovery goes through
+    /// <see cref="RepositoryRootMarker"/>. The files below legitimately name the
+    /// file: the two marker implementations, this test, and tests that write a
+    /// fixture solution into a scratch directory.
     /// </summary>
     [Fact]
-    public void NoSourceFileProbesALiteralSolutionName()
+    public void NoSourceFileSpellsALiteralSolutionName()
     {
         string repo = LocateRepoRoot();
-        var probe = new Regex("Exists\\(\\s*(?:System\\.IO\\.)?Path\\.Combine\\([^)]*\"GSharp\\.slnx?\"");
+        var literal = new Regex("\"GSharp\\.slnx?\"");
+        var allowed = new[]
+        {
+            "RepositoryRootMarker.cs", "RepositoryRootMarker.gs",
+            "Issue4861RepositoryRootMarkerTests.cs", "Issue4861RepositoryRootMarkerTests.gs",
+            "TestSourceTests.cs", "TestSourceTests.gs",
+            "Adr0151IfLetExpressionTranslationTests.cs", "Adr0151IfLetExpressionTranslationTests.gs",
+        };
         var offenders = new[] { "test", "tools", "src" }
             .SelectMany(d => Directory.EnumerateFiles(Path.Combine(repo, d), "*.*", SearchOption.AllDirectories))
             .Where(f => (f.EndsWith(".cs", StringComparison.Ordinal) || f.EndsWith(".gs", StringComparison.Ordinal))
                 && !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar)
                 && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar))
-            .Where(f => !Path.GetFileName(f).StartsWith("RepositoryRootMarker.", StringComparison.Ordinal))
-            .Where(f => probe.IsMatch(File.ReadAllText(f)))
+            .Where(f => !allowed.Contains(Path.GetFileName(f)))
+            .Where(f => literal.IsMatch(File.ReadAllText(f)))
             .Select(f => Path.GetRelativePath(repo, f))
             .OrderBy(f => f, StringComparer.Ordinal)
             .ToArray();

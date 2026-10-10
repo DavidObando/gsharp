@@ -10,7 +10,7 @@ namespace GSharp.Sdk.Tests;
 
 /// <summary>
 /// Locates the repository root by walking up from the test assembly directory
-/// until a folder containing <c>GSharp.sln</c> is found. This keeps the test
+/// until a folder containing <c>GSharp.sln</c> or <c>GSharp.slnx</c> is found. This keeps the test
 /// project free of build-time path injection.
 /// </summary>
 internal static class RepoRoot
@@ -78,6 +78,6 @@ internal static class RepoRoot
         }
 
         throw new InvalidOperationException(
-            $"Could not locate GSharp.sln walking up from {AppContext.BaseDirectory}.");
+            $"Could not locate GSharp.sln or GSharp.slnx walking up from {AppContext.BaseDirectory}.");
     }
 }

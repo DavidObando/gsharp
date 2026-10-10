@@ -106,6 +106,6 @@ public class CodeModelSurfaceTests
             dir = dir.Parent;
         }
 
-        throw new InvalidOperationException("GSharp.sln not found above the test assembly.");
+        throw new InvalidOperationException("GSharp.sln or GSharp.slnx not found above the test assembly.");
     }
 }

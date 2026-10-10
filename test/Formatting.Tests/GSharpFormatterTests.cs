@@ -411,7 +411,7 @@ public sealed class GSharpFormatterTests
             directory = directory.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate GSharp.sln.");
+        throw new DirectoryNotFoundException("Could not locate GSharp.sln or GSharp.slnx.");
     }
 
     private static string ApplyEdits(string source, System.Collections.Immutable.ImmutableArray<TextEdit> edits)

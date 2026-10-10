@@ -134,7 +134,7 @@ public sealed class Adr0156DefaultEngineFlipTests
             }
         }
 
-        throw new DirectoryNotFoundException("Could not locate GSharp.sln.");
+        throw new DirectoryNotFoundException("Could not locate GSharp.sln or GSharp.slnx.");
     }
 
     private static (int ExitCode, string Stdout, string Stderr) RunMain(params string[] args)
