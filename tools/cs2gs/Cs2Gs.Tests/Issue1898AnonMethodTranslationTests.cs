@@ -240,7 +240,7 @@ namespace Corpus.Issue1898
         string compiler = FindCompiler();
         Assert.True(
             compiler != null,
-            "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+            "gsc.dll must be built (build the repository solution) before running this test.");
 
         string corpus = TestFixtureSource.Resolve("tools", "cs2gs", "corpus");
         string outRoot = Path.Combine(

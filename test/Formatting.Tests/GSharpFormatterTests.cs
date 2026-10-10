@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Formatting.Tests;
@@ -402,7 +403,7 @@ public sealed class GSharpFormatterTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(directory.FullName))
             {
                 return directory.FullName;
             }
@@ -410,7 +411,7 @@ public sealed class GSharpFormatterTests
             directory = directory.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate GSharp.sln.");
+        throw new DirectoryNotFoundException("Could not locate GSharp.sln or GSharp.slnx.");
     }
 
     private static string ApplyEdits(string source, System.Collections.Immutable.ImmutableArray<TextEdit> edits)

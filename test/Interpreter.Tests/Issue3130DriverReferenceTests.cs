@@ -9,6 +9,7 @@ using System.Reflection.Emit;
 using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Repl.Engine;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -466,7 +467,7 @@ public sealed class Issue3130DriverReferenceTests
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory != null; directory = directory.Parent)
         {
             var candidate = Path.Combine(directory.FullName, "samples");
-            if (Directory.Exists(candidate) && File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+            if (Directory.Exists(candidate) && RepositoryRootMarker.IsRoot(directory.FullName))
             {
                 return candidate;
             }

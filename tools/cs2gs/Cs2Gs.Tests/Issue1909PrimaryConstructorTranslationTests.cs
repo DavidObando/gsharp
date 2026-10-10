@@ -232,7 +232,7 @@ namespace Corpus.Issue1909
     private static string CompileAndRun(string printed, string callExpression)
     {
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string workDir = Path.Combine(AppContext.BaseDirectory, "issue-1909-e2e", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);

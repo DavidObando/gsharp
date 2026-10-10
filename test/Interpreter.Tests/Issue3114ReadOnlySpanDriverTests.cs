@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -643,7 +644,7 @@ public class Issue3114ReadOnlySpanDriverTests
         while (directory != null)
         {
             var samples = Path.Combine(directory.FullName, "samples");
-            if (Directory.Exists(samples) && File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+            if (Directory.Exists(samples) && RepositoryRootMarker.IsRoot(directory.FullName))
             {
                 return samples;
             }

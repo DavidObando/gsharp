@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using GSharp.Tests;
 using ReplProgram = GSharp.Repl.Program;
 using Xunit;
 
@@ -127,13 +128,13 @@ public sealed class Adr0156DefaultEngineFlipTests
              directory is not null;
              directory = directory.Parent)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(directory.FullName))
             {
                 return directory.FullName;
             }
         }
 
-        throw new DirectoryNotFoundException("Could not locate GSharp.sln.");
+        throw new DirectoryNotFoundException("Could not locate GSharp.sln or GSharp.slnx.");
     }
 
     private static (int ExitCode, string Stdout, string Stderr) RunMain(params string[] args)

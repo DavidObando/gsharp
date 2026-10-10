@@ -176,20 +176,37 @@ class TreeTests(unittest.TestCase):
             self.assertIn('endswith(".tests.gsproj")', (tree / "build/generate-ci-test-matrix.py").read_text())
             self.assertIn('endswith((".csproj", ".gsproj"))', (tree / "build/nullable_hygiene.py").read_text())
 
-    def test_retained_csharp_sources_get_the_solution_anchor_too(self):
+    def test_scripts_and_workflows_get_the_slnx_name_but_sources_are_left_alone(self):
+        # #4861: sources find the root through RepositoryRootMarker (either spelling); only commands are renamed.
         with tempfile.TemporaryDirectory() as tmp:
             tree = self.make_tree(Path(tmp))
-            helper = put(tree, "src/vs-gsharp/test/VsGsharp.UnitTests/RepoRoot.cs", 'File.Exists("GSharp.sln")')
+            source = 'File.Exists("GSharp.sln")'
+            cs = put(tree, "src/vs-gsharp/test/VsGsharp.UnitTests/RepoRoot.cs", source)
+            gs = put(tree, "test/Core.Tests/Fixture.gs", source)
+            wf = put(tree, ".github/workflows/x.yml", "run: dotnet restore GSharp.sln --locked-mode")
+            sh = put(tree, "e2etests/x.sh", "dotnet build GSharp.sln")
             cutover.apply_hand_fixes(tree, "9.9.9", self.ORIGINAL, lambda _: None)
-            self.assertEqual('File.Exists("GSharp.slnx")', helper.read_text())
+            self.assertEqual(source, cs.read_text())
+            self.assertEqual(source, gs.read_text())
+            self.assertEqual("run: dotnet restore GSharp.slnx --locked-mode", wf.read_text())
+            self.assertEqual("dotnet build GSharp.slnx", sh.read_text())
 
-    def test_dual_anchor_files_keep_accepting_the_csharp_checkout(self):
+    def test_the_cutover_driver_is_not_rewritten_by_its_own_transform(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = self.make_tree(Path(tmp))
-            dual = 'Exists("GSharp.sln") || Exists("GSharp.slnx")'
-            helper = put(tree, "test/Core.Tests/TestSource.gs", dual)
+            body = 'self.sh("prepare", ["dotnet", "restore", "GSharp.sln"])\n'
+            for name in ("cutover.py", "test-cutover.py"):
+                put(tree, "build/" + name, body)
             cutover.apply_hand_fixes(tree, "9.9.9", self.ORIGINAL, lambda _: None)
-            self.assertEqual(dual, helper.read_text())
+            for name in ("cutover.py", "test-cutover.py"):
+                self.assertEqual(body, (tree / "build" / name).read_text())
+
+    def test_script_mentioning_both_names_still_has_its_sln_command_renamed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.make_tree(Path(tmp))
+            mixed = put(tree, "build/mixed.sh", "# see GSharp.slnx\ndotnet restore GSharp.sln\n")
+            cutover.apply_hand_fixes(tree, "9.9.9", self.ORIGINAL, lambda _: None)
+            self.assertEqual("# see GSharp.slnx\ndotnet restore GSharp.slnx\n", mixed.read_text())
 
     def test_bootstrap_import_and_missing_slnx_entry_are_reported(self):
         with tempfile.TemporaryDirectory() as tmp:

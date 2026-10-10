@@ -513,7 +513,7 @@ namespace Demo
     private static (int Exit, string Stdout) CompileAndRunProgram(params string[] printedFiles)
     {
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string workDir = Path.Combine(AppContext.BaseDirectory, "issue-2382-e2e", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);

@@ -116,7 +116,7 @@ INFRA_SUFFIXES = (".sh", ".py", ".yml", ".yaml", ".js", ".ps1")
 
 
 def rewrite_sln_literal(text: str) -> tuple[str, int]:
-    """`GSharp.sln` -> `GSharp.slnx`: the repository root is anchored by this file name all over the sources."""
+    """`GSharp.sln` -> `GSharp.slnx` in a script or workflow command."""
     return re.subn(r"(?<![\w.])GSharp\.sln\b", "GSharp.slnx", text)
 
 
@@ -127,8 +127,11 @@ EXTENSION_FIXES = {
     "build/nullable_hygiene.py": [('f.endswith(".csproj")', 'f.endswith((".csproj", ".gsproj"))')],
 }
 
-SLN_LITERAL_SUFFIXES = (".cs", ".gs", ".sh", ".py", ".yml", ".yaml", ".js", ".ts", ".ps1", ".targets", ".props")
-SLN_LITERAL_SKIP = ("docs/", "website/", "node_modules/", "build/test-cutover.py", ".git/")
+# Only scripts, workflows and build files: they INVOKE the solution by name (`dotnet restore GSharp.sln`).
+# C# and G# sources are deliberately not touched: they find the repository root through RepositoryRootMarker,
+# which accepts either spelling (#4861), and a blind textual rewrite of them is what that fix retired.
+SLN_LITERAL_SUFFIXES = (".sh", ".py", ".yml", ".yaml", ".js", ".ts", ".ps1", ".targets", ".props")
+SLN_LITERAL_SKIP = ("docs/", "website/", "node_modules/", "build/cutover.py", "build/test-cutover.py", ".git/")
 
 
 def unpin_sdk(text: str, version: str) -> tuple[str, bool]:
@@ -384,17 +387,15 @@ def apply_hand_fixes(tree: Path, sdk_version: str, original_sln: str | None, log
                 if not (tree / rel).is_file():
                     problems.append(f"GSharp.slnx lists a missing project {rel}")
 
-    # 4b. the repository root is found by probing for GSharp.sln (cs2gs, Sdk.Tests RepoRoot, ~100 test files,
-    #     the e2e scripts, build.yml). Found by the first dry run: with the .sln gone every one of them fails.
+    # 4b. scripts and workflows invoke the solution by name (build.yml `dotnet restore GSharp.sln`, e2e scripts).
+    #     Source files need no rewrite: repository-root discovery goes through RepositoryRootMarker (#4861).
     rewritten = 0
     for path in iter_files(tree, SLN_LITERAL_SUFFIXES):
         rel = path.relative_to(tree).as_posix()
-        if rel.startswith(SLN_LITERAL_SKIP[:4]) or rel in SLN_LITERAL_SKIP:
+        if rel.startswith(SLN_LITERAL_SKIP) or rel in SLN_LITERAL_SKIP:
             continue
         text, bom = read(path)
         new, n = rewrite_sln_literal(text)
-        if "GSharp.slnx" in text:
-            continue  # already a dual anchor (TestSource.HasSolution): it must keep accepting the C# checkout
         if n:
             write(path, new, bom)
             rewritten += 1

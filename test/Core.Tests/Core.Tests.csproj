@@ -45,4 +45,8 @@
     <Compile Include="..\Shared\GoldenFile.cs" Link="GoldenFile.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\RepositoryRootMarker.cs" Link="RepositoryRootMarker.cs" />
+  </ItemGroup>
+
 </Project>

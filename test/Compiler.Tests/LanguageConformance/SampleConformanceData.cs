@@ -39,7 +39,7 @@ internal static class SampleConformanceData
         {
             var candidate = Path.Combine(directory.FullName, "samples");
             if (Directory.Exists(candidate)
-                && File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+                && RepositoryRootMarker.IsRoot(directory.FullName))
             {
                 return candidate;
             }

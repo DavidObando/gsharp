@@ -18,4 +18,8 @@
     <ProjectReference Include="..\..\test-assets\Issue3119.CrossConstants\Issue3119.CrossConstants.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\RepositoryRootMarker.cs" Link="RepositoryRootMarker.cs" />
+  </ItemGroup>
+
 </Project>
