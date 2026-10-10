@@ -9,8 +9,6 @@ using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
-using Cs2Gs.Translator.Loading;
-using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace Cs2Gs.Tests.Coverage;
@@ -76,35 +74,41 @@ public class PrinterExhaustivenessTests
         Assert.True(GNodeSamples.IsConcreteNodeType(typeof(MigratedConcreteNode)));
     }
 
+    /// <summary>
+    /// Issue #4661: judged on the compiled CodeModel assembly, which is the same
+    /// property whether its source is C# or G#. (It used to bind the C# project
+    /// with Roslyn, which cannot read a G# tree.)
+    /// </summary>
     [Fact]
-    public async Task EverySourceConcreteGNodeTypeIsSealed()
+    public void EverySourceConcreteGNodeTypeIsSealed()
     {
-        string projectPath = TestFixtureSource.Resolve(
-            "tools", "cs2gs", "Cs2Gs.CodeModel", "Cs2Gs.CodeModel.csproj");
-        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
-        Assert.True(
-            project.BoundWithoutErrors,
-            string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        IReadOnlyList<Type> exported = typeof(GNode).Assembly.GetExportedTypes();
+        Assert.Contains(typeof(GNode), exported);
+        Assert.True(exported.Any(GNodeSamples.IsConcreteNodeType), "no concrete GNode types were found");
 
-        INamedTypeSymbol root = project.Compilation.GetTypeByMetadataName(
-            "Cs2Gs.CodeModel.Ast.GNode");
-        Assert.NotNull(root);
-
-        var unsealed = GetTypes(project.Compilation.Assembly.GlobalNamespace)
-            .Where(type =>
-                IsExported(type)
-                && InheritsFrom(type, root)
-                && !type.IsAbstract
-                && !type.IsSealed)
-            .Select(type => type.ToDisplayString())
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToList();
-
+        var unsealed = UnsealedConcreteNodeTypes(exported).Select(type => type.FullName).ToList();
         Assert.True(
             unsealed.Count == 0,
-            "Source concrete GNode subclasses must be sealed so migrated reflection can distinguish them from abstract roots:\n"
+            "Concrete GNode subclasses must be sealed so migrated reflection can distinguish them from abstract roots:\n"
             + string.Join("\n", unsealed));
     }
+
+    [Fact]
+    public void UnsealedConcreteNodeDetection_FlagsAnOpenConcreteSubclass()
+    {
+        Type[] types = { typeof(MigratedAbstractNode), typeof(MigratedConcreteNode), typeof(MigratedOpenConcreteNode) };
+
+        Assert.Equal(
+            new[] { typeof(MigratedOpenConcreteNode) },
+            UnsealedConcreteNodeTypes(types).ToArray());
+    }
+
+    private static IEnumerable<Type> UnsealedConcreteNodeTypes(IEnumerable<Type> types) =>
+        types.Where(type =>
+            type.IsClass
+            && typeof(GNode).IsAssignableFrom(type)
+            && !type.IsAbstract
+            && !type.IsSealed);
 
     [Fact]
     public void KnownRoundTripGapsOnlyListSampleTypes()
@@ -154,35 +158,25 @@ public class PrinterExhaustivenessTests
             .Where(GNodeSamples.IsConcreteNodeType)
             .ToList();
 
-    private static IEnumerable<INamedTypeSymbol> GetTypes(INamespaceSymbol scope) =>
-        scope.GetTypeMembers().SelectMany(GetTypes).Concat(
-            scope.GetNamespaceMembers().SelectMany(GetTypes));
-
-    private static IEnumerable<INamedTypeSymbol> GetTypes(INamedTypeSymbol type) =>
-        new[] { type }.Concat(type.GetTypeMembers().SelectMany(GetTypes));
-
-    private static bool IsExported(INamedTypeSymbol type) =>
-        type.DeclaredAccessibility == Accessibility.Public
-        && (type.ContainingType == null || IsExported(type.ContainingType));
-
-    private static bool InheritsFrom(INamedTypeSymbol type, INamedTypeSymbol root)
-    {
-        for (INamedTypeSymbol current = type; current != null; current = current.BaseType)
-        {
-            if (SymbolEqualityComparer.Default.Equals(current, root))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private class MigratedAbstractRoot : GNode
     {
     }
 
     private sealed class MigratedConcreteNode : MigratedAbstractRoot
+    {
+    }
+
+    private abstract class MigratedAbstractNode : GNode
+    {
+    }
+
+    // Concrete and unsealed. It needs a subclass: cs2gs infers `open` from one,
+    // and a leaf class migrates to a sealed G# class.
+    private class MigratedOpenConcreteNode : MigratedAbstractNode
+    {
+    }
+
+    private sealed class MigratedOpenConcreteLeaf : MigratedOpenConcreteNode
     {
     }
 }
