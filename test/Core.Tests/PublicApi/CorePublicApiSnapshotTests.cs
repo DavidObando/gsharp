@@ -13,6 +13,7 @@ using System.Reflection.PortableExecutable;
 using System.Text;
 using GSharp.Tests;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace GSharp.Core.Tests.PublicApi;
 
@@ -53,6 +54,13 @@ public sealed class CorePublicApiSnapshotTests
     // The modifier an init-only setter carries on its return type.
     private const string InitOnlyModifier = "modreq(System.Runtime.CompilerServices.IsExternalInit)";
 
+    private readonly ITestOutputHelper output;
+
+    public CorePublicApiSnapshotTests(ITestOutputHelper output)
+    {
+        this.output = output;
+    }
+
     /// <summary>
     /// The public surface of the built <c>GSharp.Core.dll</c> matches the
     /// committed snapshot. An intentional API change regenerates it with
@@ -75,9 +83,22 @@ public sealed class CorePublicApiSnapshotTests
         Assert.Contains(lines, line => line.StartsWith("type ", StringComparison.Ordinal)
             && line.Contains(" GSharp.Core.CodeAnalysis.Compilation.Compilation ", StringComparison.Ordinal));
 
+        // ADR-0199: a G#-built Core may carry the exact, listed record
+        // `Deconstruct` additions; they are removed here, reported below, and
+        // everything else still has to match the native golden.
+        string baselines = Path.Combine(LocateRepoRoot(), "test", "Core.Tests", "Baselines");
+        CorePublicApiAllowance.Result allowance = CorePublicApiAllowance.Apply(
+            lines,
+            CorePublicApiAllowance.Parse(File.ReadAllText(Path.Combine(baselines, CorePublicApiAllowance.AllowanceFileName))));
+        this.output.WriteLine($"Allowed additions present (ADR-0199): {allowance.Present.Count}");
+        foreach (string present in allowance.Present)
+        {
+            this.output.WriteLine("  " + present);
+        }
+
         GoldenFile.AssertMatches(
-            Path.Combine(LocateRepoRoot(), "test", "Core.Tests", "Baselines", SnapshotFileName),
-            string.Join("\n", lines) + "\n",
+            Path.Combine(baselines, SnapshotFileName),
+            string.Join("\n", allowance.Lines) + "\n",
             "The public API of GSharp.Core changed. Analyzers bind to it by assembly identity; if the change "
             + "is intended, regenerate with GSHARP_UPDATE_GOLDENS=1 and review the diff as an ABI change.");
     }
@@ -703,7 +724,7 @@ public sealed class CorePublicApiSnapshotTests
         return quoted.Append('"').ToString();
     }
 
-    private static string LocateRepoRoot()
+    internal static string LocateRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
