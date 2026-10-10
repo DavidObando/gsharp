@@ -29,10 +29,8 @@ public static class TypeMemberModel
     /// <summary>
     /// Returns the ordered members used by synthesized and bound data-type
     /// deconstruction. Primary-constructor parameters are positional. Native
-    /// body-form data types retain field/property deconstruction. A body-form
-    /// type carrying cs2gs's compiler-intrinsic
-    /// <c>@__Cs2GsRecordProvenance_4828</c> provenance
-    /// marker has no positional components.
+    /// body-form data types deconstruct their fields and then their auto
+    /// properties (ADR-0199 keeps this for every data type, however declared).
     /// </summary>
     /// <param name="type">The data class or data struct.</param>
     /// <returns>The logical deconstruction members in declaration order.</returns>
@@ -59,11 +57,6 @@ public static class TypeMemberModel
             }
 
             return members.ToImmutable();
-        }
-
-        if (IsTranslatedCSharpRecord(type))
-        {
-            return ImmutableArray<Symbol>.Empty;
         }
 
         foreach (var field in type.Fields)
@@ -1257,25 +1250,6 @@ public static class TypeMemberModel
             builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
             builder.Add(m);
         }
-    }
-
-    private static bool IsTranslatedCSharpRecord(StructSymbol type)
-    {
-        var declaration = (type.Definition ?? type).Declaration;
-        if (declaration == null)
-        {
-            return false;
-        }
-
-        foreach (var annotation in declaration.Annotations)
-        {
-            if (Binding.DeclarationBinder.IsCSharpRecordAnnotation(annotation))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /// <summary>

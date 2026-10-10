@@ -678,9 +678,11 @@ namespace Corpus.Issue4675
             Assert.Equal(expected.IsFinal, actual.IsFinal);
         }
 
-        Assert.Equal(
-            baseline.GetType("Corpus.Issue4828.Body", throwOnError: true).GetMethod("Deconstruct"),
-            migrated.GetType("Corpus.Issue4828.Body", throwOnError: true).GetMethod("Deconstruct"));
+        // ADR-0199 item 4: a body-only record keeps G#'s own Deconstruct once the
+        // provenance marker is gone; C# synthesizes none. This is the one ABI
+        // difference, listed in the Core public-API allowance.
+        Assert.Null(baseline.GetType("Corpus.Issue4828.Body", throwOnError: true).GetMethod("Deconstruct"));
+        Assert.NotNull(migrated.GetType("Corpus.Issue4828.Body", throwOnError: true).GetMethod("Deconstruct"));
         Assert.Equal(
             baseline.GetType("Corpus.Issue4828.Child", throwOnError: true).GetMethod("Render").IsFinal,
             migrated.GetType("Corpus.Issue4828.Child", throwOnError: true).GetMethod("Render").IsFinal);
@@ -701,7 +703,7 @@ namespace Corpus.Issue4675
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         string translated = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Contains("@CSharpRecord", translated, StringComparison.Ordinal);
-        Assert.Contains("@__Cs2GsRecordProvenance_4828", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("Cs2GsRecordProvenance", translated, StringComparison.Ordinal);
 
         using var image = new MemoryStream();
         var compilation = new GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(translated)))
