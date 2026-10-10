@@ -768,6 +768,28 @@ class ControllerBoundaryTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("protected properties", result.stderr)
 
+    def test_runtime_producer_closure_follows_item_transforms(self) -> None:
+        tree = self.tree()
+        (tree / "build").mkdir()
+        (tree / "build" / "gsharp.props").write_text(
+            '<Project><ItemGroup><GsharpRepl Include="$(GsharpRepoRoot)/src/Repl/Repl.gsproj" />'
+            '</ItemGroup></Project>', encoding="utf-8")
+        (tree / "src/Repl").mkdir(parents=True)
+        (tree / "src/Sdk/Gsharp.Runtime.Channels").mkdir(parents=True)
+        (tree / "src/Repl/Repl.gsproj").write_text(
+            '<Project><ItemGroup><ProjectReference Include="../Sdk/Gsharp.Runtime.Channels/'
+            'Gsharp.Runtime.Channels.gsproj" /></ItemGroup></Project>', encoding="utf-8")
+        (tree / "src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj").write_text(
+            "<Project />", encoding="utf-8")
+        (tree / "test").mkdir()
+        (tree / "test/T.gsproj").write_text(
+            "<Project><ItemGroup><ProjectReference Include=\"@(GsharpRepl-&gt;'%(RootDir)%(Directory)"
+            "%(Filename).gsproj')\" /></ItemGroup></Project>", encoding="utf-8")
+        reached = stage2.Controller.project_reference_closure(tree, Path("test/T.gsproj"))
+        self.assertIn("src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj", reached)
+        unrelated = stage2.Controller.project_reference_closure(tree, Path("src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj"))
+        self.assertNotIn("src/Repl/Repl.gsproj", unrelated)
+
     def test_imported_runtime_path_override_is_rejected(self) -> None:
         tree = self.tree()
         imported = tree / "package.props"

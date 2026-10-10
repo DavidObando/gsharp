@@ -2056,7 +2056,26 @@ class Controller:
                 if element.tag.rsplit("}", 1)[-1] != "ProjectReference":
                     continue
                 include = element.get("Include")
-                if not include or "$(" in include:
+                if not include:
+                    continue
+                if include.startswith("@("):
+                    # Item transform such as @(GsharpRepl->'...Filename.gsproj'):
+                    # expand from the repository's build/*.props definitions.
+                    name = re.match(r"@\((\w+)", include)
+                    suffix = ".gsproj" if ".gsproj'" in include else None
+                    if name is None:
+                        continue
+                    for props in sorted((tree / "build").glob("*.props")):
+                        text = props.read_text(encoding="utf-8", errors="replace")
+                        for match in re.finditer(
+                                r'<' + re.escape(name.group(1))
+                                + r'\s+Include="\$\(GsharpRepoRoot\)/([^"]+)"', text):
+                            candidate = Path(match.group(1))
+                            if suffix:
+                                candidate = candidate.with_suffix(suffix)
+                            pending.append(candidate.as_posix())
+                    continue
+                if "$(" in include:
                     continue
                 target = Path(os.path.normpath(
                     (path.parent / include.replace("\\", "/"))))
