@@ -170,6 +170,14 @@ class TreeTests(unittest.TestCase):
             cutover.apply_hand_fixes(tree, "9.9.9", self.ORIGINAL, lambda _: None)
             self.assertEqual('File.Exists("GSharp.slnx")', helper.read_text())
 
+    def test_dual_anchor_files_keep_accepting_the_csharp_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.make_tree(Path(tmp))
+            dual = 'Exists("GSharp.sln") || Exists("GSharp.slnx")'
+            helper = put(tree, "test/Core.Tests/TestSource.gs", dual)
+            cutover.apply_hand_fixes(tree, "9.9.9", self.ORIGINAL, lambda _: None)
+            self.assertEqual(dual, helper.read_text())
+
     def test_bootstrap_import_and_missing_slnx_entry_are_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = self.make_tree(Path(tmp), bootstrap=True, drop_slnx_entry=True)

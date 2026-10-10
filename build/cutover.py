@@ -368,6 +368,8 @@ def apply_hand_fixes(tree: Path, sdk_version: str, original_sln: str | None, log
             continue
         text, bom = read(path)
         new, n = rewrite_sln_literal(text)
+        if "GSharp.slnx" in text:
+            continue  # already a dual anchor (TestSource.HasSolution): it must keep accepting the C# checkout
         if n:
             write(path, new, bom)
             rewritten += 1
