@@ -202,6 +202,14 @@ Items found by the dry run that the plan did not list:
 Not run by the script (PR CI only): the re-sharded `build.yml` test matrix, per-test
 name parity against the tag's last C# nightly TRX files, the stage-2 job.
 
+**Source-inspection tests need the final C# tree.** Tests such as `L1MigrationEndToEndTests` and
+`Issue4545ManagedArrayProjectionSelfMigrationTests` read original C# files through
+`CS2GS_TEST_SOURCE_ROOT` ([self-migration policy](self-migration-policy.md)). After the cut-over
+those `.cs` files are gone from the tree, so the PR CI must check out the final C# commit (the
+`v0.4.NNNN` tag, or `cs2gs/csharp-0.4`) into a second directory and export that variable, or the
+tests must be rewritten or retired first (gate criterion 9). Do not rely on the migrated tree
+providing them.
+
 ## Rollback
 
 - Any time before the first 0.5 tag: revert the squash commit. `cs2gs/csharp-0.4`

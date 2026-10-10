@@ -652,8 +652,9 @@ class Run:
             rel = path.relative_to(self.migrated)
             dest = self.src / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
+            if not dest.exists():
+                added += 1  # the commit message counts files that are new, not overwritten ones
             shutil.copy2(path, dest)
-            added += 1
         self.sh("assemble", ["git", "checkout", "--quiet", "-B", "cutover/dry-run"], cwd=self.src)
         self.sh("assemble", ["git", "add", "-A"], cwd=self.src)
         facts = self.record["facts"]
@@ -679,7 +680,7 @@ class Run:
         packable = tuple(p for p in packable_gsprojs(originals) if (self.src / p).is_file())
         problems = apply_hand_fixes(self.src, self.record["facts"]["sdk_pin"], sln, notes.append,
                                     tuple(self.record["facts"]["assemble"]["keep_csharp"]), packable)
-        (self.logs / "hand-fix.log").write_text("\n".join(notes + ["PROBLEMS:"] + problems) + "\n")
+        (self.logs / "hand-fix-notes.log").write_text("\n".join(notes + ["PROBLEMS:"] + problems) + "\n")
         # 2c check: the migrated test projects must be discoverable the way CI discovers them.
         rc = self.sh("hand-fix", ["python3", "build/generate-ci-test-matrix.py"], cwd=self.src, check=False)
         if rc != 0:
