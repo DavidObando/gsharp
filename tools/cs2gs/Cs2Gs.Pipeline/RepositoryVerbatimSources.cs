@@ -110,12 +110,30 @@ internal static class RepositoryVerbatimSources
             }
         }
 
-        var importers = documents
-            .Where(d => !IsSharedFile(d.Path))
+        // MSBuild imports Directory.Build.props/.targets implicitly from every
+        // ancestor directory; they seed a project's import closure like an
+        // explicit Import, so what THEY import is reachable too.
+        var implicitImports = documents
+            .Where(d => IsSharedFile(d.Path)
+                && Path.GetFileName(d.Path.Replace('\\', '/')).StartsWith("Directory.", StringComparison.OrdinalIgnoreCase))
             .Select(d => (
                 Directory: DirectoryOf(d.Path.Replace('\\', '/')),
-                IsGsharp: Path.GetExtension(d.Path).Equals(".gsproj", StringComparison.OrdinalIgnoreCase),
-                Imports: ImportClosure(ImportedFileNames(d.Document), sharedImports)))
+                Name: Path.GetFileName(d.Path.Replace('\\', '/'))))
+            .ToList();
+        var importers = documents
+            .Where(d => !IsSharedFile(d.Path))
+            .Select(d =>
+            {
+                string projectDirectory = DirectoryOf(d.Path.Replace('\\', '/'));
+                HashSet<string> seeds = ImportedFileNames(d.Document);
+                seeds.UnionWith(implicitImports
+                    .Where(i => IsAtOrAbove(i.Directory, projectDirectory))
+                    .Select(i => i.Name));
+                return (
+                    Directory: projectDirectory,
+                    IsGsharp: Path.GetExtension(d.Path).Equals(".gsproj", StringComparison.OrdinalIgnoreCase),
+                    Imports: ImportClosure(seeds, sharedImports));
+            })
             .ToList();
 
         foreach ((string projectPath, XDocument document) in documents)
@@ -128,8 +146,7 @@ internal static class RepositoryVerbatimSources
             {
                 var owners = importers
                     .Where(i => fileName.StartsWith("Directory.", StringComparison.OrdinalIgnoreCase)
-                        ? directory.Length == 0 || i.Directory.Equals(directory, StringComparison.OrdinalIgnoreCase)
-                            || i.Directory.StartsWith(directory + "/", StringComparison.OrdinalIgnoreCase)
+                        ? IsAtOrAbove(directory, i.Directory)
                         : i.Imports.Contains(fileName))
                     .ToList();
                 if (owners.Count == 0)
@@ -333,6 +350,11 @@ internal static class RepositoryVerbatimSources
         pattern.Append('$');
         return new Regex(pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
+
+    private static bool IsAtOrAbove(string ancestor, string directory) =>
+        ancestor.Length == 0
+        || directory.Equals(ancestor, StringComparison.OrdinalIgnoreCase)
+        || directory.StartsWith(ancestor + "/", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsSharedFile(string path)
     {

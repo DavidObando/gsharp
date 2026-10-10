@@ -339,6 +339,19 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
     }
 
     [Fact]
+    public void FilesImportedByADirectoryBuildFile_AreReachableFromProjectsBelow()
+    {
+        this.Write("Directory.Build.props", "<Project><Import Project=\"build/common.props\" /></Project>");
+        this.Write("build/common.props", "<Project><ItemGroup><Compile Include=\"Foreign.cs\" /></ItemGroup></Project>");
+        this.Write("g/Foreign.cs", "class F {}");
+        this.Write("g/g.gsproj", "<Project Sdk=\"Gsharp.NET.Sdk\" />");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
+
+        Assert.Equal(new[] { "g/Foreign.cs" }, verbatim.ToArray());
+    }
+
+    [Fact]
     public void SharedFileWithNoGsprojImporter_KeepsItsCompileItemsTranslated()
     {
         this.Write("Directory.Build.targets", "<Project><ItemGroup><Compile Include=\"Own.cs\" /></ItemGroup></Project>");
