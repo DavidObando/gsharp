@@ -395,6 +395,10 @@ internal static class Program
         // (which carries the redundant-!! polish) without paying for test
         // parity. --translate-only is --stop-after translate.
         MigrationStageKind? lastStage = translateOnly ? MigrationStageKind.Translate : stopAfter;
+
+        // --translate-only keeps its documented contract (validate shards run the
+        // rest); an explicit --stop-after before test-parity is a partial run.
+        options.PartialRun = !translateOnly && stopAfter is MigrationStageKind early && early != MigrationStageKind.TestParity;
         var pipeline = lastStage is MigrationStageKind last
             ? new MigrationPipeline(options, MigrationPipeline.StagesThrough(last))
             : new MigrationPipeline(options);

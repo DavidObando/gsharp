@@ -440,6 +440,16 @@ public sealed class MigrationPipeline
                 this.options.GeneratedProjectPaths);
         }
 
+        if (this.options.PartialRun)
+        {
+            // Issue #4853: stages after the requested last stage never ran, so a
+            // passing app is "not verified" rather than green (issue #1831).
+            foreach (AppResult partialApp in runResult.Apps.Where(a => a.Succeeded))
+            {
+                partialApp.Unverified = true;
+            }
+        }
+
         if (runResult.Succeeded && runResult.Apps.Any(a => a.Unverified))
         {
             runResult.Unverified = true;

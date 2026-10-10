@@ -131,6 +131,9 @@ public sealed class Issue4853StopAfterTests : IDisposable
         RunResult result = JsonSerializer.Deserialize<RunResult>(File.ReadAllText(runJson), TriageSerialization.Options);
         AppResult app = Assert.Single(result.Apps);
         Assert.Equal(new[] { "translate" }, app.Stages.Select(stage => stage.Stage).ToArray());
+        Assert.True(app.Succeeded);
+        Assert.True(app.Unverified);
+        Assert.True(result.Unverified);
         Assert.Equal(0, exit);
     }
 
