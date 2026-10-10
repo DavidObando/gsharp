@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -1602,11 +1603,23 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // At statement position the parser reads `yield (` as a tuple
-            // yield, not as an arbitrary parenthesized expression. Keep the
-            // expression's target type and iterator-time evaluation by
-            // materializing it immediately before the yield.
+            // yield, not as an arbitrary parenthesized expression (#4705).
+            // The printed text is the single source of truth: only a value
+            // whose rendering starts with `(` and is not a tuple literal needs
+            // to be materialized, keeping the expression's target type and
+            // iterator-time evaluation. A rendering that starts with a nonempty
+            // `[` (a sized array creation, `[3]T`) is materialized for the same
+            // reason: `yield [` parses as indexing a variable named `yield`.
+            // Everything else prints inline.
+            //
+            // The one other reason to materialize: a branching expression whose
+            // arms are tuple literals needs the declared tuple type as its
+            // target (user conversions inside the tuple leaves, #4719), which a
+            // bare `yield if ...` does not provide.
             if (value is not TupleLiteralExpression
-                && !IsUnambiguousYieldValue(value))
+                && (YieldValuePrintsAmbiguously(GSharpPrinter.RenderExpressionText(value))
+                    || (value is IfExpression or SwitchExpression or IfLetExpression
+                        && typeInfo.ConvertedType is { IsTupleType: true })))
             {
                 string name = this.FreshYieldedValueName(node);
                 GTypeReference type = null;
@@ -1631,46 +1644,41 @@ public sealed partial class CSharpToGSharpTranslator
             return new[] { (GStatement)new YieldStatement(value) };
         }
 
-        // ponytail: only known grammar-safe heads stay inline. A binary
-        // expression can require grouping for G# precedence even without C#
-        // parentheses, and a string literal can become a spliced concatenation.
-        // Materialize them rather than duplicating printer rules.
-        private static bool IsUnambiguousYieldValue(GExpression value) => value switch
+        // Mirrors the statement-start disambiguation in Parser.Statements.cs: at
+        // `yield (` only a tuple literal parses as a yield, and `yield [` is an
+        // index of a variable named `yield` unless the bracket pair is empty
+        // (`yield []T{...}`), so a sized array creation (`[3]T`) must be
+        // materialized as well. A tuple literal never reaches this check.
+        private static bool YieldValuePrintsAmbiguously(string printed)
         {
-            LiteralExpression { Kind: LiteralKind.Int or LiteralKind.Float or LiteralKind.Bool or LiteralKind.Char or LiteralKind.Null } => true,
-            IdentifierExpression or ThisExpression
-                or UnaryExpression or CheckedExpression or TypeOfExpression
-                or DefaultValueExpression => true,
-            ConversionExpression { TargetType: NamedTypeReference } => true,
-            MemberAccessExpression member => IsUnambiguousYieldValue(member.Target),
-            InvocationExpression invocation => IsUnambiguousYieldValue(invocation.Target),
-            IndexExpression index => IsUnambiguousYieldValue(index.Target),
-            NonNullAssertionExpression assertion => IsUnambiguousYieldValue(assertion.Operand),
-            _ => false,
-        };
+            string text = printed.TrimStart();
+            if (text.StartsWith("(", StringComparison.Ordinal))
+            {
+                return true;
+            }
 
+            return text.StartsWith("[", StringComparison.Ordinal)
+                && !text.Substring(1).TrimStart().StartsWith("]", StringComparison.Ordinal);
+        }
+
+        // The hoisted local gets a readable name (`item`, `item_2`, ...). It is
+        // claimed through the shared synthesized-local mechanism, so it cannot
+        // collide with a source identifier in the body or with a local other
+        // passes synthesized (guard captures, spills); it must also not shadow
+        // any symbol visible at the yield.
         private string FreshYieldedValueName(YieldStatementSyntax node)
         {
-            if (!this.state.YieldedValueNamesByTree.TryGetValue(
-                node.SyntaxTree,
-                out HashSet<string> usedNames))
+            string stem = "item";
+            string candidate = stem;
+            for (int suffix = 2;
+                !this.context.SemanticModel.LookupSymbols(node.SpanStart, name: candidate).IsEmpty
+                    || !this.TryClaimSynthesizedLocalName(candidate, node);
+                suffix++)
             {
-                usedNames = new HashSet<string>(
-                    node.SyntaxTree.GetRoot().DescendantTokens()
-                        .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
-                        .Select(token => token.ValueText),
-                    StringComparer.Ordinal);
-                this.state.YieldedValueNamesByTree.Add(node.SyntaxTree, usedNames);
+                candidate = $"{stem}_{suffix}";
             }
 
-            string name;
-            do
-            {
-                name = $"__yielded{this.state.YieldedValueCounter++}";
-            }
-            while (!usedNames.Add(name));
-
-            return name;
+            return candidate;
         }
 
         private static SyntaxNode GetBreakTarget(YieldStatementSyntax node)
