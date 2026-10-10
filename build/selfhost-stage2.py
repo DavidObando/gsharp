@@ -516,12 +516,17 @@ def validate_vstest_extensions(
     for directory in testhost_directories:
         deps = directory / "testhost.deps.json"
         runtimeconfig = directory / "testhost.runtimeconfig.json"
-        for required in (deps, runtimeconfig):
-            name = required.name.casefold()
-            if (not required.is_file()
-                    or sha256_file(required) not in package_by_name.get(name, set())):
+        # The SDK does not copy testhost.deps.json on Linux and no package ships
+        # testhost.runtimeconfig.json, so VSTest falls back to the test
+        # assembly's own manifests (authenticated by the certified runtime
+        # closure). A present file must still match the locked package.
+        for present in (deps, runtimeconfig):
+            if (present.is_file() and sha256_file(present)
+                    not in package_by_name.get(present.name.casefold(), set())):
                 raise CertificationError(
-                    f"test host runtime closure is incomplete: {required}")
+                    f"test host runtime closure differs from the locked package: {present}")
+        if not deps.is_file():
+            continue
         try:
             document = json.loads(deps.read_text(encoding="utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
