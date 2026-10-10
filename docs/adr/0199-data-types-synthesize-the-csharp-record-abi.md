@@ -95,7 +95,7 @@ member is unchanged (`=`); changes are called out in the last column.
 | `<Clone>$()` | public | public virtual newslot, MethodImpl to base | public virtual newslot | public virtual newslot, MethodImpl to base | = |
 | `EqualityContract` | private | protected virtual override | protected virtual newslot | protected virtual override | = |
 | `Equals(object)` | public virtual override | same | same | same | = |
-| `Equals(T)` | public | public sealed; plus `public sealed override Equals(B)` | public virtual | public virtual; plus `public sealed override Equals(B)` | = |
+| `Equals(T)` | public sealed (final virtual, implements `IEquatable<T>`) | public sealed; plus `public sealed override Equals(B)` | public virtual | public virtual; plus `public sealed override Equals(B)` | = |
 | `GetHashCode()` | public virtual override | same | same | same | = |
 | `ToString()` | public virtual override | same | same | same | format becomes record format |
 | `PrintMembers(StringBuilder)` | private bool | protected virtual override | protected virtual | protected virtual override | new (today cs2gs source for protected cases) |
@@ -173,9 +173,16 @@ rules below are the intended outcome and the witnesses win on any discrepancy.
   sizing), and REPL display (ADR-0157) already defers to a real `ToString`
   override, so it picks up the synthesized one. Only expectations are
   regenerated.
-- `data object` (ADR-0146): C# anonymous types print `{ X = 1, Y = 2 }` with no
-  type name. A field-only `data object` therefore omits its synthesized name
-  and prints `{ X = 1, Y = 2 }`. This updates ADR-0146 item 6.
+- Field-only anonymous literals (ADR-0146): both `data object { ... }` and a
+  plain `object { ... }` are backed by `AnonymousTypeCache` data symbols and
+  share the synthesizer, so the decision must name them. They adopt the C#
+  **anonymous-type** ABI, not the record ABI: `IEquatable<T>` implemented,
+  `Equals`/`GetHashCode`/`==`/`!=` as today, `ToString` prints
+  `{ X = 1, Y = 2 }` with no type name (the synthesized name is not
+  meaningful), and no `PrintMembers`, copy constructor or `<Clone>$`. Stage 2
+  gates those on a *declared* data type and adds witnesses for both literal
+  forms. This updates ADR-0146 item 6. Rich anonymous classes (ADR-0146 (b))
+  are ordinary classes and are unaffected.
 - `inline struct` (ADR-0033) is not a data type and is unchanged
   (`UserId(value=u-1)`).
 
