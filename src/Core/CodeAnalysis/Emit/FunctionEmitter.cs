@@ -587,9 +587,7 @@ internal sealed class FunctionEmitter
             // binder only admits the compatible shape (GS0623).
             bool isDataPrintMembers = receiverStruct != null
                 && receiverStruct.IsData
-                && function.Name != null
-                && !function.HasExplicitInterfaceClause
-                && DataPrintMembersModel.IsSlotName(function.Name, function.Parameters);
+                && DataPrintMembersModel.IsSlot(function);
             bool isVirtualDataPrintMembers = isDataPrintMembers
                 && DataStructSynthesizer.IsPrintMembersVirtual(Invariant.Required(receiverStruct, "a data print-members slot has a receiver"));
 

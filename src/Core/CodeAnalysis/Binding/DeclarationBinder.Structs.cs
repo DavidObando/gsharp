@@ -1394,8 +1394,7 @@ internal sealed partial class DeclarationBinder
                     // synthesized one (the same rule ToString has); any other shape
                     // of that slot is rejected rather than silently shadowing it.
                     if (structSymbol.IsData
-                        && !methodSyntax.HasExplicitInterfaceClause
-                        && DataPrintMembersModel.IsSlotName(methodName, methodParameters)
+                        && DataPrintMembersModel.IsSlotCandidate(methodName, methodSyntax.HasExplicitInterfaceClause, methodParameters)
                         && !IsCompatibleDataPrintMembers(structSymbol, returnType, methodReturnRefKind, methodIsAsync, methodTypeParameters, methodAccessibility))
                     {
                         Diagnostics.ReportIncompatibleDataPrintMembers(
@@ -1546,9 +1545,8 @@ internal sealed partial class DeclarationBinder
                     // whatever modifiers the source wrote.
                     var isOpenMethod = methodSyntax.IsOpen
                         || (structSymbol.IsData
-                            && !methodSyntax.HasExplicitInterfaceClause
                             && methodAccessibility == Accessibility.Protected
-                            && DataPrintMembersModel.IsSlotName(methodName, methodParameters));
+                            && DataPrintMembersModel.IsSlotCandidate(methodName, methodSyntax.HasExplicitInterfaceClause, methodParameters));
                     var methodSymbol = new FunctionSymbol(
                         methodName,
                         methodParameters,
@@ -2989,7 +2987,7 @@ internal sealed partial class DeclarationBinder
 
                     // ADR-0199: the print-members slot is an instance method; a
                     // shared one of that shape is rejected like any other bad shape.
-                    if (structSymbol.IsData && DataPrintMembersModel.IsSlotName(methodName, sharedMethodParameters))
+                    if (structSymbol.IsData && DataPrintMembersModel.IsSlotCandidate(methodName, methodSyntax.HasExplicitInterfaceClause, sharedMethodParameters))
                     {
                         Diagnostics.ReportIncompatibleDataPrintMembers(
                             methodSyntax.Identifier.Location,
