@@ -25,6 +25,10 @@ public class Adr0199DataSelfEquatableTests
             data class Declared(X int32) : IEquatable[Declared]
             data class OpenGeneric[T](Value T) : IEquatable[OpenGeneric[T]]
             data class ClosedGeneric[T](Value T) : IEquatable[ClosedGeneric[int32]]
+            class Outer[T] {
+                data class Nested(X int32) : IEquatable[Outer[int32].Nested]
+                data class SelfNested(X int32) : IEquatable[Outer[T].SelfNested]
+            }
             """)) { IsLibrary = true };
         var structs = compilation.GlobalScope.Structs;
         int Count(string name) => structs.Single(s => s.Name == name).ImplementedClrInterfaces.Length;
@@ -36,5 +40,9 @@ public class Adr0199DataSelfEquatableTests
         // The declared interface is closed over int32, so the type's own
         // IEquatable[ClosedGeneric[T]] is still implied next to it.
         Assert.Equal(2, Count("ClosedGeneric"));
+
+        // The enclosing construction counts too: Outer[int32].Nested is not Outer[T].Nested.
+        Assert.Equal(2, Count("Nested"));
+        Assert.Equal(1, Count("SelfNested"));
     }
 }
