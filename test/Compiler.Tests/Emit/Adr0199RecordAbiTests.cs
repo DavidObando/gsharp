@@ -429,6 +429,70 @@ public class Adr0199RecordAbiTests
     }
 
     [Fact]
+    public void ReadonlyValueTypeField_IsCopiedBeforeAMutatingToStringRuns()
+    {
+        const string csharp = """
+            public struct Counter { public int Count; public override string ToString() => (++Count).ToString(); }
+            public sealed record Item { public readonly Counter Value; public Counter Open; }
+            """;
+        const string gsharp = """
+            package W
+            import System
+
+            struct Counter {
+                var Count int32
+                override func ToString() string {
+                    this.Count = this.Count + 1
+                    return this.Count.ToString()
+                }
+            }
+            data class Item {
+                let Value Counter
+                var Open Counter
+            }
+            """;
+        string Twice(Assembly assembly)
+        {
+            var item = Activator.CreateInstance(assembly.GetTypes().Single(t => t.Name == "Item"));
+            return item.ToString() + "|" + item.ToString();
+        }
+
+        var expected = Twice(Adr0199RecordAbiWitness.CompileCSharp(csharp));
+        Assert.Equal("Item { Value = 1, Open = 1 }|Item { Value = 1, Open = 2 }", expected);
+        Assert.Equal(expected, Twice(Adr0199RecordAbiWitness.CompileGSharp(gsharp)));
+    }
+
+    [Fact]
+    public void PartialDataClass_PrintsMembersInMergedFileOrder()
+    {
+        var padding = string.Concat(Enumerable.Repeat("// padding so this member sits later in its file\n", 20));
+        var assembly = Adr0199RecordAbiWitness.CompileGSharpFiles(
+            ("a.gs", "package W\n" + padding + "partial data class P {\n    var FromA int32\n}\n"),
+            ("b.gs", "package W\npartial data class P {\n    var FromB int32\n}\n"));
+        var type = assembly.GetTypes().Single(t => t.Name == "P");
+        Assert.Equal("P { FromA = 0, FromB = 0 }", Activator.CreateInstance(type).ToString());
+    }
+
+    [Fact]
+    public void IntermediaryWithAnUnrelatedPrintMembersShape_IsNotTheInheritedSlot()
+    {
+        const string source = """
+            package W
+            import System
+            import System.Text
+
+            open data class Base(Id int32)
+            open class Middle : Base(1) {
+                protected open func PrintMembers(builder StringBuilder) int32 -> 5
+            }
+            data class Leaf(Z int32) : Middle
+            """;
+        var assembly = Adr0199RecordAbiWitness.CompileGSharp(source);
+        var leaf = assembly.GetTypes().Single(t => t.Name == "Leaf");
+        Assert.Equal("Leaf { Id = 1, Z = 3 }", Activator.CreateInstance(leaf, 3).ToString());
+    }
+
+    [Fact]
     public void HandWrittenPrintMembers_OfTheWrongShape_IsRejectedWithGS0623()
     {
         const string source = """

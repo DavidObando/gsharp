@@ -96,6 +96,50 @@ internal static class Adr0199RecordAbiWitness
         return outPath;
     }
 
+    /// <summary>Compiles several G# files (as one package) and loads the result.</summary>
+    /// <param name="files">The file names and sources.</param>
+    /// <returns>The loaded assembly.</returns>
+    public static Assembly CompileGSharpFiles(params (string Name, string Source)[] files)
+    {
+        var directory = Directory.CreateTempSubdirectory("gs_adr0199_files_").FullName;
+        try
+        {
+            var paths = new List<string>();
+            foreach (var (name, source) in files)
+            {
+                var path = Path.Combine(directory, name);
+                File.WriteAllText(path, source);
+                paths.Add(path);
+            }
+
+            var outPath = Path.Combine(directory, "test.dll");
+            using var compileOut = new StringWriter();
+            using var compileErr = new StringWriter();
+            var prevOut = Console.Out;
+            var prevErr = Console.Error;
+            Console.SetOut(compileOut);
+            Console.SetError(compileErr);
+            int exit;
+            try
+            {
+                exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/targetframework:net10.0" }.Concat(paths).ToArray());
+            }
+            finally
+            {
+                Console.SetOut(prevOut);
+                Console.SetError(prevErr);
+            }
+
+            Assert.True(exit == 0, $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            IlVerifier.Verify(outPath);
+            return EmittedFixture.Load(outPath);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     /// <summary>Compiles G# with the real driver and returns the driver's exit code and combined output.</summary>
     /// <param name="source">The G# source.</param>
     /// <returns>The exit code and the captured output.</returns>

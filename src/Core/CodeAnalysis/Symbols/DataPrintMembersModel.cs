@@ -191,7 +191,7 @@ internal static class DataPrintMembersModel
     /// <returns>The printable members.</returns>
     internal static ImmutableArray<PrintableMember> GetPrintableMembers(StructSymbol owner)
     {
-        var members = ImmutableArray.CreateBuilder<(int Position, int Group, PrintableMember Member)>();
+        var members = ImmutableArray.CreateBuilder<(string File, int Position, int Group, PrintableMember Member)>();
         foreach (var field in owner.Fields)
         {
             if (field.IsStatic
@@ -201,7 +201,7 @@ internal static class DataPrintMembersModel
                 continue;
             }
 
-            members.Add((field.Declaration?.Span.Start ?? -1, 0, new PrintableMember(field.Name, field, null)));
+            members.Add((field.Declaration?.SyntaxTree.Text?.FileName ?? string.Empty, field.Declaration?.Span.Start ?? -1, 0, new PrintableMember(field.Name, field, null)));
         }
 
         foreach (var property in owner.Properties)
@@ -219,14 +219,17 @@ internal static class DataPrintMembersModel
                 continue;
             }
 
-            members.Add((property.Declaration?.Span.Start ?? -1, 1, new PrintableMember(property.Name, null, property)));
+            members.Add((property.Declaration?.SyntaxTree.Text?.FileName ?? string.Empty, property.Declaration?.Span.Start ?? -1, 1, new PrintableMember(property.Name, null, property)));
         }
 
         // Stable: positional parameters (no body position) first, then source
-        // order, with a field before a property at an equal position.
+        // order with a field before a property at an equal position. A partial
+        // type's parts are merged in (file name, position) order (ADR-0066), so
+        // a position is only comparable within one file.
         return members
-            .Select((entry, index) => (entry.Position, entry.Group, Index: index, entry.Member))
-            .OrderBy(entry => entry.Position)
+            .Select((entry, index) => (entry.File, entry.Position, entry.Group, Index: index, entry.Member))
+            .OrderBy(entry => entry.File, StringComparer.Ordinal)
+            .ThenBy(entry => entry.Position)
             .ThenBy(entry => entry.Group)
             .ThenBy(entry => entry.Index)
             .Select(entry => entry.Member)
@@ -240,7 +243,12 @@ internal static class DataPrintMembersModel
         => !ancestor.IsData
             && ancestor.ClrType == null
             && FindDeclared(ancestor) is { } slot
-            && (slot.IsOpen || slot.IsOverride);
+            && (slot.IsOpen || slot.IsOverride)
+            && slot.Accessibility == Accessibility.Protected
+            && slot.Type == TypeSymbol.Bool
+            && slot.ReturnRefKind == RefKind.None
+            && !slot.IsAsync
+            && slot.TypeParameters.IsDefaultOrEmpty;
 
     /// <summary>A member printed by <c>PrintMembers</c>.</summary>
     /// <param name="Name">The printed name.</param>

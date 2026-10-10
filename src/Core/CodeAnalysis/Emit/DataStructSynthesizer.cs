@@ -1452,7 +1452,8 @@ internal sealed class DataStructSynthesizer
     /// mutating <c>ToString</c> and a ref-like value are honoured; any other
     /// member (references, unconstrained type parameters, <c>Nullable&lt;T&gt;</c>)
     /// is appended as <c>object</c>, where null prints nothing. A value-typed
-    /// property is read once into a temporary so its address can be taken.
+    /// property or readonly field is copied into a temporary so its address can
+    /// be taken without exposing the original to a mutating <c>ToString</c>.
     /// </summary>
     private void EmitAppendMember(
         InstructionEncoder il,
@@ -1469,9 +1470,19 @@ internal sealed class DataStructSynthesizer
         var printsThroughAddress = ReflectionMetadataEmitter.IsValueTypeSymbol(type) && type is not NullableTypeSymbol;
         if (member.Field is { } field)
         {
+            // A readonly field is copied before ToString runs, as C# does: taking
+            // its address would let a mutating ToString change the readonly field.
+            var copiesReadonlyField = printsThroughAddress && field.IsReadOnly;
             il.LoadArgument(0);
-            il.OpCode(printsThroughAddress ? ILOpCode.Ldflda : ILOpCode.Ldfld);
+            il.OpCode(printsThroughAddress && !copiesReadonlyField ? ILOpCode.Ldflda : ILOpCode.Ldfld);
             il.Token(this.resolveUserFieldToken(structSym, field));
+            if (copiesReadonlyField)
+            {
+                var temp = firstTempIndex + temps.Count;
+                temps.Add(type);
+                il.StoreLocal(temp);
+                il.LoadLocalAddress(temp);
+            }
         }
         else
         {
