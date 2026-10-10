@@ -264,6 +264,42 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
     }
 
     [Fact]
+    public void CompileItemsOfASharedFileImportedByAGsproj_AreVerbatim()
+    {
+        this.Write("g/g.gsproj", "<Project Sdk=\"Gsharp.NET.Sdk\"><Import Project=\"..\\shared\\shared.props\" /></Project>");
+        this.Write("shared/shared.props", "<Project><ItemGroup><Compile Include=\"Foreign.cs\" /></ItemGroup></Project>");
+        this.Write("shared/Foreign.cs", "class F {}");
+        this.Write("shared/unrelated.props", "<Project><ItemGroup><Compile Include=\"Own.cs\" /></ItemGroup></Project>");
+        this.Write("shared/Own.cs", "class O {}");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
+
+        Assert.Equal(new[] { "shared/Foreign.cs" }, verbatim.ToArray());
+    }
+
+    [Fact]
+    public void CompileItemsOfADirectoryBuildFileOverAGsproj_AreVerbatim()
+    {
+        this.Write("Directory.Build.targets", "<Project><ItemGroup><Compile Include=\"Foreign.cs\" /></ItemGroup></Project>");
+        this.Write("Foreign.cs", "class F {}");
+        this.Write("g/g.gsproj", "<Project Sdk=\"Gsharp.NET.Sdk\" />");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
+
+        Assert.Equal(new[] { "Foreign.cs" }, verbatim.ToArray());
+    }
+
+    [Fact]
+    public void SharedFileWithNoGsprojImporter_KeepsItsCompileItemsTranslated()
+    {
+        this.Write("Directory.Build.targets", "<Project><ItemGroup><Compile Include=\"Own.cs\" /></ItemGroup></Project>");
+        this.Write("Own.cs", "class O {}");
+        this.Write("a/a.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+        Assert.Empty(RepositoryVerbatimSources.Compute(this.root, this.Inventory()));
+    }
+
+    [Fact]
     public void DataOnlySourceWithAGsTwin_IsNotACollision()
     {
         this.Write(
