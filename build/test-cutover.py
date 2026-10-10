@@ -159,6 +159,13 @@ class TreeTests(unittest.TestCase):
             self.assertEqual("9.9.9", json.loads((tree / "global.json").read_text())["msbuild-sdks"]["Gsharp.NET.Sdk"])
             self.assertIn("*.gs", (tree / ".gitattributes").read_text())
 
+    def test_retained_csharp_sources_get_the_solution_anchor_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.make_tree(Path(tmp))
+            helper = put(tree, "src/vs-gsharp/test/VsGsharp.UnitTests/RepoRoot.cs", 'File.Exists("GSharp.sln")')
+            cutover.apply_hand_fixes(tree, "9.9.9", self.ORIGINAL, lambda _: None)
+            self.assertEqual('File.Exists("GSharp.slnx")', helper.read_text())
+
     def test_bootstrap_import_and_missing_slnx_entry_are_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = self.make_tree(Path(tmp), bootstrap=True, drop_slnx_entry=True)

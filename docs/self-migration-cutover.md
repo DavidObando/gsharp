@@ -315,5 +315,8 @@ were parsed as projects.
 4. #4850 (P1) the mirror drops C# files that translated projects reference.
 5. Lower: #4851, #4852, #4853, #4858 (all P2).
 
-None of the five translate failures is a new compiler defect: each matches a fix listed under
-Unreleased. They confirm the rehearsal has to be repeated with tool == SDK == tag.
+Three of the five translate failures are attributable to listed fixes (`Compiler.Tests` and
+`Core.Tests`: #4832 and the nil/array-initializer family; `G09`: added after the tag). Two are
+**not triaged**: `Cs2Gs.Tests` (GS0154/GS0155/GS0159, not individually verified) and the
+`Interpreter.Tests` per-test-name parity mismatch. They stay open items for the matched-tag
+rehearsal, which also has to confirm that nothing on the list above is a defect.

@@ -116,7 +116,7 @@ def rewrite_sln_literal(text: str) -> tuple[str, int]:
     return re.subn(r"(?<![\w.])GSharp\.sln\b", "GSharp.slnx", text)
 
 
-SLN_LITERAL_SUFFIXES = (".gs", ".sh", ".py", ".yml", ".yaml", ".js", ".ts", ".ps1", ".targets", ".props")
+SLN_LITERAL_SUFFIXES = (".cs", ".gs", ".sh", ".py", ".yml", ".yaml", ".js", ".ts", ".ps1", ".targets", ".props")
 SLN_LITERAL_SKIP = ("docs/", "website/", "node_modules/", "build/test-cutover.py", ".git/")
 
 
@@ -751,15 +751,22 @@ def main(argv=None) -> int:
     d.add_argument("--e2e", nargs="*", default=[], help="e2e script prefixes (default: all)")
     d.add_argument("--stop-on-failure", action="store_true")
     h = sub.add_parser("hand-fix", help="apply only the hand-fix list to a migrated tree")
-    h.add_argument("--tree", required=True)
+    h.add_argument("--tree", required=True, help="the assembled tree to fix")
     h.add_argument("--sdk-version", required=True)
-    h.add_argument("--packable", nargs="*", default=[], help=".gsproj paths whose C# project had GeneratePackageOnBuild=true")
-    h.add_argument("--original-sln", help="path to the C# GSharp.sln, to check the .slnx lists every project")
+    h.add_argument("--original-tree", required=True,
+                   help="checkout of the final C# commit: the solution check and the packable-project list derive from it")
     args = p.parse_args(argv)
     try:
         if args.command == "hand-fix":
-            sln = Path(args.original_sln).read_text(encoding="utf-8-sig") if args.original_sln else None
-            problems = apply_hand_fixes(Path(args.tree), args.sdk_version, sln, print, packable=tuple(args.packable))
+            original = Path(args.original_tree)
+            sln_path = original / "GSharp.sln"
+            if not sln_path.is_file():
+                raise CutoverError(f"{sln_path} not found; --original-tree must be the final C# checkout")
+            sln = sln_path.read_text(encoding="utf-8-sig")
+            originals = {p.relative_to(original).as_posix(): read(p)[0] for p in iter_files(original, (".csproj",))
+                         if not under(p.relative_to(original).as_posix(), ALWAYS_KEEP_CSHARP)}
+            packable = tuple(q for q in packable_gsprojs(originals) if (Path(args.tree) / q).is_file())
+            problems = apply_hand_fixes(Path(args.tree), args.sdk_version, sln, print, packable=packable)
             # hand-fix 8, shared with the dry run: the mirrored lock files describe the C# projects.
             rc = subprocess.run(LOCK_REGEN, cwd=args.tree).returncode
             if rc != 0:
