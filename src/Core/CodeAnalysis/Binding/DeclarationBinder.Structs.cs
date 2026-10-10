@@ -1540,6 +1540,13 @@ internal sealed partial class DeclarationBinder
                         }
                     }
 
+                    // ADR-0199: a compatible protected print-members slot is always
+                    // emitted as an overridable virtual method, so the symbol says so
+                    // whatever modifiers the source wrote.
+                    var isOpenMethod = methodSyntax.IsOpen
+                        || (structSymbol.IsData
+                            && methodAccessibility == Accessibility.Protected
+                            && DataPrintMembersModel.IsSlotName(methodName, methodParameters));
                     var methodSymbol = new FunctionSymbol(
                         methodName,
                         methodParameters,
@@ -1548,7 +1555,7 @@ internal sealed partial class DeclarationBinder
                         package,
                         methodAccessibility,
                         receiverType: structSymbol,
-                        isOpen: methodSyntax.IsOpen,
+                        isOpen: isOpenMethod,
                         isOverride: methodSyntax.IsOverride);
                     methodSymbol.OverriddenMethod = overriddenMethod;
                     methodSymbol.ExternalOverriddenMethod = externalOverriddenMethod;
