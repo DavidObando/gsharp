@@ -182,6 +182,34 @@ public sealed class Issue4859YieldedTemporaryTests
     }
 
     [Fact]
+    public void GuardCaptureLocal_AndYieldTemporary_DoNotCollide()
+    {
+        string printed = Translate("""
+            using System.Collections.Generic;
+
+            public class Holder
+            {
+                public string Item { get; }
+
+                public IEnumerable<int> Rows(bool choose, int y, int z)
+                {
+                    if (Item == null)
+                    {
+                        throw new System.InvalidOperationException();
+                    }
+
+                    int length = Item.Length;
+                    yield return (choose ? y : z) + length;
+                }
+            }
+            """);
+
+        Assert.Contains("let item = Item!!", printed, StringComparison.Ordinal);
+        Assert.Contains("let item_2 int32 =", printed, StringComparison.Ordinal);
+        Assert.Contains("yield item_2", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void InlineArrayYield_BindsAndRuns()
     {
         string printed = Translate("""
