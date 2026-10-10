@@ -264,29 +264,61 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
     }
 
     [Fact]
-    public void CompileItemsOfASharedFileImportedByAGsproj_AreVerbatim()
+    public void CompileItemsOfASharedFileImportedByAGsproj_ResolveAgainstTheImporterOrTheFile()
     {
         this.Write("g/g.gsproj", "<Project Sdk=\"Gsharp.NET.Sdk\"><Import Project=\"..\\shared\\shared.props\" /></Project>");
-        this.Write("shared/shared.props", "<Project><ItemGroup><Compile Include=\"Foreign.cs\" /></ItemGroup></Project>");
-        this.Write("shared/Foreign.cs", "class F {}");
+        this.Write(
+            "shared/shared.props",
+            "<Project><ItemGroup><Compile Include=\"Foreign.cs\" />" +
+            "<Compile Include=\"$(MSBuildThisFileDirectory)Anchored.cs\" /></ItemGroup></Project>");
+        this.Write("g/Foreign.cs", "class F {}");
+        this.Write("shared/Anchored.cs", "class A {}");
         this.Write("shared/unrelated.props", "<Project><ItemGroup><Compile Include=\"Own.cs\" /></ItemGroup></Project>");
         this.Write("shared/Own.cs", "class O {}");
 
         ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
 
-        Assert.Equal(new[] { "shared/Foreign.cs" }, verbatim.ToArray());
+        Assert.Equal(
+            new[] { "g/Foreign.cs", "shared/Anchored.cs" },
+            verbatim.OrderBy(p => p, StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
+    public void CompileItemsOfATransitivelyImportedSharedFile_AreVerbatim()
+    {
+        this.Write("g/g.gsproj", "<Project Sdk=\"Gsharp.NET.Sdk\"><Import Project=\"..\\shared\\a.props\" /></Project>");
+        this.Write("shared/a.props", "<Project><Import Project=\"b.props\" /></Project>");
+        this.Write("shared/b.props", "<Project><ItemGroup><Compile Include=\"Foreign.cs\" /></ItemGroup></Project>");
+        this.Write("g/Foreign.cs", "class F {}");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
+
+        Assert.Equal(new[] { "g/Foreign.cs" }, verbatim.ToArray());
+    }
+
+    [Fact]
+    public void Update_NeverMakesAFileReferenced()
+    {
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+            "<Compile Remove=\"Data.cs\" /><None Update=\"Data.cs\" CopyToOutputDirectory=\"Always\" />" +
+            "</ItemGroup></Project>");
+        this.Write("a/Data.cs", "class A {}");
+
+        Assert.Empty(RepositoryVerbatimSources.Compute(this.root, this.Inventory()));
     }
 
     [Fact]
     public void CompileItemsOfADirectoryBuildFileOverAGsproj_AreVerbatim()
     {
         this.Write("Directory.Build.targets", "<Project><ItemGroup><Compile Include=\"Foreign.cs\" /></ItemGroup></Project>");
-        this.Write("Foreign.cs", "class F {}");
+        this.Write("g/Foreign.cs", "class F {}");
         this.Write("g/g.gsproj", "<Project Sdk=\"Gsharp.NET.Sdk\" />");
 
         ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
 
-        Assert.Equal(new[] { "Foreign.cs" }, verbatim.ToArray());
+        Assert.Equal(new[] { "g/Foreign.cs" }, verbatim.ToArray());
     }
 
     [Fact]
