@@ -4333,8 +4333,10 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
     {
         MatchCollection locals = Regex.Matches(printed, @"let (?<name>item(_\d+)?) " + Regex.Escape(tuple) + " =");
         // Issue #4859: a yield value only gets a temporary when it prints with
-        // a leading `(`; the rest yield inline, so the count is an upper bound
-        // and the behavioural assertions in each test carry the contract.
+        // a leading `(` or a nonempty `[`, or when a branching expression is
+        // yielded into a tuple type; other shapes yield inline, so the count
+        // is an upper bound and the behavioural assertions in each test
+        // carry the contract.
         Assert.True(locals.Count <= expectedCount, printed);
         Assert.DoesNotContain("__yielded", printed, StringComparison.Ordinal);
         Assert.All(
