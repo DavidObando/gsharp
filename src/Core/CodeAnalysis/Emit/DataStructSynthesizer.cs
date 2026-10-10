@@ -1417,8 +1417,8 @@ internal sealed class DataStructSynthesizer
 
     /// <summary>Gets the synthesized or hand-written print-members slot of a declared data type.</summary>
     private static FunctionSymbol GetPrintMembersSlot(StructSymbol structSym)
-        => structSym.DataPrintMembers
-            ?? Invariant.Required(DataPrintMembersModel.FindDeclared(structSym), "a declared data type owns a print-members slot");
+        => DataPrintMembersModel.FindDeclared(structSym)
+            ?? Invariant.Required(structSym.DataPrintMembers, "a data type owns a print-members slot");
 
     private bool TryResolveBasePrintMembersToken(StructSymbol structSym, out EntityHandle token)
     {

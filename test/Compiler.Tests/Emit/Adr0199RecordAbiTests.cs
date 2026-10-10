@@ -370,6 +370,65 @@ public class Adr0199RecordAbiTests
     }
 
     [Fact]
+    public void IntermediaryClassOverride_IsWhatADerivedDataClassCallsAsBase()
+    {
+        const string source = """
+            package W
+            import System
+            import System.Text
+
+            open data class Base(Id int32)
+            open class Middle : Base(1) {
+                protected open override func PrintMembers(builder StringBuilder) bool {
+                    builder.Append("middle")
+                    return true
+                }
+            }
+            data class Leaf(Z int32) : Middle
+            """;
+        var assembly = Adr0199RecordAbiWitness.CompileGSharp(source);
+        var leaf = assembly.GetTypes().Single(t => t.Name == "Leaf");
+        Assert.Equal("Leaf { middle, Z = 3 }", Activator.CreateInstance(leaf, 3).ToString());
+    }
+
+    [Fact]
+    public void SealedIntermediaryOverride_CannotBeOverriddenBySynthesis()
+    {
+        const string source = """
+            package W
+            import System
+            import System.Text
+
+            open data class Base(Id int32)
+            open class Middle : Base(1) {
+                protected override func PrintMembers(builder StringBuilder) bool -> true
+            }
+            data class Leaf(Z int32) : Middle
+            """;
+        var (exitCode, output) = Adr0199RecordAbiWitness.TryCompileGSharp(source);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0184", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedPrintMembers_OfTheSlotShape_IsRejectedWithGS0623()
+    {
+        const string source = """
+            package W
+            import System.Text
+
+            data class Item(Id int32) {
+                shared {
+                    func PrintMembers(builder StringBuilder) bool -> true
+                }
+            }
+            """;
+        var (exitCode, output) = Adr0199RecordAbiWitness.TryCompileGSharp(source);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0623", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void HandWrittenPrintMembers_OfTheWrongShape_IsRejectedWithGS0623()
     {
         const string source = """
