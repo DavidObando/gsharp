@@ -23,8 +23,8 @@ internal static class FrozenCompilerSnapshots
 
     /// <summary>
     /// Every snapshot and the repository-relative C# file it mirrors. A snapshot
-    /// with region markers is mirrored by the text between them (contained in
-    /// the live file); one without is mirrored by the whole live file.
+    /// flagged Region mirrors the tail of the live file from the snapshot's
+    /// first line; any other snapshot mirrors the whole live file.
     /// </summary>
     internal static readonly IReadOnlyList<(string Snapshot, string Live, bool Region)> Manifest = new (string, string, bool)[]
     {
@@ -75,8 +75,9 @@ internal static class FrozenCompilerSnapshots
 
     /// <summary>
     /// The live text a snapshot is compared with: the whole live file, or for a
-    /// region snapshot the stretch of the live file that starts at the
-    /// snapshot's first line and is as long as the snapshot. A region whose
+    /// region snapshot the tail of the live file that starts at the
+    /// snapshot's first line (up to the end of the file, so the end does not
+    /// depend on the snapshot's current length and a refresh stays complete). A region whose
     /// first line is not found throws, so a refresh can never write an empty
     /// snapshot.
     /// </summary>
@@ -101,8 +102,7 @@ internal static class FrozenCompilerSnapshots
                 $"The first line of the region snapshot is not in the live file: '{snapshotLines[0]}'. Re-point the snapshot at the moved or edited region by hand.");
         }
 
-        int count = Math.Min(snapshotLines.Length, liveLines.Length - start);
-        return string.Join("\n", liveLines, start, count) + "\n";
+        return string.Join("\n", liveLines, start, liveLines.Length - start) + "\n";
     }
 
     private static string Normalize(string text) =>

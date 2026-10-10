@@ -75,8 +75,10 @@ public sealed class Issue4661FrozenCompilerSnapshotTests
         string live = "a\r\nb\r\nc\r\nd\r\n";
 
         Assert.Equal("a\nb\nc\nd\n", FrozenCompilerSnapshots.LiveText("anything", live, region: false));
-        Assert.Equal("b\nc\n", FrozenCompilerSnapshots.LiveText("b\nc\n", live, region: true));
-        Assert.Equal("b\nc\nd\n", FrozenCompilerSnapshots.LiveText("b\nX\nY\nZ\n", live, region: true));
+        // A region is the tail of the live file from the snapshot's first line, so
+        // lines added or removed inside it are picked up whole.
+        Assert.Equal("b\nc\nd\n", FrozenCompilerSnapshots.LiveText("b\nc\n", live, region: true));
+        Assert.Equal("b\nc\nd\n", FrozenCompilerSnapshots.LiveText("b\nX\nY\nZ\nW\n", live, region: true));
         Assert.Throws<InvalidOperationException>(() => FrozenCompilerSnapshots.LiveText("zzz\n", live, region: true));
     }
 
