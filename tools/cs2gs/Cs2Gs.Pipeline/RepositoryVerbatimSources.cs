@@ -88,11 +88,34 @@ internal static class RepositoryVerbatimSources
         }
 
         // Shared .props/.targets: their Compile items belong to whichever projects
-        // import them. A file a G# project may import keeps its Compile items
-        // verbatim (the SDK translates foreign C# at build time).
+        // import them, transitively. A shared file a G# project may import keeps its
+        // Compile items verbatim (the SDK translates foreign C# at build time), and
+        // its relative includes resolve against EVERY importing G# project's
+        // directory as well as its own (MSBuild resolves them against the importer).
+        // The match is by file name, so it over-approximates; over-copying a .cs is
+        // safe, dropping one is not.
+        var sharedImports = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach ((string path, XDocument doc) in documents)
+        {
+            string sharedExtension = Path.GetExtension(path);
+            if (sharedExtension.Equals(".props", StringComparison.OrdinalIgnoreCase)
+                || sharedExtension.Equals(".targets", StringComparison.OrdinalIgnoreCase))
+            {
+                string name = Path.GetFileName(path.Replace('\\', '/'));
+                if (!sharedImports.TryGetValue(name, out HashSet<string> names))
+                {
+                    sharedImports[name] = names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                }
+
+                names.UnionWith(ImportedFileNames(doc));
+            }
+        }
+
         var gsprojs = documents
             .Where(d => Path.GetExtension(d.Path).Equals(".gsproj", StringComparison.OrdinalIgnoreCase))
-            .Select(d => (Directory: DirectoryOf(d.Path.Replace('\\', '/')), Imports: ImportedFileNames(d.Document)))
+            .Select(d => (
+                Directory: DirectoryOf(d.Path.Replace('\\', '/')),
+                Imports: ImportClosure(ImportedFileNames(d.Document), sharedImports)))
             .ToList();
 
         foreach ((string projectPath, XDocument document) in documents)
@@ -102,12 +125,19 @@ internal static class RepositoryVerbatimSources
             string fileName = Path.GetFileName(projectPath.Replace('\\', '/'));
             bool sharedFile = extension.Equals(".props", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase);
-            bool translatedProject = !extension.Equals(".gsproj", StringComparison.OrdinalIgnoreCase)
-                && !(sharedFile && gsprojs.Any(g =>
-                    fileName.StartsWith("Directory.", StringComparison.OrdinalIgnoreCase)
+            var baseDirectories = new List<string> { directory };
+            if (sharedFile)
+            {
+                baseDirectories.AddRange(gsprojs
+                    .Where(g => fileName.StartsWith("Directory.", StringComparison.OrdinalIgnoreCase)
                         ? directory.Length == 0 || g.Directory.Equals(directory, StringComparison.OrdinalIgnoreCase)
                             || g.Directory.StartsWith(directory + "/", StringComparison.OrdinalIgnoreCase)
-                        : g.Imports.Contains(fileName)));
+                        : g.Imports.Contains(fileName))
+                    .Select(g => g.Directory));
+            }
+
+            bool translatedProject = !extension.Equals(".gsproj", StringComparison.OrdinalIgnoreCase)
+                && baseDirectories.Count == 1;
 
             // MSBuild evaluates item operations in document order per item
             // type, so a later Include can re-add what an earlier Remove took.
@@ -134,30 +164,29 @@ internal static class RepositoryVerbatimSources
                 string remove = item.Attribute("Remove")?.Value;
                 if (remove is not null && !IsConditionalOrDynamic(item))
                 {
-                    list.Add(new ItemOperation(true, Patterns(remove, directory, null).ToArray(), Array.Empty<Regex>()));
+                    list.Add(new ItemOperation(true, Patterns(remove, baseDirectories, null).ToArray(), Array.Empty<Regex>()));
                 }
 
-                foreach (string attribute in new[] { "Include", "Update" })
+                // Update changes metadata of items already in the list; it never
+                // adds one, so only Include can make a file referenced.
+                string value = item.Attribute("Include")?.Value;
+                if (value is null)
                 {
-                    string value = item.Attribute(attribute)?.Value;
-                    if (value is null)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    List<string> unresolved = warnings is null ? null : new List<string>();
-                    list.Add(new ItemOperation(
-                        false,
-                        Patterns(value, directory, unresolved).ToArray(),
-                        Patterns(item.Attribute("Exclude")?.Value, directory, null).ToArray()));
-                    if (unresolved is not null)
+                List<string> unresolved = warnings is null ? null : new List<string>();
+                list.Add(new ItemOperation(
+                    false,
+                    Patterns(value, baseDirectories, unresolved).ToArray(),
+                    Patterns(item.Attribute("Exclude")?.Value, baseDirectories, null).ToArray()));
+                if (unresolved is not null)
+                {
+                    foreach (string text in unresolved)
                     {
-                        foreach (string text in unresolved)
-                        {
-                            warnings.Add(
-                                $"'{projectPath}' {itemName} item '{text}' uses an MSBuild expression this " +
-                                "mirror cannot resolve; if it names .cs files they will be translated, not copied.");
-                        }
+                        warnings.Add(
+                            $"'{projectPath}' {itemName} item '{text}' uses an MSBuild expression this " +
+                            "mirror cannot resolve; if it names .cs files they will be translated, not copied.");
                     }
                 }
             }
@@ -199,7 +228,7 @@ internal static class RepositoryVerbatimSources
 
     private static IEnumerable<Regex> Patterns(
         string itemValue,
-        string projectDirectory,
+        IReadOnlyList<string> baseDirectories,
         ICollection<string> unresolved)
     {
         if (string.IsNullOrWhiteSpace(itemValue))
@@ -230,13 +259,14 @@ internal static class RepositoryVerbatimSources
                 continue;
             }
 
-            string resolved = Resolve(projectDirectory, text);
-            if (resolved is null)
+            foreach (string baseDirectory in baseDirectories)
             {
-                continue;
+                string resolved = Resolve(baseDirectory, text);
+                if (resolved is not null)
+                {
+                    yield return GlobToRegex(resolved);
+                }
             }
-
-            yield return GlobToRegex(resolved);
         }
     }
 
@@ -312,6 +342,26 @@ internal static class RepositoryVerbatimSources
         }
 
         return names;
+    }
+
+    private static HashSet<string> ImportClosure(
+        HashSet<string> direct,
+        Dictionary<string, HashSet<string>> sharedImports)
+    {
+        var closure = new HashSet<string>(direct, StringComparer.OrdinalIgnoreCase);
+        var pending = new Queue<string>(direct);
+        while (pending.Count > 0)
+        {
+            if (sharedImports.TryGetValue(pending.Dequeue(), out HashSet<string> next))
+            {
+                foreach (string name in next.Where(closure.Add))
+                {
+                    pending.Enqueue(name);
+                }
+            }
+        }
+
+        return closure;
     }
 
     private static bool IsConditionalOrDynamic(XElement item) =>
