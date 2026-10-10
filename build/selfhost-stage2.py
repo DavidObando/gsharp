@@ -1453,6 +1453,10 @@ class Controller:
         for name in helper_files:
             atomic_bytes(helper_source / name, (HERE / "selfhost" / name).read_bytes())
         atomic_bytes(inputs / "Adr0198.Pdb.targets", b"""<Project>
+  <ItemGroup Condition="'$(DebugType)' != 'none' and '$(PdbFile)' != ''">
+    <_DebugSymbolsIntermediatePath Remove="@(_DebugSymbolsIntermediatePath)" />
+    <_DebugSymbolsIntermediatePath Include="$(PdbFile)" />
+  </ItemGroup>
   <Target Name="_Adr0198CanonicalPdb" BeforeTargets="CoreCompile">
     <ItemGroup Condition="'$(DebugType)' != 'none'">
       <_DebugSymbolsIntermediatePath Remove="@(_DebugSymbolsIntermediatePath)" />
@@ -1539,6 +1543,13 @@ class Controller:
                 "--ro-bind", str(tree), "/adr0198/tree",
                 "--dir", "/adr0198/pdb",
                 "--bind", str(self.writable(env["ADR0198_STAGE"], "pdb")),
+                "/adr0198/pdb",
+            ))
+        elif len(command) > 1 and command[1] == "publish":
+            arguments.extend((
+                "--dir", "/adr0198",
+                "--dir", "/adr0198/pdb",
+                "--ro-bind", str(self.writable(env["ADR0198_STAGE"], "pdb")),
                 "/adr0198/pdb",
             ))
         toolchain = self.stage_toolchain(env["ADR0198_STAGE"])
