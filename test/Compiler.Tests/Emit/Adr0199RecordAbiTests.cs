@@ -493,6 +493,33 @@ public class Adr0199RecordAbiTests
     }
 
     [Fact]
+    public void HandWrittenSlotWithoutOpen_StillAcceptsADerivedOverride()
+    {
+        const string source = """
+            package W
+            import System
+            import System.Text
+
+            open data class Base(Id int32) {
+                protected func PrintMembers(builder StringBuilder) bool {
+                    builder.Append("base")
+                    return true
+                }
+            }
+            open data class Derived(Z int32) : Base(1) {
+                protected override func PrintMembers(builder StringBuilder) bool {
+                    builder.Append("derived")
+                    return true
+                }
+            }
+            data class Leaf(Y int32) : Derived(2)
+            """;
+        var assembly = Adr0199RecordAbiWitness.CompileGSharp(source);
+        var leaf = assembly.GetTypes().Single(t => t.Name == "Leaf");
+        Assert.Equal("Leaf { derived, Y = 4 }", Activator.CreateInstance(leaf, 4).ToString());
+    }
+
+    [Fact]
     public void HandWrittenPrintMembers_OfTheWrongShape_IsRejectedWithGS0623()
     {
         const string source = """

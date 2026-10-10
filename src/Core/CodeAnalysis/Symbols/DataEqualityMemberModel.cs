@@ -215,7 +215,8 @@ internal static class DataEqualityMemberModel
                 && ClrTypeUtilities.AreSame(open, typeof(IEquatable<>))
                 && arguments.Length == 1
                 && arguments[0] is StructSymbol argument
-                && ReferenceEquals(argument.Definition ?? argument, ownerDefinition))
+                && ReferenceEquals(argument.Definition ?? argument, ownerDefinition)
+                && IsOwnConstruction(owner, argument))
             {
                 return true;
             }
@@ -245,5 +246,34 @@ internal static class DataEqualityMemberModel
             receiverType: owner,
             isOpen: owner.IsClass && (owner.IsOpen || owner.IsSealedHierarchy),
             isOverride: true);
+    }
+
+    // `IEquatable[Item[int32]]` is a different interface from `IEquatable[Item[T]]`:
+    // the argument must be the type itself, closed over its own type parameters.
+    private static bool IsOwnConstruction(StructSymbol owner, StructSymbol argument)
+    {
+        var ownParameters = owner.TypeParameters;
+        var closedOver = argument.TypeArguments;
+        if (ownParameters.IsDefaultOrEmpty)
+        {
+            return closedOver.IsDefaultOrEmpty;
+        }
+
+        if (closedOver.IsDefaultOrEmpty || closedOver.Length != ownParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < ownParameters.Length; i++)
+        {
+            if (closedOver[i] is not TypeParameterSymbol parameter
+                || parameter.Ordinal != ownParameters[i].Ordinal
+                || parameter.Name != ownParameters[i].Name)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

@@ -99,10 +99,14 @@ internal static class DataPrintMembersModel
                 return ancestor;
             }
 
-            if (ancestor.ImportedBaseType is not { ClrType: { } clrBase } importedBase)
+            // Only an imported record / data base owns the slot; an ordinary CLR class
+            // that happens to expose a matching virtual method does not.
+            if (DataEqualityMemberModel.GetImportedDataBase(ancestor) is not { } importedDataBase)
             {
                 continue;
             }
+
+            var (importedBase, clrBase) = importedDataBase;
 
             foreach (var method in ClrTypeUtilities.SafeGetMethods(
                          clrBase, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
