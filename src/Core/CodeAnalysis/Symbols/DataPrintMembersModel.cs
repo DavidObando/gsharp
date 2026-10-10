@@ -44,7 +44,9 @@ internal static class DataPrintMembersModel
 
         foreach (var method in type.Methods)
         {
-            if (IsSlotName(method.Name, method.Parameters))
+            // An explicit interface implementation is emitted under its mangled
+            // name and is not the record slot.
+            if (!method.HasExplicitInterfaceClause && IsSlotName(method.Name, method.Parameters))
             {
                 return method;
             }

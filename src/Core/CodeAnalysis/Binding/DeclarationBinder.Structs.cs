@@ -1394,6 +1394,7 @@ internal sealed partial class DeclarationBinder
                     // synthesized one (the same rule ToString has); any other shape
                     // of that slot is rejected rather than silently shadowing it.
                     if (structSymbol.IsData
+                        && !methodSyntax.HasExplicitInterfaceClause
                         && DataPrintMembersModel.IsSlotName(methodName, methodParameters)
                         && !IsCompatibleDataPrintMembers(structSymbol, returnType, methodReturnRefKind, methodIsAsync, methodTypeParameters, methodAccessibility))
                     {
@@ -1545,6 +1546,7 @@ internal sealed partial class DeclarationBinder
                     // whatever modifiers the source wrote.
                     var isOpenMethod = methodSyntax.IsOpen
                         || (structSymbol.IsData
+                            && !methodSyntax.HasExplicitInterfaceClause
                             && methodAccessibility == Accessibility.Protected
                             && DataPrintMembersModel.IsSlotName(methodName, methodParameters));
                     var methodSymbol = new FunctionSymbol(

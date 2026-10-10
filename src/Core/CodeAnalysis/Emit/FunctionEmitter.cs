@@ -588,6 +588,7 @@ internal sealed class FunctionEmitter
             bool isDataPrintMembers = receiverStruct != null
                 && receiverStruct.IsData
                 && function.Name != null
+                && !function.HasExplicitInterfaceClause
                 && DataPrintMembersModel.IsSlotName(function.Name, function.Parameters);
             bool isVirtualDataPrintMembers = isDataPrintMembers
                 && DataStructSynthesizer.IsPrintMembersVirtual(Invariant.Required(receiverStruct, "a data print-members slot has a receiver"));

@@ -520,6 +520,28 @@ public class Adr0199RecordAbiTests
     }
 
     [Fact]
+    public void ExplicitInterfacePrintMembers_CoexistsWithTheSynthesizedRecordSlot()
+    {
+        const string source = """
+            package W
+            import System.Text
+
+            interface IPrinter {
+                func PrintMembers(builder StringBuilder) bool;
+            }
+            data class Open(Id int32) : IPrinter {
+                func (IPrinter) PrintMembers(builder StringBuilder) bool -> false
+            }
+            """;
+        var assembly = Adr0199RecordAbiWitness.CompileGSharp(source);
+        var all = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var type = assembly.GetTypes().Single(t => t.Name == "Open");
+        var slot = Assert.Single(type.GetMethods(all), m => m.Name == "PrintMembers");
+        Assert.True(slot.IsPrivate);
+        Assert.Equal("Open { Id = 4 }", Activator.CreateInstance(type, 4).ToString());
+    }
+
+    [Fact]
     public void HandWrittenPrintMembers_OfTheWrongShape_IsRejectedWithGS0623()
     {
         const string source = """
