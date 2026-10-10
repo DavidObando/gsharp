@@ -116,6 +116,13 @@ def rewrite_sln_literal(text: str) -> tuple[str, int]:
     return re.subn(r"(?<![\w.])GSharp\.sln\b", "GSharp.slnx", text)
 
 
+# Scripts that match the project EXTENSION rather than a name, so the name rewrite cannot reach them.
+# {path: [(old, new)]}; a missing `old` is reported, because it means the script changed under this table.
+EXTENSION_FIXES = {
+    "build/generate-ci-test-matrix.py": [('.endswith(".tests.csproj")', '.endswith(".tests.gsproj")')],
+    "build/nullable_hygiene.py": [('f.endswith(".csproj")', 'f.endswith((".csproj", ".gsproj"))')],
+}
+
 SLN_LITERAL_SUFFIXES = (".cs", ".gs", ".sh", ".py", ".yml", ".yaml", ".js", ".ts", ".ps1", ".targets", ".props")
 SLN_LITERAL_SKIP = ("docs/", "website/", "node_modules/", "build/test-cutover.py", ".git/")
 
@@ -307,6 +314,22 @@ def apply_hand_fixes(tree: Path, sdk_version: str, original_sln: str | None, log
                 write(path, new, bom)
                 log(f"hand-fix 2b: {rel}: {len(changed)} project file name(s) .csproj -> .gsproj")
 
+    # 2c. extension-based project discovery in the CI scripts (found by Copilot review of this PR and
+    #     confirmed: generate-ci-test-matrix.py exits "Missing sharded test projects" on the migrated tree).
+    for rel, edits in EXTENSION_FIXES.items():
+        path = tree / rel
+        if not path.is_file():
+            problems.append(f"{rel} not found (EXTENSION_FIXES is stale)")
+            continue
+        text, bom = read(path)
+        for old, new in edits:
+            if old in text:
+                text = text.replace(old, new)
+                log(f"hand-fix 2c: {rel}: {old} -> {new}")
+            elif new not in text:
+                problems.append(f"{rel}: expected '{old}' not found (EXTENSION_FIXES is stale)")
+        write(path, text, bom)
+
     # 3. Gsharp.Extensions rebound to the pinned SDK (the mirror does it; verify)
     ext = tree / EXTENSIONS_PROJECT
     if ext.is_file():
@@ -395,7 +418,7 @@ class Run:
     def __init__(self, args):
         self.args = args
         self.root = Path(args.work_root).expanduser().resolve()
-        if str(self.root).startswith("/tmp") or str(self.root) == "/":
+        if self.root == Path("/") or Path("/tmp") in (self.root, *self.root.parents):
             raise CutoverError("the work root must not be under /tmp (shared tmpfs); use ~/.cache/<tag>/")
         # The stages delete and recreate src/, tools/, migrated/ and runs/ below the root, so the root must
         # be a directory of its own: never this checkout (or one containing it), never a repository.
@@ -657,6 +680,10 @@ class Run:
         problems = apply_hand_fixes(self.src, self.record["facts"]["sdk_pin"], sln, notes.append,
                                     tuple(self.record["facts"]["assemble"]["keep_csharp"]), packable)
         (self.logs / "hand-fix.log").write_text("\n".join(notes + ["PROBLEMS:"] + problems) + "\n")
+        # 2c check: the migrated test projects must be discoverable the way CI discovers them.
+        rc = self.sh("hand-fix", ["python3", "build/generate-ci-test-matrix.py"], cwd=self.src, check=False)
+        if rc != 0:
+            problems.append(f"build/generate-ci-test-matrix.py exited {rc} on the migrated tree; see hand-fix.log")
         # 8. the mirrored packages.lock.json files describe the C# projects; regenerate them so the
         #    locked-mode restore CI uses can pass (found by the first dry run: NU1004).
         rc = self.sh("hand-fix", LOCK_REGEN, cwd=self.src, check=False)

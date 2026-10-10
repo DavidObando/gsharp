@@ -138,6 +138,8 @@ class TreeTests(unittest.TestCase):
             "" if drop_slnx_entry else '<Project Path="src/LanguageServer/LanguageServer.gsproj" />')
         put(tree, "GSharp.slnx", f"<Solution>{entries}<Project Path=\"{cutover.EXTENSIONS_PROJECT}\" /></Solution>")
         put(tree, "global.json", '{"sdk":{"version":"10.0.300"}}')
+        put(tree, "build/generate-ci-test-matrix.py", 'if line.strip().lower().endswith(".tests.csproj")')
+        put(tree, "build/nullable_hygiene.py", 'projs = [f for f in os.listdir(d) if f.endswith(".csproj")]')
         return tree
 
     ORIGINAL = ('Project("{F}") = "Compiler", "src\\Compiler\\Compiler.csproj", "{1}"\n'
@@ -158,6 +160,8 @@ class TreeTests(unittest.TestCase):
             self.assertFalse((tree / "GSharp.sln").exists())
             self.assertEqual("9.9.9", json.loads((tree / "global.json").read_text())["msbuild-sdks"]["Gsharp.NET.Sdk"])
             self.assertIn("*.gs", (tree / ".gitattributes").read_text())
+            self.assertIn('endswith(".tests.gsproj")', (tree / "build/generate-ci-test-matrix.py").read_text())
+            self.assertIn('endswith((".csproj", ".gsproj"))', (tree / "build/nullable_hygiene.py").read_text())
 
     def test_retained_csharp_sources_get_the_solution_anchor_too(self):
         with tempfile.TemporaryDirectory() as tmp:
