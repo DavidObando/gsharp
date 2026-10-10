@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **`cs2gs migrate --stop-after <stage>`** (issue #4853, parent #3501). Runs the stages up to and including `translate`, `compile`, `ilverify` or `test-parity` (the default). `--stop-after compile` still performs the redundant-`!!` polish and writes the migrated tree, so a cut-over rehearsal no longer pays for test parity; A run that stops before `test-parity` records its passing apps as unverified (not green) and prints a partial-run line. `--translate-only` is `--stop-after translate`.
+- **`cs2gs migrate --stop-after <stage>`** (issue #4853, parent #3501). Runs the stages up to and including `translate`, `compile`, `ilverify` or `test-parity` (the default). `--stop-after compile` still performs the redundant-`!!` polish and writes the migrated tree, so a cut-over rehearsal no longer pays for test parity. A run that stops before `test-parity` records its passing apps as unverified (not green) and prints a partial-run line. `--translate-only` is `--stop-after translate`.
 
 - **cs2gs no longer asserts a nullable argument forwarded to a generic-method type parameter** (issue #4843, parent #3501). A promoted `object?` parameter forwarded to `DecodeSignature(provider, genericContext)` was bridged with a runtime `!!` and threw a NullReferenceException in the migrated Core.Tests public-API snapshot test; gsc infers the method type argument from the argument, so the forward is now emitted unasserted.
 
