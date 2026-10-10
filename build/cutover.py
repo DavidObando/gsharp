@@ -548,8 +548,12 @@ class Run:
         for rel in ("tools/compiler/gsc.dll", "tools/gsgen/gsgen.dll"):
             if not (self.pkgs / "sdk" / rel).is_file():
                 raise CutoverError(f"{nupkg.name} has no {rel}")
-        help_text = subprocess.run([str(self.tools / "cs2gs"), "migrate", "--help"], env=self.env, text=True,
-                                   capture_output=True).stdout
+        probe = subprocess.run([str(self.tools / "cs2gs"), "migrate", "--help"], env=self.env, text=True,
+                               capture_output=True)
+        if probe.returncode != 0:
+            raise CutoverError(f"the installed cs2gs does not launch (exit {probe.returncode}): "
+                               f"{(probe.stderr or probe.stdout).strip()[:300]}")
+        help_text = probe.stdout
         capable = "--sdk-pin" in help_text and "--sdk-version" in help_text
         self.record["facts"]["cs2gs_has_sdk_pin_flags"] = capable
         detail = f"cs2gs {cs2gs_version}, gsfmt {pin}, SDK {pin}; --sdk-pin/--sdk-version " + (
