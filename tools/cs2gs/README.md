@@ -95,6 +95,7 @@ dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
 | `--gsc <path>` | Override `gsc.dll` (default `out/bin/<Config>/Compiler/gsc.dll`). |
 | `--config <name>` | Build config used to locate `gsc` (default `Release`). |
 | `--translate-only` | Repository mode: run stage 1 only, then stop (see `validate`). |
+| `--stop-after <stage>` | Run the stages up to and including `translate`, `compile`, `ilverify` or `test-parity` (default). `compile` includes the redundant-`!!` polish, so the migrated tree is final without running test parity (issue #4853). `--translate-only` is `--stop-after translate`. |
 | `--sdk-version <v>` | Repository mode: pin `Gsharp.NET.Sdk` to exactly `<v>` (default: the newest local nupkg). A local nupkg of `<v>` is staged into `.nugs`; otherwise `<v>` must be on nuget.org, such as a published release; the mirror's generated `nuget.config` lists only nuget.org and the local `.nugs` feed (issue #4631). |
 | `--sdk-pin <where>` | Repository mode: `project` (default) writes `Sdk="Gsharp.NET.Sdk/<v>"` into every generated project; `global-json` writes the version under `msbuild-sdks` in the root and nested `global.json` files and leaves every `Sdk` attribute bare. |
 
