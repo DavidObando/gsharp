@@ -191,6 +191,16 @@ class TreeTests(unittest.TestCase):
             self.assertEqual("run: dotnet restore GSharp.slnx --locked-mode", wf.read_text())
             self.assertEqual("dotnet build GSharp.slnx", sh.read_text())
 
+    def test_the_cutover_driver_is_not_rewritten_by_its_own_transform(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.make_tree(Path(tmp))
+            body = 'self.sh("prepare", ["dotnet", "restore", "GSharp.sln"])\n'
+            for name in ("cutover.py", "test-cutover.py"):
+                put(tree, "build/" + name, body)
+            cutover.apply_hand_fixes(tree, "9.9.9", self.ORIGINAL, lambda _: None)
+            for name in ("cutover.py", "test-cutover.py"):
+                self.assertEqual(body, (tree / "build" / name).read_text())
+
     def test_script_mentioning_both_names_still_has_its_sln_command_renamed(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = self.make_tree(Path(tmp))

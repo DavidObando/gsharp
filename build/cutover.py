@@ -131,7 +131,7 @@ EXTENSION_FIXES = {
 # C# and G# sources are deliberately not touched: they find the repository root through RepositoryRootMarker,
 # which accepts either spelling (#4861), and a blind textual rewrite of them is what that fix retired.
 SLN_LITERAL_SUFFIXES = (".sh", ".py", ".yml", ".yaml", ".js", ".ts", ".ps1", ".targets", ".props")
-SLN_LITERAL_SKIP = ("docs/", "website/", "node_modules/", "build/test-cutover.py", ".git/")
+SLN_LITERAL_SKIP = ("docs/", "website/", "node_modules/", "build/cutover.py", "build/test-cutover.py", ".git/")
 
 
 def unpin_sdk(text: str, version: str) -> tuple[str, bool]:
@@ -392,7 +392,7 @@ def apply_hand_fixes(tree: Path, sdk_version: str, original_sln: str | None, log
     rewritten = 0
     for path in iter_files(tree, SLN_LITERAL_SUFFIXES):
         rel = path.relative_to(tree).as_posix()
-        if rel.startswith(SLN_LITERAL_SKIP[:4]) or rel in SLN_LITERAL_SKIP:
+        if rel.startswith(SLN_LITERAL_SKIP) or rel in SLN_LITERAL_SKIP:
             continue
         text, bom = read(path)
         new, n = rewrite_sln_literal(text)
