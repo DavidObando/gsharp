@@ -322,6 +322,23 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
     }
 
     [Fact]
+    public void NonCompileItemsOfASharedFileImportedByACsproj_AreVerbatim_AndUnimportedFilesAreIgnored()
+    {
+        this.Write("a/a.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><Import Project=\"..\\shared\\shared.props\" /></Project>");
+        this.Write(
+            "shared/shared.props",
+            "<Project><ItemGroup><None Include=\"Fixture.cs\" /><Compile Include=\"Own.cs\" /></ItemGroup></Project>");
+        this.Write("a/Fixture.cs", "class F {}");
+        this.Write("a/Own.cs", "class O {}");
+        this.Write("shared/unused.props", "<Project><ItemGroup><None Include=\"Unused.cs\" /></ItemGroup></Project>");
+        this.Write("shared/Unused.cs", "class U {}");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
+
+        Assert.Equal(new[] { "a/Fixture.cs" }, verbatim.ToArray());
+    }
+
+    [Fact]
     public void SharedFileWithNoGsprojImporter_KeepsItsCompileItemsTranslated()
     {
         this.Write("Directory.Build.targets", "<Project><ItemGroup><Compile Include=\"Own.cs\" /></ItemGroup></Project>");
