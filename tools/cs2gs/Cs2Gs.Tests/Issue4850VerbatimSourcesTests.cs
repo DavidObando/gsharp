@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Cs2Gs.Pipeline;
 using Xunit;
 
@@ -176,6 +177,147 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
         this.Write("src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
 
         Assert.Contains("src/out/Keep.cs", RepositoryFileInventory.Enumerate(this.root));
+    }
+
+    [Fact]
+    public void LaterIncludeReAddsWhatAnEarlierRemoveTook_AndLaterRemoveWins()
+    {
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+            "<None Remove=\"Readded.cs\" /><None Include=\"Readded.cs\" />" +
+            "<None Include=\"Removed.cs\" /><None Remove=\"Removed.cs\" />" +
+            "</ItemGroup></Project>");
+        this.Write("a/Readded.cs", "class A {}");
+        this.Write("a/Removed.cs", "class B {}");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
+
+        Assert.Equal(new[] { "a/Readded.cs" }, verbatim.ToArray());
+    }
+
+    [Fact]
+    public void DirectoryAnchors_ResolveRelativeToTheProjectOnce()
+    {
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+            "<None Include=\"$(MSBuildThisFileDirectory)Data.cs\" />" +
+            "<None Include=\"$(MSBuildProjectDirectory)\\Other.cs\" />" +
+            "</ItemGroup></Project>");
+        this.Write("a/Data.cs", "class A {}");
+        this.Write("a/Other.cs", "class B {}");
+        var warnings = new List<string>();
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory(), warnings);
+
+        Assert.Equal(new[] { "a/Data.cs", "a/Other.cs" }, verbatim.OrderBy(p => p, StringComparer.Ordinal).ToArray());
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
+    public void BackslashSpelledInventory_StillMatches()
+    {
+        this.Write("a/a.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><None Include=\"Fixtures\\**\\*\" /></ItemGroup></Project>");
+        this.Write("a/Fixtures/Data.cs", "class A {}");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(
+            this.root, new[] { "a\\a.csproj", "a\\Fixtures\\Data.cs" });
+
+        Assert.Equal(new[] { "a\\Fixtures\\Data.cs" }, verbatim.ToArray());
+    }
+
+    [Fact]
+    public void DualOwnedSourceWithCheckedInGsTwin_IsACollision()
+    {
+        this.Write("a/a.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><None Include=\"Shared.cs\" /></ItemGroup></Project>");
+        this.Write("a/Shared.cs", "class A {}");
+        this.Write("a/Shared.gs", "package a");
+        string destination = Path.Combine(Path.GetTempPath(), "cs2gs-4850-out-" + Guid.NewGuid().ToString("N"));
+
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(
+            () => RepositoryMirror.Prepare(this.root, destination));
+
+        Assert.Contains("Shared.gs", ex.Message);
+        if (Directory.Exists(destination))
+        {
+            Directory.Delete(destination, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The real repository driver: a source compiled by a translated project AND
+    /// referenced as data is translated and copied, and data/foreign inputs are
+    /// copied without a translated twin.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Pipeline_TranslatesCompiledSources_AndCopiesReferencedOnes()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        this.Write(
+            "source/src/Widget/Widget.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>" +
+            "<ItemGroup><Compile Remove=\"Fixtures\\**\\*.cs\" />" +
+            "<None Include=\"Fixtures\\**\\*\" /><None Include=\"Shared.cs\" /></ItemGroup></Project>");
+        this.Write("source/src/Widget/Widget.cs", "namespace Widget { public static class Answer { public static int Value() => 42; } }");
+        this.Write("source/src/Widget/Shared.cs", "namespace Widget { public static class Shared { public static int One() => 1; } }");
+        this.Write("source/src/Widget/Fixtures/Data.cs", "namespace Fixture { public class Data { } }");
+        this.Write(
+            "source/samples/Foreign/Foreign.gsproj",
+            "<Project Sdk=\"Gsharp.NET.Sdk\"><ItemGroup><Compile Include=\"ThisAssembly.cs\" /></ItemGroup></Project>");
+        this.Write("source/samples/Foreign/ThisAssembly.cs", "namespace G { internal static class ThisAssembly { } }");
+        string source = Path.Combine(this.root, "source");
+        string destination = Path.Combine(this.root, "destination");
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            SourceRoot = source,
+            OutputRoot = destination,
+            ArtifactRoot = Path.Combine(this.root, "runs"),
+            OutputLayout = MigrationOutputLayout.Repository,
+            Config = "Release",
+        };
+        var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
+
+        RunResult result = await pipeline.RunAsync(RepositoryDiscovery.Discover(source));
+
+        Assert.True(result.Succeeded);
+        string widget = Path.Combine(destination, "src", "Widget");
+        Assert.True(File.Exists(Path.Combine(widget, "Shared.gs")));
+        Assert.Equal(
+            File.ReadAllText(Path.Combine(source, "src", "Widget", "Shared.cs")),
+            File.ReadAllText(Path.Combine(widget, "Shared.cs")));
+        Assert.True(File.Exists(Path.Combine(widget, "Widget.gs")));
+        Assert.True(File.Exists(Path.Combine(widget, "Fixtures", "Data.cs")));
+        Assert.False(File.Exists(Path.Combine(widget, "Fixtures", "Data.gs")));
+        Assert.True(File.Exists(Path.Combine(destination, "samples", "Foreign", "ThisAssembly.cs")));
+        Assert.False(File.Exists(Path.Combine(destination, "samples", "Foreign", "ThisAssembly.gs")));
+    }
+
+    private static string FindCompiler()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            foreach (string config in new[] { "Release", "Debug" })
+            {
+                string candidate = Path.Combine(dir.FullName, "out", "bin", config, "Compiler", "gsc.dll");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
     }
 
     private IReadOnlyList<string> Inventory() => RepositoryFileInventory.Enumerate(this.root);

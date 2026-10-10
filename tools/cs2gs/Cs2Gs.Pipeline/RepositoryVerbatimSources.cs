@@ -32,30 +32,40 @@ namespace Cs2Gs.Pipeline;
 /// other than a <c>Compile</c> item of a translated (<c>.csproj</c>, shared
 /// <c>.props</c>/<c>.targets</c>) project is copied verbatim. A file that is
 /// both (compiled by a translated project AND referenced as data) is
-/// translated and ALSO copied. Includes that cannot be resolved statically
-/// (unknown MSBuild properties) and could name <c>.cs</c> files are reported
-/// as warnings rather than guessed at.
+/// translated and ALSO copied. Item operations are applied in document order
+/// per item type, as MSBuild does. Includes that cannot be resolved statically
+/// (unknown MSBuild properties) and explicitly name <c>.cs</c> files are
+/// reported as warnings rather than guessed at.
 /// </para>
 /// </remarks>
 internal static class RepositoryVerbatimSources
 {
     private static readonly string[] ProjectExtensions = { ".csproj", ".gsproj", ".props", ".targets" };
 
-    /// <summary>Computes the repository-relative ('/'-separated) <c>.cs</c> files copied verbatim.</summary>
+    /// <summary>Computes the <c>.cs</c> inventory entries copied verbatim.</summary>
     /// <param name="sourceRoot">The repository source root.</param>
-    /// <param name="inventory">The repository inventory ('/'-separated, root-relative).</param>
+    /// <param name="inventory">The repository inventory (root-relative paths).</param>
     /// <param name="warnings">Receives unresolvable-include warnings, or <see langword="null"/> to ignore them.</param>
-    /// <returns>The set of <c>.cs</c> paths, case-insensitive.</returns>
+    /// <returns>The matching inventory entries, spelled as in <paramref name="inventory"/>, case-insensitive.</returns>
     internal static ISet<string> Compute(
         string sourceRoot,
         IReadOnlyList<string> inventory,
         ICollection<string> warnings = null)
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        string[] csharpFiles = inventory
-            .Where(path => Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        if (csharpFiles.Length == 0)
+
+        // Matching runs over '/'-separated paths; the result keeps the inventory's
+        // own spelling, which is what callers use for set membership.
+        var csharpFiles = new List<(string Normalized, string Original)>();
+        foreach (string path in inventory)
+        {
+            if (Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                csharpFiles.Add((path.Replace('\\', '/'), path));
+            }
+        }
+
+        if (csharpFiles.Count == 0)
         {
             return result;
         }
@@ -67,7 +77,7 @@ internal static class RepositoryVerbatimSources
             XDocument document;
             try
             {
-                document = XDocument.Load(Path.Combine(root, projectPath.Replace('/', Path.DirectorySeparatorChar)));
+                document = XDocument.Load(Path.Combine(root, projectPath.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar)));
             }
             catch (Exception ex) when (ex is System.Xml.XmlException or IOException)
             {
@@ -75,67 +85,74 @@ internal static class RepositoryVerbatimSources
             }
 
             bool translatedProject = !Path.GetExtension(projectPath).Equals(".gsproj", StringComparison.OrdinalIgnoreCase);
-            string directory = DirectoryOf(projectPath);
-            var removed = new Dictionary<string, List<Regex>>(StringComparer.OrdinalIgnoreCase);
-            var included = new List<(string ItemName, XElement Item, string Pattern)>();
+            string directory = DirectoryOf(projectPath.Replace('\\', '/'));
+
+            // MSBuild evaluates item operations in document order per item
+            // type, so a later Include can re-add what an earlier Remove took.
+            var operations = new Dictionary<string, List<ItemOperation>>(StringComparer.OrdinalIgnoreCase);
             foreach (XElement item in document.Descendants().Where(e =>
                 e.Parent is not null
                 && e.Parent.Name.LocalName.Equals("ItemGroup", StringComparison.OrdinalIgnoreCase)))
             {
                 string itemName = item.Name.LocalName;
-                string removePattern = item.Attribute("Remove")?.Value;
-                if (removePattern is not null)
-                {
-                    foreach (Regex remove in Patterns(removePattern, directory, null))
-                    {
-                        if (!removed.TryGetValue(itemName, out List<Regex> list))
-                        {
-                            removed[itemName] = list = new List<Regex>();
-                        }
-
-                        list.Add(remove);
-                    }
-                }
-
-                foreach (string attribute in new[] { "Include", "Update" })
-                {
-                    string value = item.Attribute(attribute)?.Value;
-                    if (value is not null)
-                    {
-                        included.Add((itemName, item, value));
-                    }
-                }
-            }
-
-            foreach ((string itemName, XElement item, string pattern) in included)
-            {
                 if (translatedProject && itemName.Equals("Compile", StringComparison.OrdinalIgnoreCase))
                 {
                     // Compiled by a translated project: the translation owns it.
                     continue;
                 }
 
-                List<string> unresolved = warnings is null ? null : new List<string>();
-                Regex[] includes = Patterns(pattern, directory, unresolved).ToArray();
-                Regex[] excludes = Patterns(item.Attribute("Exclude")?.Value, directory, null).ToArray();
-                removed.TryGetValue(itemName, out List<Regex> removes);
-                foreach (string file in csharpFiles)
+                if (!operations.TryGetValue(itemName, out List<ItemOperation> list))
                 {
-                    if (includes.Any(r => r.IsMatch(file))
-                        && !excludes.Any(r => r.IsMatch(file))
-                        && removes?.Any(r => r.IsMatch(file)) != true)
-                    {
-                        result.Add(file);
-                    }
+                    operations[itemName] = list = new List<ItemOperation>();
                 }
 
-                if (unresolved is { Count: > 0 })
+                string remove = item.Attribute("Remove")?.Value;
+                if (remove is not null)
                 {
-                    foreach (string text in unresolved)
+                    list.Add(new ItemOperation(true, Patterns(remove, directory, null).ToArray(), Array.Empty<Regex>()));
+                }
+
+                foreach (string attribute in new[] { "Include", "Update" })
+                {
+                    string value = item.Attribute(attribute)?.Value;
+                    if (value is null)
                     {
-                        warnings.Add(
-                            $"'{projectPath}' {itemName} item '{text}' uses an MSBuild expression this " +
-                            "mirror cannot resolve; if it names .cs files they will be translated, not copied.");
+                        continue;
+                    }
+
+                    List<string> unresolved = warnings is null ? null : new List<string>();
+                    list.Add(new ItemOperation(
+                        false,
+                        Patterns(value, directory, unresolved).ToArray(),
+                        Patterns(item.Attribute("Exclude")?.Value, directory, null).ToArray()));
+                    if (unresolved is not null)
+                    {
+                        foreach (string text in unresolved)
+                        {
+                            warnings.Add(
+                                $"'{projectPath}' {itemName} item '{text}' uses an MSBuild expression this " +
+                                "mirror cannot resolve; if it names .cs files they will be translated, not copied.");
+                        }
+                    }
+                }
+            }
+
+            foreach (List<ItemOperation> list in operations.Values)
+            {
+                foreach ((string normalized, string original) in csharpFiles)
+                {
+                    bool referenced = false;
+                    foreach (ItemOperation operation in list)
+                    {
+                        if (operation.Matches.Any(r => r.IsMatch(normalized)))
+                        {
+                            referenced = !operation.Remove && !operation.Excludes.Any(r => r.IsMatch(normalized));
+                        }
+                    }
+
+                    if (referenced)
+                    {
+                        result.Add(original);
                     }
                 }
             }
@@ -156,9 +173,12 @@ internal static class RepositoryVerbatimSources
 
         foreach (string raw in itemValue.Split(';', StringSplitOptions.RemoveEmptyEntries))
         {
+            // The two directory anchors resolve to the file's own directory,
+            // which Resolve prepends once below; substituting the directory
+            // here too would duplicate it.
             string text = raw.Trim()
-                .Replace("$(MSBuildThisFileDirectory)", projectDirectory.Length == 0 ? string.Empty : projectDirectory + "/", StringComparison.OrdinalIgnoreCase)
-                .Replace("$(MSBuildProjectDirectory)", projectDirectory, StringComparison.OrdinalIgnoreCase)
+                .Replace("$(MSBuildThisFileDirectory)", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Replace("$(MSBuildProjectDirectory)", string.Empty, StringComparison.OrdinalIgnoreCase)
                 .Replace('\\', '/');
             if (text.Contains("$(", StringComparison.Ordinal)
                 || text.Contains("@(", StringComparison.Ordinal)
@@ -247,4 +267,6 @@ internal static class RepositoryVerbatimSources
         int separator = relativePath.LastIndexOf('/');
         return separator < 0 ? string.Empty : relativePath.Substring(0, separator);
     }
+
+    private sealed record ItemOperation(bool Remove, Regex[] Matches, Regex[] Excludes);
 }
