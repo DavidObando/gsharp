@@ -111,6 +111,13 @@ public sealed class CorePublicApiAllowanceTests : IDisposable
     }
 
     [Fact]
+    public void DormantEntryOnNonRecord_IsRejectedEvenWhenAbsent()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => CorePublicApiAllowance.Apply(NativeSurface(), Allow("Demo.Plain", Deconstruct)));
+    }
+
+    [Fact]
     public void RemovedExistingMember_StillFails()
     {
         string[] golden = NativeSurface();

@@ -121,15 +121,15 @@ internal static class CorePublicApiAllowance
                 }
             }
 
-            if (match < 0)
-            {
-                continue;
-            }
-
             if (!isRecord)
             {
                 throw new InvalidOperationException(
                     $"Allowed addition names a type that is not a record: {entry.TypeName} | {entry.MemberLine.Trim()}");
+            }
+
+            if (match < 0)
+            {
+                continue;
             }
 
             drop.Add(match);
