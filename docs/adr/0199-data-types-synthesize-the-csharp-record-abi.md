@@ -260,7 +260,7 @@ have. There are ten, all `public sealed record`:
 `MarshalAsMetadata` (5 members), `PInvokeMetadata` (11),
 `StructLayoutMetadata` (3), `BoundFieldInitializer` (up to 5),
 `BoundCatchClause` (5), `BoundSelectCase` (6), `BoundUnaryOperator` (4),
-`BoundBinaryOperator` (5), `BoundAttributeArgument` (5) and `BoundMapEntry` (2).
+`BoundBinaryOperator` (7: its five public auto properties plus the internal `IsReferenceEquality` and `IsDelegateCombination`), `BoundAttributeArgument` (5) and `BoundMapEntry` (2).
 Exact member lists are produced by the renderer in stage 2 (only auto
 properties and fields participate). All other public Core records are
 positional (`OptionalValue`, `TypeInfo`, `SymbolInfo`, `SymbolDisplayPart`,
