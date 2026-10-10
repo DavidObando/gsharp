@@ -44,9 +44,7 @@ internal static class DataPrintMembersModel
 
         foreach (var method in type.Methods)
         {
-            // An explicit interface implementation is emitted under its mangled
-            // name and is not the record slot.
-            if (!method.HasExplicitInterfaceClause && IsSlotName(method.Name, method.Parameters))
+            if (IsSlot(method))
             {
                 return method;
             }
@@ -56,19 +54,32 @@ internal static class DataPrintMembersModel
     }
 
     /// <summary>
-    /// Tests whether a method name and parameter list denote the print-members
-    /// slot: <c>PrintMembers</c> taking exactly one <see cref="StringBuilder"/>.
-    /// Other overloads named <c>PrintMembers</c> are ordinary methods.
+    /// The single answer to "is this declaration the print-members slot": a method
+    /// named <c>PrintMembers</c> taking exactly one <see cref="StringBuilder"/> by
+    /// value that is not an explicit interface implementation (those are emitted
+    /// under a mangled name and are ordinary members). Staticness is the caller's
+    /// business: an instance declaration is the slot, a static one of this shape
+    /// is rejected. Other overloads named <c>PrintMembers</c> are ordinary methods.
     /// </summary>
     /// <param name="name">The method name.</param>
+    /// <param name="hasExplicitInterfaceClause">Whether the declaration names an interface.</param>
     /// <param name="parameters">The parameters.</param>
-    /// <returns><see langword="true"/> when the shape names the slot.</returns>
-    internal static bool IsSlotName(string name, ImmutableArray<ParameterSymbol> parameters)
+    /// <returns><see langword="true"/> when the declaration has the slot's identity.</returns>
+    internal static bool IsSlotCandidate(string name, bool hasExplicitInterfaceClause, ImmutableArray<ParameterSymbol> parameters)
         => name == Name
+            && !hasExplicitInterfaceClause
             && !parameters.IsDefaultOrEmpty
             && parameters.Length == 1
             && parameters[0].RefKind == RefKind.None
             && IsStringBuilder(parameters[0].Type);
+
+    /// <summary>Tests whether a bound method has the slot's identity (see <see cref="IsSlotCandidate"/>).</summary>
+    /// <param name="method">The method.</param>
+    /// <returns><see langword="true"/> for the print-members slot.</returns>
+    internal static bool IsSlot(FunctionSymbol method)
+        => method.Name != null
+            && !method.IsStatic
+            && IsSlotCandidate(method.Name, method.HasExplicitInterfaceClause, method.Parameters);
 
     /// <summary>Tests whether a type is <see cref="StringBuilder"/> (ignoring reference nullability).</summary>
     /// <param name="type">The type.</param>
