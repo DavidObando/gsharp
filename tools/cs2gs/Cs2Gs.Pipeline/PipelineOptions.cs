@@ -222,8 +222,8 @@ public sealed class PipelineOptions
     /// <summary>Gets or sets extra G# files required when one C# file declares multiple namespaces.</summary>
     internal ISet<string>? RepositoryAdditionalFiles { get; set; }
 
-    /// <summary>Gets or sets the translated <c>.gs</c> paths this repository run already wrote (issue #4850).</summary>
-    internal ISet<string>? RepositoryEmittedOutputs { get; set; }
+    /// <summary>Gets or sets the translated <c>.gs</c> paths this repository run already wrote, with their source and text (issue #4850).</summary>
+    internal IDictionary<string, (string Source, string Text)>? RepositoryEmittedOutputs { get; set; }
 
     /// <summary>
     /// Gets or sets the absolute project paths that another app in this run

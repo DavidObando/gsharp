@@ -71,21 +71,43 @@ internal static class RepositoryVerbatimSources
         }
 
         string root = Path.GetFullPath(sourceRoot);
+        var documents = new List<(string Path, XDocument Document)>();
         foreach (string projectPath in inventory.Where(path =>
             ProjectExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase)))
         {
-            XDocument document;
             try
             {
-                document = XDocument.Load(Path.Combine(root, projectPath.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar)));
+                documents.Add((
+                    projectPath,
+                    XDocument.Load(Path.Combine(root, projectPath.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar)))));
             }
             catch (Exception ex) when (ex is System.Xml.XmlException or IOException)
             {
                 continue;
             }
+        }
 
-            bool translatedProject = !Path.GetExtension(projectPath).Equals(".gsproj", StringComparison.OrdinalIgnoreCase);
+        // Shared .props/.targets: their Compile items belong to whichever projects
+        // import them. A file a G# project may import keeps its Compile items
+        // verbatim (the SDK translates foreign C# at build time).
+        var gsprojs = documents
+            .Where(d => Path.GetExtension(d.Path).Equals(".gsproj", StringComparison.OrdinalIgnoreCase))
+            .Select(d => (Directory: DirectoryOf(d.Path.Replace('\\', '/')), Imports: ImportedFileNames(d.Document)))
+            .ToList();
+
+        foreach ((string projectPath, XDocument document) in documents)
+        {
             string directory = DirectoryOf(projectPath.Replace('\\', '/'));
+            string extension = Path.GetExtension(projectPath);
+            string fileName = Path.GetFileName(projectPath.Replace('\\', '/'));
+            bool sharedFile = extension.Equals(".props", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase);
+            bool translatedProject = !extension.Equals(".gsproj", StringComparison.OrdinalIgnoreCase)
+                && !(sharedFile && gsprojs.Any(g =>
+                    fileName.StartsWith("Directory.", StringComparison.OrdinalIgnoreCase)
+                        ? directory.Length == 0 || g.Directory.Equals(directory, StringComparison.OrdinalIgnoreCase)
+                            || g.Directory.StartsWith(directory + "/", StringComparison.OrdinalIgnoreCase)
+                        : g.Imports.Contains(fileName)));
 
             // MSBuild evaluates item operations in document order per item
             // type, so a later Include can re-add what an earlier Remove took.
@@ -274,6 +296,22 @@ internal static class RepositoryVerbatimSources
 
         pattern.Append('$');
         return new Regex(pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static HashSet<string> ImportedFileNames(XDocument document)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (XElement import in document.Descendants()
+            .Where(e => e.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase)))
+        {
+            string project = import.Attribute("Project")?.Value;
+            if (!string.IsNullOrWhiteSpace(project))
+            {
+                names.Add(project.Replace('\\', '/').Split('/').Last().Trim());
+            }
+        }
+
+        return names;
     }
 
     private static bool IsConditionalOrDynamic(XElement item) =>
