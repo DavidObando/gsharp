@@ -210,6 +210,27 @@ def under(path: str, prefixes) -> bool:
     return any(path == p or path.startswith(p + "/") for p in prefixes)
 
 
+def is_translated(rel: str, tracked: set[str], migrated_files: set[str]) -> bool:
+    """Whether the mirror carries (or replaced) the tracked `.cs`/`.csproj` file `rel`.
+
+    True when the mirror has the same path, the `.gs`/`.gsproj` twin, or, for a `.cs`, a split part
+    `Stem.<Part>.gs` whose own `Stem.<Part>.cs` is not tracked. A tracked partial-class sibling
+    `Stem.Part.cs` translates to `Stem.Part.gs` and says nothing about `Stem.cs`, so it never
+    authorises deleting `Stem.cs`.
+    """
+    if rel in migrated_files:
+        return True
+    stem = rel.rsplit(".", 1)[0]
+    if stem + (".gs" if rel.endswith(".cs") else ".gsproj") in migrated_files:
+        return True
+    if not rel.endswith(".cs"):
+        return False
+    directory, _, name = stem.rpartition("/")
+    prefix = (directory + "/" if directory else "") + name + "."
+    return any(f.startswith(prefix) and f.endswith(".gs") and "/" not in f[len(prefix):]
+               and f[:-3] + ".cs" not in tracked for f in migrated_files)
+
+
 def commit_message(final_sha: str, tag: str, cs2gs_version: str, sdk_version: str,
                    deleted: int, added: int) -> str:
     return (
@@ -637,21 +658,15 @@ class Run:
         self.sh("assemble", ["git", "clean", "-fdxq"], cwd=self.src)
         tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=self.src).decode().split("\0")
         tracked_set = set(tracked)
+        migrated_files = {path.relative_to(self.migrated).as_posix() for path in iter_files(self.migrated, ("",))}
         deleted = 0
         retained: list[str] = []
         for rel in tracked:
             if not rel.endswith((".cs", ".csproj")) or under(rel, keep):
                 continue
-            stem = rel.rsplit(".", 1)[0]
-            twin = (self.migrated / (stem + (".gs" if rel.endswith(".cs") else ".gsproj"))).is_file()
-            # "split" sources: one C# file became Stem.<Part>.gs files (no same-named twin)
-            # Only a Stem.<Part>.gs whose own Stem.<Part>.cs is NOT tracked counts: a tracked partial-class
-            # file Stem.Part.cs translates to Stem.Part.gs and says nothing about Stem.cs.
-            split = rel.endswith(".cs") and any(
-                (stem + g.name[len(Path(stem).name):-3] + ".cs") not in tracked_set
-                for g in (self.migrated / rel).parent.glob(Path(stem).name + ".*.gs"))
-            if twin or split or (self.migrated / rel).is_file():
-                if not (self.migrated / rel).is_file():
+            translated = is_translated(rel, tracked_set, migrated_files)
+            if translated:
+                if rel not in migrated_files:
                     (self.src / rel).unlink()
                     deleted += 1
             else:
@@ -777,6 +792,10 @@ class Run:
 
     def go(self) -> int:
         self.record["started"] = datetime.now(timezone.utc).isoformat()
+        # Results of the stages this invocation starts from are void, whether or not --only re-runs them:
+        # a later success must not survive a change made to an earlier stage (new pin, new tree).
+        for name in STAGES[STAGES.index(self.args.from_stage):]:
+            self.record["stages"][name] = {"status": "not-run"}
         for name, fn in (("clone", self.s_clone), ("tools", self.s_tools), ("prepare", self.s_prepare),
                          ("translate", self.s_translate), ("assemble", self.s_assemble),
                          ("hand-fix", self.s_hand_fix), ("gsfmt", self.s_gsfmt), ("core-smoke", self.s_core_smoke),

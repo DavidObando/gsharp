@@ -89,6 +89,19 @@ class TransformTests(unittest.TestCase):
         sln = 'Project("{2150E333}") = "Build", "Build", "{1}"\nProject("{F}") = "A", "src\\A\\A.csproj", "{2}"\n'
         self.assertEqual(["src/A/A.csproj"], cutover.solution_projects(sln))
 
+    def test_assemble_deletion_decision(self):
+        tracked = {"a/Binder.cs", "a/Binder.Part.cs", "a/Big.cs", "a/Orphan.cs", "a/Lib.csproj", "a/Other.csproj"}
+        migrated = {"a/Binder.gs", "a/Binder.Part.gs", "a/Big.Fixtures.gs", "a/Lib.gsproj", "a/Keep.cs"}
+        decide = lambda rel: cutover.is_translated(rel, tracked, migrated)
+        self.assertTrue(decide("a/Binder.cs"))          # twin
+        self.assertTrue(decide("a/Binder.Part.cs"))     # twin of the partial sibling
+        self.assertTrue(decide("a/Big.cs"))             # genuine split: Big.Fixtures.cs is not tracked
+        self.assertTrue(decide("a/Lib.csproj"))         # project twin
+        self.assertFalse(decide("a/Orphan.cs"))         # nothing carries it: retained
+        self.assertFalse(decide("a/Other.csproj"))
+        # a tracked partial sibling must never authorise deleting the base file
+        self.assertFalse(cutover.is_translated("a/Binder.cs", tracked, {"a/Binder.Part.gs"}))
+
     def test_filters_and_keep_prefixes(self):
         text = "x=(\n  --exclude samples/A/CSharpApp\n  --exclude src/vs-gsharp/src/VsGsharp/VsGsharp.csproj\n  # --exclude no\n)"
         filters = cutover.parse_project_filters(text)
