@@ -488,6 +488,53 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
         Assert.Contains("checkedIn", File.ReadAllText(Path.Combine(destination, "src", "Widget", "Mixed.Deep.gs")));
     }
 
+    /// <summary>
+    /// The unresolved-include warning reaches stderr through the real driver.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Pipeline_ReportsAnUnresolvableCSharpIncludeOnStandardError()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        this.Write(
+            "source/src/Widget/Widget.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>" +
+            "<ItemGroup><None Include=\"$(SomeDir)/Data.cs\" /></ItemGroup></Project>");
+        this.Write("source/src/Widget/Widget.cs", "namespace Widget { public static class Answer { public static int Value() => 42; } }");
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            SourceRoot = Path.Combine(this.root, "source"),
+            OutputRoot = Path.Combine(this.root, "destination"),
+            ArtifactRoot = Path.Combine(this.root, "runs"),
+            OutputLayout = MigrationOutputLayout.Repository,
+            Config = "Release",
+        };
+        var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
+        TextWriter originalError = Console.Error;
+        var captured = new StringWriter();
+        Console.SetError(captured);
+        try
+        {
+            await pipeline.RunAsync(RepositoryDiscovery.Discover(Path.Combine(this.root, "source")));
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        string warning = Assert.Single(
+            captured.ToString().Split('\n'),
+            line => line.Contains("cannot resolve", StringComparison.Ordinal));
+        Assert.Contains("src/Widget/Widget.csproj", warning, StringComparison.Ordinal);
+        Assert.Contains("$(SomeDir)/Data.cs", warning, StringComparison.Ordinal);
+    }
+
     private static string FindCompiler()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

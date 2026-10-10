@@ -185,6 +185,8 @@ public sealed class MigrationPipeline
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             this.options.RepositoryTranslations =
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            this.options.RepositoryEmittedOutputs =
+                new Dictionary<string, (string Source, string Text)>(StringComparer.OrdinalIgnoreCase);
             this.options.RepositoryAdditionalFiles =
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
