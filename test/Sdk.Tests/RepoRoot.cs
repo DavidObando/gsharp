@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using GSharp.Tests;
 
 namespace GSharp.Sdk.Tests;
 
@@ -68,7 +69,7 @@ internal static class RepoRoot
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(System.IO.Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return dir.FullName;
             }

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator.Coverage;
 using GSharp.Tests;
 using Xunit;
@@ -190,7 +191,7 @@ public class ConstructInventoryGoldenTests
         var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(ConstructInventoryGoldenTests).Assembly.Location));
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return dir.FullName;
             }

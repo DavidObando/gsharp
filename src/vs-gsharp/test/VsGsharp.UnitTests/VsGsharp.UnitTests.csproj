@@ -28,4 +28,9 @@
     <Compile Include="..\..\src\VsGsharp.CodeLens\GSharpReferenceCodeLensPayload.cs"
              Link="GSharpReferenceCodeLensPayload.cs" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\..\..\test\Shared\RepositoryRootMarker.cs" Link="RepositoryRootMarker.cs" />
+  </ItemGroup>
+
 </Project>

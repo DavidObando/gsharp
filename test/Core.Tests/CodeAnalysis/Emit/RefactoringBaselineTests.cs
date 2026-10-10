@@ -430,7 +430,7 @@ public class RefactoringBaselineTests
         var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(RefactoringBaselineTests).Assembly.Location)!);
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return dir.FullName;
             }

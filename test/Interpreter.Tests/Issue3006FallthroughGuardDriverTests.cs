@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GSharp.Compiler;
 using GSharp.Core.CodeAnalysis;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -576,7 +577,7 @@ public class Issue3006FallthroughGuardDriverTests
     private static string GetRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+        while (directory != null && !RepositoryRootMarker.IsRoot(directory.FullName))
         {
             directory = directory.Parent;
         }

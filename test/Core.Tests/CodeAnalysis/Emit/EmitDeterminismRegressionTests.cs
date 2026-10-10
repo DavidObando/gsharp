@@ -14,6 +14,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
@@ -214,7 +215,7 @@ public class EmitDeterminismRegressionTests
         var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(EmitDeterminismRegressionTests).Assembly.Location)!);
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return dir.FullName;
             }

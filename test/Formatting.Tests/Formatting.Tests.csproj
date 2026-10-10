@@ -11,4 +11,8 @@
     <ProjectReference Include="..\..\src\Formatting\Gsfmt.Cli\Gsfmt.Cli.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\RepositoryRootMarker.cs" Link="RepositoryRootMarker.cs" />
+  </ItemGroup>
+
 </Project>

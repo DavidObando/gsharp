@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GSharp.LanguageServer.Protocol;
 using GSharp.LanguageServer.Server;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.LanguageServer.Tests;
@@ -142,7 +143,7 @@ public sealed class Issue3198LooseFileExtensionDiagnosticsTests
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory != null; directory = directory.Parent)
         {
             var candidate = Path.Combine(directory.FullName, "samples");
-            if (Directory.Exists(candidate) && File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+            if (Directory.Exists(candidate) && RepositoryRootMarker.IsRoot(directory.FullName))
             {
                 return candidate;
             }
