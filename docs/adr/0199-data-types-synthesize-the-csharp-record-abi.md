@@ -73,7 +73,7 @@ already matches on those members; the stage-2 change must keep that true.
 6. **Add** `IEquatable<Self>` to every data type's interface list (it is
    implemented by the existing `Equals(Self)` slot), and a C#-shaped
    `PrintMembers`.
-7. **Parameterless constructor: no new removal needed** (audit below).
+7. **Parameterless constructor: no removal** (audit below): `with` does not use it, but body-only construction and imported body-only records do.
 
 ### Member tables
 
@@ -82,22 +82,30 @@ unchanged. `T` is the type; `B` its direct data base.
 
 **data class**
 
-| Member | Sealed (default) today | Sealed after | Open / derived after |
-|---|---|---|---|
-| Primary ctor | public, only ctor when primary-only (#4829) | = | = |
-| Parameterless ctor | body-only types and types with explicit `init` | = (see audit) | = |
-| Copy ctor `.ctor(T original)` | private | = | protected; chains to base copy ctor |
-| `<Clone>$()` | public | = | public virtual newslot; MethodImpl to base clone |
-| `EqualityContract` | private | = | protected virtual (override if base is data) |
-| `Equals(object)` | public override | = | = |
-| `Equals(T)` | public | = | public virtual; derived adds `sealed override Equals(B)` |
-| `GetHashCode()` | public override | = | = |
-| `ToString()` | public override, Kotlin format | public override, record format | same; calls `PrintMembers` |
-| `PrintMembers(StringBuilder)` | absent | private bool | protected virtual (derived: protected override, base first) |
-| `op_Equality` / `op_Inequality` | public static (`left`, `right`) | = | = |
-| `Deconstruct(out ...)` | per G# rule (non-empty) | = | = |
-| `IEquatable<T>` | only when declared | always | always |
-| `IEquatable<B>` | n/a | n/a | not added; `Equals(B)` override exists as in C# |
+Four class shapes have distinct ABIs. "Root" means the direct base is not a
+data type; "derived" means it is one. "Today" columns are omitted where the
+member is unchanged (`=`); changes are called out in the last column.
+
+| Member | Sealed root | Sealed derived | Open root | Open derived | Change |
+|---|---|---|---|---|---|
+| Primary ctor | public | public | public | public | = (primary-only: no parameterless, #4829) |
+| Parameterless ctor | body-only / explicit `init` only | same | same | same | = (audit) |
+| Copy ctor `.ctor(T original)` | private | private | protected | protected | = |
+| Copy ctor base chain | `object` | base copy ctor | `object` | base copy ctor | = |
+| `<Clone>$()` | public | public virtual newslot, MethodImpl to base | public virtual newslot | public virtual newslot, MethodImpl to base | = |
+| `EqualityContract` | private | protected virtual override | protected virtual newslot | protected virtual override | = |
+| `Equals(object)` | public virtual override | same | same | same | = |
+| `Equals(T)` | public | public sealed; plus `public sealed override Equals(B)` | public virtual | public virtual; plus `public sealed override Equals(B)` | = |
+| `GetHashCode()` | public virtual override | same | same | same | = |
+| `ToString()` | public virtual override | same | same | same | format becomes record format |
+| `PrintMembers(StringBuilder)` | private bool | protected virtual override | protected virtual | protected virtual override | new (today cs2gs source for protected cases) |
+| `op_Equality` / `op_Inequality` | public static (`left`, `right`) | same | same | same | = |
+| `Deconstruct(out ...)` | per G# rule | same | same | same | = |
+| `IEquatable<T>` | implemented | implemented | implemented | implemented | now always (was only when declared) |
+
+The native `DocInline+Code` entry in the Core snapshot is the witness for the
+"sealed derived" column and `DocInline` for "open root"; stage 2 adds Roslyn
+witness tests for each of the four shapes rather than trusting this table.
 
 **data struct**
 
@@ -189,13 +197,15 @@ What the parameterless constructor still does, and why it stays or goes:
    public parameterless constructor (`dataPrimaryOnly` in
    `PlanClassMethods`); nothing uses it.
 3. `EmitStructLiteral` has a fallback (the #2263 branch) that constructs an
-   *imported* G# data class through `GetConstructor(Type.EmptyTypes)`. That
-   exists for assemblies emitted by older gsc that still carried the extra
-   constructor. Since breaking changes are accepted, stage 2 deletes that
-   fallback; imported primary-constructor records already use the #2291
-   positional-constructor path.
+   *imported* data class through `GetConstructor(Type.EmptyTypes)`. It serves
+   imported **body-only** C# records, which do have a public parameterless
+   constructor, as well as assemblies from older gsc. It must stay. The #2291
+   positional-constructor path covers only imported records that lack a
+   parameterless constructor.
 
-So no code outside the paths above needs removal, and nothing blocks the plan.
+So nothing is removed beyond what #4829 already removed; the owner's
+recollection is right for `with`, but the parameterless constructor is not
+dead code and is part of the C# ABI for body-only records.
 
 ### Migration impact (counted)
 
