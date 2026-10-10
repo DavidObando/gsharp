@@ -61,9 +61,12 @@ git -C "$work/migrated" add -A
 git -C "$work/migrated" -c user.name=stage2 -c user.email=stage2@example.invalid \
   commit -q -m "migrated tree"
 
+# The stage-0 package is the one whose version the migrated tree pins.
+pin=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['msbuild-sdks']['Gsharp.NET.Sdk'])" \
+  "$work/migrated/global.json")
 mkdir -p "$work/bootstrap"
-cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg "$work/bootstrap/"
-bootstrap=$(find "$work/bootstrap" -name 'Gsharp.NET.Sdk.*.nupkg' ! -name '*.snupkg' | head -1)
+cp "out/bin/Release/nupkgs/Gsharp.NET.Sdk.$pin.nupkg" "$work/bootstrap/"
+bootstrap="$work/bootstrap/Gsharp.NET.Sdk.$pin.nupkg"
 
 python3 build/selfhost-stage2.py \
   --tree "$work/migrated" --bootstrap "$bootstrap" --work "$work/controller" \
