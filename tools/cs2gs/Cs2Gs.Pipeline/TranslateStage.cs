@@ -568,6 +568,19 @@ public sealed class TranslateStage : IMigrationStage
                         primaryGsRelativePath = gsRelativePath;
                         if (context.Options.OutputLayout == MigrationOutputLayout.Repository)
                         {
+                            // Issue #4850: a source copied verbatim AND compiled by a
+                            // translated project is dual-owned. If a checked-in `.gs`
+                            // already sits at the translation's destination, the first
+                            // translation of this source would silently overwrite it.
+                            string translatedDestination = Path.Combine(context.ProjectOutputDir, gsRelativePath);
+                            if (File.Exists(translatedDestination)
+                                && context.Options.RepositoryTranslations?.ContainsKey(Path.GetFullPath(document.FilePath)) != true)
+                            {
+                                throw new InvalidOperationException(
+                                    $"Migration output collision: translating '{document.FilePath}' would overwrite the " +
+                                    $"checked-in '{translatedDestination}'.");
+                            }
+
                             RegisterRepositoryTranslation(context.Options, document.FilePath, printed);
                         }
                     }
