@@ -184,6 +184,12 @@ public sealed class PipelineOptions
     public TestNameParityBaseline? TestNameParityBaseline { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the run stops before the final stage, so a passing app is
+    /// recorded as unverified instead of green (issue #4853).
+    /// </summary>
+    public bool PartialRun { get; set; }
+
+    /// <summary>
     /// Gets or sets the canonical source-project to generated-project mapping
     /// established before migration starts.
     /// </summary>
