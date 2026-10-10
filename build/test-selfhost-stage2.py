@@ -527,6 +527,22 @@ static class Program
         self.assertIn("overlaps", result.stderr)
 
 
+class TestSelectionTests(unittest.TestCase):
+    def test_filter_excludes_each_recorded_test_exactly_once(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "stage2_test_filter", REPO / "build" / "selfhost" / "stage2-test-filter.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        document = json.loads(
+            (REPO / "build/selfhost/stage2-env-bound-tests.json").read_text(encoding="utf-8"))
+        for project in ("Core.Tests", "Compiler.Tests"):
+            clauses = module.build_filter(project).split("&")
+            self.assertEqual(len(document[project]), len(set(clauses)))
+            self.assertTrue(all(c.startswith("FullyQualifiedName!=") for c in clauses))
+        with self.assertRaises(SystemExit):
+            module.build_filter("Nope.Tests")
+
+
 class ReportVerifierTests(unittest.TestCase):
     """The integrated script trusts verify-stage2-report.py over the exit code."""
 
