@@ -36,6 +36,7 @@ from pathlib import Path
 SDK_ID = "Gsharp.NET.Sdk"
 CS2GS_ID = "Gsharp.Cs2Gs"
 GSFMT_ID = "Gsharp.Gsfmt"
+TESTING_ID = "GSharp.CodeAnalysis.Analyzers.Testing"
 FLAT = "https://api.nuget.org/v3-flatcontainer"
 CLONE_URL = "https://github.com/DavidObando/gsharp.git"
 STAGES = ("clone", "tools", "prepare", "translate", "assemble", "hand-fix", "gsfmt",
@@ -108,6 +109,15 @@ def rewrite_by_basename(text: str, gsproj_only: set[str]) -> tuple[str, list[str
 
 INFRA_DIRS = ("e2etests", ".github/workflows", "build", "src/vscode-gsharp", "website/scripts")
 INFRA_SUFFIXES = (".sh", ".py", ".yml", ".yaml", ".js", ".ps1")
+
+
+def rewrite_sln_literal(text: str) -> tuple[str, int]:
+    """`GSharp.sln` -> `GSharp.slnx`: the repository root is anchored by this file name all over the sources."""
+    return re.subn(r"(?<![\w.])GSharp\.sln\b", "GSharp.slnx", text)
+
+
+SLN_LITERAL_SUFFIXES = (".gs", ".sh", ".py", ".yml", ".yaml", ".js", ".ts", ".ps1", ".targets", ".props")
+SLN_LITERAL_SKIP = ("docs/", "website/", "node_modules/", "build/test-cutover.py", ".git/")
 
 
 def unpin_sdk(text: str, version: str) -> tuple[str, bool]:
@@ -233,23 +243,31 @@ def write(path: Path, text: str, bom: bool) -> None:
     path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8"))
 
 
+def packable_gsprojs(csproj_texts: dict[str, str]) -> list[str]:
+    """`.gsproj` paths of the C# projects that set GeneratePackageOnBuild=true (input: {csproj path: text})."""
+    return sorted(rel[:-len(".csproj")] + ".gsproj" for rel, text in csproj_texts.items()
+                  if re.search(r"<GeneratePackageOnBuild>\s*true\s*</GeneratePackageOnBuild>", text, re.IGNORECASE))
+
+
 def apply_hand_fixes(tree: Path, sdk_version: str, original_sln: str | None, log,
-                     keep: tuple[str, ...] = ALWAYS_KEEP_CSHARP) -> list[str]:
+                     keep: tuple[str, ...] = ALWAYS_KEEP_CSHARP, packable: tuple[str, ...] = ()) -> list[str]:
     """Applies the audited hand-fix list; returns the list of problems that need a human."""
     problems: list[str] = []
 
-    # 1. GeneratePackageOnBuild
-    sdk_proj = tree / SDK_PROJECT
-    if not sdk_proj.is_file():
-        problems.append(f"{SDK_PROJECT} not found")
-    else:
-        text, bom = read(sdk_proj)
-        new, hit = enable_generate_package_on_build(text)
+    # 1. GeneratePackageOnBuild: the mirror forces it to false everywhere; every project that packed on
+    #    build in C# (SDK, Templates, Repl, Cs2Gs.Cli, Gsfmt.Cli, Analyzers.Testing today) must again.
+    for rel in sorted(set(packable) | {SDK_PROJECT}):
+        proj = tree / rel
+        if not proj.is_file():
+            problems.append(f"{rel} not found")
+            continue
+        text, bom = read(proj)
+        new_text, hit = enable_generate_package_on_build(text)
         if hit:
-            write(sdk_proj, new, bom)
-            log("hand-fix 1: GeneratePackageOnBuild re-enabled")
+            write(proj, new_text, bom)
+            log(f"hand-fix 1: {rel}: GeneratePackageOnBuild re-enabled")
         elif "<GeneratePackageOnBuild>true" not in text:
-            problems.append(f"{SDK_PROJECT} has no GeneratePackageOnBuild property")
+            problems.append(f"{rel} has no GeneratePackageOnBuild property")
 
     # 2. dangling .csproj literals (Pack* targets, VsGsharp LanguageServer path, ...)
     for path in iter_files(tree, (".gsproj", ".csproj", ".props", ".targets")):
@@ -281,7 +299,7 @@ def apply_hand_fixes(tree: Path, sdk_version: str, original_sln: str | None, log
             continue
         for path in iter_files(base, INFRA_SUFFIXES):
             rel = path.relative_to(tree).as_posix()
-            if path.name.startswith("test-") or "/test/" in rel or "/node_modules/" in rel:
+            if rel == "build/test-cutover.py" or "/test/" in rel or "/node_modules/" in rel:
                 continue
             text, bom = read(path)
             new, changed = rewrite_by_basename(text, gsproj_only)
@@ -317,6 +335,20 @@ def apply_hand_fixes(tree: Path, sdk_version: str, original_sln: str | None, log
             for rel in slnx_projects:
                 if not (tree / rel).is_file():
                     problems.append(f"GSharp.slnx lists a missing project {rel}")
+
+    # 4b. the repository root is found by probing for GSharp.sln (cs2gs, Sdk.Tests RepoRoot, ~100 test files,
+    #     the e2e scripts, build.yml). Found by the first dry run: with the .sln gone every one of them fails.
+    rewritten = 0
+    for path in iter_files(tree, SLN_LITERAL_SUFFIXES):
+        rel = path.relative_to(tree).as_posix()
+        if rel.startswith(SLN_LITERAL_SKIP[:4]) or rel in SLN_LITERAL_SKIP:
+            continue
+        text, bom = read(path)
+        new, n = rewrite_sln_literal(text)
+        if n:
+            write(path, new, bom)
+            rewritten += 1
+    log(f"hand-fix 4b: GSharp.sln -> GSharp.slnx in {rewritten} file(s)")
 
     # 5. .gitattributes
     ga = tree / ".gitattributes"
@@ -483,6 +515,8 @@ class Run:
             self.sh("tools", ["dotnet", "tool", "install", package, "--version", version, "--tool-path",
                               self.tools, "--configfile", config], cwd=self.root)
         nupkg = self.download(SDK_ID, pin, self.pkgs / f"{SDK_ID}.{pin}.nupkg")
+        self.download(TESTING_ID, pin, self.pkgs / f"{TESTING_ID}.{pin}.nupkg")
+        shutil.rmtree(self.pkgs / "sdk", ignore_errors=True)
         with zipfile.ZipFile(nupkg) as z:
             z.extractall(self.pkgs / "sdk")
         for rel in ("tools/compiler/gsc.dll", "tools/gsgen/gsgen.dll"):
@@ -504,15 +538,27 @@ class Run:
                             "-graph"], cwd=self.src)
         self.sh("prepare", ["dotnet", "build", "src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/"
                             "GSharp.CodeAnalysis.Analyzers.Testing.csproj", "-c", "Release", "-graph"], cwd=self.src)
-        # Only the PUBLISHED SDK may be a local candidate for the pin: drop what the source build produced.
+        pin = self.stage_pinned_sdk()
+        return "passed", f"restored, built prerequisites, staged published {SDK_ID} {pin}"
+
+    def stage_pinned_sdk(self) -> str:
+        """Only the PUBLISHED SDK may be a local candidate for the pin: drop what a source build produced.
+
+        Called again after capture-test-oracle, whose Release build of the C# solution packs a fresh
+        `Gsharp.NET.Sdk.<version>-g<sha>` that an older cs2gs (no --sdk-version) would otherwise pick as
+        the newest local nupkg. The first dry run did exactly that and pinned the whole tree to 0.4.1253-g...
+        """
         pin = self.record["facts"]["sdk_pin"]
-        for nupkg in list(self.src.glob(f"out/bin/*/nupkgs/{SDK_ID}.*.nupkg")) + list(
-                (self.src / ".nugs").glob(f"{SDK_ID}.*.nupkg")):
-            nupkg.unlink()
         feed = self.src / "out" / "bin" / "Release" / "nupkgs"
         feed.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(self.pkgs / f"{SDK_ID}.{pin}.nupkg", feed / f"{SDK_ID}.{pin}.nupkg")
-        return "passed", f"restored, built prerequisites, staged published {SDK_ID} {pin}"
+        # The analyzer-test verifier package is resolved the same way (newest local nupkg), so it is pinned too.
+        for package in (SDK_ID, TESTING_ID):
+            for nupkg in list(self.src.glob(f"out/bin/*/nupkgs/{package}.*.*pkg")) + list(
+                    (self.src / ".nugs").glob(f"{package}.*.*pkg")):
+                if nupkg.name != f"{package}.{pin}.nupkg":
+                    nupkg.unlink()
+            shutil.copy2(self.pkgs / f"{package}.{pin}.nupkg", feed / f"{package}.{pin}.nupkg")
+        return pin
 
     def s_translate(self):
         facts = self.record["facts"]
@@ -537,6 +583,7 @@ class Run:
             self.sh("capture-oracle", [cs2gs, "capture-test-oracle", "--corpus", self.src, "--out", oracle]
                     + filters, cwd=self.src, env_extra=env, check=False)
             cmd += ["--csharp-test-oracle", oracle]
+            self.stage_pinned_sdk()
         rc = self.sh("translate", cmd + filters, cwd=self.src, env_extra=env, check=False)
         run_jsons = sorted(self.runs.glob("*/run.json"))
         if not run_jsons:
@@ -598,8 +645,15 @@ class Run:
         sln = subprocess.run(["git", "show", f"{self.record['facts']['csharp_commit']}:GSharp.sln"], cwd=self.src,
                              capture_output=True, text=True).stdout or None
         notes: list[str] = []
+        commit = self.record["facts"]["csharp_commit"]
+        listed = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", commit], cwd=self.src,
+                                         text=True).splitlines()
+        originals = {rel: subprocess.run(["git", "show", f"{commit}:{rel}"], cwd=self.src, capture_output=True,
+                                         text=True).stdout
+                     for rel in listed if rel.endswith(".csproj") and not under(rel, ALWAYS_KEEP_CSHARP)}
+        packable = tuple(p for p in packable_gsprojs(originals) if (self.src / p).is_file())
         problems = apply_hand_fixes(self.src, self.record["facts"]["sdk_pin"], sln, notes.append,
-                                  tuple(self.record["facts"]["assemble"]["keep_csharp"]))
+                                    tuple(self.record["facts"]["assemble"]["keep_csharp"]), packable)
         (self.logs / "hand-fix.log").write_text("\n".join(notes + ["PROBLEMS:"] + problems) + "\n")
         # 8. the mirrored packages.lock.json files describe the C# projects; regenerate them so the
         #    locked-mode restore CI uses can pass (found by the first dry run: NU1004).
@@ -615,7 +669,23 @@ class Run:
     def s_gsfmt(self):
         rc = self.sh("gsfmt", [self.tools / "gsfmt", "--check", "."], cwd=self.src, check=False)
         count = sum(1 for _ in iter_files(self.src, (".gs",)))
-        return ("passed", f"gsfmt --check clean over {count} .gs files") if rc == 0 else ("failed", f"gsfmt --check exit {rc}")
+        if rc == 0:
+            return "passed", f"gsfmt --check clean over {count} .gs files"
+        # The polish pass edits `!!` after the formatter ran, so some lines re-wrap. Record how many files
+        # the cut-over commit must reformat (the plan expected zero), write them, and require a clean re-check.
+        listing = self.logs / "gsfmt-list.log"
+        with listing.open("wb") as out:
+            subprocess.run([str(self.tools / "gsfmt"), "--list", "."], cwd=self.src, env=self.env, stdout=out)
+        changed = sum(1 for line in listing.read_text().splitlines() if line.strip())
+        self.record["facts"]["gsfmt_files_reformatted"] = changed
+        self.sh("gsfmt", [self.tools / "gsfmt", "--write", "."], cwd=self.src)
+        rc2 = self.sh("gsfmt", [self.tools / "gsfmt", "--check", "."], cwd=self.src, check=False)
+        if rc2 != 0:
+            return "failed", f"gsfmt --write left the tree unclean (exit {rc2})"
+        self.sh("gsfmt", ["git", "add", "-A"], cwd=self.src)
+        self.sh("gsfmt", ["git", "-c", "user.name=cutover", "-c", "user.email=cutover@invalid", "commit", "--quiet",
+                          "--no-verify", "-m", "Run gsfmt over the migrated tree"], cwd=self.src, check=False)
+        return "passed", f"gsfmt --check was NOT clean: {changed} of {count} .gs files reformatted by --write, re-check clean"
 
     def s_core_smoke(self):
         self.sh("core-smoke", ["dotnet", "build", "src/Core/Core.gsproj", "-c", "Release"], cwd=self.src)
@@ -683,12 +753,13 @@ def main(argv=None) -> int:
     h = sub.add_parser("hand-fix", help="apply only the hand-fix list to a migrated tree")
     h.add_argument("--tree", required=True)
     h.add_argument("--sdk-version", required=True)
+    h.add_argument("--packable", nargs="*", default=[], help=".gsproj paths whose C# project had GeneratePackageOnBuild=true")
     h.add_argument("--original-sln", help="path to the C# GSharp.sln, to check the .slnx lists every project")
     args = p.parse_args(argv)
     try:
         if args.command == "hand-fix":
             sln = Path(args.original_sln).read_text(encoding="utf-8-sig") if args.original_sln else None
-            problems = apply_hand_fixes(Path(args.tree), args.sdk_version, sln, print)
+            problems = apply_hand_fixes(Path(args.tree), args.sdk_version, sln, print, packable=tuple(args.packable))
             # hand-fix 8, shared with the dry run: the mirrored lock files describe the C# projects.
             rc = subprocess.run(LOCK_REGEN, cwd=args.tree).returncode
             if rc != 0:

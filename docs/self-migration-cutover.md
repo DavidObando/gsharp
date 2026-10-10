@@ -162,11 +162,11 @@ made by the published tools. "Script" is the `hand-fix` step in `cutover.py`.
 
 | # | Plan item | Today | Script |
 |---|---|---|---|
-| 1 | Re-enable `GeneratePackageOnBuild` | **Still needed.** The mirror forces `false` in `Gsharp.NET.Sdk.gsproj`. | 1 |
+| 1 | Re-enable `GeneratePackageOnBuild` | **Still needed, and for six projects, not one.** The mirror forces `false` everywhere; `Gsharp.NET.Sdk`, `Gsharp.Templates`, `Repl`, `Cs2Gs.Cli`, `Gsfmt.Cli` and `GSharp.CodeAnalysis.Analyzers.Testing` all pack on build in C#. The script reads the list from the C# commit. Missing it made `templates-e2e` fail (no `Gsharp.Templates` nupkg). | 1 |
 | 2 | Rewrite the `Pack*` literal `.csproj` paths in `Gsharp.NET.Sdk.csproj` | **Automated by the mirror.** `Compiler`, `Gsfmt.Cli` and `Gsgen.Cli` come out as `.gsproj`. The one `Gsharp.Extensions.csproj` literal is correct, since that project stays `.csproj`. The script re-checks every literal anyway. | 2 |
 | 3 | Rebind `Gsharp.Extensions` to the pinned SDK, drop the Bootstrap import and ordering ProjectReferences | **Automated by the mirror** (`RepositoryMirror`, #3772). The script verifies instead of editing and fails if a Bootstrap import or Compiler/SDK ordering reference returns. | 3 |
 | 4 | Fix `VsGsharp.csproj:76` (LanguageServer path) | **Still needed**, same line today. Generalised: *any* kept-C# project that names a translated project's `.csproj` needs it. `bench/concurrency/clr/ClrBaseline.csproj` has the same defect (its Channels reference). | 2 |
-| 5 | Replace `GSharp.sln` with the generated `.slnx`, check it lists every project | **Still needed.** The mirror writes both. The script deletes the `.sln` and compares every project of the original `.sln` (after `.csproj`→`.gsproj`) with the `.slnx`. | 4 |
+| 5 | Replace `GSharp.sln` with the generated `.slnx`, check it lists every project | **Needed, but incomplete as written** (#4861). The mirror writes both. The script deletes the `.sln`, compares every project of the original `.sln` (after `.csproj`→`.gsproj`) with the `.slnx`, and rewrites the `GSharp.sln` literal to `GSharp.slnx` in `.gs` sources, scripts and workflows, because the repository root is found by probing for that file name (cs2gs, `Sdk.Tests`, ~100 tests, `build.yml`). Without the rewrite `cs2gs-migrate-generated-regex-e2e` fails. | 4, 4b |
 | 6 | Add `.gitattributes` | **Not needed.** It already exists and is carried over (it classifies `*.gs` for Linguist). The script only verifies the `*.gs` rule. | 5 |
 | 7 | Delete the per-file SDK pins in favour of `global.json msbuild-sdks` | **Still needed with a tool that lacks `--sdk-pin`.** A tool that has it already writes the global pin. The script removes `Gsharp.NET.Sdk/<pin>` from `<Project Sdk>` (not from `<Import>`), writes `msbuild-sdks`, and reports any surviving versioned pin outside samples/templates/`src/vs-gsharp`. | 6 |
 | 8 | Strip C#-only props (`LangVersion`, StyleCop) | **Narrower than listed.** Only `src/LanguageServer/LanguageServer.gsproj` carries `LangVersion`. StyleCop is applied by the shared `build/gsharp.build.props` (kept, the repo is mixed). | 7 |
@@ -176,6 +176,8 @@ Items found by the dry run that the plan did not list:
 | Added | Why | Script |
 |---|---|---|
 | Rewrite `<name>.csproj` to `.gsproj` in `e2etests/*.sh`, `.github/workflows/*.yml`, `build/*.sh|py`, `src/vscode-gsharp`, `website/scripts` | About 130 files name translated projects. Without it the e2e scripts and workflows break. Only names with a `.gsproj` twin and no `.csproj` twin are rewritten, so fixtures such as `App.csproj` are not touched. | 2b |
+| Reformat with `gsfmt --write` | The plan expected `gsfmt --check` clean. After polish it is not: 394 of 4,350 `.gs` files re-wrap (#4858). The script writes them and requires a clean re-check; commit the result as its own commit. | gsfmt stage |
+| Keep the pin to the published artefacts | A source build of the C# solution (which `capture-test-oracle` triggers) packs `Gsharp.NET.Sdk.<v>-g<sha>` and `GSharp.CodeAnalysis.Analyzers.Testing.<v>-g<sha>`; a tool without `--sdk-version` then pins the whole tree to them (#4849). The script deletes every source-built copy before translating. | translate |
 | Regenerate `packages.lock.json` | Established from the mirror: the 35 translated product projects (src, test, tools) DO carry a `packages.lock.json`, copied from their C# projects, while samples and templates never had one. The copies are stale for the `.gsproj` projects: the locked-mode restore CI uses fails with NU1004 on the first test project. | 8 |
 | Keep untranslated C# the mirror drops | `ForeignCompile` and the Adr0169 fixtures would otherwise be deleted and their projects broken. | assemble |
 
@@ -278,4 +280,40 @@ Windows job.
 
 ## Dry run log
 
-See the section appended by the rehearsal below.
+First rehearsal: 2026-10-09, `origin/main` at `c2b079774` (stand-in for the release-candidate
+tag), published `Gsharp.Cs2Gs`/`Gsharp.Gsfmt`/`Gsharp.NET.Sdk` **0.4.1150**, private NuGet cache,
+nuget.org only. Work root `~/.cache/d-cutover/run2`. The translate stage took 9 h 8 min on a
+shared machine (full `migrate`, test parity included). All the failures below are classified as
+**skew** (the tool is 105 commits older than the source, see "Why a rehearsal against the
+published 0.4.1150 is only an approximation") or **finding** (a real defect or plan gap, with an
+issue).
+
+| Stage | Result | Notes |
+|---|---|---|
+| clone | passed | fresh clone, no `out/`, empty `.nugs` |
+| tools | passed | `cs2gs`/`gsfmt` 0.4.1150 installed with a nuget.org-only config; SDK and Testing packages downloaded; `--sdk-pin`/`--sdk-version` not supported (skew) |
+| prepare | passed | locked-mode restore of `GSharp.sln`, prerequisite builds, published nupkgs staged |
+| translate | failed, 52/57 apps | 5 apps red, all skew: `Compiler.Tests` and `Core.Tests` (GS0179 switch-expression arm types, fixed by #4832; GS0155 nil to `object`/`string`, cf. #4831/#4833), `Cs2Gs.Tests` (GS0154/GS0155/GS0159, same family, not individually verified), `G09-Functions-Console` (translation gap for a ref-returning local function, added after the tag), `Interpreter.Tests` (per-test-name parity: 14 missing and 14 extra of 1,512 cases, theory display names with `(scope: "function")`; not triaged). Findings: #4849, #4850, #4852, #4853, #4858 |
+| assemble | passed | 4,182 C# files deleted, 5,473 written; 8 untranslated C# files retained (#4850) |
+| hand-fix | passed | 44 fix groups; findings: #4851 (lock files), #4861 (`GSharp.sln` anchor) |
+| gsfmt | passed after `--write` | not clean before: 394 files (#4858) |
+| core-smoke | passed | `src/Core` compiles with the pinned published SDK |
+| build | failed | `GSharp.slnx` Release: only `Core.Tests`, `Cs2Gs.Tests` (the translate failures above) and `Repl` fail. `Repl` compiled with main's SDK during polish and fails with GS0490 under 0.4.1150 (gsc skew). Locked-mode restore passed after lock regeneration |
+| e2e | 14 passed, 1 skipped, 1 failed | `debugger-e2e` skipped (netcoredbg not installed); `gsgen-e2e` fails with `InvalidProgramException` from the stage-1 gsgen (#4862, may be skew); `templates-e2e` and `cs2gs-migrate-generated-regex-e2e` failed until hand-fix 1 (six packable projects) and 4b (`GSharp.sln`) were added |
+| vsix | passed (VS Code); VS: Windows only | `.vsix` packaged; the Visual Studio VSIX path check passes, the VSSDK build must run on Windows |
+
+Two earlier attempts are worth recording because the script now guards against them:
+the first full run pinned every project to the source-built `0.4.1253-g...` SDK (#4849 comment),
+and the first hand-fix pass reported 15 bogus missing projects because `.sln` solution folders
+were parsed as projects.
+
+### Blockers for the real cut-over, in order of risk
+
+1. #4861 (P1) `GSharp.sln` is the repository-root anchor; the plan's replacement breaks it.
+2. #4862 (P1) stage-1 gsgen `InvalidProgramException`: re-run at a matched tag.
+3. #4849 (P1) published `cs2gs migrate` needs an in-tree build for `gsc`/`gsgen`, the repo root and the SDK nupkg.
+4. #4850 (P1) the mirror drops C# files that translated projects reference.
+5. Lower: #4851, #4852, #4853, #4858 (all P2).
+
+None of the five translate failures is a new compiler defect: each matches a fix listed under
+Unreleased. They confirm the rehearsal has to be repeated with tool == SDK == tag.

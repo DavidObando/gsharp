@@ -25,6 +25,11 @@ def put(root: Path, rel: str, text: str) -> Path:
 
 
 class TransformTests(unittest.TestCase):
+    def test_packable_projects_come_from_the_csharp_originals(self):
+        texts = {"src/A/A.csproj": "<GeneratePackageOnBuild>true</GeneratePackageOnBuild>",
+                 "src/B/B.csproj": "<GeneratePackageOnBuild>false</GeneratePackageOnBuild>", "src/C/C.csproj": ""}
+        self.assertEqual(["src/A/A.gsproj"], cutover.packable_gsprojs(texts))
+
     def test_generate_package_on_build(self):
         new, hit = cutover.enable_generate_package_on_build("<GeneratePackageOnBuild>false</GeneratePackageOnBuild>")
         self.assertTrue(hit)
@@ -73,6 +78,12 @@ class TransformTests(unittest.TestCase):
         new, changed = cutover.rewrite_by_basename(text, {"Gsharp.NET.Sdk"})
         self.assertEqual("dotnet pack src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj App.csproj Gsharp.Extensions.csproj", new)
         self.assertEqual(["Gsharp.NET.Sdk"], changed)
+
+    def test_sln_literal_rewrite_leaves_slnx_and_vs_solution_alone(self):
+        text = 'File.Exists("GSharp.sln") GSharp.slnx VsGsharp.sln dotnet build GSharp.sln -c Release'
+        new, n = cutover.rewrite_sln_literal(text)
+        self.assertEqual('File.Exists("GSharp.slnx") GSharp.slnx VsGsharp.sln dotnet build GSharp.slnx -c Release', new)
+        self.assertEqual(2, n)
 
     def test_solution_folders_are_not_projects(self):
         sln = 'Project("{2150E333}") = "Build", "Build", "{1}"\nProject("{F}") = "A", "src\\A\\A.csproj", "{2}"\n'
