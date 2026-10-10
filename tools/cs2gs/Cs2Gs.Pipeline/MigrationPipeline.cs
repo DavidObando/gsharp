@@ -172,6 +172,13 @@ public sealed class MigrationPipeline
                 this.options.SourceRoot,
                 destinationRoot,
                 this.options.GeneratedProjectPaths);
+            var verbatimWarnings = new List<string>();
+            RepositoryVerbatimSources.Compute(this.options.SourceRoot, repositoryFiles, verbatimWarnings);
+            foreach (string warning in verbatimWarnings)
+            {
+                Console.Error.WriteLine("cs2gs: warning: " + warning);
+            }
+
             this.options.RepositorySourceFiles = repositoryFiles
                 .Where(path => Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
                 .Select(path => Path.GetFullPath(Path.Combine(this.options.SourceRoot, path)))
