@@ -47,6 +47,10 @@ ALWAYS_KEEP_CSHARP = ("src/vs-gsharp",)
 SDK_PROJECT = "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"
 EXTENSIONS_PROJECT = "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+# C# files the mirror does not carry that are C# on purpose (reviewed in the first dry run, #4850):
+# the foreign-compile sample's input and the C# data fixtures the Adr0169 parity tests read as text.
+EXPECTED_RETAINED_CSHARP = ("samples/ForeignCompile/ThisAssembly.cs",
+                            "tools/cs2gs/Cs2Gs.Tests/Fixtures/Adr0169FunnelSurface")
 WORK_ROOT_MARKER = ".cutover-work-root"
 LOCK_REGEN = ["dotnet", "restore", "GSharp.slnx", "--force-evaluate"]
 NUGET_ORG_CONFIG = ('<?xml version="1.0" encoding="utf-8"?>\n<configuration><packageSources><clear />'
@@ -690,8 +694,13 @@ class Run:
         self.sh("assemble", ["git", "-c", "user.name=cutover", "-c", "user.email=cutover@invalid", "commit",
                              "--quiet", "--no-verify", "-F", msg], cwd=self.src)
         facts["assemble"] = {"deleted": deleted, "written": added, "keep_csharp": keep, "retained_csharp": retained}
-        return "passed", (f"deleted {deleted} C# files, wrote {added} files, kept C# under {keep}; "
-                          f"{len(retained)} untranslated tracked C# file(s) retained for review: {retained[:12]}")
+        unexpected = [r for r in retained if not under(r, EXPECTED_RETAINED_CSHARP)]
+        detail = (f"deleted {deleted} C# files, added {added} files, kept C# under {keep}; "
+                  f"{len(retained)} untranslated tracked C# file(s) retained: {retained[:12]}")
+        if unexpected:
+            # Anything not on the reviewed list is either a translation gap or a new intentional C# file.
+            return "failed", f"unexpected untranslated C# retained (review, then list it in EXPECTED_RETAINED_CSHARP): {unexpected[:12]}; {detail}"
+        return "passed", detail
 
     def s_hand_fix(self):
         sln = subprocess.run(["git", "show", f"{self.record['facts']['csharp_commit']}:GSharp.sln"], cwd=self.src,
