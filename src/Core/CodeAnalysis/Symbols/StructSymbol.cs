@@ -713,7 +713,7 @@ public sealed class StructSymbol : TypeSymbol
             // The slot depends on the declared methods and the base class, both
             // installed after the shell exists; re-derive when either changes.
             if (!dataPrintMembersComputed
-                || dataPrintMembersMethods != Methods
+                || !dataPrintMembersMethods.Equals(Methods)
                 || !ReferenceEquals(dataPrintMembersBase, BaseClass))
             {
                 dataPrintMembers = DataPrintMembersModel.FindDeclared(this) is null
