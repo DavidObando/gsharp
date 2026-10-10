@@ -84,7 +84,7 @@ public sealed class Issue4779NullableReflectionArgumentsSelfMigrationTests
                 Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Pipeline", "Cs2Gs.Pipeline.csproj"));
             Assert.True(pipeline.BoundWithoutErrors, string.Join(Environment.NewLine, pipeline.ErrorDiagnostics));
             var helperPaths = new List<string> { helperPath };
-            foreach (string name in new[] { "GsharpTestProjectRunner.cs", "CanonicalRootPath.cs" })
+            foreach (string name in new[] { "GsharpTestProjectRunner.cs", "CanonicalRootPath.cs", "RepositoryRootMarker.cs" })
             {
                 LoadedDocument dependency = Assert.Single(pipeline.Documents, candidate =>
                     Path.GetFileName(candidate.FilePath) == name);
@@ -97,7 +97,7 @@ public sealed class Issue4779NullableReflectionArgumentsSelfMigrationTests
                     ClassDeclarationSyntax selectedType = originalType.WithMembers(SyntaxFactory.List(
                         originalType.Members.Where(member =>
                             member is MethodDeclarationSyntax method &&
-                                method.Identifier.ValueText is "FindRepoRoot" or "ResolveConfiguredSourceRoot" ||
+                                method.Identifier.ValueText is "FindRepoRoot" or "FindRepoRootAbove" or "ResolveConfiguredSourceRoot" ||
                             member is FieldDeclarationSyntax field &&
                                 field.Declaration.Variables.Any(variable => variable.Identifier.ValueText == "SourceRootEnvironmentVariable"))));
                     SyntaxTree tree = CSharpSyntaxTree.Create(originalRoot.ReplaceNode(originalType, selectedType),
