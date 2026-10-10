@@ -17,8 +17,8 @@ namespace Cs2Gs.Tests;
 /// keeps only the generated <c>GSharp.slnx</c>) had to rewrite them all by
 /// text. There is now one rule, <see cref="RepositoryRootMarker"/>, accepting
 /// either spelling. These tests fail if the rule stops accepting the
-/// <c>.slnx</c>, if the test-side copy drifts from it, or if a new literal
-/// literal appears.
+/// <c>.slnx</c>, if the test-side copy drifts from it, or if a new
+/// literal solution name appears.
 /// </summary>
 public sealed class Issue4861RepositoryRootMarkerTests : IDisposable
 {
@@ -109,23 +109,31 @@ public sealed class Issue4861RepositoryRootMarkerTests : IDisposable
         var literal = new Regex("\"GSharp\\.slnx?\"");
         var allowed = new[]
         {
-            "RepositoryRootMarker.cs", "RepositoryRootMarker.gs",
-            "Issue4861RepositoryRootMarkerTests.cs", "Issue4861RepositoryRootMarkerTests.gs",
-            "TestSourceTests.cs", "TestSourceTests.gs",
-            "Adr0151IfLetExpressionTranslationTests.cs", "Adr0151IfLetExpressionTranslationTests.gs",
+            "test/Shared/RepositoryRootMarker",
+            "tools/cs2gs/Cs2Gs.Pipeline/RepositoryRootMarker",
+            "tools/cs2gs/Cs2Gs.Tests/Issue4861RepositoryRootMarkerTests",
+            "test/Core.Tests/TestSourceTests",
+            "tools/cs2gs/Cs2Gs.Tests/Adr0151IfLetExpressionTranslationTests",
         };
         var offenders = new[] { "test", "tools", "src" }
             .SelectMany(d => Directory.EnumerateFiles(Path.Combine(repo, d), "*.*", SearchOption.AllDirectories))
             .Where(f => (f.EndsWith(".cs", StringComparison.Ordinal) || f.EndsWith(".gs", StringComparison.Ordinal))
                 && !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar)
                 && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar))
-            .Where(f => !allowed.Contains(Path.GetFileName(f)))
+            .Where(f => !allowed.Contains(RepoRelativeWithoutExtension(repo, f)))
             .Where(f => literal.IsMatch(File.ReadAllText(f)))
             .Select(f => Path.GetRelativePath(repo, f))
             .OrderBy(f => f, StringComparer.Ordinal)
             .ToArray();
 
         Assert.Empty(offenders);
+    }
+
+    // Forward-slash, extension-less, so the allowlist matches the .cs and the migrated .gs spelling alike.
+    private static string RepoRelativeWithoutExtension(string repo, string file)
+    {
+        string relative = Path.GetRelativePath(repo, file).Replace('\\', '/');
+        return relative.Substring(0, relative.LastIndexOf('.'));
     }
 
     private static string SourceOf(string withoutExtension)
