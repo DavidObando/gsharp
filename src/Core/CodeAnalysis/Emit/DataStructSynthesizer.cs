@@ -1492,12 +1492,22 @@ internal sealed class DataStructSynthesizer
             il.Token(this.resolveUserPropertyAccessorToken(structSym, property, false));
             if (property.ReturnRefKind != RefKind.None)
             {
-                // A ref-returning getter leaves the value's address: a value type is
-                // printed through it directly; anything else is loaded through it.
-                if (!printsThroughAddress)
+                // A ref-returning getter leaves the value's address. A mutable ref to a
+                // value type is printed through it directly; a readonly ref is copied
+                // first (C# makes a defensive copy); anything else is loaded through it.
+                var copiesReadonlyRef = printsThroughAddress && property.ReturnRefKind != RefKind.Ref;
+                if (!printsThroughAddress || copiesReadonlyRef)
                 {
                     il.OpCode(ILOpCode.Ldobj);
                     il.Token(this.getElementTypeToken(type));
+                }
+
+                if (copiesReadonlyRef)
+                {
+                    var temp = firstTempIndex + temps.Count;
+                    temps.Add(type);
+                    il.StoreLocal(temp);
+                    il.LoadLocalAddress(temp);
                 }
             }
             else if (printsThroughAddress)

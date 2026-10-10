@@ -1293,12 +1293,14 @@ internal sealed partial class DeclarationBinder
         TypeSymbol returnType,
         RefKind returnRefKind,
         bool isAsync,
+        bool isSuspend,
         ImmutableArray<TypeParameterSymbol> methodTypeParameters,
         Accessibility accessibility)
     {
         return returnType == TypeSymbol.Bool
             && returnRefKind == RefKind.None
             && !isAsync
+            && !isSuspend
             && methodTypeParameters.IsDefaultOrEmpty
             && accessibility == DataPrintMembersModel.GetRequiredAccessibility(owner);
     }

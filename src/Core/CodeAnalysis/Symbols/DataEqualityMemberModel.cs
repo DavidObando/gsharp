@@ -214,7 +214,7 @@ internal static class DataEqualityMemberModel
             if (MemberLookup.TryGetSymbolicClrGenericInterface(candidate, out var open, out var arguments)
                 && ClrTypeUtilities.AreSame(open, typeof(IEquatable<>))
                 && arguments.Length == 1
-                && arguments[0] is StructSymbol argument
+                && StripReferenceNullability(arguments[0]) is StructSymbol argument
                 && ReferenceEquals(argument.Definition ?? argument, ownerDefinition)
                 && IsOwnConstruction(owner, argument))
             {
@@ -246,6 +246,27 @@ internal static class DataEqualityMemberModel
             receiverType: owner,
             isOpen: owner.IsClass && (owner.IsOpen || owner.IsSealedHierarchy),
             isOverride: true);
+    }
+
+    // `IEquatable[Item?]` and `IEquatable[Item]` are one runtime interface: `?` and
+    // platform marks on a reference type are metadata only. A nullable VALUE type
+    // (`Item?` on a data struct) is `Nullable<Item>`, a different interface.
+    private static TypeSymbol StripReferenceNullability(TypeSymbol type)
+    {
+        while (true)
+        {
+            switch (type)
+            {
+                case NullableTypeSymbol { UnderlyingType: StructSymbol { IsClass: true } referenceType }:
+                    type = referenceType;
+                    continue;
+                case PlatformTypeSymbol platform:
+                    type = platform.UnderlyingType;
+                    continue;
+                default:
+                    return type;
+            }
+        }
     }
 
     // `IEquatable[Item[int32]]` is a different interface from `IEquatable[Item[T]]`:

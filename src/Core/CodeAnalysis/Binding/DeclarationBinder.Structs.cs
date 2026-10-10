@@ -1395,7 +1395,7 @@ internal sealed partial class DeclarationBinder
                     // of that slot is rejected rather than silently shadowing it.
                     if (structSymbol.IsData
                         && DataPrintMembersModel.IsSlotCandidate(methodName, methodSyntax.HasExplicitInterfaceClause, methodParameters)
-                        && !IsCompatibleDataPrintMembers(structSymbol, returnType, methodReturnRefKind, methodIsAsync, methodTypeParameters, methodAccessibility))
+                        && !IsCompatibleDataPrintMembers(structSymbol, returnType, methodReturnRefKind, methodIsAsync, methodSyntax.IsSuspend, methodTypeParameters, methodAccessibility))
                     {
                         Diagnostics.ReportIncompatibleDataPrintMembers(
                             methodSyntax.Identifier.Location,

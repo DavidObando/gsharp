@@ -582,6 +582,57 @@ public class Adr0199RecordAbiTests
     }
 
     [Fact]
+    public void ReadonlyRefProperty_IsCopiedBeforeAMutatingToStringRuns()
+    {
+        const string csharp = """
+            public struct Counter { public int Count; public override string ToString() => (++Count).ToString(); }
+            public sealed record Item { private Counter c; public ref readonly Counter R => ref c; public Counter V => c; }
+            """;
+        const string gsharp = """
+            package W
+            import System
+
+            struct Counter {
+                var Count int32
+                override func ToString() string {
+                    this.Count = this.Count + 1
+                    return this.Count.ToString()
+                }
+            }
+            data class Item {
+                private var c Counter
+                prop R ref readonly Counter { get { return ref c } }
+            }
+            """;
+        string Twice(Assembly assembly)
+        {
+            var item = Activator.CreateInstance(assembly.GetTypes().Single(t => t.Name == "Item"));
+            return item.ToString() + "|" + item.ToString();
+        }
+
+        var expectedText = Twice(Adr0199RecordAbiWitness.CompileCSharp(csharp));
+        Assert.StartsWith("Item { R = 1", expectedText, StringComparison.Ordinal);
+        Assert.Contains("|Item { R = 1", expectedText, StringComparison.Ordinal);
+        Assert.Equal("Item { R = 1 }|Item { R = 1 }", Twice(Adr0199RecordAbiWitness.CompileGSharp(gsharp)));
+    }
+
+    [Fact]
+    public void SuspendingFunctionNamedPrintMembers_IsNotTheSynchronousSlot()
+    {
+        const string source = """
+            package W
+            import System.Text
+
+            data class Item(Id int32) {
+                suspend func PrintMembers(builder StringBuilder) bool -> true
+            }
+            """;
+        var (exitCode, output) = Adr0199RecordAbiWitness.TryCompileGSharp(source);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0623", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void HandWrittenPrintMembers_OfTheWrongShape_IsRejectedWithGS0623()
     {
         const string source = """

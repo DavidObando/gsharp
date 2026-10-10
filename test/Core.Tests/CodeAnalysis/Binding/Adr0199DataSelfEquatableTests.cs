@@ -25,6 +25,7 @@ public class Adr0199DataSelfEquatableTests
             data class Declared(X int32) : IEquatable[Declared]
             data class OpenGeneric[T](Value T) : IEquatable[OpenGeneric[T]]
             data class ClosedGeneric[T](Value T) : IEquatable[ClosedGeneric[int32]]
+            data class Annotated(X int32) : IEquatable[Annotated?]
             class Outer[T] {
                 data class Nested(X int32) : IEquatable[Outer[int32].Nested]
                 data class SelfNested(X int32) : IEquatable[Outer[T].SelfNested]
@@ -36,6 +37,9 @@ public class Adr0199DataSelfEquatableTests
         Assert.Equal(1, Count("Plain"));
         Assert.Equal(1, Count("Declared"));
         Assert.Equal(1, Count("OpenGeneric"));
+
+        // Reference nullability is metadata only: IEquatable[Annotated?] is IEquatable[Annotated].
+        Assert.Equal(1, Count("Annotated"));
 
         // The declared interface is closed over int32, so the type's own
         // IEquatable[ClosedGeneric[T]] is still implied next to it.
