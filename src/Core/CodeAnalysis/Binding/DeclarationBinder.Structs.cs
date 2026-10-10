@@ -2978,6 +2978,18 @@ internal sealed partial class DeclarationBinder
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
                     var sharedMethodParameters = parameters.ToImmutable();
 
+                    // ADR-0199: the print-members slot is an instance method; a
+                    // shared one of that shape is rejected like any other bad shape.
+                    if (structSymbol.IsData && DataPrintMembersModel.IsSlotName(methodName, sharedMethodParameters))
+                    {
+                        Diagnostics.ReportIncompatibleDataPrintMembers(
+                            methodSyntax.Identifier.Location,
+                            structSymbol.Name,
+                            structSymbol.IsClass,
+                            DataPrintMembersModel.GetRequiredAccessibility(structSymbol) == Accessibility.Private ? "private" : "protected");
+                        continue;
+                    }
+
                     // Copilot review round 7: the declaring part's own
                     // return/parameter type clauses were discarded after
                     // only a textual comparison; bind and compare them
@@ -3967,6 +3979,15 @@ internal sealed partial class DeclarationBinder
         if (DataEqualityMemberModel.GetSealedIntermediaryOverride(structSymbol) is { } sealedEquality)
         {
             Diagnostics.ReportOverrideOfSealedMethod(syntax.Identifier.Location, sealedEquality.Name);
+        }
+
+        // ADR-0199: the synthesized print-members override cannot override a
+        // sealed override declared by an intermediary class.
+        if (structSymbol.IsData
+            && DataPrintMembersModel.FindDeclared(structSymbol) is null
+            && DataPrintMembersModel.GetSealedBaseSlot(structSymbol) is { } sealedPrintMembers)
+        {
+            Diagnostics.ReportOverrideOfSealedMethod(syntax.Identifier.Location, sealedPrintMembers.Name);
         }
 
         // Issue #910 / ADR-0110 / issue #1069: bind the BODIES of the nested type

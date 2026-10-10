@@ -54,7 +54,15 @@ internal static class Adr0199RecordAbiWitness
     public static Assembly CompileGSharp(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_adr0199_").FullName;
-        return EmittedFixture.Load(CompileGSharpToPath(source, tempDir));
+        try
+        {
+            // EmittedFixture.Load reads the image from bytes, so the workspace can go.
+            return EmittedFixture.Load(CompileGSharpToPath(source, tempDir));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     /// <summary>Compiles G# with the real driver into <paramref name="directory"/> and verifies the IL.</summary>

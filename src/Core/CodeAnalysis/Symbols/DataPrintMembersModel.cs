@@ -90,7 +90,11 @@ internal static class DataPrintMembersModel
         for (var level = 0; level < hierarchy.Count; level++)
         {
             var ancestor = hierarchy[level];
-            if (level > 0 && IsDeclaredDataType(ancestor))
+
+            // The nearest ancestor that owns the slot: a declared data type, or an
+            // ordinary class that overrides the inherited slot itself (its override
+            // is what a derived `base.PrintMembers` must reach, not the older one).
+            if (level > 0 && (IsDeclaredDataType(ancestor) || DeclaresVirtualSlot(ancestor)))
             {
                 return ancestor;
             }
@@ -118,6 +122,24 @@ internal static class DataPrintMembersModel
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Gets the hand-written slot of the nearest base that a synthesized
+    /// override would have to override although it is final (a sealed override
+    /// in an intermediary class), or null when the inherited slot stays overridable.
+    /// </summary>
+    /// <param name="owner">The data type.</param>
+    /// <returns>The blocking declaration, or null.</returns>
+    internal static FunctionSymbol? GetSealedBaseSlot(StructSymbol owner)
+    {
+        if (GetBase(owner, out _) is not StructSymbol baseOwner
+            || FindDeclared(baseOwner) is not { } slot)
+        {
+            return null;
+        }
+
+        return slot.IsOverride && !slot.IsOpen && !slot.IsAbstract ? slot : null;
     }
 
     /// <summary>
@@ -210,6 +232,15 @@ internal static class DataPrintMembersModel
             .Select(entry => entry.Member)
             .ToImmutableArray();
     }
+
+    /// <summary>Tests whether a non-data class declares a virtual print-members slot of its own.</summary>
+    /// <param name="ancestor">The ancestor class.</param>
+    /// <returns><see langword="true"/> for a hand-written <c>open</c> or <c>override</c> slot.</returns>
+    private static bool DeclaresVirtualSlot(StructSymbol ancestor)
+        => !ancestor.IsData
+            && ancestor.ClrType == null
+            && FindDeclared(ancestor) is { } slot
+            && (slot.IsOpen || slot.IsOverride);
 
     /// <summary>A member printed by <c>PrintMembers</c>.</summary>
     /// <param name="Name">The printed name.</param>
