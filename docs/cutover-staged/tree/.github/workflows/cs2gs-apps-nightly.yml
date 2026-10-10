@@ -1,0 +1,193 @@
+name: cs2gs-apps-nightly
+
+# Replaces cs2gs-selfmig-nightly after the cut-over (self-hosting plan #3501,
+# Phase 4 item 4; owner decisions D9 and the 2026-10-09 follow-ups).
+# Nothing on `main` is C# compiler source any more, so there is nothing to
+# self-migrate. This one nightly keeps the regression signal: cs2gs is run over
+# every real-world app we cover, in ONE run with one end-of-run report.
+#
+# The tool under test is cs2gs as built from the checked-out MAIN tree (the
+# migrator is G# now), built with the pinned toolchain from global.json. The
+# apps are its INPUT:
+#
+#   gsharp-csharp  C# input: branch cs2gs/csharp-0.4 at the SHA pinned in
+#                  tools/cs2gs/external/gsharp-csharp.json, checked out beside
+#                  main and passed as SELFMIG_SOURCE_ROOT. The branch is
+#                  semi-frozen: a living corpus that gets back-ports from G#
+#                  when they exercise cs2gs (bump the pin in the same PR). The
+#                  translated output IS the G# compiler tree; it is compiled,
+#                  ILVerified and parity-tested.
+#   oahu           C# input: tools/cs2gs/external/oahu.json
+#   code-exploder  C# input: tools/cs2gs/external/code-exploder.json
+#
+# Oahu and Code Exploder used to be PR jobs in build.yml (and `publish`
+# dependencies). They run only here now, so they no longer slow or block PRs.
+# The self-host stage-2 check is separate: selfhost-stage2-nightly.yml.
+#
+# Failure handling: every app leg writes result-<app>.json. The `gate` job
+# merges them into the run summary and, for every red app, files or updates ONE
+# GitHub issue (build/cs2gs-apps-gate-issues.py), deduplicated by
+# gate/app/failure fingerprint, with the gate report in the body. Priority per
+# CLAUDE.md: P0 only when a banked app (tools/cs2gs/apps-nightly-banked.json)
+# goes red on main, otherwise P1.
+#
+# NOT YET IMPLEMENTED (Phase 4 work this file only reserves a slot for):
+#   * build/run-cs2gs-selfmig-*.sh assume the checkout IS the C# source. The
+#     gsharp-csharp leg needs SELFMIG_SOURCE_ROOT; "Require source-root
+#     support" fails loudly until then, so the leg cannot pass vacuously.
+#   * tools/cs2gs/external/gsharp-csharp.json and
+#     tools/cs2gs/apps-nightly-banked.json (a {"banked": [...]} list; an app is
+#     added only after it has been seen green on main).
+#   * Per-app accounting from the old gate (stage floors, readability counters)
+#     is produced by the leg scripts; fold it into result-<app>.json "summary".
+
+on:
+  schedule:
+    - cron: '23 13 * * *'
+  workflow_dispatch:
+
+env:
+  NBGV_SetCloudBuildVersionVars: false
+
+permissions:
+  contents: read
+
+# Issue deduplication is search-then-create, so overlapping runs could file
+# duplicates. Serialize runs.
+concurrency:
+  group: cs2gs-apps-nightly
+  cancel-in-progress: false
+
+jobs:
+  app:
+    name: app (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [gsharp-csharp, oahu, code-exploder]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.slnx --locked-mode
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build cs2gs (Release)
+        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
+
+      - name: Check out the C# input (cs2gs/csharp-0.4, pinned) as the source corpus
+        if: matrix.app == 'gsharp-csharp'
+        run: |
+          pinned=$(jq -r '.commit' tools/cs2gs/external/gsharp-csharp.json)
+          git fetch --quiet origin "cs2gs/csharp-0.4"
+          git worktree add "$RUNNER_TEMP/csharp-0.4" "$pinned"
+          grep -q SELFMIG_SOURCE_ROOT build/selfmig-common.sh || {
+            echo "::error::build/selfmig-common.sh has no SELFMIG_SOURCE_ROOT support yet (Phase 4 work)."
+            exit 1
+          }
+
+      - name: Migrate and validate ${{ matrix.app }}
+        id: leg
+        env:
+          APP: ${{ matrix.app }}
+          SELFMIG_SOURCE_ROOT: ${{ runner.temp }}/csharp-0.4
+          # Every leg writes under the one directory the upload step collects.
+          SELFMIG_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/gsharp-csharp
+          OAHU_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/oahu
+          CODE_EXPLODER_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/code-exploder
+        run: |
+          set +e
+          case "$APP" in
+            gsharp-csharp) cmd=./build/run-cs2gs-selfmig.sh ;;
+            oahu) cmd=./build/run-cs2gs-oahu.sh ;;
+            code-exploder) cmd=./build/run-cs2gs-code-exploder.sh ;;
+          esac
+          "$cmd" 2>&1 | tee "$RUNNER_TEMP/leg.log"
+          code=${PIPESTATUS[0]}
+          status=green
+          [[ $code -eq 0 ]] || status=red
+          mkdir -p "$RUNNER_TEMP/results"
+          python3 - "$APP" "$status" "$code" <<'PY'
+          import json, os, sys
+          app, status, code = sys.argv[1:4]
+          tail = open(os.environ["RUNNER_TEMP"] + "/leg.log", errors="replace").read()[-8000:]
+          run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          json.dump({"app": app, "gate": "cs2gs-apps-nightly", "status": status,
+                     "summary": f"leg exited {code}", "log_tail": tail, "run_url": run},
+                    open(os.environ["RUNNER_TEMP"] + f"/results/result-{app}.json", "w"))
+          PY
+          # The artifact upload and the gate job report the failure; do not
+          # fail this leg twice.
+          exit 0
+
+      - name: Upload result and reports
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-apps-${{ matrix.app }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/results/result-*.json
+            ${{ runner.temp }}/gsharp-cs2gs-gate/**/*.json
+            ${{ runner.temp }}/gsharp-cs2gs-gate/**/*.log
+            ${{ runner.temp }}/gsharp-cs2gs-gate/**/report.html
+            ${{ runner.temp }}/gsharp-cs2gs-gate/oahu/smoke/*
+            ${{ runner.temp }}/gsharp-cs2gs-gate/code-exploder/smoke/*
+
+  gate:
+    name: gate report
+    needs: app
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download results
+        # If every leg failed before uploading, the download finds nothing and
+        # errors. Continue so --expect below files the missing-result issues.
+        continue-on-error: true
+        uses: actions/download-artifact@v5
+        with:
+          pattern: cs2gs-apps-*
+          path: results
+          merge-multiple: true
+
+      - name: Summarize, then file or update issues for red apps
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p results
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, json
+          print("### cs2gs apps nightly")
+          print("| app | status | summary |\n|---|---|---|")
+          seen = {}
+          # Artifacts extract relative to their common ancestor, so results can be nested.
+          for p in sorted(glob.glob("results/**/result-*.json", recursive=True)):
+              r = json.load(open(p))
+              seen[r["app"]] = r
+          for app in ("gsharp-csharp", "oahu", "code-exploder"):
+              r = seen.get(app) or {"status": "red", "summary": "no result: the leg crashed before reporting"}
+              print(f"| {app} | {r['status']} | {r.get('summary','')} |")
+          PY
+          python3 build/cs2gs-apps-gate-issues.py \
+            --results results \
+            --banked tools/cs2gs/apps-nightly-banked.json \
+            --expect gsharp-csharp,oahu,code-exploder \
+            --ref "${GITHUB_REF_NAME}"

@@ -7,8 +7,11 @@
 > [`final-csharp-release.md`](final-csharp-release.md)). This draft moves
 > there only when the first 0.5 release is cut.
 >
-> Items marked **pending D&lt;n&gt;** depend on an owner decision in the self-hosting
-> assessment (section 7) and must be confirmed or rewritten before publishing.
+> The owner decisions D1-D12 of the self-hosting plan (#3501, comment of
+> 2026-10-01) are recorded below as decided. Remaining `(Confirm ...)` and
+> placeholder items must be resolved before publishing. At the cut-over the
+> final text moves to `website/docs/release-notes.md` (see
+> `docs/cutover-staged/README.md`, which is deleted once applied).
 > The stage-2 shipping rule follows the owner decision recorded in #4631.
 > `0.4.NNNN` is the final C#-built release; `0.5.x` is the first 0.5 version
 > number NBGV produces.
@@ -45,16 +48,21 @@ had suggested shipping stage 1 first):
 - After 0.5.x is published, the pin moves from 0.4.NNNN to a 0.5 release.
   From then on, each release is built by an earlier G# release.
 
-Where the C# source went (**pending D2**; the assessment recommends this
-policy):
+Where the C# source went (owner decision D2):
 
 - The C# source of 0.4.NNNN stays on branch `cs2gs/csharp-0.4`. The branch is
-  **frozen except for security fixes**, released as `0.4.NNNN+k`. Nothing is
-  back-ported to it.
-- All development, including fixes, happens in G# on `main`.
-- The branch also serves cs2gs as a pinned C# corpus.
+  **semi-frozen**: it gets no bug fixes and no features. It is a living C#
+  corpus for cs2gs, so code is occasionally back-ported from G# to C# when it
+  merits exercising cs2gs, and a security fix, if one is ever required, is
+  released as `0.4.NNNN+k`.
+- All development, including fixes, happens in G# on `main`, never on the C#
+  branch.
+- cs2gs's nightly run migrates a pinned commit of the branch, together with
+  Oahu and Code Exploder.
+- The Visual Studio extension (`src/vs-gsharp`) is still C#; it is not part of
+  the translation.
 
-A rule for compiler contributors (**pending D4**): the "N-1 rule". The
+A rule for compiler contributors (owner decision D4): the "N-1 rule". The
 compiler's own source may use only language features that the **pinned**
 released compiler supports. A PR that adds a language feature must not use
 that feature in compiler source until a release containing it becomes the pin.
@@ -96,10 +104,10 @@ documentation, run the project's tests, and review the affected diagnostics.
 ### Known limitations
 
 Translating the compiler from C# to G# lost some things, by decision
-(**pending D7**). None of these changes what the compiler does:
+(owner decision D7). None of these changes what the compiler does:
 
-- **File headers and regions.** Copyright headers and `#region` blocks are not
-  in the G# source.
+- **Regions.** `#region` blocks are not in the G# source. License headers are
+  preserved.
 - **Warning pragmas.** Only G# analyzer (`GSA*`) and nullable (`CS86xx`)
   suppressions were carried over, as `@SuppressDiagnostic`. Other
   `#pragma warning` lines were dropped.
@@ -113,11 +121,12 @@ Translating the compiler from C# to G# lost some things, by decision
 - **`!!` density.** The translated source has many `!!` assertions where the G#
   compiler could not prove that a value is non-null. Reducing them is ongoing
   cleanup.
-- **Conditional compilation.** Translation resolved `#if` blocks, so code under
-  a configuration the translation didn't use is gone. Three test-only
-  `#if DEBUG` sites were affected (a Release-only assertion in the channel
-  tests); they are rewritten as runtime checks before the cut-over.
-  *(Confirm the final state.)*
+- **Conditional compilation.** G# has no `#if`. cs2gs reports `#if`/`#elif` as
+  an error instead of silently choosing a branch, and the compiler source was
+  free of them before translation (three test-only `#if DEBUG` sites were
+  rewritten as runtime checks).
 - *(placeholder)* Performance of the G#-built compiler compared with 0.4.NNNN
   (compile time, memory), once measured against the agreed budget
-  (**pending D11**).
+  (owner decision D11: aim for parity, 1.5x acceptable). Measured on the
+  cut-over candidate: about 1.04x time and 1.02x peak memory; re-measure
+  on the released bits.
