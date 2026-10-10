@@ -60,6 +60,18 @@ public sealed class Issue4853StopAfterTests : IDisposable
         Assert.Null((MigrationStageKind?)parsed.GetType().GetProperty("StopAfter").GetValue(parsed));
     }
 
+    [Theory]
+    [InlineData("compile", true)]
+    [InlineData("ilverify", true)]
+    [InlineData("test-parity", true)]
+    [InlineData("translate", false)]
+    public void TranslateOnly_ConflictsWithALaterStopAfter(string stage, bool rejected)
+    {
+        object parsed = Parse("--corpus", "/nonexistent-corpus", "--translate-only", "--stop-after", stage);
+
+        Assert.Equal(rejected, parsed is null);
+    }
+
     [Fact]
     public void StopAfter_RejectsAnUnknownStage()
     {

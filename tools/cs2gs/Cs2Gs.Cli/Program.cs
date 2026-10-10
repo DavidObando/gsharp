@@ -742,6 +742,14 @@ internal static class Program
             return null;
         }
 
+        if (translateOnly && stopAfter is MigrationStageKind requested && requested != MigrationStageKind.Translate)
+        {
+            Console.Error.WriteLine(
+                "cs2gs: --translate-only is --stop-after translate and conflicts with " +
+                $"--stop-after {TriageSerialization.StageName(requested)}; pass only one.");
+            return null;
+        }
+
         if (string.IsNullOrEmpty(corpus))
         {
             corpus = DefaultCorpus();
