@@ -147,7 +147,7 @@ public class DataStructSynthesizedMembersTests
         var toString = point.GetMethod("ToString", Type.EmptyTypes);
         Assert.NotNull(toString);
         var actual = (string)toString!.Invoke(p, null)!;
-        Assert.Equal("Point(X=3, Y=4)", actual);
+        Assert.Equal("Point { X = 3, Y = 4 }", actual);
     }
 
     [Fact]
@@ -171,8 +171,8 @@ public class DataStructSynthesizedMembersTests
         var toString = pair.GetMethod("ToString", Type.EmptyTypes);
         Assert.NotNull(toString);
         var actual = (string)toString!.Invoke(instance, null)!;
-        // Convert.ToString(null, InvariantCulture) returns string.Empty (not "null").
-        Assert.Equal("Pair(Name=, Count=0)", actual);
+        // A null reference member appends nothing (ADR-0199).
+        Assert.Equal("Pair { Name = , Count = 0 }", actual);
     }
 
     [Fact]

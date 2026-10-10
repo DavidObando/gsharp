@@ -1389,6 +1389,22 @@ internal sealed partial class DeclarationBinder
                         continue;
                     }
 
+                    // ADR-0199: a data type's `PrintMembers(StringBuilder)` is the
+                    // C# record print slot. A compatible declaration replaces the
+                    // synthesized one (the same rule ToString has); any other shape
+                    // of that slot is rejected rather than silently shadowing it.
+                    if (structSymbol.IsData
+                        && DataPrintMembersModel.IsSlotName(methodName, methodParameters)
+                        && !IsCompatibleDataPrintMembers(structSymbol, returnType, methodReturnRefKind, methodIsAsync, methodTypeParameters, methodAccessibility))
+                    {
+                        Diagnostics.ReportIncompatibleDataPrintMembers(
+                            methodSyntax.Identifier.Location,
+                            structSymbol.Name,
+                            structSymbol.IsClass,
+                            DataPrintMembersModel.GetRequiredAccessibility(structSymbol) == Accessibility.Private ? "private" : "protected");
+                        continue;
+                    }
+
                     // Phase 3.B.3 sub-step 3: open/override validation against
                     // base class chain per ADR-0017.
                     FunctionSymbol? overriddenMethod = null;
@@ -3855,6 +3871,15 @@ internal sealed partial class DeclarationBinder
     {
         var implementedInterfaces = baseBinding.ImplementedInterfaces;
         var implementedClrInterfaces = baseBinding.ImplementedClrInterfaces;
+
+        // ADR-0199: every data type implements IEquatable<Self> through its
+        // compiler-owned typed Equals slot, as a C# record does. A declared
+        // `IEquatable[Self]` is the same interface and is not repeated.
+        if (structSymbol.IsData
+            && !DataEqualityMemberModel.ListsSelfEquatable(structSymbol, implementedClrInterfaces))
+        {
+            implementedClrInterfaces.Add(DataEqualityMemberModel.CreateSelfEquatable(structSymbol));
+        }
 
         // Phase 3.B.4: validate interface implementation. Walks each
         // implemented interface and confirms the class (including inherited

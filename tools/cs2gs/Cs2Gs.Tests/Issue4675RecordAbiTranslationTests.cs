@@ -488,11 +488,13 @@ namespace Corpus.Issue4675
             "Translated record should bind:\n" + string.Join(Environment.NewLine, roundTrip.Errors) + "\n" + translated);
 
         TypeDeclaration translatedClass = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "RecordClass");
-        MethodDeclaration translatedPrintMembers = Assert.Single(
+
+        // ADR-0199: gsc synthesizes the record PrintMembers; the translation
+        // must not carry a generated copy (the Roslyn-shaped slot is checked
+        // below through the emitted metadata).
+        Assert.DoesNotContain(
             translatedClass.Members.OfType<MethodDeclaration>(),
             method => method.Name == "PrintMembers");
-        Assert.Equal(Visibility.Protected, translatedPrintMembers.Visibility);
-        Assert.True(translatedPrintMembers.IsOpen);
         Assert.Contains("BodyHash", translated);
         Assert.DoesNotContain("BodyHash string { get; init; }", translated, StringComparison.Ordinal);
 
@@ -501,9 +503,11 @@ namespace Corpus.Issue4675
             translatedStruct.Interfaces,
             iface => iface is NamedTypeReference named && named.Name.Contains("IEquatable", StringComparison.Ordinal));
         TypeDeclaration translatedOverloaded = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "OverloadedPrintMembers");
-        Assert.Equal(
-            2,
-            translatedOverloaded.Members.OfType<MethodDeclaration>().Count(method => method.Name == "PrintMembers"));
+        MethodDeclaration translatedOverload = Assert.Single(
+            translatedOverloaded.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "PrintMembers");
+        Assert.Single(translatedOverload.Parameters);
+        Assert.Equal("ignored", translatedOverload.Parameters[0].Name);
 
         using var csharpImage = new MemoryStream();
         Assert.True(project.Compilation.Emit(csharpImage).Success, "C# baseline should emit.");
@@ -838,7 +842,7 @@ namespace Corpus.Issue4675
     }
 
     [Fact]
-    public void PartialRecordPrintMembers_IsEmittedOnce()
+    public void PartialRecordPrintMembers_IsNotTranslated()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -851,7 +855,7 @@ namespace Corpus.Issue4675
             var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
             return GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         }).ToArray();
-        Assert.Equal(1, translated.Sum(text => text.Split("func PrintMembers(", StringSplitOptions.None).Length - 1));
+        Assert.Equal(0, translated.Sum(text => text.Split("func PrintMembers(", StringSplitOptions.None).Length - 1));
         TranslationTestValidation.AssertBinds(translated);
     }
 

@@ -119,9 +119,12 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
             }
             """;
 
+        // The derived class re-declares `Type`/`Message` (the shape cs2gs emits
+        // for the Oahu record, which C# does not duplicate: #4874), so each
+        // declaring type prints its own copy.
         Assert.Equal(
             $"info{Environment.NewLine}hello{Environment.NewLine}99{Environment.NewLine}"
-            + $"InteractionMessage(Type=info, Message=hello, Data=99){Environment.NewLine}"
+            + $"InteractionMessage {{ Type = info, Message = hello, Type = info, Message = hello, Data = 99 }}{Environment.NewLine}"
             + $"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}",
             CompileAndRun(source));
     }
@@ -221,8 +224,9 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
             }
             """;
 
+        // `Derived` re-declares `Name`, so both copies print (see #4874).
         Assert.Equal(
-            $"hello{Environment.NewLine}42{Environment.NewLine}Derived2338DataExtendsData(Name=hello, Value=42){Environment.NewLine}",
+            $"hello{Environment.NewLine}42{Environment.NewLine}Derived2338DataExtendsData {{ Name = hello, Name = hello, Value = 42 }}{Environment.NewLine}",
             CompileAndRun(source));
     }
 
