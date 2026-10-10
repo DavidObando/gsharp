@@ -62,6 +62,14 @@ public sealed class MigrationPipeline
     };
 
     /// <summary>
+    /// The default stages up to and including <paramref name="last"/> (issue #4853).
+    /// </summary>
+    /// <param name="last">The last stage to run.</param>
+    /// <returns>The ordered stage prefix.</returns>
+    public static IReadOnlyList<IMigrationStage> StagesThrough(MigrationStageKind last) =>
+        DefaultStages().Where(stage => stage.Kind <= last).ToList();
+
+    /// <summary>
     /// Sanitizes a corpus app id into a filesystem-safe directory segment
     /// (<c>corpus/L1-Console</c> → <c>corpus_L1-Console</c>).
     /// </summary>
