@@ -1618,7 +1618,7 @@ public sealed partial class CSharpToGSharpTranslator
             // bare `yield if ...` does not provide.
             if (value is not TupleLiteralExpression
                 && (YieldValuePrintsAmbiguously(GSharpPrinter.RenderExpressionText(value))
-                    || (value is IfExpression or SwitchExpression or IfLetExpression
+                    || (value is IfExpression or SwitchExpression or IfLetExpression or BlockExpression
                         && typeInfo.ConvertedType is { IsTupleType: true })))
             {
                 string name = this.FreshYieldedValueName(node);
