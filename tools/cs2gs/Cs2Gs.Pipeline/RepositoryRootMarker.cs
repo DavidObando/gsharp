@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.IO;
 
 namespace Cs2Gs.Pipeline;
@@ -16,8 +17,8 @@ namespace Cs2Gs.Pipeline;
 /// </summary>
 public static class RepositoryRootMarker
 {
-    /// <summary>The solution file names that anchor the repository root.</summary>
-    public static readonly string[] SolutionFileNames = { "GSharp.slnx", "GSharp.sln" };
+    /// <summary>Gets the solution file names that anchor the repository root.</summary>
+    public static IReadOnlyList<string> SolutionFileNames => new[] { "GSharp.slnx", "GSharp.sln" };
 
     /// <summary>Returns whether <paramref name="directory"/> holds the repository solution.</summary>
     /// <param name="directory">The directory to probe.</param>
