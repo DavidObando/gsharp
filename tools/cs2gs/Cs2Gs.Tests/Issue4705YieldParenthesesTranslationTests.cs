@@ -34,10 +34,10 @@ public sealed class Issue4705YieldParenthesesTranslationTests
                     return calls;
                 }
 
-                public static IEnumerable<int> Arithmetic(int __yielded0, int x, int y, int z)
+                public static IEnumerable<int> Arithmetic(int item, int x, int y, int z)
                 {
                     yield return (x + y) * z;
-                    yield return (__yielded0 + x) << y;
+                    yield return (item + x) << y;
                     yield return x + y << z;
                 }
 
@@ -111,8 +111,9 @@ public sealed class Issue4705YieldParenthesesTranslationTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
         Assert.Null(result.UnhandledException);
         Assert.Equal(149, result.Value);
-        Assert.DoesNotContain("let __yielded0 ", printed, StringComparison.Ordinal);
-        MatchCollection hoistedValues = Regex.Matches(printed, @"let (?<name>__yielded\d+) int32 =");
+        Assert.DoesNotContain("let item int32 = (item", printed, StringComparison.Ordinal);
+        Assert.Matches(@"let item_\d+ int32 = \(item \+ x\) << y", printed);
+        MatchCollection hoistedValues = Regex.Matches(printed, @"let (?<name>item(_\d+)?) int32 =");
         Assert.NotEmpty(hoistedValues);
         Assert.All(
             hoistedValues.Cast<Match>(),

@@ -164,7 +164,8 @@ namespace Demo
 }");
 
         Assert.Contains("sequence[string]", printed);
-        Assert.Matches(@"let (?<name>__yielded\d+) string = ""a""\s+yield \k<name>\b", printed);
+        Assert.Contains("yield \"a\"", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("item", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("IEnumerable", printed);
     }
 
