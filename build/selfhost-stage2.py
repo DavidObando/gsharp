@@ -111,7 +111,7 @@ PROTECTED_PROPERTIES = {
     "gsharpvaluesruntimeassemblyfullpath",
     "generatedependencyfile",
     "debugsymbols", "debugtype",
-    "pdbfile",
+    "pdbfile", "adr0198pdbdirectory",
     "baseoutputpath", "baseintermediateoutputpath",
     "outdir", "outputpath", "intermediateoutputpath",
     "msbuildprojectextensionspath", "restorepackagespath",
@@ -1453,6 +1453,9 @@ class Controller:
         for name in helper_files:
             atomic_bytes(helper_source / name, (HERE / "selfhost" / name).read_bytes())
         atomic_bytes(inputs / "Adr0198.Pdb.targets", b"""<Project>
+  <PropertyGroup Condition="'$(Adr0198PdbDirectory)' != ''">
+    <PdbFile>$(Adr0198PdbDirectory)$(TargetName).pdb</PdbFile>
+  </PropertyGroup>
   <ItemGroup Condition="'$(DebugType)' != 'none' and '$(PdbFile)' != ''">
     <_DebugSymbolsIntermediatePath Remove="@(_DebugSymbolsIntermediatePath)" />
     <_DebugSymbolsIntermediatePath Include="$(PdbFile)" />
@@ -2118,7 +2121,7 @@ class Controller:
             "ProduceReferenceAssembly": "false",
             "DebugSymbols": "true",
             "DebugType": "portable",
-            "PdbFile": f"/adr0198/pdb/{key}/{project.stem}.pdb",
+            "Adr0198PdbDirectory": f"/adr0198/pdb/{key}/",
             "CustomAfterMicrosoftCommonTargets": str(
                 self.toolchains / "controller-inputs" / "Adr0198.Pdb.targets"),
             "UseAppHost": str(use_app_host).lower(),
