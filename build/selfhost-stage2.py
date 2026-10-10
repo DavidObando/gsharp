@@ -636,7 +636,11 @@ def first_difference(left: Any, right: Any, path: str = "$") -> str:
                 return first_difference(left[key], right[key], f"{path}.{key}")
     elif isinstance(left, list):
         if len(left) != len(right):
-            return f"{path}: lengths {len(left)} != {len(right)}"
+            left_text = {json.dumps(item, sort_keys=True, default=str) for item in left}
+            right_text = {json.dumps(item, sort_keys=True, default=str) for item in right}
+            return (f"{path}: lengths {len(left)} != {len(right)}; "
+                    f"only-current={sorted(left_text - right_text)[:3]}; "
+                    f"only-frozen={sorted(right_text - left_text)[:3]}")
         for index, (left_item, right_item) in enumerate(zip(left, right)):
             if left_item != right_item:
                 return first_difference(
@@ -2032,6 +2036,36 @@ class Controller:
             raise CertificationError(f"cannot compute the NuGet content hash for {package}")
         return value
 
+    @staticmethod
+    def project_reference_closure(tree: Path, project: Path) -> set[str]:
+        seen: set[str] = set()
+        pending = [project.as_posix()]
+        while pending:
+            relative = pending.pop()
+            if relative in seen:
+                continue
+            seen.add(relative)
+            path = tree / relative
+            if not path.is_file():
+                continue
+            try:
+                root = ET.parse(path).getroot()
+            except ET.ParseError:
+                continue
+            for element in root.iter():
+                if element.tag.rsplit("}", 1)[-1] != "ProjectReference":
+                    continue
+                include = element.get("Include")
+                if not include or "$(" in include:
+                    continue
+                target = Path(os.path.normpath(
+                    (path.parent / include.replace("\\", "/"))))
+                try:
+                    pending.append(target.relative_to(tree).as_posix())
+                except ValueError:
+                    continue
+        return seen
+
     def properties(self, stage: str, project: Path) -> dict[str, str]:
         key = hashlib.sha256(project.as_posix().encode()).hexdigest()[:16]
         output = self.writable(stage, "out")
@@ -2075,6 +2109,16 @@ class Controller:
                 "GsharpNoChannelsRuntime": "true",
                 "GsharpNoValuesRuntime": "true",
             })
+        # A project that reaches a runtime producer through ProjectReference must
+        # not also take the toolchain copy through the SDK's implicit reference:
+        # RAR keeps whichever copy it sees, so the resolved input set would
+        # change once the producer output exists. Freeze on the producer.
+        reached = self.project_reference_closure(
+            self.stage1 if stage == "stage-1" else self.stage2, project)
+        if any(item.endswith("Gsharp.Runtime.Channels.gsproj") for item in reached):
+            properties["GsharpNoChannelsRuntime"] = "true"
+        if any(item.endswith("Gsharp.Runtime.Values.gsproj") for item in reached):
+            properties["GsharpNoValuesRuntime"] = "true"
         if relative.endswith((
                 "src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj",
                 "src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj",
