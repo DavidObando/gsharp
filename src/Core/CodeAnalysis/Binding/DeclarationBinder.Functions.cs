@@ -1282,6 +1282,28 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
+    /// ADR-0199: a data type's hand-written <c>PrintMembers(StringBuilder)</c>
+    /// replaces the synthesized one only when it has the slot's shape: an
+    /// instance, non-generic, synchronous method returning <c>bool</c> by value
+    /// whose accessibility is the one the type's slot requires (<c>private</c>
+    /// for a sealed type that starts the slot, <c>protected</c> otherwise).
+    /// </summary>
+    private static bool IsCompatibleDataPrintMembers(
+        StructSymbol owner,
+        TypeSymbol returnType,
+        RefKind returnRefKind,
+        bool isAsync,
+        ImmutableArray<TypeParameterSymbol> methodTypeParameters,
+        Accessibility accessibility)
+    {
+        return returnType == TypeSymbol.Bool
+            && returnRefKind == RefKind.None
+            && !isAsync
+            && methodTypeParameters.IsDefaultOrEmpty
+            && accessibility == DataPrintMembersModel.GetRequiredAccessibility(owner);
+    }
+
+    /// <summary>
     /// Binds a type-parameter list. Made <c>internal</c> (issue #1886) so
     /// <see cref="LambdaBinder"/> can bind the <c>[T, U, ...]</c> list on a
     /// generic <c>let</c>-bound local function declaration

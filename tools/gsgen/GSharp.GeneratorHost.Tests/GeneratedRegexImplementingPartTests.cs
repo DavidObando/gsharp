@@ -707,7 +707,7 @@ HEADER GitHubUrl(Owner string, Name string, PrNumber int32?) {
         Assert.Equal(4, Invoke(type, "Captures", "https://github.com/a/b"));
         Assert.Equal("ExplicitCapture", Invoke(type, "Options"));
         Assert.Equal(1000.0, Invoke(type, "TimeoutMs"));
-        Assert.Equal("GitHubUrl(Owner=o, Name=n, PrNumber=7)|True|m", Invoke(type, "Show"));
+        Assert.Equal("GitHubUrl { Owner = o, Name = n, PrNumber = 7 }|True|m", Invoke(type, "Show"));
     }
 
     // A data class with a base class cannot be a C# record in the stub (a

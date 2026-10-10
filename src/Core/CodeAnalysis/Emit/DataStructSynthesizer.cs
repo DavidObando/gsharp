@@ -107,6 +107,7 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, FunctionSymbol, EntityHandle> resolveUserInstanceMethodToken;
     private readonly Action<ParameterHandle, ImmutableArray<byte>> emitParameterNullability;
     private readonly Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> resolveImportedConstructorRef;
+    private readonly Func<StructSymbol, PropertySymbol, bool, EntityHandle> resolveUserPropertyAccessorToken;
 
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
 
@@ -134,7 +135,8 @@ internal sealed class DataStructSynthesizer
         Func<StructSymbol, MethodDefinitionHandle> emitInitializerConstructor,
         Func<StructSymbol, FunctionSymbol, EntityHandle> resolveUserInstanceMethodToken,
         Action<ParameterHandle, ImmutableArray<byte>> emitParameterNullability,
-        Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> resolveImportedConstructorRef)
+        Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> resolveImportedConstructorRef,
+        Func<StructSymbol, PropertySymbol, bool, EntityHandle> resolveUserPropertyAccessorToken)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -154,6 +156,7 @@ internal sealed class DataStructSynthesizer
         this.resolveUserInstanceMethodToken = resolveUserInstanceMethodToken ?? throw new ArgumentNullException(nameof(resolveUserInstanceMethodToken));
         this.emitParameterNullability = emitParameterNullability ?? throw new ArgumentNullException(nameof(emitParameterNullability));
         this.resolveImportedConstructorRef = resolveImportedConstructorRef ?? throw new ArgumentNullException(nameof(resolveImportedConstructorRef));
+        this.resolveUserPropertyAccessorToken = resolveUserPropertyAccessorToken ?? throw new ArgumentNullException(nameof(resolveUserPropertyAccessorToken));
     }
 
     /// <summary>
@@ -186,12 +189,6 @@ internal sealed class DataStructSynthesizer
         }
 
         return builder.ToImmutable();
-    }
-
-    private static string GetSynthesisMemberName(StructSymbol structSym, FieldSymbol field)
-    {
-        return structSym.Properties.FirstOrDefault(property => property.BackingField == field)?.Name
-            ?? field.Name;
     }
 
     /// <summary>
@@ -551,6 +548,16 @@ internal sealed class DataStructSynthesizer
         if (!HasZeroDeconstructionMembers(structSym))
         {
             this.EmitDataStructDeconstruct(structSym);
+        }
+
+        // ADR-0199: the C#-record `PrintMembers(StringBuilder)` slot. It is the
+        // LAST synthesized row (after Deconstruct) in both the class and the
+        // struct planner, and is skipped when the type declares its own
+        // (emitted through the ordinary user-method path) or is an anonymous
+        // literal.
+        if (structSym.DataPrintMembers is { } printMembersSlot)
+        {
+            this.EmitDataStructPrintMembers(structSym, printMembersSlot);
         }
 
         // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
@@ -1299,90 +1306,297 @@ internal sealed class DataStructSynthesizer
     }
 
     /// <summary>
-    /// Issue #410 / ADR-0029: emits
-    /// <c>public override string ToString()</c> rendering
-    /// <c>Name(F1=v1, F2=v2, …)</c>. Field values are converted via
-    /// <c>Convert.ToString(object, IFormatProvider)</c> with
-    /// <see cref="System.Globalization.CultureInfo.InvariantCulture"/> so
-    /// null reference fields render as the empty string and value-type
-    /// formatting is locale-independent. Pieces are assembled with
-    /// <c>String.Concat(string[])</c>.
+    /// ADR-0199: tests whether the synthesized (or hand-written) print-members
+    /// slot of <paramref name="structSym"/> is a CLR virtual method. A sealed
+    /// type that starts the slot keeps it <c>private</c> and non-virtual;
+    /// every other data class has a <c>protected virtual</c> slot.
+    /// </summary>
+    /// <param name="structSym">The data type.</param>
+    /// <returns><see langword="true"/> when the slot is virtual.</returns>
+    public static bool IsPrintMembersVirtual(StructSymbol structSym)
+        => DataPrintMembersModel.GetRequiredAccessibility(structSym) != Accessibility.Private;
+
+    /// <summary>
+    /// ADR-0199: tests whether the print-members slot starts a new vtable slot
+    /// (an open root) rather than overriding the base type's slot.
+    /// </summary>
+    /// <param name="structSym">The data type.</param>
+    /// <returns><see langword="true"/> when the slot is <c>newslot</c>.</returns>
+    public static bool IsPrintMembersNewSlot(StructSymbol structSym)
+        => IsPrintMembersVirtual(structSym) && DataPrintMembersModel.GetBase(structSym, out _) is null;
+
+    /// <summary>
+    /// ADR-0199: emits the C#-record <c>PrintMembers(StringBuilder)</c>: it
+    /// first lets the base slot print (writing <c>", "</c> only when the base
+    /// printed something), then writes <c>Name = value</c> for every printable
+    /// member, and returns whether anything was printed. Values are rendered
+    /// with <c>ToString()</c> under the current culture, exactly as Roslyn's
+    /// synthesized member does (see <see cref="EmitAppendMember"/>).
+    /// </summary>
+    private void EmitDataStructPrintMembers(StructSymbol structSym, FunctionSymbol slot)
+    {
+        var members = DataPrintMembersModel.GetPrintableMembers(structSym);
+        var hasBase = this.TryResolveBasePrintMembersToken(structSym, out var baseToken);
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var temps = new List<TypeSymbol>();
+        StandaloneSignatureHandle localsSignature = default;
+        int bodyOffset = -1;
+        if (!this.emitCtx.MetadataOnly)
+        {
+            if (hasBase && members.IsDefaultOrEmpty)
+            {
+                il.LoadArgument(0);
+                il.LoadArgument(1);
+                il.OpCode(ILOpCode.Call);
+                il.Token(baseToken);
+                il.OpCode(ILOpCode.Ret);
+            }
+            else
+            {
+                if (hasBase)
+                {
+                    var basePrintedNothing = il.DefineLabel();
+                    il.LoadArgument(0);
+                    il.LoadArgument(1);
+                    il.OpCode(ILOpCode.Call);
+                    il.Token(baseToken);
+                    il.Branch(ILOpCode.Brfalse, basePrintedNothing);
+                    this.EmitAppendLiteral(il, () => il.LoadArgument(1), ", ");
+                    il.MarkLabel(basePrintedNothing);
+                }
+
+                for (var i = 0; i < members.Length; i++)
+                {
+                    this.EmitAppendMember(il, structSym, members[i], () => il.LoadArgument(1), (i == 0 ? string.Empty : ", ") + members[i].Name + " = ", temps, firstTempIndex: 0);
+                }
+
+                il.LoadConstantI4(members.IsDefaultOrEmpty ? 0 : 1);
+                il.OpCode(ILOpCode.Ret);
+            }
+
+            localsSignature = this.BuildLocalsSignature(includeBuilder: false, temps);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+        }
+
+        var builderRef = this.wellKnown.GetStringBuilderTypeReference();
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                1,
+                r => r.Type().Boolean(),
+                ps => ps.AddParameter().Type().Type(builderRef, isValueType: false));
+
+        var attributes = MethodAttributes.HideBySig;
+        if (IsPrintMembersVirtual(structSym))
+        {
+            attributes |= MethodAttributes.Family | MethodAttributes.Virtual;
+            if (IsPrintMembersNewSlot(structSym))
+            {
+                attributes |= MethodAttributes.NewSlot;
+            }
+        }
+        else
+        {
+            attributes |= MethodAttributes.Private;
+        }
+
+        var handle = this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: attributes,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.emitCtx.Metadata.GetOrAddString(DataPrintMembersModel.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
+            bodyOffset: bodyOffset,
+            parameterList: this.EmitEqualityParameter(slot.Parameters[0]));
+        if (this.cache.MethodHandles.TryGetValue(slot, out var planned) && planned != handle)
+        {
+            throw new InvalidOperationException(
+                $"Data type '{structSym.Name}' PrintMembers MethodDef row {MetadataTokens.GetRowNumber(handle)} did not match the planned row {MetadataTokens.GetRowNumber(planned)}.");
+        }
+    }
+
+    /// <summary>Gets the synthesized or hand-written print-members slot of a declared data type.</summary>
+    private static FunctionSymbol GetPrintMembersSlot(StructSymbol structSym)
+        => structSym.DataPrintMembers
+            ?? Invariant.Required(DataPrintMembersModel.FindDeclared(structSym), "a declared data type owns a print-members slot");
+
+    private bool TryResolveBasePrintMembersToken(StructSymbol structSym, out EntityHandle token)
+    {
+        var directBase = DataPrintMembersModel.GetBase(structSym, out var importedMethod);
+        token = directBase switch
+        {
+            null => default,
+            _ when importedMethod is not null => this.resolveImportedMethodRef(importedMethod, directBase),
+            StructSymbol sourceBase => this.resolveUserInstanceMethodToken(sourceBase, GetPrintMembersSlot(sourceBase)),
+            _ => throw new InvalidOperationException($"Data class '{structSym.Name}' has an unsupported print-members base."),
+        };
+        return !token.IsNil;
+    }
+
+    /// <summary>Appends a string literal to the builder produced by <paramref name="loadBuilder"/>.</summary>
+    private void EmitAppendLiteral(InstructionEncoder il, Action loadBuilder, string text)
+    {
+        loadBuilder();
+        il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(text));
+        il.OpCode(ILOpCode.Callvirt);
+        il.Token(this.wellKnown.GetStringBuilderAppendStringReference());
+        il.OpCode(ILOpCode.Pop);
+    }
+
+    /// <summary>
+    /// Appends <paramref name="label"/> and then the member's value to the
+    /// builder produced by <paramref name="loadBuilder"/>, as Roslyn's
+    /// synthesized <c>PrintMembers</c> does: a non-nullable value-typed member
+    /// (or a value-type-constrained type parameter) is rendered by a
+    /// <c>constrained.</c> <c>ToString()</c> call on its address, so a
+    /// mutating <c>ToString</c> and a ref-like value are honoured; any other
+    /// member (references, unconstrained type parameters, <c>Nullable&lt;T&gt;</c>)
+    /// is appended as <c>object</c>, where null prints nothing. A value-typed
+    /// property is read once into a temporary so its address can be taken.
+    /// </summary>
+    private void EmitAppendMember(
+        InstructionEncoder il,
+        StructSymbol structSym,
+        DataPrintMembersModel.PrintableMember member,
+        Action loadBuilder,
+        string label,
+        List<TypeSymbol> temps,
+        int firstTempIndex)
+    {
+        this.EmitAppendLiteral(il, loadBuilder, label);
+        loadBuilder();
+        var type = member.Type;
+        var printsThroughAddress = ReflectionMetadataEmitter.IsValueTypeSymbol(type) && type is not NullableTypeSymbol;
+        if (member.Field is { } field)
+        {
+            il.LoadArgument(0);
+            il.OpCode(printsThroughAddress ? ILOpCode.Ldflda : ILOpCode.Ldfld);
+            il.Token(this.resolveUserFieldToken(structSym, field));
+        }
+        else
+        {
+            var property = Invariant.Required(member.Property, "a printable member is a field or a property");
+            il.LoadArgument(0);
+            il.OpCode(property.IsVirtual || property.IsOverride || property.IsAbstract ? ILOpCode.Callvirt : ILOpCode.Call);
+            il.Token(this.resolveUserPropertyAccessorToken(structSym, property, false));
+            if (printsThroughAddress)
+            {
+                var temp = firstTempIndex + temps.Count;
+                temps.Add(type);
+                il.StoreLocal(temp);
+                il.LoadLocalAddress(temp);
+            }
+        }
+
+        if (printsThroughAddress)
+        {
+            il.OpCode(ILOpCode.Constrained);
+            il.Token(this.getElementTypeToken(type));
+            il.OpCode(ILOpCode.Callvirt);
+            il.Token(this.wellKnown.GetObjectInstanceToStringReference());
+            il.OpCode(ILOpCode.Callvirt);
+            il.Token(this.wellKnown.GetStringBuilderAppendStringReference());
+        }
+        else
+        {
+            this.conversionEmitter.EmitBoxIfNeeded(il, type);
+            il.OpCode(ILOpCode.Callvirt);
+            il.Token(this.wellKnown.GetStringBuilderAppendObjectReference());
+        }
+
+        il.OpCode(ILOpCode.Pop);
+    }
+
+    /// <summary>
+    /// Builds the standalone local-variable signature of a synthesized
+    /// print body: an optional leading <c>StringBuilder</c> followed by one
+    /// temporary per value-typed property that was read through its address.
+    /// </summary>
+    private StandaloneSignatureHandle BuildLocalsSignature(bool includeBuilder, List<TypeSymbol> temps)
+    {
+        var count = temps.Count + (includeBuilder ? 1 : 0);
+        if (count == 0)
+        {
+            return default;
+        }
+
+        var sigBlob = new BlobBuilder();
+        var encoder = new BlobEncoder(sigBlob).LocalVariableSignature(count);
+        if (includeBuilder)
+        {
+            encoder.AddVariable().Type().Type(this.wellKnown.GetStringBuilderTypeReference(), isValueType: false);
+        }
+
+        foreach (var temp in temps)
+        {
+            this.encodeTypeSymbol(encoder.AddVariable().Type(), temp);
+        }
+
+        return this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// ADR-0199: emits <c>public override string ToString()</c> in the C#
+    /// record format. A declared data type renders <c>Name { X = 1, Y = 2 }</c>
+    /// (<c>Name { }</c> when empty) by building the text in a
+    /// <see cref="System.Text.StringBuilder"/> around its <c>PrintMembers</c> slot, so
+    /// derived types contribute the inherited members. An anonymous literal
+    /// renders the C# anonymous-type form <c>{ X = 1, Y = 2 }</c> with no type
+    /// name and no <c>PrintMembers</c>.
     /// </summary>
     private void EmitDataStructToString(StructSymbol structSym)
     {
-        var fields = GetSynthesisFields(structSym);
-
-        // Issue #2363: a zero-field data class/struct renders as "Name()" —
-        // a fixed literal, no array/Concat machinery needed (and fields[0]
-        // below would throw IndexOutOfRangeException for zero fields).
-        if (fields.IsDefaultOrEmpty)
-        {
-            var il0 = new InstructionEncoder(new BlobBuilder());
-            if (!this.emitCtx.MetadataOnly)
-            {
-                il0.LoadString(this.emitCtx.Metadata.GetOrAddUserString(structSym.Name + "()"));
-                il0.OpCode(ILOpCode.Ret);
-            }
-
-            var sig0 = new BlobBuilder();
-            new BlobEncoder(sig0).MethodSignature(isInstanceMethod: true)
-                .Parameters(0, r => r.Type().String(), _ => { });
-
-            this.emitCtx.Metadata.AddMethodDefinition(
-                attributes: DataObjectOverrideAttributes(structSym),
-                implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                name: this.emitCtx.Metadata.GetOrAddString("ToString"),
-                signature: this.emitCtx.Metadata.GetOrAddBlob(sig0),
-                bodyOffset: this.FinishInlineBody(il0),
-                parameterList: this.nextParameterHandle());
-            return;
-        }
-
-        int pieceCount = (2 * fields.Length) + 1;
-
-        var il = new InstructionEncoder(new BlobBuilder());
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var temps = new List<TypeSymbol>();
+        StandaloneSignatureHandle localsSignature = default;
+        int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {
-            var stringTypeRef = this.getTypeReference(this.emitCtx.CoreStringType);
+            il.OpCode(ILOpCode.Newobj);
+            il.Token(this.wellKnown.GetStringBuilderCtorReference());
+            il.StoreLocal(0);
+            void LoadBuilder() => il.LoadLocal(0);
 
-            il.LoadConstantI4(pieceCount);
-            il.OpCode(ILOpCode.Newarr);
-            il.Token(stringTypeRef);
-
-            // Piece 0: "Name(F1="
-            il.OpCode(ILOpCode.Dup);
-            il.LoadConstantI4(0);
-            il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(structSym.Name + "(" + GetSynthesisMemberName(structSym, fields[0]) + "="));
-            il.OpCode(ILOpCode.Stelem_ref);
-
-            for (int i = 0; i < fields.Length; i++)
+            if (structSym.IsAnonymousLiteral)
             {
-                var field = fields[i];
-                var fieldHandle = this.resolveUserFieldToken(structSym, field);
+                var members = DataPrintMembersModel.GetPrintableMembers(structSym);
+                if (members.IsDefaultOrEmpty)
+                {
+                    this.EmitAppendLiteral(il, LoadBuilder, "{ }");
+                }
+                else
+                {
+                    this.EmitAppendLiteral(il, LoadBuilder, "{ ");
+                    for (var i = 0; i < members.Length; i++)
+                    {
+                        this.EmitAppendMember(il, structSym, members[i], LoadBuilder, (i == 0 ? string.Empty : ", ") + members[i].Name + " = ", temps, firstTempIndex: 1);
+                    }
 
-                // Piece 2*i + 1: Convert.ToString(this.Fi, InvariantCulture)
-                il.OpCode(ILOpCode.Dup);
-                il.LoadConstantI4((2 * i) + 1);
+                    this.EmitAppendLiteral(il, LoadBuilder, " }");
+                }
+            }
+            else
+            {
+                var slot = GetPrintMembersSlot(structSym);
+                var skipSeparator = il.DefineLabel();
+                this.EmitAppendLiteral(il, LoadBuilder, structSym.Name);
+                this.EmitAppendLiteral(il, LoadBuilder, " { ");
                 il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.Call(this.wellKnown.GetCultureInvariantGetterReference());
-                il.Call(this.wellKnown.GetConvertToStringReference());
-                il.OpCode(ILOpCode.Stelem_ref);
-
-                // Piece 2*i + 2: separator (", F{i+1}=" if more fields, else ")")
-                il.OpCode(ILOpCode.Dup);
-                il.LoadConstantI4((2 * i) + 2);
-                string separator = i + 1 < fields.Length
-                    ? ", " + GetSynthesisMemberName(structSym, fields[i + 1]) + "="
-                    : ")";
-                il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(separator));
-                il.OpCode(ILOpCode.Stelem_ref);
+                LoadBuilder();
+                il.OpCode(IsPrintMembersVirtual(structSym) ? ILOpCode.Callvirt : ILOpCode.Call);
+                il.Token(this.resolveUserInstanceMethodToken(structSym, slot));
+                il.Branch(ILOpCode.Brfalse, skipSeparator);
+                this.EmitAppendLiteral(il, LoadBuilder, " ");
+                il.MarkLabel(skipSeparator);
+                this.EmitAppendLiteral(il, LoadBuilder, "}");
             }
 
-            il.Call(this.wellKnown.GetStringConcatArrayReference());
+            LoadBuilder();
+            il.OpCode(ILOpCode.Callvirt);
+            il.Token(this.wellKnown.GetStringBuilderToStringReference());
             il.OpCode(ILOpCode.Ret);
+            localsSignature = this.BuildLocalsSignature(includeBuilder: true, temps);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
         }
 
         var sig = new BlobBuilder();
@@ -1394,7 +1608,7 @@ internal sealed class DataStructSynthesizer
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("ToString"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
-            bodyOffset: this.FinishInlineBody(il),
+            bodyOffset: bodyOffset,
             parameterList: this.nextParameterHandle());
     }
 

@@ -120,9 +120,11 @@ internal sealed class WellKnownReferences
     private MemberReferenceHandle objectInstanceGetHashCodeRef;
     private MemberReferenceHandle nullRefExceptionCtorRef;
     private MemberReferenceHandle nullRefExceptionMessageCtorRef;
-    private MemberReferenceHandle stringConcatArrayRef;
-    private MemberReferenceHandle convertToStringRef;
-    private MemberReferenceHandle cultureInvariantGetterRef;
+    private TypeReferenceHandle stringBuilderTypeRef;
+    private MemberReferenceHandle stringBuilderCtorRef;
+    private MemberReferenceHandle stringBuilderAppendStringRef;
+    private MemberReferenceHandle stringBuilderAppendObjectRef;
+    private MemberReferenceHandle stringBuilderToStringRef;
     private MemberReferenceHandle hashCodeAddOpenRef;
     private MemberReferenceHandle hashCodeToHashCodeRef;
     private TypeReferenceHandle hashCodeTypeRef;
@@ -1414,93 +1416,76 @@ internal sealed class WellKnownReferences
     }
 
     /// <summary>
-    /// Issue #410 / ADR-0029: resolves the MemberRef for the static
-    /// <c>System.Convert.ToString(object, IFormatProvider)</c> overload used
-    /// by data-struct <c>ToString</c> synthesis. Handles null reference-type
-    /// fields gracefully (returns the empty string) per the ADR.
+    /// ADR-0199: resolves the TypeRef for <c>System.Text.StringBuilder</c>, used by
+    /// the synthesized record-format <c>ToString</c> and <c>PrintMembers</c>.
     /// </summary>
-    /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
-    public MemberReferenceHandle GetConvertToStringReference()
+    /// <returns>The cached <see cref="TypeReferenceHandle"/>.</returns>
+    public TypeReferenceHandle GetStringBuilderTypeReference()
     {
-        if (!this.convertToStringRef.IsNil)
+        if (this.stringBuilderTypeRef.IsNil)
         {
-            return this.convertToStringRef;
+            this.stringBuilderTypeRef = this.getTypeReference(typeof(System.Text.StringBuilder));
         }
 
-        var convertRef = this.getTypeReference(typeof(System.Convert));
-        var ifpRef = this.getTypeReference(typeof(System.IFormatProvider));
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(
-                2,
-                r => r.Type().String(),
-                ps =>
-                {
-                    ps.AddParameter().Type().Object();
-                    ps.AddParameter().Type().Type(ifpRef, isValueType: false);
-                });
-
-        this.convertToStringRef = this.emitCtx.Metadata.AddMemberReference(
-            convertRef,
-            this.emitCtx.Metadata.GetOrAddString("ToString"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.convertToStringRef;
+        return this.stringBuilderTypeRef;
     }
 
-    /// <summary>
-    /// Issue #410 / ADR-0029: resolves the MemberRef for the static
-    /// property getter <c>System.Globalization.CultureInfo::get_InvariantCulture</c>,
-    /// used to thread an invariant <see cref="System.IFormatProvider"/> into
-    /// <c>Convert.ToString</c> during data-struct <c>ToString</c> synthesis.
-    /// </summary>
+    /// <summary>ADR-0199: resolves the MemberRef for <c>StringBuilder::.ctor()</c>.</summary>
     /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
-    public MemberReferenceHandle GetCultureInvariantGetterReference()
+    public MemberReferenceHandle GetStringBuilderCtorReference()
     {
-        if (!this.cultureInvariantGetterRef.IsNil)
+        if (this.stringBuilderCtorRef.IsNil)
         {
-            return this.cultureInvariantGetterRef;
+            var sig = new BlobBuilder();
+            new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Void(), _ => { });
+            this.stringBuilderCtorRef = this.emitCtx.Metadata.AddMemberReference(
+                this.GetStringBuilderTypeReference(),
+                this.emitCtx.Metadata.GetOrAddString(".ctor"),
+                this.emitCtx.Metadata.GetOrAddBlob(sig));
         }
 
-        var cultureInfoRef = this.getTypeReference(typeof(System.Globalization.CultureInfo));
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(0, r => r.Type().Type(cultureInfoRef, isValueType: false), _ => { });
-
-        this.cultureInvariantGetterRef = this.emitCtx.Metadata.AddMemberReference(
-            cultureInfoRef,
-            this.emitCtx.Metadata.GetOrAddString("get_InvariantCulture"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.cultureInvariantGetterRef;
+        return this.stringBuilderCtorRef;
     }
 
-    /// <summary>
-    /// Issue #410 / ADR-0029: resolves the MemberRef for the static
-    /// <c>System.String.Concat(string[])</c> overload used to assemble the
-    /// data-struct <c>ToString</c> output from a per-field array of pieces.
-    /// </summary>
+    /// <summary>ADR-0199: resolves the MemberRef for <c>StringBuilder.Append(string)</c>.</summary>
     /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
-    public MemberReferenceHandle GetStringConcatArrayReference()
+    public MemberReferenceHandle GetStringBuilderAppendStringReference()
     {
-        if (!this.stringConcatArrayRef.IsNil)
+        if (this.stringBuilderAppendStringRef.IsNil)
         {
-            return this.stringConcatArrayRef;
+            this.stringBuilderAppendStringRef = this.AddStringBuilderAppend(p => p.String());
         }
 
-        var stringTypeRef = this.getTypeReference(this.emitCtx.CoreStringType);
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(
-                1,
-                r => r.Type().String(),
-                ps => ps.AddParameter().Type().SZArray().String());
+        return this.stringBuilderAppendStringRef;
+    }
 
-        this.stringConcatArrayRef = this.emitCtx.Metadata.AddMemberReference(
-            stringTypeRef,
-            this.emitCtx.Metadata.GetOrAddString("Concat"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.stringConcatArrayRef;
+    /// <summary>ADR-0199: resolves the MemberRef for <c>StringBuilder.Append(object)</c>.</summary>
+    /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
+    public MemberReferenceHandle GetStringBuilderAppendObjectReference()
+    {
+        if (this.stringBuilderAppendObjectRef.IsNil)
+        {
+            this.stringBuilderAppendObjectRef = this.AddStringBuilderAppend(p => p.Object());
+        }
+
+        return this.stringBuilderAppendObjectRef;
+    }
+
+    /// <summary>ADR-0199: resolves the MemberRef for <c>StringBuilder.ToString()</c>.</summary>
+    /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
+    public MemberReferenceHandle GetStringBuilderToStringReference()
+    {
+        if (this.stringBuilderToStringRef.IsNil)
+        {
+            var sig = new BlobBuilder();
+            new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Type().String(), _ => { });
+            this.stringBuilderToStringRef = this.emitCtx.Metadata.AddMemberReference(
+                this.GetStringBuilderTypeReference(),
+                this.emitCtx.Metadata.GetOrAddString("ToString"),
+                this.emitCtx.Metadata.GetOrAddBlob(sig));
+        }
+
+        return this.stringBuilderToStringRef;
     }
 
     /// <summary>
@@ -1582,5 +1567,20 @@ internal sealed class WellKnownReferences
             parent: this.ObjectTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    private MemberReferenceHandle AddStringBuilderAppend(Action<SignatureTypeEncoder> encodeParameter)
+    {
+        var builderRef = this.GetStringBuilderTypeReference();
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                1,
+                r => r.Type().Type(builderRef, isValueType: false),
+                ps => encodeParameter(ps.AddParameter().Type()));
+        return this.emitCtx.Metadata.AddMemberReference(
+            builderRef,
+            this.emitCtx.Metadata.GetOrAddString("Append"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
     }
 }

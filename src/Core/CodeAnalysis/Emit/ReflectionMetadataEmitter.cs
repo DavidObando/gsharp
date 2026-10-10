@@ -962,6 +962,7 @@ internal sealed class ReflectionMetadataEmitter
                 _ = symbol.DataEqualsSelf;
                 _ = symbol.DataEqualsBase;
                 _ = symbol.DataEqualsObject;
+                _ = symbol.DataPrintMembers;
             }
         }
 
@@ -1307,7 +1308,8 @@ internal sealed class ReflectionMetadataEmitter
             this.typeDefEmitter.EmitValueStructDefaultConstructor,
             this.userTokens.ResolveUserInstanceMethodToken,
             this.customAttrEncoder.EmitNullableAttributeOnParameter,
-            this.memberRefs.GetCtorReference);
+            this.memberRefs.GetCtorReference,
+            this.userTokens.ResolveUserPropertyAccessorToken);
 
         // PR-E-9: ClosureEmitter wires up after TypeDefEmitter. It depends
         // on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -2243,10 +2245,20 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 this.cache.MethodHandles[c.DataClassCloneMethod] = this.cache.DataClassCloneHandles[c];
-                methodRow += 10
+                var synthesizedRows = 10
                     + (c.DataEqualsBase != null ? 1 : 0)
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
                     - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
+
+                // ADR-0199: the synthesized C#-record PrintMembers is the last
+                // synthesized row (a hand-written one is an ordinary method).
+                if (c.DataPrintMembers is { } printMembers)
+                {
+                    this.cache.MethodHandles[printMembers] = MetadataTokens.MethodDefinitionHandle(methodRow + synthesizedRows);
+                    synthesizedRows++;
+                }
+
+                methodRow += synthesizedRows;
             }
 
             if (!c.Methods.IsDefaultOrEmpty)
@@ -2426,9 +2438,19 @@ internal sealed class ReflectionMetadataEmitter
                 // compatible hand-written ToString — see the matching
                 // class-side comment in PlanClassMethods above. The two
                 // skips compose independently.
-                methodRow += 7
+                var structSynthesizedRows = 7
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(s) ? 1 : 0)
                     - (DataStructSynthesizer.HasUserToStringOverride(s) ? 1 : 0);
+
+                // ADR-0199: PrintMembers is the last synthesized row, before the
+                // primary constructor; an anonymous literal has none.
+                if (s.DataPrintMembers is { } structPrintMembers)
+                {
+                    this.cache.MethodHandles[structPrintMembers] = MetadataTokens.MethodDefinitionHandle(methodRow + structSynthesizedRows);
+                    structSynthesizedRows++;
+                }
+
+                methodRow += structSynthesizedRows;
 
                 // Native positional data construction invokes a real primary
                 // constructor, including anonymous-class literal backing types.

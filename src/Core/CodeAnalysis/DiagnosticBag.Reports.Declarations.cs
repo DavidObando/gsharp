@@ -1315,6 +1315,20 @@ public sealed partial class DiagnosticBag
         expectedType,
         actualType);
 
+    /// <summary>
+    /// ADR-0199: reports a data class/struct <c>PrintMembers(StringBuilder)</c> whose
+    /// shape cannot replace the synthesized print-members slot. Compiler-internal on
+    /// purpose: it adds nothing to the public API snapshot (#4654).
+    /// </summary>
+    /// <param name="location">The text location of the member name.</param>
+    /// <param name="typeName">The data type name.</param>
+    /// <param name="isClass"><see langword="true"/> when the type is a data class; otherwise a data struct.</param>
+    /// <param name="requiredAccessibility">The accessibility the slot must have (<c>private</c> or <c>protected</c>).</param>
+    internal void ReportIncompatibleDataPrintMembers(TextLocation location, string typeName, bool isClass, string requiredAccessibility)
+    {
+        Report(location, DiagnosticDescriptors.IncompatibleDataPrintMembers, isClass ? "class" : "struct", typeName, requiredAccessibility);
+    }
+
     private static string GetAggregateKindName(StructSymbol symbol)
         => symbol.IsClass ? "Class" : "Struct";
 }

@@ -85,6 +85,9 @@ internal sealed class AnonymousTypeCache
                 isClass: false,
                 primaryConstructorParameters: ctorParams.MoveToImmutable());
 
+            dataSymbol.IsAnonymousLiteral = true;
+            dataSymbol.SetImplementedClrInterfaces(
+                ImmutableArray.Create(DataEqualityMemberModel.CreateSelfEquatable(dataSymbol)));
             byShape[key] = dataSymbol;
             symbols.Add(dataSymbol);
             return dataSymbol;
@@ -140,6 +143,9 @@ internal sealed class AnonymousTypeCache
             isClass: false,
             primaryConstructorParameters: ctorParams.MoveToImmutable());
         symbol.HasAnonymousConstructorMembers = true;
+        symbol.IsAnonymousLiteral = true;
+        symbol.SetImplementedClrInterfaces(
+            ImmutableArray.Create(DataEqualityMemberModel.CreateSelfEquatable(symbol)));
         symbol.SetProperties(properties.MoveToImmutable());
 
         byShape[key] = symbol;

@@ -248,9 +248,9 @@ public sealed class TestNameParityBaseline
                     "'missing' and 'extra' entries.");
             }
 
-            // The same normalization the matcher applies, so two entries that
+            // The same name the matcher compares, so two entries that
             // would match the same name are caught as duplicates here.
-            if (!seen.Add(NormalizeAppId(app).ToUpperInvariant() + "\n" + kind + "\n" + TestParityComparison.NormalizeTestName(test)))
+            if (!seen.Add(NormalizeAppId(app).ToUpperInvariant() + "\n" + kind + "\n" + test))
             {
                 errors.Add(where + " ('" + test + "'): duplicate entry.");
             }
@@ -374,11 +374,11 @@ public sealed class TestNameParityBaseline
         string name,
         HashSet<string> rowMethods)
     {
-        string normalized = TestParityComparison.NormalizeTestName(name);
+        string normalized = name;
         TestNameParityBaselineEntry exact = scoped.FirstOrDefault(entry =>
             entry.Kind.Trim() == kind &&
             remaining.TryGetValue(entry, out int left) && left > 0 &&
-            string.Equals(TestParityComparison.NormalizeTestName(entry.Test.Trim()), normalized, StringComparison.Ordinal));
+            string.Equals(entry.Test.Trim(), normalized, StringComparison.Ordinal));
         if (exact is not null)
         {
             remaining[exact] = remaining[exact] - 1;

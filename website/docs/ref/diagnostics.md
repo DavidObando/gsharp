@@ -339,6 +339,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0620 | Error | An explicit abstract property has a non-abstract owner, a private required accessor, a body or bare auto-property form, or a conflicting `open` or explicit-interface modifier (ADR-0197). | Declare an abstract class and a non-private, bodyless accessor list; use `abstract override prop` to reabstract a base slot. |
 | GS0621 | Error | A property that replaces a positional data member has no getter. | Add a getter so the positional value remains readable. |
 | GS0622 | Error | A positional member follows a braced or content initializer in a composite literal. | Move positional members before composite elements so constructor arguments keep source evaluation order. |
+| GS0623 | Error | A data class or struct declares `PrintMembers(StringBuilder)` with a shape other than an instance, non-generic, synchronous method returning `bool` whose accessibility is `private` (a sealed type that starts the slot) or `protected` (ADR-0199). | A compatible `PrintMembers` replaces the synthesized one; remove it to use the synthesized print members, or fix its shape. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |

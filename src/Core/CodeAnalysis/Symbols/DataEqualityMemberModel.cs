@@ -179,6 +179,51 @@ internal static class DataEqualityMemberModel
             isOverride: isOverride);
     }
 
+    /// <summary>
+    /// ADR-0199: the <c>IEquatable&lt;Self&gt;</c> every data type implements
+    /// through its compiler-owned typed <c>Equals</c> slot, constructed over the
+    /// type itself (over its own type parameters when it is generic).
+    /// </summary>
+    /// <param name="owner">The data type.</param>
+    /// <returns>The symbolic <c>IEquatable[Self]</c>.</returns>
+    internal static TypeSymbol CreateSelfEquatable(StructSymbol owner)
+    {
+        TypeSymbol self = owner.TypeParameters.IsDefaultOrEmpty
+            ? owner
+            : StructSymbol.Construct(owner, owner.TypeParameters.Cast<TypeSymbol>().ToImmutableArray());
+        return ImportedTypeSymbol.GetConstructed(
+            typeof(IEquatable<object>),
+            typeof(IEquatable<>),
+            ImmutableArray.Create(self));
+    }
+
+    /// <summary>
+    /// ADR-0199: tests whether <paramref name="interfaces"/> already lists
+    /// <c>IEquatable[Self]</c> for <paramref name="owner"/>, so the implicit
+    /// interface is added exactly once (a cs2gs-translated record carries the
+    /// native one over from the C# symbol).
+    /// </summary>
+    /// <param name="owner">The data type.</param>
+    /// <param name="interfaces">The imported interfaces the type names.</param>
+    /// <returns><see langword="true"/> when the self interface is already listed.</returns>
+    internal static bool ListsSelfEquatable(StructSymbol owner, System.Collections.Generic.IEnumerable<TypeSymbol> interfaces)
+    {
+        var ownerDefinition = owner.Definition ?? owner;
+        foreach (var candidate in interfaces)
+        {
+            if (MemberLookup.TryGetSymbolicClrGenericInterface(candidate, out var open, out var arguments)
+                && ClrTypeUtilities.AreSame(open, typeof(IEquatable<>))
+                && arguments.Length == 1
+                && arguments[0] is StructSymbol argument
+                && ReferenceEquals(argument.Definition ?? argument, ownerDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Creates the existing synthesized override of object equality.</summary>
     /// <param name="owner">The declaring data type.</param>
     /// <returns>The compiler-owned object equality signature.</returns>

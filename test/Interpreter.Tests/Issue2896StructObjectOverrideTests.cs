@@ -324,7 +324,7 @@ public class Issue2896StructObjectOverrideTests
         // (the CLR type name). The evaluator's record-style rendering for
         // plain structs retired with it.
         Assert.Equal(
-            $"DataValue(Number=7){Environment.NewLine}DataValue(Number=7){Environment.NewLine}"
+            $"DataValue {{ Number = 7 }}{Environment.NewLine}DataValue {{ Number = 7 }}{Environment.NewLine}"
                 + $"Issue2896.Controls.DefaultValue{Environment.NewLine}Issue2896.Controls.DefaultValue{Environment.NewLine}",
             RunEmittedOracle(Source));
     }
