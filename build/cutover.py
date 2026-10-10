@@ -580,6 +580,8 @@ class Run:
             cmd += ["--translate-only"]
         else:
             oracle = self.root / "csharp-tests"
+            # A failed capture is tolerated per app, so stale JSON from an earlier run must not survive it.
+            shutil.rmtree(oracle, ignore_errors=True)
             self.sh("capture-oracle", [cs2gs, "capture-test-oracle", "--corpus", self.src, "--out", oracle]
                     + filters, cwd=self.src, env_extra=env, check=False)
             cmd += ["--csharp-test-oracle", oracle]
@@ -602,7 +604,7 @@ class Run:
         # Idempotent: always assemble from the pristine C# commit.
         self.sh("assemble", ["git", "checkout", "--quiet", "-f", "-B", "cutover/dry-run",
                              self.record["facts"]["csharp_commit"]], cwd=self.src)
-        self.sh("assemble", ["git", "clean", "-fdq"], cwd=self.src)
+        self.sh("assemble", ["git", "clean", "-fdxq"], cwd=self.src)
         tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=self.src).decode().split("\0")
         deleted = 0
         retained: list[str] = []
@@ -701,8 +703,20 @@ class Run:
         return ("failed" if note else "passed"), "GSharp.slnx built in Release" + note
 
     def s_e2e(self):
+        log = self.logs / "e2e.log"
+        offset = log.stat().st_size if log.is_file() else 0
         rc = self.sh("e2e", ["bash", "build/run-e2e-tests.sh"] + self.args.e2e, cwd=self.src, check=False)
-        return ("passed", "e2etests green") if rc == 0 else ("failed", f"run-e2e-tests.sh exit {rc}")
+        # run-e2e-tests.sh exits 0 when a script SKIPs (for example the debugger e2e without netcoredbg).
+        # The cut-over criterion is "every e2e script green", so a skip fails unless explicitly allowed.
+        with log.open("rb") as f:
+            f.seek(offset)
+            this_run = f.read().decode("utf-8", "replace")
+        skipped = re.findall(r"^\S*\s*(\S+-e2e): SKIPPED", this_run, flags=re.MULTILINE)
+        if rc != 0:
+            return "failed", f"run-e2e-tests.sh exit {rc}"
+        if skipped and not self.args.allow_e2e_skips:
+            return "failed", f"e2e scripts skipped (install their prerequisites, e.g. build/install-netcoredbg.sh): {skipped}"
+        return "passed", "e2etests green" + (f" (skipped, allowed: {skipped})" if skipped else "")
 
     def s_vsix(self):
         details = []
@@ -749,6 +763,8 @@ def main(argv=None) -> int:
     d.add_argument("--skip", nargs="*", choices=STAGES, default=[])
     d.add_argument("--translate-only", action="store_true", help="skip compile/polish/parity (unpolished tree; fast iteration)")
     d.add_argument("--e2e", nargs="*", default=[], help="e2e script prefixes (default: all)")
+    d.add_argument("--allow-e2e-skips", action="store_true",
+                   help="do not fail the e2e stage when a script skips itself (missing optional tool)")
     d.add_argument("--stop-on-failure", action="store_true")
     h = sub.add_parser("hand-fix", help="apply only the hand-fix list to a migrated tree")
     h.add_argument("--tree", required=True, help="the assembled tree to fix")
