@@ -244,6 +244,26 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
     }
 
     [Fact]
+    public void ConditionalOrTargetRemove_DoesNotClearAReference()
+    {
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+            "<None Include=\"A.cs\" /><None Remove=\"A.cs\" Condition=\"'false' == 'true'\" />" +
+            "<None Include=\"B.cs\" /></ItemGroup>" +
+            "<ItemGroup Condition=\"'false' == 'true'\"><None Remove=\"B.cs\" /></ItemGroup>" +
+            "<ItemGroup><None Include=\"C.cs\" /></ItemGroup>" +
+            "<Target Name=\"T\"><ItemGroup><None Remove=\"C.cs\" /></ItemGroup></Target></Project>");
+        this.Write("a/A.cs", "class A {}");
+        this.Write("a/B.cs", "class B {}");
+        this.Write("a/C.cs", "class C {}");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
+
+        Assert.Equal(new[] { "a/A.cs", "a/B.cs", "a/C.cs" }, verbatim.OrderBy(p => p, StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
     public void DataOnlySourceWithAGsTwin_IsNotACollision()
     {
         this.Write(
@@ -359,6 +379,45 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
         Assert.False(File.Exists(Path.Combine(widget, "Fixtures", "Data.gs")));
         Assert.True(File.Exists(Path.Combine(destination, "samples", "Foreign", "ThisAssembly.cs")));
         Assert.False(File.Exists(Path.Combine(destination, "samples", "Foreign", "ThisAssembly.gs")));
+    }
+
+    /// <summary>
+    /// A namespace-split sibling of a translated source must not overwrite a
+    /// checked-in file either.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Pipeline_NamespaceSplitSiblingWithCheckedInGsTwin_FailsInsteadOfOverwriting()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        this.Write(
+            "source/src/Widget/Widget.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+        this.Write(
+            "source/src/Widget/Mixed.cs",
+            "namespace Split { public sealed class Shallow { } }\nnamespace Split.Deep { public sealed class Deeper { } }\n");
+        this.Write("source/src/Widget/Mixed.Deep.gs", "package Split.Deep\n\nfunc checkedIn() {}\n");
+        string destination = Path.Combine(this.root, "destination");
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            SourceRoot = Path.Combine(this.root, "source"),
+            OutputRoot = destination,
+            ArtifactRoot = Path.Combine(this.root, "runs"),
+            OutputLayout = MigrationOutputLayout.Repository,
+            Config = "Release",
+        };
+        var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
+
+        RunResult result = await pipeline.RunAsync(RepositoryDiscovery.Discover(Path.Combine(this.root, "source")));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("checkedIn", File.ReadAllText(Path.Combine(destination, "src", "Widget", "Mixed.Deep.gs")));
     }
 
     private static string FindCompiler()

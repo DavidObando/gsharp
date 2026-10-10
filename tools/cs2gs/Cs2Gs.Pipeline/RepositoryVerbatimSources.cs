@@ -106,8 +106,11 @@ internal static class RepositoryVerbatimSources
                     operations[itemName] = list = new List<ItemOperation>();
                 }
 
+                // A Remove under a condition, or inside a target, may never run;
+                // letting it clear an established reference could drop a required
+                // file, so it is ignored (over-copying a .cs is safe, dropping is not).
                 string remove = item.Attribute("Remove")?.Value;
-                if (remove is not null)
+                if (remove is not null && !IsConditionalOrDynamic(item))
                 {
                     list.Add(new ItemOperation(true, Patterns(remove, directory, null).ToArray(), Array.Empty<Regex>()));
                 }
@@ -272,6 +275,11 @@ internal static class RepositoryVerbatimSources
         pattern.Append('$');
         return new Regex(pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
+
+    private static bool IsConditionalOrDynamic(XElement item) =>
+        item.AncestorsAndSelf().Any(e =>
+            e.Attribute("Condition") is not null
+            || e.Name.LocalName.Equals("Target", StringComparison.OrdinalIgnoreCase));
 
     private static string DirectoryOf(string relativePath)
     {
