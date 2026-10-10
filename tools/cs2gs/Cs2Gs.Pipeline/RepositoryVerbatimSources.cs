@@ -87,19 +87,18 @@ internal static class RepositoryVerbatimSources
             }
         }
 
-        // Shared .props/.targets: their Compile items belong to whichever projects
-        // import them, transitively. A shared file a G# project may import keeps its
-        // Compile items verbatim (the SDK translates foreign C# at build time), and
-        // its relative includes resolve against EVERY importing G# project's
-        // directory as well as its own (MSBuild resolves them against the importer).
-        // The match is by file name, so it over-approximates; over-copying a .cs is
-        // safe, dropping one is not.
+        // Shared .props/.targets: their items belong to whichever projects import
+        // them, transitively, and their relative includes resolve against the
+        // IMPORTING project's directory (an anchored include resolves beside the
+        // file). The importer kind only decides what a Compile item means: a
+        // translated project (.csproj) owns it, a .gsproj keeps foreign C# verbatim
+        // (the SDK translates it at build time). A shared file nothing imports is
+        // not evaluated. The import match is by file name, so it over-approximates;
+        // over-copying a .cs is safe, dropping one is not.
         var sharedImports = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         foreach ((string path, XDocument doc) in documents)
         {
-            string sharedExtension = Path.GetExtension(path);
-            if (sharedExtension.Equals(".props", StringComparison.OrdinalIgnoreCase)
-                || sharedExtension.Equals(".targets", StringComparison.OrdinalIgnoreCase))
+            if (IsSharedFile(path))
             {
                 string name = Path.GetFileName(path.Replace('\\', '/'));
                 if (!sharedImports.TryGetValue(name, out HashSet<string> names))
@@ -111,33 +110,40 @@ internal static class RepositoryVerbatimSources
             }
         }
 
-        var gsprojs = documents
-            .Where(d => Path.GetExtension(d.Path).Equals(".gsproj", StringComparison.OrdinalIgnoreCase))
+        var importers = documents
+            .Where(d => !IsSharedFile(d.Path))
             .Select(d => (
                 Directory: DirectoryOf(d.Path.Replace('\\', '/')),
+                IsGsharp: Path.GetExtension(d.Path).Equals(".gsproj", StringComparison.OrdinalIgnoreCase),
                 Imports: ImportClosure(ImportedFileNames(d.Document), sharedImports)))
             .ToList();
 
         foreach ((string projectPath, XDocument document) in documents)
         {
             string directory = DirectoryOf(projectPath.Replace('\\', '/'));
-            string extension = Path.GetExtension(projectPath);
             string fileName = Path.GetFileName(projectPath.Replace('\\', '/'));
-            bool sharedFile = extension.Equals(".props", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase);
             var baseDirectories = new List<string> { directory };
-            if (sharedFile)
+            bool translatedProject;
+            if (IsSharedFile(projectPath))
             {
-                baseDirectories.AddRange(gsprojs
-                    .Where(g => fileName.StartsWith("Directory.", StringComparison.OrdinalIgnoreCase)
-                        ? directory.Length == 0 || g.Directory.Equals(directory, StringComparison.OrdinalIgnoreCase)
-                            || g.Directory.StartsWith(directory + "/", StringComparison.OrdinalIgnoreCase)
-                        : g.Imports.Contains(fileName))
-                    .Select(g => g.Directory));
-            }
+                var owners = importers
+                    .Where(i => fileName.StartsWith("Directory.", StringComparison.OrdinalIgnoreCase)
+                        ? directory.Length == 0 || i.Directory.Equals(directory, StringComparison.OrdinalIgnoreCase)
+                            || i.Directory.StartsWith(directory + "/", StringComparison.OrdinalIgnoreCase)
+                        : i.Imports.Contains(fileName))
+                    .ToList();
+                if (owners.Count == 0)
+                {
+                    continue;
+                }
 
-            bool translatedProject = !extension.Equals(".gsproj", StringComparison.OrdinalIgnoreCase)
-                && baseDirectories.Count == 1;
+                baseDirectories.AddRange(owners.Select(i => i.Directory));
+                translatedProject = !owners.Any(i => i.IsGsharp);
+            }
+            else
+            {
+                translatedProject = !Path.GetExtension(projectPath).Equals(".gsproj", StringComparison.OrdinalIgnoreCase);
+            }
 
             // MSBuild evaluates item operations in document order per item
             // type, so a later Include can re-add what an earlier Remove took.
@@ -326,6 +332,13 @@ internal static class RepositoryVerbatimSources
 
         pattern.Append('$');
         return new Regex(pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static bool IsSharedFile(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return extension.Equals(".props", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase);
     }
 
     private static HashSet<string> ImportedFileNames(XDocument document)
