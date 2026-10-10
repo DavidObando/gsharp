@@ -156,7 +156,7 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     {
         string printed = Translate(Source);
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string workDir = Path.Combine(
             AppContext.BaseDirectory,
@@ -258,7 +258,7 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     {
         string printed = Translate(CovariantSource);
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string workDir = Path.Combine(
             AppContext.BaseDirectory,
@@ -324,7 +324,7 @@ public sealed class Issue4180NullableSelectResultRegressionTests
         Assert.DoesNotContain("t.FullName as string!!", printed, StringComparison.Ordinal);
 
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
         string workDir = Path.Combine(
             AppContext.BaseDirectory,
             nameof(Issue4180NullableSelectResultRegressionTests),
@@ -499,7 +499,7 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     private static void AssertCompilesAndRuns(string printed, string expectedOutput, bool requiresBridge)
     {
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
         string workDir = Path.Combine(
             AppContext.BaseDirectory,
             nameof(Issue4180NullableSelectResultRegressionTests),

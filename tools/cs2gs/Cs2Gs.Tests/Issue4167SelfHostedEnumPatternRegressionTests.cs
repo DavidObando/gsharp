@@ -242,7 +242,7 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
     public void SelfHostedEnumTypeKindCheck_DistinguishesEnumFromNonEnumTypes()
     {
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string workDir = Path.Combine(
             AppContext.BaseDirectory,

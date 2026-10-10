@@ -400,7 +400,7 @@ namespace Demo
     public void SelfHostedShape_BareVersionRunsCleanly_BangBangVersionThrowsNre()
     {
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         (int bareExit, string bareOutput) = CompileAndRun(compiler, BareSource);
         Assert.True(bareExit == 0, "the bare (fixed) shape must run cleanly. Output:\n" + bareOutput);
@@ -423,7 +423,7 @@ namespace Demo
     public void SelfHostedShape_StartNew_BareVersionRunsCleanly_BangBangVersionThrowsNre()
     {
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         (int bareExit, string bareOutput) = CompileAndRun(compiler, StartNewBareSource);
         Assert.True(bareExit == 0, "the bare (fixed) shape must run cleanly. Output:\n" + bareOutput);

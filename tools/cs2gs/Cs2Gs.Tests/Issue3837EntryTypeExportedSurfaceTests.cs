@@ -242,7 +242,7 @@ public sealed class Issue3837EntryTypeExportedSurfaceTests
         string compiler = FindCompiler();
         Assert.True(
             compiler != null,
-            "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+            "gsc.dll must be built (build the repository solution) before running this test.");
 
         (int exit, string log) = RunDotnet($"\"{compiler}\" {arguments}");
         Assert.True(
