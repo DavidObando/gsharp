@@ -425,7 +425,12 @@ public sealed class GsStubRenderer
 
         if (!structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty)
         {
-            bases.AddRange(structSymbol.ImplementedClrInterfaces.Select(i => speller.Spell(i)));
+            // ADR-0199: every data type implements IEquatable[Self] implicitly,
+            // so the stub does not restate it (a generated part would otherwise
+            // name an interface its user part never declared).
+            bases.AddRange(structSymbol.ImplementedClrInterfaces
+                .Where(i => !(structSymbol.IsData && DataEqualityMemberModel.ListsSelfEquatable(structSymbol, new[] { i })))
+                .Select(i => speller.Spell(i)));
         }
 
         return bases;

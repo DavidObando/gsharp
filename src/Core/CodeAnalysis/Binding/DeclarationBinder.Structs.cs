@@ -1389,6 +1389,22 @@ internal sealed partial class DeclarationBinder
                         continue;
                     }
 
+                    // ADR-0199: a data type's `PrintMembers(StringBuilder)` is the
+                    // C# record print slot. A compatible declaration replaces the
+                    // synthesized one (the same rule ToString has); any other shape
+                    // of that slot is rejected rather than silently shadowing it.
+                    if (structSymbol.IsData
+                        && DataPrintMembersModel.IsSlotCandidate(methodName, methodSyntax.HasExplicitInterfaceClause, methodParameters)
+                        && !IsCompatibleDataPrintMembers(structSymbol, returnType, methodReturnRefKind, methodIsAsync, methodTypeParameters, methodAccessibility))
+                    {
+                        Diagnostics.ReportIncompatibleDataPrintMembers(
+                            methodSyntax.Identifier.Location,
+                            structSymbol.Name,
+                            structSymbol.IsClass,
+                            DataPrintMembersModel.GetRequiredAccessibility(structSymbol) == Accessibility.Private ? "private" : "protected");
+                        continue;
+                    }
+
                     // Phase 3.B.3 sub-step 3: open/override validation against
                     // base class chain per ADR-0017.
                     FunctionSymbol? overriddenMethod = null;
@@ -1524,6 +1540,13 @@ internal sealed partial class DeclarationBinder
                         }
                     }
 
+                    // ADR-0199: a compatible protected print-members slot is always
+                    // emitted as an overridable virtual method, so the symbol says so
+                    // whatever modifiers the source wrote.
+                    var isOpenMethod = methodSyntax.IsOpen
+                        || (structSymbol.IsData
+                            && methodAccessibility == Accessibility.Protected
+                            && DataPrintMembersModel.IsSlotCandidate(methodName, methodSyntax.HasExplicitInterfaceClause, methodParameters));
                     var methodSymbol = new FunctionSymbol(
                         methodName,
                         methodParameters,
@@ -1532,7 +1555,7 @@ internal sealed partial class DeclarationBinder
                         package,
                         methodAccessibility,
                         receiverType: structSymbol,
-                        isOpen: methodSyntax.IsOpen,
+                        isOpen: isOpenMethod,
                         isOverride: methodSyntax.IsOverride);
                     methodSymbol.OverriddenMethod = overriddenMethod;
                     methodSymbol.ExternalOverriddenMethod = externalOverriddenMethod;
@@ -2962,6 +2985,18 @@ internal sealed partial class DeclarationBinder
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
                     var sharedMethodParameters = parameters.ToImmutable();
 
+                    // ADR-0199: the print-members slot is an instance method; a
+                    // shared one of that shape is rejected like any other bad shape.
+                    if (structSymbol.IsData && DataPrintMembersModel.IsSlotCandidate(methodName, methodSyntax.HasExplicitInterfaceClause, sharedMethodParameters))
+                    {
+                        Diagnostics.ReportIncompatibleDataPrintMembers(
+                            methodSyntax.Identifier.Location,
+                            structSymbol.Name,
+                            structSymbol.IsClass,
+                            DataPrintMembersModel.GetRequiredAccessibility(structSymbol) == Accessibility.Private ? "private" : "protected");
+                        continue;
+                    }
+
                     // Copilot review round 7: the declaring part's own
                     // return/parameter type clauses were discarded after
                     // only a textual comparison; bind and compare them
@@ -3856,6 +3891,15 @@ internal sealed partial class DeclarationBinder
         var implementedInterfaces = baseBinding.ImplementedInterfaces;
         var implementedClrInterfaces = baseBinding.ImplementedClrInterfaces;
 
+        // ADR-0199: every data type implements IEquatable<Self> through its
+        // compiler-owned typed Equals slot, as a C# record does. A declared
+        // `IEquatable[Self]` is the same interface and is not repeated.
+        if (structSymbol.IsData
+            && !DataEqualityMemberModel.ListsSelfEquatable(structSymbol, implementedClrInterfaces))
+        {
+            implementedClrInterfaces.Add(DataEqualityMemberModel.CreateSelfEquatable(structSymbol));
+        }
+
         // Phase 3.B.4: validate interface implementation. Walks each
         // implemented interface and confirms the class (including inherited
         // methods) provides a same-name, same-signature method. The check
@@ -3942,6 +3986,15 @@ internal sealed partial class DeclarationBinder
         if (DataEqualityMemberModel.GetSealedIntermediaryOverride(structSymbol) is { } sealedEquality)
         {
             Diagnostics.ReportOverrideOfSealedMethod(syntax.Identifier.Location, sealedEquality.Name);
+        }
+
+        // ADR-0199: the synthesized print-members override cannot override a
+        // sealed override declared by an intermediary class.
+        if (structSymbol.IsData
+            && DataPrintMembersModel.FindDeclared(structSymbol) is null
+            && DataPrintMembersModel.GetSealedBaseSlot(structSymbol) is { } sealedPrintMembers)
+        {
+            Diagnostics.ReportOverrideOfSealedMethod(syntax.Identifier.Location, sealedPrintMembers.Name);
         }
 
         // Issue #910 / ADR-0110 / issue #1069: bind the BODIES of the nested type

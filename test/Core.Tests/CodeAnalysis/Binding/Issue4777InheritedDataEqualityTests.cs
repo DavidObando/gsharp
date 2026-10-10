@@ -208,8 +208,12 @@ public class Issue4777InheritedDataEqualityTests
         Assert.Equal(3, slots.Length);
         Assert.Equal<FunctionSymbol>(slots, TypeMemberModel.GetMethods(leaf, "Equals", query));
         Assert.Same(slots[0], TypeMemberModel.LookupMember(leaf, "Equals", query));
-        Assert.Equal(slots, TypeMemberModel.EnumerateMembers(leaf, query).OfType<FunctionSymbol>());
-        Assert.Equal(slots, leaf.GetMembers().OfType<FunctionSymbol>());
+
+        // ADR-0199: the compiler-owned PrintMembers slot is enumerated after the
+        // equality slots.
+        var printMembers = Assert.Single(leaf.GetMembers().OfType<FunctionSymbol>(), m => m.Name == "PrintMembers");
+        Assert.Equal(slots.Add(printMembers), TypeMemberModel.EnumerateMembers(leaf, query).OfType<FunctionSymbol>());
+        Assert.Equal(slots.Add(printMembers), leaf.GetMembers().OfType<FunctionSymbol>());
         Assert.Empty(TypeMemberModel.GetMethods(leaf, "Equals", MemberQuery.Static()));
     }
 
@@ -281,8 +285,13 @@ public class Issue4777InheritedDataEqualityTests
             var middle = assembly.GetType("NoInterface.Middle", throwOnError: true);
             var leaf = assembly.GetType("NoInterface.Leaf", throwOnError: true);
             var plain = assembly.GetType("NoInterface.Plain", throwOnError: true);
-            Assert.Empty(root.GetInterfaces());
-            Assert.Empty(leaf.GetInterfaces());
+            // ADR-0199: a data type implements IEquatable<Self> without naming
+            // it, as a C# record does; an ordinary class with an `Equals(Self)`
+            // method still implements nothing.
+            Assert.Equal(new[] { typeof(IEquatable<>).MakeGenericType(root) }, root.GetInterfaces());
+            Assert.Equal(
+                new[] { root, middle, leaf }.Select(type => typeof(IEquatable<>).MakeGenericType(type)).ToHashSet(),
+                leaf.GetInterfaces().ToHashSet());
             Assert.Empty(plain.GetInterfaces());
             var slot = middle.GetMethod("Equals", new[] { root });
             Assert.NotNull(slot);

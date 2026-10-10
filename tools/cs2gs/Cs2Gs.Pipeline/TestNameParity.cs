@@ -13,8 +13,7 @@ namespace Cs2Gs.Pipeline;
 /// (<see cref="CSharpTestOracle"/>) with the test cases the migrated run
 /// actually executed (its TRX), name for name.
 /// <para>
-/// Names are compared as MULTISETS after
-/// <see cref="TestParityComparison.NormalizeTestName"/>: two theory rows whose
+/// Names are compared as MULTISETS: two theory rows whose
 /// arguments render identically are two cases on both sides, so one of them
 /// vanishing is still a missing case.
 /// </para>
@@ -136,7 +135,7 @@ public static class TestNameParity
                 continue;
             }
 
-            string key = TestParityComparison.NormalizeTestName(name);
+            string key = name;
             if (!tally.TryGetValue(key, out NameTally entry))
             {
                 entry = new NameTally(key, name);

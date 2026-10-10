@@ -122,7 +122,7 @@ public class Issue2864AbstractDataClassCloneEmitTests
         // matters here is that `Base` reserves 10 - 1 (ToString) rows,
         // including its abstract Clone row, so `Describe` and `Shout` still
         // resolve to the right tokens.
-        Assert.Equal($"kind=leaf!|Leaf(Id=3)|3{Environment.NewLine}", CompileAndRun(source));
+        Assert.Equal($"kind=leaf!|Leaf {{ Kind = leaf, Id = 3 }}|3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]

@@ -177,7 +177,7 @@ a == b
     }
 
     [Fact]
-    public void DataStruct_ZeroFields_ToString_RendersNameWithEmptyParens()
+    public void DataStruct_ZeroFields_ToString_RendersRecordFormatWithEmptyBraces()
     {
         var result = Evaluate(@"
 data struct Empty {
@@ -186,7 +186,7 @@ var a = Empty{}
 a.ToString()
 ");
         Assert.Empty(result.Diagnostics);
-        Assert.Equal("Empty()", result.Value);
+        Assert.Equal("Empty { }", result.Value);
     }
 
     [Fact]

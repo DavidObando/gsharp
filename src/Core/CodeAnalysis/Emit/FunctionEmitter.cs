@@ -580,6 +580,17 @@ internal sealed class FunctionEmitter
             // extra shape check is needed here.
             bool isDataToStringOverride = receiverStruct != null && receiverStruct.IsData && function.Name == "ToString";
 
+            // ADR-0199: a hand-written `PrintMembers(StringBuilder)` on a data
+            // type replaces the synthesized one and must occupy the same CLR
+            // slot (private for a sealed type that starts it; otherwise
+            // protected virtual, newslot only when no base slot exists). The
+            // binder only admits the compatible shape (GS0623).
+            bool isDataPrintMembers = receiverStruct != null
+                && receiverStruct.IsData
+                && DataPrintMembersModel.IsSlot(function);
+            bool isVirtualDataPrintMembers = isDataPrintMembers
+                && DataStructSynthesizer.IsPrintMembersVirtual(Invariant.Required(receiverStruct, "a data print-members slot has a receiver"));
+
             if (receiverIsInterface && function.Accessibility != Accessibility.Private)
             {
                 // ADR-0085 / issue #726: an instance method whose receiver is
@@ -602,14 +613,17 @@ internal sealed class FunctionEmitter
                 // Fall through — no further attribute stamping needed.
             }
             else if (isDataToStringOverride
+                || isVirtualDataPrintMembers
                 || function.IsOpen
                 || function.IsOverride
                 || isInterfaceImplementation
                 || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
                 methodAttrs |= MethodAttributes.Virtual;
-                if ((!function.IsOverride && !isDataToStringOverride)
-                    || MethodInfoHelpers.IsCovariantPropertyGetter(function))
+                if (isVirtualDataPrintMembers
+                    ? DataStructSynthesizer.IsPrintMembersNewSlot(Invariant.Required(receiverStruct, "a data print-members slot has a receiver"))
+                    : (!function.IsOverride && !isDataToStringOverride)
+                        || MethodInfoHelpers.IsCovariantPropertyGetter(function))
                 {
                     methodAttrs |= MethodAttributes.NewSlot;
                 }
@@ -620,7 +634,7 @@ internal sealed class FunctionEmitter
                         || (!receiverStruct.IsOpen && !receiverStruct.IsSealedHierarchy));
                 if ((isDataToStringOverride
                         ? DataStructSynthesizer.IsDataObjectOverrideFinal(receiverStruct)
-                        : !function.IsOpen)
+                        : !isVirtualDataPrintMembers && !function.IsOpen)
                     && !redundantFinalOnSealedOverride)
                 {
                     methodAttrs |= MethodAttributes.Final;

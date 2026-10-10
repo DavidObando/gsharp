@@ -1665,6 +1665,11 @@ internal sealed class UserTokenResolver
             {
                 method = Invariant.Required(definition.DataEqualsBase, "a constructed typed-base slot has a definition");
             }
+            else if (method.Name == DataPrintMembersModel.Name
+                && ReferenceEquals(method, containingType.DataPrintMembers))
+            {
+                method = Invariant.Required(definition.DataPrintMembers, "a constructed print-members slot has a definition");
+            }
         }
 
         if (!this.cache.MethodHandles.TryGetValue(method, out var openDef)

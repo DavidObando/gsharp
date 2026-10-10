@@ -146,7 +146,7 @@ p
         Assert.Empty(result.Diagnostics);
         Assert.NotNull(result.Value);
         var rendered = result.Value.ToString();
-        Assert.Equal("Point(X=3, Y=4)", rendered);
+        Assert.Equal("Point { X = 3, Y = 4 }", rendered);
     }
 
     [Fact]

@@ -103,6 +103,10 @@ public sealed class StructSymbol : TypeSymbol
     private FunctionSymbol? dataClassCloneMethod;
     private FunctionSymbol? dataEqualsSelf;
     private FunctionSymbol? dataEqualsObject;
+    private FunctionSymbol? dataPrintMembers;
+    private ImmutableArray<FunctionSymbol> dataPrintMembersMethods;
+    private StructSymbol? dataPrintMembersBase;
+    private bool dataPrintMembersComputed;
     private FunctionSymbol? dataEqualsBase;
     private TypeSymbol? dataEqualsBaseOwner;
 
@@ -689,6 +693,40 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>Gets the compiler-owned self equality signature on this exact construction.</summary>
     internal FunctionSymbol DataEqualsSelf => dataEqualsSelf ??= DataEqualityMemberModel.Create(this, this, isOverride: false);
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this type is the synthesized backing type of an
+    /// anonymous literal (<c>data object { ... }</c> or <c>object { ... }</c>, ADR-0146).
+    /// Such a type keeps G#'s equality surface and prints as a C# anonymous type
+    /// (ADR-0199); it gets no <c>PrintMembers</c>, copy constructor or clone.
+    /// </summary>
+    internal bool IsAnonymousLiteral { get; set; }
+
+    /// <summary>
+    /// Gets the compiler-owned <c>PrintMembers(StringBuilder)</c> slot (ADR-0199), or
+    /// null when this type declares its own (which then replaces it) or is an anonymous literal.
+    /// </summary>
+    internal FunctionSymbol? DataPrintMembers
+    {
+        get
+        {
+            // The slot depends on the declared methods and the base class, both
+            // installed after the shell exists; re-derive when either changes.
+            if (!dataPrintMembersComputed
+                || dataPrintMembersMethods != Methods
+                || !ReferenceEquals(dataPrintMembersBase, BaseClass))
+            {
+                dataPrintMembers = DataPrintMembersModel.FindDeclared(this) is null
+                    ? DataPrintMembersModel.Create(this)
+                    : null;
+                dataPrintMembersMethods = Methods;
+                dataPrintMembersBase = BaseClass;
+                dataPrintMembersComputed = true;
+            }
+
+            return dataPrintMembers;
+        }
+    }
 
     /// <summary>Gets the compiler-owned override of the nullable object equality slot.</summary>
     internal FunctionSymbol DataEqualsObject => dataEqualsObject ??= DataEqualityMemberModel.CreateObject(this);
@@ -1843,6 +1881,11 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         builder.Add(DataEqualsObject);
+        if (DataPrintMembers is { } printMembers)
+        {
+            builder.Add(printMembers);
+        }
+
         return builder.ToImmutable();
     }
 

@@ -45,7 +45,7 @@ public sealed class Adr0157ReplValueFormatterTests
     public void CompatEcho_DataStructOverride_Unchanged()
     {
         Assert.Equal(
-            $"Point(X=1, Y=2){Environment.NewLine}",
+            $"Point {{ X = 1, Y = 2 }}{Environment.NewLine}",
             EchoOf("""
                 data struct Point {
                     var X int32
