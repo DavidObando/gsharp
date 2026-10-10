@@ -3176,6 +3176,10 @@ class Controller:
             self.revalidate(
                 "stage-2", tree, [project], test_plan, f"before-test-{index}")
             env, runtime_writable = self.environment("stage-2")
+            # Source-tree tests find their inputs through this variable; point it
+            # at the immutable stage tree instead of letting them search upward
+            # from the controller-owned output directory.
+            env["CS2GS_TEST_SOURCE_ROOT"] = str(tree)
             test_target = self.project_target(test_plan, project)
             validate_vstest_extensions(
                 self.writable("stage-2", "out"),
