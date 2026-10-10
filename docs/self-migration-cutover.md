@@ -166,7 +166,7 @@ made by the published tools. "Script" is the `hand-fix` step in `cutover.py`.
 | 2 | Rewrite the `Pack*` literal `.csproj` paths in `Gsharp.NET.Sdk.csproj` | **Automated by the mirror.** `Compiler`, `Gsfmt.Cli` and `Gsgen.Cli` come out as `.gsproj`. The one `Gsharp.Extensions.csproj` literal is correct, since that project stays `.csproj`. The script re-checks every literal anyway. | 2 |
 | 3 | Rebind `Gsharp.Extensions` to the pinned SDK, drop the Bootstrap import and ordering ProjectReferences | **Automated by the mirror** (`RepositoryMirror`, #3772). The script verifies instead of editing and fails if a Bootstrap import or Compiler/SDK ordering reference returns. | 3 |
 | 4 | Fix `VsGsharp.csproj:76` (LanguageServer path) | **Still needed**, same line today. Generalised: *any* kept-C# project that names a translated project's `.csproj` needs it. `bench/concurrency/clr/ClrBaseline.csproj` has the same defect (its Channels reference). | 2 |
-| 5 | Replace `GSharp.sln` with the generated `.slnx`, check it lists every project | **Needed, but incomplete as written** (#4861). The mirror writes both. The script deletes the `.sln`, compares every project of the original `.sln` (after `.csproj`→`.gsproj`) with the `.slnx`, and rewrites the `GSharp.sln` literal to `GSharp.slnx` in `.gs` sources, scripts and workflows, because the repository root is found by probing for that file name (cs2gs, `Sdk.Tests`, ~100 tests, `build.yml`). Without the rewrite `cs2gs-migrate-generated-regex-e2e` fails. | 4, 4b |
+| 5 | Replace `GSharp.sln` with the generated `.slnx`, check it lists every project | **Needed.** The mirror writes both; at the cut-over the `.slnx` stays and the `.sln` is dropped (#4861). The script deletes the `.sln`, compares every project of the original `.sln` (after `.csproj`→`.gsproj`) with the `.slnx`, and renames the `GSharp.sln` literal to `GSharp.slnx` in scripts and workflows (`build.yml`, the e2e scripts), which invoke it by name. Source files need no rewrite: cs2gs and the test projects find the repository root through one rule, `RepositoryRootMarker`, which accepts either spelling. | 4, 4b |
 | 6 | Add `.gitattributes` | **Not needed.** It already exists and is carried over (it classifies `*.gs` for Linguist). The script only verifies the `*.gs` rule. | 5 |
 | 7 | Delete the per-file SDK pins in favour of `global.json msbuild-sdks` | **Still needed with a tool that lacks `--sdk-pin`.** A tool that has it already writes the global pin. The script removes `Gsharp.NET.Sdk/<pin>` from `<Project Sdk>` (not from `<Import>`), writes `msbuild-sdks`, and reports any surviving versioned pin outside samples/templates/`src/vs-gsharp`. | 6 |
 | 8 | Strip C#-only props (`LangVersion`, StyleCop) | **Narrower than listed.** Only `src/LanguageServer/LanguageServer.gsproj` carries `LangVersion`. StyleCop is applied by the shared `build/gsharp.build.props` (kept, the repo is mixed). | 7 |
@@ -308,7 +308,7 @@ issue).
 | gsfmt | passed after `--write` | not clean before: 394 files (#4858) |
 | core-smoke | passed | `src/Core` compiles with the pinned published SDK |
 | build | failed | `GSharp.slnx` Release: only `Core.Tests`, `Cs2Gs.Tests` (the translate failures above) and `Repl` fail. `Repl` compiled with main's SDK during polish and fails with GS0490 under 0.4.1150 (gsc skew). Locked-mode restore passed after lock regeneration |
-| e2e | 14 passed, 1 skipped, 1 failed | `debugger-e2e` skipped (netcoredbg not installed); `gsgen-e2e` fails with `InvalidProgramException` from the stage-1 gsgen (#4862, may be skew); `templates-e2e` and `cs2gs-migrate-generated-regex-e2e` failed until hand-fix 1 (six packable projects) and 4b (`GSharp.sln`) were added |
+| e2e | 14 passed, 1 skipped, 1 failed | `debugger-e2e` skipped (netcoredbg not installed); `gsgen-e2e` fails with `InvalidProgramException` from the stage-1 gsgen (#4862, may be skew); `templates-e2e` and `cs2gs-migrate-generated-regex-e2e` failed until hand-fix 1 (six packable projects) and 4b (the `GSharp.sln` command name in scripts) were added |
 | vsix | passed (VS Code); VS: Windows only | `.vsix` packaged; the Visual Studio VSIX path check passes, the VSSDK build must run on Windows |
 
 Two earlier attempts are worth recording because the script now guards against them:
@@ -318,7 +318,7 @@ were parsed as projects.
 
 ### Blockers for the real cut-over, in order of risk
 
-1. #4861 (P1) `GSharp.sln` is the repository-root anchor; the plan's replacement breaks it.
+1. #4861 (P1) `GSharp.sln` was the repository-root anchor; fixed by `RepositoryRootMarker` (either spelling), so the plan's replacement is safe.
 2. #4862 (P1) stage-1 gsgen `InvalidProgramException`: re-run at a matched tag.
 3. #4849 (P1) published `cs2gs migrate` needs an in-tree build for `gsc`/`gsgen`, the repo root and the SDK nupkg.
 4. #4850 (P1) the mirror drops C# files that translated projects reference.
