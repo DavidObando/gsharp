@@ -191,6 +191,13 @@ class TreeTests(unittest.TestCase):
             self.assertEqual("run: dotnet restore GSharp.slnx --locked-mode", wf.read_text())
             self.assertEqual("dotnet build GSharp.slnx", sh.read_text())
 
+    def test_script_mentioning_both_names_still_has_its_sln_command_renamed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.make_tree(Path(tmp))
+            mixed = put(tree, "build/mixed.sh", "# see GSharp.slnx\ndotnet restore GSharp.sln\n")
+            cutover.apply_hand_fixes(tree, "9.9.9", self.ORIGINAL, lambda _: None)
+            self.assertEqual("# see GSharp.slnx\ndotnet restore GSharp.slnx\n", mixed.read_text())
+
     def test_bootstrap_import_and_missing_slnx_entry_are_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = self.make_tree(Path(tmp), bootstrap=True, drop_slnx_entry=True)
