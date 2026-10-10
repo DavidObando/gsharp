@@ -252,6 +252,14 @@ internal static class DataEqualityMemberModel
     // the argument must be the type itself, closed over its own type parameters.
     private static bool IsOwnConstruction(StructSymbol owner, StructSymbol argument)
     {
+        // The enclosing construction counts too: `Outer[int32].Item` is not `Outer[T].Item`.
+        var enclosingParameters = StructSymbol.CollectEnclosingTypeParameters(owner);
+        var enclosingArguments = argument.EnclosingTypeArguments;
+        if (!enclosingArguments.IsDefaultOrEmpty && !SameParameters(enclosingArguments, enclosingParameters))
+        {
+            return false;
+        }
+
         var ownParameters = owner.TypeParameters;
         var closedOver = argument.TypeArguments;
         if (ownParameters.IsDefaultOrEmpty)
@@ -264,11 +272,21 @@ internal static class DataEqualityMemberModel
             return false;
         }
 
-        for (var i = 0; i < ownParameters.Length; i++)
+        return SameParameters(closedOver, ownParameters);
+    }
+
+    private static bool SameParameters(ImmutableArray<TypeSymbol> arguments, ImmutableArray<TypeParameterSymbol> parameters)
+    {
+        if (arguments.Length != parameters.Length)
         {
-            if (closedOver[i] is not TypeParameterSymbol parameter
-                || parameter.Ordinal != ownParameters[i].Ordinal
-                || parameter.Name != ownParameters[i].Name)
+            return false;
+        }
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (arguments[i] is not TypeParameterSymbol parameter
+                || parameter.Ordinal != parameters[i].Ordinal
+                || parameter.Name != parameters[i].Name)
             {
                 return false;
             }
