@@ -160,9 +160,11 @@ rules below are the intended outcome and the witnesses win on any discrepancy.
 - Inherited members come from the base `PrintMembers` call, not from re-reading
   base fields (today's synthesized `ToString` omits inherited fields).
 - A `data struct` prints the same way (`private bool PrintMembers`).
-- Interpreter (`StructValue.ToString`) and REPL display (ADR-0157) follow the
-  same rules; the interpreter's `nil` for a null member becomes the C# empty
-  rendering.
+- There is no second formatting implementation to change: the tree-walking
+  interpreter is retired (ADR-0156; `StructValue` survives only for layout
+  sizing), and REPL display (ADR-0157) already defers to a real `ToString`
+  override, so it picks up the synthesized one. Only expectations are
+  regenerated.
 - `data object` (ADR-0146): C# anonymous types print `{ X = 1, Y = 2 }` with no
   type name. A field-only `data object` therefore omits its synthesized name
   and prints `{ X = 1, Y = 2 }`. This updates ADR-0146 item 6.
@@ -202,7 +204,8 @@ Kotlin-format expectations that change in stage 2:
 - Test sources asserting `Name(F=v)` on data types: 14 files (Compiler.Tests
   Emit: Issue2443, Issue2338, Issue2363, Issue2864, DataStructSynthesizedMembers;
   Core.Tests: DataStructTests, Adr0192PartialMethodsBinderTests;
-  Interpreter.Tests: Issue2896, Adr0157 spike and formatter tests;
+  Interpreter.Tests (emitted-code expectations): Issue2896, Adr0157 spike and
+  formatter tests;
   GeneratorHost: GeneratedRegexImplementingPartTests;
   cs2gs: Issue2833RecordToStringParityTests, Issue4633TestNameParityTests;
   `Cs2Gs.Pipeline/TestParityComparison.cs`, whose #2833 normalizer that maps
@@ -256,10 +259,11 @@ C# snapshot already lists them.
 
 **Decision and scope of the allowance.**
 
-- The allowance covers only compiler-synthesized `Deconstruct` methods, and any
-  other purely additive member that the compiler synthesizes on a data type,
-  on types that are records or data types in the migrated Core. It is not a
-  general additive waiver.
+- The allowance covers only the compiler-synthesized `Deconstruct` method on
+  the ten body-only record types listed above. The audit found no other
+  additive member. A future additive synthesized member needs its own ADR
+  amendment, not a silent extension of the list. It is not a general additive
+  waiver.
 - It is an exact allow-list file next to the golden
   (`gsharp-core-public-api-allowed-additions.txt`): each entry names the type
   and the full rendered member line. A non-listed addition, a listed entry on a
@@ -295,8 +299,8 @@ snapshot must carry as an explicit exception.
 2. Implementation seams, one PR each where reviewable: (a) marker removal in
    cs2gs and gsc plus snapshot allowance and tests; cs2gs stops generating
    `PrintMembers` once gsc synthesizes it (seam b); (b) `PrintMembers`,
-   record-format `ToString`, `IEquatable<T>` emit, interpreter/REPL, `data
-   object`; (c) docs, website, release notes, golden regeneration. Proof: strict
+   record-format `ToString`, `IEquatable<T>` emit, `data object`, regenerated
+   REPL expectations; (c) docs, website, release notes, golden regeneration. Proof: strict
    native-vs-migrated Core snapshot, migrated Core.Tests / Compiler.Tests /
    Cs2Gs.Tests parity for affected projects, Roslyn witness tests for
    `ToString` and metadata shape.
