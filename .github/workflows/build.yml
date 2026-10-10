@@ -208,6 +208,9 @@ jobs:
       - name: Verify self-host stage-1 packer contract
         run: python3 build/test-selfhost-pack-stage1.py
 
+      - name: Verify cut-over mechanics contract
+        run: python3 build/test-cutover.py
+
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
         with:
