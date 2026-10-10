@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **Design decision: `data class` / `data struct` will synthesize the C# record ABI** (ADR-0199, issue #3501). Planned breaking change: `ToString` adopts the C# record format (`Point { X = 3, Y = 4 }`) in place of `Point(X=3, Y=4)`, every data type implements `IEquatable<T>` and gets `PrintMembers`, and cs2gs stops emitting the `@__Cs2GsRecordProvenance_4828` marker. This entry records the accepted design; the behavior ships in follow-up PRs.
+- **Design decision: `data class` / `data struct` will synthesize the C# record ABI** (ADR-0199, issue #3501). Planned breaking change: `ToString` adopts the C# record format (`Point { X = 3, Y = 4 }`) in place of `Point(X=3, Y=4)`, every data type implements `IEquatable<T>`, declared data classes and structs get `PrintMembers`, and cs2gs stops emitting the `@__Cs2GsRecordProvenance_4828` marker. This entry records the accepted design; the behavior ships in follow-up PRs.
 
 - **cs2gs no longer asserts a nullable argument forwarded to a generic-method type parameter** (issue #4843, parent #3501). A promoted `object?` parameter forwarded to `DecodeSignature(provider, genericContext)` was bridged with a runtime `!!` and threw a NullReferenceException in the migrated Core.Tests public-API snapshot test; gsc infers the method type argument from the argument, so the forward is now emitted unasserted.
 

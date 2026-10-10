@@ -62,17 +62,20 @@ already matches on those members; the stage-2 change must keep that true.
 3. **`ToString` adopts the C# record format** (rules below), replacing the
    Kotlin form `Name(F=v)`.
 4. **Keep G#'s `Deconstruct`** exactly as today (positional components when a
-   primary constructor exists, otherwise fields then auto-properties in
-   declaration order; skipped when there are no members). The consequence for
+   primary constructor exists, otherwise all fields in declaration order
+   followed by all auto-properties in declaration order, i.e. grouped, not one
+   merged declaration order, as `TypeMemberModel.GetDataDeconstructionMembers`
+   does today; skipped when there are no members). The consequence for
    the native-vs-migrated Core comparison is handled under "Core ABI snapshot".
 5. **Keep** the protected/private copy constructor with parameter `original`,
    `<Clone>$`, `EqualityContract`, the virtual `Equals(T)` machinery of the
    2026-10-04 amendment, `left` / `right` operator parameter names, and
    Roslyn's finality model for object overrides (virtual, not `final`, when the
    owner is sealed; unchanged from ADR-0017 and the 2026-10-07 amendment).
-6. **Add** `IEquatable<Self>` to every data type's interface list (it is
+6. **Add** `IEquatable<Self>` to every data symbol's interface list (it is
    implemented by the existing `Equals(Self)` slot), and a C#-shaped
-   `PrintMembers`.
+   `PrintMembers` to every *declared* `data class` / `data struct` (not to
+   field-only anonymous literals, see the `ToString` rules).
 7. **Parameterless constructor: no removal** (audit below): `with` does not use it, but body-only construction and imported body-only records do.
 
 ### Member tables
@@ -125,7 +128,7 @@ witness tests for each of the four shapes rather than trusting this table.
 - *Positional* (`data class P(X int32, Y int32)`): `Deconstruct(out X, out Y)`
   (identical to C#); `PrintMembers` prints X then Y.
 - *Body-only* (`data class P { X int32; Y int32 }`): parameterless ctor,
-  `Deconstruct` over fields and auto-properties (G# behavior, kept; this is the
+  `Deconstruct` over fields then auto-properties, each group in declaration order (G# behavior, kept; this is the
   only difference from a C# record, see snapshot section), `PrintMembers`
   prints public instance fields and readable properties in declaration order.
 - *Positional plus body members*: `Deconstruct` covers the primary-constructor
@@ -175,11 +178,13 @@ rules below are the intended outcome and the witnesses win on any discrepancy.
   regenerated.
 - Field-only anonymous literals (ADR-0146): both `data object { ... }` and a
   plain `object { ... }` are backed by `AnonymousTypeCache` data symbols and
-  share the synthesizer, so the decision must name them. They adopt the C#
-  **anonymous-type** ABI, not the record ABI: `IEquatable<T>` implemented,
-  `Equals`/`GetHashCode`/`==`/`!=` as today, `ToString` prints
+  share the synthesizer, so the decision must name them. They do **not** get
+  the record ABI. They keep G#'s existing equality surface (`Equals`,
+  `GetHashCode`, `==`, `!=`, plus the `IEquatable<T>` that every data symbol now
+  implements; this is G# behavior, not a claim of Roslyn anonymous-type parity)
+  and adopt only the C# anonymous-type *formatting*: `ToString` prints
   `{ X = 1, Y = 2 }` with no type name (the synthesized name is not
-  meaningful), and no `PrintMembers`, copy constructor or `<Clone>$`. Stage 2
+  meaningful). They get no `PrintMembers`, copy constructor or `<Clone>$`. Stage 2
   gates those on a *declared* data type and adds witnesses for both literal
   forms. This updates ADR-0146 item 6. Rich anonymous classes (ADR-0146 (b))
   are ordinary classes and are unaffected.
