@@ -18,8 +18,8 @@ namespace Cs2Gs.Tests;
 /// Issue #4859: <c>yield return</c> values only need a temporary when their
 /// printed form starts with <c>(</c> and is not a tuple literal (#4705), or
 /// when it starts with a nonempty <c>[</c> (a sized array, <c>yield [3]T</c>
-/// parses as indexing), or when a branching expression is yielded into a tuple
-/// element type (#4719).
+/// parses as indexing), or when it is a branching expression, which needs the
+/// iterator element type as its target (#4719).
 /// Everything else prints inline, and a remaining temporary has a readable name, never <c>__yielded{N}</c>.
 /// </summary>
 public sealed class Issue4859YieldedTemporaryTests
@@ -146,6 +146,39 @@ public sealed class Issue4859YieldedTemporaryTests
         EmittedOracleResult result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Obj.Run()");
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
         Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void BranchingYield_IsMaterializedSoTheElementTypeIsItsTarget()
+    {
+        string printed = Translate("""
+            using System.Collections.Generic;
+
+            public static class Obj
+            {
+                public static IEnumerable<object> Rows(bool b, string s, int n)
+                {
+                    yield return b ? s : n;
+                }
+
+                public static int Run()
+                {
+                    int total = 0;
+                    foreach (object row in Rows(false, "x", 4))
+                    {
+                        total += (int)row;
+                    }
+
+                    return total;
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("yield if", printed, StringComparison.Ordinal);
+        Assert.Matches(@"let item(_\d+)? ", printed);
+        EmittedOracleResult result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Obj.Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Equal(4, result.Value);
     }
 
     [Fact]
