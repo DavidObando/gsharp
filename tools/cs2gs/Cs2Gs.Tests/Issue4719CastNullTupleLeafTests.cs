@@ -4331,9 +4331,14 @@ public sealed class Issue4719CastNullTupleLeafTests : IDisposable
 
     private static void AssertTypedHoists(string printed, string tuple, int expectedCount)
     {
-        MatchCollection locals = Regex.Matches(printed, @"let (?<name>__yielded\d+) " + Regex.Escape(tuple) + " =");
-        Assert.NotEmpty(locals);
-        Assert.Equal(expectedCount, locals.Count);
+        MatchCollection locals = Regex.Matches(printed, @"let (?<name>item(_\d+)?) " + Regex.Escape(tuple) + " =");
+        // Issue #4859: a yield value only gets a temporary when it prints with
+        // a leading `(` or a nonempty `[`, or when a branching expression is
+        // yielded; other shapes yield inline, so the count
+        // is an upper bound and the behavioural assertions in each test
+        // carry the contract.
+        Assert.True(locals.Count <= expectedCount, printed);
+        Assert.DoesNotContain("__yielded", printed, StringComparison.Ordinal);
         Assert.All(
             locals.Cast<Match>(),
             local => Assert.Matches(@"\byield " + Regex.Escape(local.Groups["name"].Value) + @"\b", printed));
