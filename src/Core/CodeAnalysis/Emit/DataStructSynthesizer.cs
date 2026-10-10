@@ -1490,7 +1490,17 @@ internal sealed class DataStructSynthesizer
             il.LoadArgument(0);
             il.OpCode(property.IsVirtual || property.IsOverride || property.IsAbstract ? ILOpCode.Callvirt : ILOpCode.Call);
             il.Token(this.resolveUserPropertyAccessorToken(structSym, property, false));
-            if (printsThroughAddress)
+            if (property.ReturnRefKind != RefKind.None)
+            {
+                // A ref-returning getter leaves the value's address: a value type is
+                // printed through it directly; anything else is loaded through it.
+                if (!printsThroughAddress)
+                {
+                    il.OpCode(ILOpCode.Ldobj);
+                    il.Token(this.getElementTypeToken(type));
+                }
+            }
+            else if (printsThroughAddress)
             {
                 var temp = firstTempIndex + temps.Count;
                 temps.Add(type);

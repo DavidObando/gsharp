@@ -230,7 +230,6 @@ internal static class DataPrintMembersModel
                 || property.IsIndexer
                 || !property.HasGetter
                 || property.Accessibility != Accessibility.Public
-                || property.ReturnRefKind != RefKind.None
                 || property.Type is PointerTypeSymbol)
             {
                 continue;

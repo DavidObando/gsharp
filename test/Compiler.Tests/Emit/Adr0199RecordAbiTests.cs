@@ -542,6 +542,46 @@ public class Adr0199RecordAbiTests
     }
 
     [Fact]
+    public void RefReturningProperty_PrintsItsValue()
+    {
+        const string csharp = """
+            public sealed record Item { private int f = 3; private string s = "x"; public ref int P => ref f; public ref string S => ref s; }
+            """;
+        const string gsharp = """
+            package W
+            data class Item {
+                private var f int32 = 3
+                private var s string = "x"
+                prop P ref int32 { get { return ref f } }
+                prop S ref string { get { return ref s } }
+            }
+            """;
+        var expected = Activator.CreateInstance(Adr0199RecordAbiWitness.CompileCSharp(csharp).GetType("Item")).ToString();
+        Assert.Equal("Item { P = 3, S = x }", expected);
+        var actual = Activator.CreateInstance(Adr0199RecordAbiWitness.CompileGSharp(gsharp).GetTypes().Single(t => t.Name == "Item")).ToString();
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void HandWrittenPrivateSlot_OnASealedType_StaysNonVirtualWhateverTheModifiers()
+    {
+        const string source = """
+            package W
+            import System.Text
+
+            data class Item(Id int32) {
+                private open func PrintMembers(builder StringBuilder) bool -> false
+            }
+            """;
+        var assembly = Adr0199RecordAbiWitness.CompileGSharp(source);
+        var all = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var type = assembly.GetTypes().Single(t => t.Name == "Item");
+        var slot = Assert.Single(type.GetMethods(all), m => m.Name == "PrintMembers");
+        Assert.True(slot.IsPrivate && !slot.IsVirtual);
+        Assert.Equal("Item { }", Activator.CreateInstance(type, 1).ToString());
+    }
+
+    [Fact]
     public void HandWrittenPrintMembers_OfTheWrongShape_IsRejectedWithGS0623()
     {
         const string source = """

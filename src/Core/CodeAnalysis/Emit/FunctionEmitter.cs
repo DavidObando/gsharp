@@ -612,12 +612,13 @@ internal sealed class FunctionEmitter
                 //
                 // Fall through — no further attribute stamping needed.
             }
-            else if (isDataToStringOverride
-                || isVirtualDataPrintMembers
-                || function.IsOpen
-                || function.IsOverride
-                || isInterfaceImplementation
-                || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
+            else if (isDataPrintMembers
+                ? isVirtualDataPrintMembers
+                : isDataToStringOverride
+                    || function.IsOpen
+                    || function.IsOverride
+                    || isInterfaceImplementation
+                    || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
                 methodAttrs |= MethodAttributes.Virtual;
                 if (isVirtualDataPrintMembers
