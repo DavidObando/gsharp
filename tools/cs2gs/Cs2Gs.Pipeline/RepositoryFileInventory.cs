@@ -51,7 +51,13 @@ internal static class RepositoryFileInventory
         string[] segments = relativePath.Split(
             new[] { '/', '\\' },
             StringSplitOptions.RemoveEmptyEntries);
-        return IsBuildOutputPath(relativePath) || segments.Any(segment =>
+
+        // Issue #4852: the top-level `out/` directory is the repository's build
+        // output root (bin/obj/nupkgs/scratch tools). Whatever is tracked under
+        // it (out/scratch/...) is a stray output, never a source or an app.
+        return IsBuildOutputPath(relativePath)
+            || (segments.Length > 1 && segments[0].Equals("out", StringComparison.OrdinalIgnoreCase))
+            || segments.Any(segment =>
             segment.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("TestResults", StringComparison.OrdinalIgnoreCase));
     }

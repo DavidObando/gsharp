@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **cs2gs migrate mirrors every file a project references and ignores stray `out/` outputs** (issues #4850 and #4852, parent #3501). A `.cs` file referenced as data or foreign input (a `None`/`Content`/`EmbeddedResource` item, or a `Compile` item of an already-G# project such as `samples/ForeignCompile/ThisAssembly.cs` and the Adr0169 fixtures) is now copied verbatim instead of being translated or dropped; one decision point (`RepositoryVerbatimSources`) feeds the mirror copy, the orphan step and the completeness check, and an include it cannot resolve statically is reported as a warning. The top-level `out/` build-output root is no longer inventoried, so tracked scratch tools there are not discovered as apps (`out/scratch/ildump` is untracked; the self-migration corpus is 56 apps).
+
 - **cs2gs no longer asserts a nullable argument forwarded to a generic-method type parameter** (issue #4843, parent #3501). A promoted `object?` parameter forwarded to `DecodeSignature(provider, genericContext)` was bridged with a runtime `!!` and threw a NullReferenceException in the migrated Core.Tests public-API snapshot test; gsc infers the method type argument from the argument, so the forward is now emitted unasserted.
 
 - **cs2gs preserves nullable tuple values stored through generic indexers** (issue #4833, parent #3501). Assigning a tuple containing an oblivious nullable return into a dictionary-style value slot now promotes the matching tuple element on the receiver declaration, avoiding a later GS0155 when an absent value is represented by `nil`.

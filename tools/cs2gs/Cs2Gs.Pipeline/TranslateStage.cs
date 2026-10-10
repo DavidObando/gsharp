@@ -586,6 +586,39 @@ public sealed class TranslateStage : IMigrationStage
 
                     string gsPath = Path.Combine(context.ProjectOutputDir, gsRelativePath);
                     Directory.CreateDirectory(Path.GetDirectoryName(gsPath));
+                    if (context.Options.OutputLayout == MigrationOutputLayout.Repository)
+                    {
+                        // Issue #4850: a source copied verbatim AND compiled by a
+                        // translated project is dual-owned, and a checked-in `.gs` may
+                        // already sit at any emitted unit's destination (the primary
+                        // output or a namespace-split sibling). The first emission of a
+                        // path in this run must not silently overwrite it. A repeat is
+                        // allowed only for the same source with identical text (a linked
+                        // source translated by several projects); anything else is two
+                        // different emitters claiming one path.
+                        context.Options.RepositoryEmittedOutputs ??=
+                            new Dictionary<string, (string Source, string Text)>(StringComparer.OrdinalIgnoreCase);
+                        string fullGsPath = Path.GetFullPath(gsPath);
+                        string fullSourcePath = Path.GetFullPath(document.FilePath);
+                        if (context.Options.RepositoryEmittedOutputs.TryGetValue(fullGsPath, out (string Source, string Text) prior))
+                        {
+                            if (!string.Equals(prior.Source, fullSourcePath, StringComparison.OrdinalIgnoreCase)
+                                || !string.Equals(prior.Text, printed, StringComparison.Ordinal))
+                            {
+                                throw new InvalidOperationException(
+                                    $"Migration output collision: '{document.FilePath}' and '{prior.Source}' both emit '{gsPath}'.");
+                            }
+                        }
+                        else if (File.Exists(gsPath))
+                        {
+                            throw new InvalidOperationException(
+                                $"Migration output collision: translating '{document.FilePath}' would overwrite the " +
+                                $"checked-in '{gsPath}'.");
+                        }
+
+                        context.Options.RepositoryEmittedOutputs[fullGsPath] = (fullSourcePath, printed);
+                    }
+
                     File.WriteAllText(gsPath, printed);
 
                     string relativeGsPath = MigrationPipeline.SanitizeAppId(context.App.Id) + "/" +
