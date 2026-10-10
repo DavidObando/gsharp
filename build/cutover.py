@@ -442,8 +442,9 @@ class Run:
         self.logs = self.root / "logs"
         self.logs.mkdir(exist_ok=True)
         self.record_path = self.root / "dry-run.json"
-        self.record = json.loads(self.record_path.read_text()) if self.record_path.is_file() else {
-            "stages": {}, "facts": {}}
+        # A run that starts at `clone` is a new rehearsal: facts from an earlier commit must not leak into it.
+        resume = args.from_stage != "clone" and self.record_path.is_file()
+        self.record = json.loads(self.record_path.read_text()) if resume else {"stages": {}, "facts": {}}
         self.env = dict(os.environ)
         self.env.update({
             # A private package cache and CLI home: nothing from the host can satisfy a restore.
@@ -631,6 +632,7 @@ class Run:
                              self.record["facts"]["csharp_commit"]], cwd=self.src)
         self.sh("assemble", ["git", "clean", "-fdxq"], cwd=self.src)
         tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=self.src).decode().split("\0")
+        tracked_set = set(tracked)
         deleted = 0
         retained: list[str] = []
         for rel in tracked:
@@ -639,8 +641,11 @@ class Run:
             stem = rel.rsplit(".", 1)[0]
             twin = (self.migrated / (stem + (".gs" if rel.endswith(".cs") else ".gsproj"))).is_file()
             # "split" sources: one C# file became Stem.<Part>.gs files (no same-named twin)
+            # Only a Stem.<Part>.gs whose own Stem.<Part>.cs is NOT tracked counts: a tracked partial-class
+            # file Stem.Part.cs translates to Stem.Part.gs and says nothing about Stem.cs.
             split = rel.endswith(".cs") and any(
-                (self.migrated / rel).parent.glob(Path(stem).name + ".*.gs"))
+                (stem + g.name[len(Path(stem).name):-3] + ".cs") not in tracked_set
+                for g in (self.migrated / rel).parent.glob(Path(stem).name + ".*.gs"))
             if twin or split or (self.migrated / rel).is_file():
                 if not (self.migrated / rel).is_file():
                     (self.src / rel).unlink()
@@ -820,8 +825,8 @@ def main(argv=None) -> int:
             for line in problems:
                 print("PROBLEM:", line)
             return 1 if problems else 0
-        if args.from_stage != "clone" and args.commit == "origin/main" and not Path(args.work_root).exists():
-            raise CutoverError("--from-stage needs an existing --work-root")
+        if args.from_stage != "clone" and not (Path(args.work_root).expanduser() / "dry-run.json").is_file():
+            raise CutoverError("--from-stage needs an existing --work-root with a dry-run.json from an earlier run")
         return Run(args).go()
     except CutoverError as e:
         print(f"cutover: {e}", file=sys.stderr)

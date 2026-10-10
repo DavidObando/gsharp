@@ -303,7 +303,7 @@ issue).
 | tools | passed | `cs2gs`/`gsfmt` 0.4.1150 installed with a nuget.org-only config; SDK and Testing packages downloaded; `--sdk-pin`/`--sdk-version` not supported (skew) |
 | prepare | passed | locked-mode restore of `GSharp.sln`, prerequisite builds, published nupkgs staged |
 | translate | failed, 52/57 apps | 5 apps red, all skew: `Compiler.Tests` and `Core.Tests` (GS0179 switch-expression arm types, fixed by #4832; GS0155 nil to `object`/`string`, cf. #4831/#4833), `Cs2Gs.Tests` (GS0154/GS0155/GS0159, same family, not individually verified), `G09-Functions-Console` (translation gap for a ref-returning local function, added after the tag), `Interpreter.Tests` (per-test-name parity: 14 missing and 14 extra of 1,512 cases, theory display names with `(scope: "function")`; not triaged). Findings: #4849, #4850, #4852, #4853, #4858 |
-| assemble | passed | 4,182 C# files deleted, 5,473 written; 8 untranslated C# files retained (#4850) |
+| assemble | passed | 4,182 C# files deleted, 4,194 new files added (5,473 mirror files copied); 8 untranslated C# files retained (#4850) |
 | hand-fix | passed | 44 fix groups; findings: #4851 (lock files), #4861 (`GSharp.sln` anchor) |
 | gsfmt | passed after `--write` | not clean before: 394 files (#4858) |
 | core-smoke | passed | `src/Core` compiles with the pinned published SDK |
