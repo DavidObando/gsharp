@@ -1990,12 +1990,6 @@ public sealed partial class CSharpToGSharpTranslator
                 node.Modifiers.Any(SyntaxKind.RefKeyword) ||
                 (otherParts != null && otherParts.Any(p => p.Modifiers.Any(SyntaxKind.RefKeyword)));
             List<AttributeUse> attributes = this.MapAttributes(mergedAttributeLists);
-            if (symbol?.IsRecord == true)
-            {
-                attributes.Add(new AttributeUse(
-                    "__Cs2GsRecordProvenance_4828",
-                    Array.Empty<AttributeArgument>()));
-            }
 
             return new TypeDeclaration(
                 kind.Value,
