@@ -1294,10 +1294,15 @@ internal sealed partial class DeclarationBinder
         RefKind returnRefKind,
         bool isAsync,
         bool isSuspend,
+        bool isOverride,
         ImmutableArray<TypeParameterSymbol> methodTypeParameters,
         Accessibility accessibility)
     {
+        // Like C#: a type with an inherited slot must say `override`, and a type
+        // that starts the slot must not (the emitter would otherwise force a
+        // CLR override the normal override checks never saw).
         return returnType == TypeSymbol.Bool
+            && isOverride == (DataPrintMembersModel.GetBase(owner, out _) is not null)
             && returnRefKind == RefKind.None
             && !isAsync
             && !isSuspend

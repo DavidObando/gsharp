@@ -633,6 +633,79 @@ public class Adr0199RecordAbiTests
     }
 
     [Fact]
+    public void HandWrittenSlot_MustSayOverrideExactlyWhenTheBaseHasOne()
+    {
+        const string derivedWithoutOverride = """
+            package W
+            import System.Text
+
+            open data class Base(Id int32)
+            data class Derived(Z int32) : Base(1) {
+                protected func PrintMembers(builder StringBuilder) bool -> true
+            }
+            """;
+        var (exitCode, output) = Adr0199RecordAbiWitness.TryCompileGSharp(derivedWithoutOverride);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0623", output, StringComparison.Ordinal);
+
+        const string rootWithOverride = """
+            package W
+            import System.Text
+
+            open data class Base(Id int32) {
+                protected override func PrintMembers(builder StringBuilder) bool -> true
+            }
+            """;
+        var (rootExit, rootOutput) = Adr0199RecordAbiWitness.TryCompileGSharp(rootWithOverride);
+        Assert.NotEqual(0, rootExit);
+        Assert.Contains("GS0623", rootOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HandWrittenOverride_BindsAgainstASynthesizedOverrideFurtherUpTheChain()
+    {
+        const string source = """
+            package W
+            import System
+            import System.Text
+
+            open data class Base(Id int32)
+            open data class Derived(Z int32) : Base(1)
+            data class Leaf(Y int32) : Derived(2) {
+                protected override func PrintMembers(builder StringBuilder) bool {
+                    builder.Append("leaf")
+                    return true
+                }
+            }
+            """;
+        var assembly = Adr0199RecordAbiWitness.CompileGSharp(source);
+        var leaf = assembly.GetTypes().Single(t => t.Name == "Leaf");
+        Assert.Equal("Leaf { leaf }", Activator.CreateInstance(leaf, 3).ToString());
+    }
+
+    [Fact]
+    public void AbstractBaseSlot_IsOverriddenByAHandWrittenSlot_AndTheAbstractBodyIsNeverCalled()
+    {
+        const string source = """
+            package W
+            import System
+            import System.Text
+
+            abstract data class Shape(Id int32) {
+                protected open func PrintMembers(builder StringBuilder) bool;
+            }
+            data class Circle(R int32) : Shape(1) {
+                protected override func PrintMembers(builder StringBuilder) bool {
+                    builder.Append("circle")
+                    return true
+                }
+            }
+            """;
+        var assembly = Adr0199RecordAbiWitness.CompileGSharp(source);
+        Assert.Equal("Circle { circle }", Activator.CreateInstance(assembly.GetTypes().Single(t => t.Name == "Circle"), 3).ToString());
+    }
+
+    [Fact]
     public void HandWrittenPrintMembers_OfTheWrongShape_IsRejectedWithGS0623()
     {
         const string source = """

@@ -142,6 +142,21 @@ internal static class DataPrintMembersModel
     }
 
     /// <summary>
+    /// Tests whether the inherited slot is abstract, so a synthesized override
+    /// still overrides it but has no base body to call.
+    /// </summary>
+    /// <param name="owner">The data type.</param>
+    /// <returns><see langword="true"/> when the base slot has no body.</returns>
+    internal static bool IsBaseSlotAbstract(StructSymbol owner)
+        => GetBase(owner, out var importedMethod) switch
+        {
+            null => false,
+            _ when importedMethod is not null => importedMethod.IsAbstract,
+            StructSymbol baseOwner => FindDeclared(baseOwner)?.IsAbstract == true,
+            _ => false,
+        };
+
+    /// <summary>
     /// Gets the hand-written slot of the nearest base that a synthesized
     /// override would have to override although it is final (a sealed override
     /// in an intermediary class), or null when the inherited slot stays overridable.
@@ -185,6 +200,10 @@ internal static class DataPrintMembersModel
         }
 
         var hasBase = GetBase(owner, out _) is not null;
+
+        // Emitted non-final whenever it is virtual, so the symbol is open too: a
+        // further source `override` binds against it.
+        var isVirtual = GetRequiredAccessibility(owner) != Accessibility.Private;
         var builder = ImportedTypeSymbol.GetWithoutNullability(typeof(StringBuilder), NullabilityFreeReason.CompilerProduced);
         return new FunctionSymbol(
             Name,
@@ -194,7 +213,7 @@ internal static class DataPrintMembersModel
             package: null,
             accessibility: GetRequiredAccessibility(owner),
             receiverType: owner,
-            isOpen: !IsSealed(owner) && !hasBase,
+            isOpen: isVirtual,
             isOverride: hasBase);
     }
 

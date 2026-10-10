@@ -1422,6 +1422,13 @@ internal sealed class DataStructSynthesizer
 
     private bool TryResolveBasePrintMembersToken(StructSymbol structSym, out EntityHandle token)
     {
+        if (DataPrintMembersModel.IsBaseSlotAbstract(structSym))
+        {
+            // An abstract base slot has no body to call; the override still reuses its slot.
+            token = default;
+            return false;
+        }
+
         var directBase = DataPrintMembersModel.GetBase(structSym, out var importedMethod);
         token = directBase switch
         {
