@@ -401,6 +401,12 @@ internal static class Program
         RunResult result = await pipeline.RunAsync(apps).ConfigureAwait(false);
 
         PrintSummary(result, pipeline.Stages);
+        if (!translateOnly && stopAfter is MigrationStageKind partial && partial != MigrationStageKind.TestParity)
+        {
+            Console.WriteLine(
+                $"cs2gs: partial run (--stop-after {TriageSerialization.StageName(partial)}): the later stages were not " +
+                "run, so green here is not a full verdict.");
+        }
 
         string runsRoot = options.OutputLayout == MigrationOutputLayout.Repository
             ? options.ArtifactRoot

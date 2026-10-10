@@ -103,16 +103,29 @@ public sealed class Issue4853StopAfterTests : IDisposable
             "namespace Widget { public static class Answer { public static int Value() => 42; } }");
         string artifacts = Path.Combine(this.root, "runs");
 
-        int exit = await Cs2Gs.Cli.Program.Main(new[]
+        TextWriter originalOut = Console.Out;
+        var capturedOut = new StringWriter();
+        Console.SetOut(capturedOut);
+        int exit;
+        try
         {
-            "migrate",
-            "--corpus", Path.Combine(this.root, "source"),
-            "--out", Path.Combine(this.root, "destination"),
-            "--artifacts", artifacts,
-            "--gsc", compiler,
-            "--config", "Release",
-            "--stop-after", "translate",
-        });
+            exit = await Cs2Gs.Cli.Program.Main(new[]
+            {
+                "migrate",
+                "--corpus", Path.Combine(this.root, "source"),
+                "--out", Path.Combine(this.root, "destination"),
+                "--artifacts", artifacts,
+                "--gsc", compiler,
+                "--config", "Release",
+                "--stop-after", "translate",
+            });
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        Assert.Contains("partial run (--stop-after translate)", capturedOut.ToString(), StringComparison.Ordinal);
 
         string runJson = Directory.GetFiles(artifacts, "run.json", SearchOption.AllDirectories).Single();
         RunResult result = JsonSerializer.Deserialize<RunResult>(File.ReadAllText(runJson), TriageSerialization.Options);
