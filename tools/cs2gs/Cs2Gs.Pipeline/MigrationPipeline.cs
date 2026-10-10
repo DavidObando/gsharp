@@ -62,6 +62,14 @@ public sealed class MigrationPipeline
     };
 
     /// <summary>
+    /// The default stages up to and including <paramref name="last"/> (issue #4853).
+    /// </summary>
+    /// <param name="last">The last stage to run.</param>
+    /// <returns>The ordered stage prefix.</returns>
+    public static IReadOnlyList<IMigrationStage> StagesThrough(MigrationStageKind last) =>
+        DefaultStages().Where(stage => stage.Kind <= last).ToList();
+
+    /// <summary>
     /// Sanitizes a corpus app id into a filesystem-safe directory segment
     /// (<c>corpus/L1-Console</c> → <c>corpus_L1-Console</c>).
     /// </summary>
@@ -430,6 +438,16 @@ public sealed class MigrationPipeline
                 this.options.SourceRoot,
                 runDir,
                 this.options.GeneratedProjectPaths);
+        }
+
+        if (this.options.PartialRun)
+        {
+            // Issue #4853: stages after the requested last stage never ran, so a
+            // passing app is "not verified" rather than green (issue #1831).
+            foreach (AppResult partialApp in runResult.Apps.Where(a => a.Succeeded))
+            {
+                partialApp.Unverified = true;
+            }
         }
 
         if (runResult.Succeeded && runResult.Apps.Any(a => a.Unverified))

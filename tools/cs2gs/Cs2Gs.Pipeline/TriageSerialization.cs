@@ -45,6 +45,25 @@ public static class TriageSerialization
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 
+    /// <summary>Parses a schema stage string (the inverse of <see cref="StageName"/>).</summary>
+    /// <param name="name">The stage string, e.g. <c>compile</c>.</param>
+    /// <param name="kind">The parsed stage.</param>
+    /// <returns><see langword="true"/> when <paramref name="name"/> names a stage.</returns>
+    public static bool TryParseStageName(string name, out MigrationStageKind kind)
+    {
+        foreach (MigrationStageKind candidate in Enum.GetValues<MigrationStageKind>())
+        {
+            if (string.Equals(StageName(candidate), name, StringComparison.Ordinal))
+            {
+                kind = candidate;
+                return true;
+            }
+        }
+
+        kind = default;
+        return false;
+    }
+
     /// <summary>
     /// Maps a <see cref="TriageCategory"/> to its schema spelling
     /// (<c>translation-unsupported</c>, <c>compile-error</c>, <c>pipeline-crash</c>, …).

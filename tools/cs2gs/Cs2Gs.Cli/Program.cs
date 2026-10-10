@@ -260,7 +260,7 @@ internal static class Program
         }
 
         (string corpus, List<string> appIds, PipelineOptions options, string baselinePath,
-            bool baselineStrict, bool translateOnly, string allowListPath) = parsed.Value;
+            bool baselineStrict, bool translateOnly, string allowListPath, MigrationStageKind? stopAfter) = parsed.Value;
 
         // Issue #3732: canonicalize, not merely absolutize. A root reached
         // through a symlink (`/tmp` and `$TMPDIR` are both links on macOS)
@@ -389,12 +389,28 @@ internal static class Program
         // pass (and its cross-project linked-source guard) intact while
         // deferring the per-app compile/ilverify/test-parity work to
         // `cs2gs validate` shards.
-        var pipeline = translateOnly
-            ? new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+        //
+        // Issue #4853: --stop-after <stage> runs every stage up to and
+        // including <stage>, so a cut-over rehearsal can stop after compile
+        // (which carries the redundant-!! polish) without paying for test
+        // parity. --translate-only is --stop-after translate.
+        MigrationStageKind? lastStage = translateOnly ? MigrationStageKind.Translate : stopAfter;
+
+        // --translate-only keeps its documented contract (validate shards run the
+        // rest); an explicit --stop-after before test-parity is a partial run.
+        options.PartialRun = !translateOnly && stopAfter is MigrationStageKind early && early != MigrationStageKind.TestParity;
+        var pipeline = lastStage is MigrationStageKind last
+            ? new MigrationPipeline(options, MigrationPipeline.StagesThrough(last))
             : new MigrationPipeline(options);
         RunResult result = await pipeline.RunAsync(apps).ConfigureAwait(false);
 
         PrintSummary(result, pipeline.Stages);
+        if (!translateOnly && stopAfter is MigrationStageKind partial && partial != MigrationStageKind.TestParity)
+        {
+            Console.WriteLine(
+                $"cs2gs: partial run (--stop-after {TriageSerialization.StageName(partial)}): the later stages were not " +
+                "run, so green here is not a full verdict.");
+        }
 
         string runsRoot = options.OutputLayout == MigrationOutputLayout.Repository
             ? options.ArtifactRoot
@@ -600,6 +616,7 @@ internal static class Program
         string allowListPath = null;
         bool baselineStrict = false;
         bool translateOnly = false;
+        MigrationStageKind? stopAfter = null;
         bool sdkPinSpecified = false;
         var appIds = new List<string>();
         var options = new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository };
@@ -667,6 +684,17 @@ internal static class Program
                     case "--translate-only":
                         translateOnly = true;
                         break;
+                    case "--stop-after":
+                        string stopAfterName = NextValue(args, ref i, arg);
+                        if (!TriageSerialization.TryParseStageName(stopAfterName, out MigrationStageKind stopAfterKind))
+                        {
+                            Console.Error.WriteLine(
+                                $"cs2gs: --stop-after expects 'translate', 'compile', 'ilverify' or 'test-parity', not '{stopAfterName}'.");
+                            return null;
+                        }
+
+                        stopAfter = stopAfterKind;
+                        break;
                     case "--format":
                         options.FormatOutput = true;
                         break;
@@ -724,6 +752,14 @@ internal static class Program
             return null;
         }
 
+        if (translateOnly && stopAfter is MigrationStageKind requested && requested != MigrationStageKind.Translate)
+        {
+            Console.Error.WriteLine(
+                "cs2gs: --translate-only is --stop-after translate and conflicts with " +
+                $"--stop-after {TriageSerialization.StageName(requested)}; pass only one.");
+            return null;
+        }
+
         if (string.IsNullOrEmpty(corpus))
         {
             corpus = DefaultCorpus();
@@ -735,7 +771,7 @@ internal static class Program
         }
 
         return new MigrateArguments(
-            corpus, appIds, options, baselinePath, baselineStrict, translateOnly, allowListPath);
+            corpus, appIds, options, baselinePath, baselineStrict, translateOnly, allowListPath, stopAfter);
     }
 
     /// <summary>
@@ -842,6 +878,10 @@ internal static class Program
         Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE");
         Console.WriteLine("                    repository and stop, writing a per-app validation-context.json so");
         Console.WriteLine("                    'cs2gs validate' shards can run stages 2-4 in parallel elsewhere.");
+        Console.WriteLine("  --stop-after <s>  Run the stages up to and including <s> (translate, compile, ilverify or");
+        Console.WriteLine("                    test-parity; default test-parity). 'compile' includes the redundant-!!");
+        Console.WriteLine("                    polish, so the migrated tree is final without running test parity");
+        Console.WriteLine("                    (issue #4853). --translate-only is --stop-after translate.");
         Console.WriteLine("  --sdk-version <v> Repository migration only: pin Gsharp.NET.Sdk to exactly <v> (default:");
         Console.WriteLine("                    the newest local nupkg). A local nupkg of <v> is staged into .nugs;");
         Console.WriteLine("                    otherwise <v> must be on nuget.org (e.g. a published release).");
@@ -883,6 +923,7 @@ internal static class Program
     /// <param name="BaselineStrict">Whether stale ledger entries fail the gate.</param>
     /// <param name="TranslateOnly">Whether to run the translate stage only (issue #3668).</param>
     /// <param name="AllowListPath">An explicit test-parity allow-list path, or <see langword="null"/> (issue #3885).</param>
+    /// <param name="StopAfter">The last stage to run, or <see langword="null"/> for all stages (issue #4853).</param>
     private readonly record struct MigrateArguments(
         string Corpus,
         List<string> AppIds,
@@ -890,7 +931,8 @@ internal static class Program
         string BaselinePath,
         bool BaselineStrict,
         bool TranslateOnly,
-        string AllowListPath);
+        string AllowListPath,
+        MigrationStageKind? StopAfter);
 
     /// <summary>
     /// Sentinel exception thrown by <see cref="NextValue"/> when an option's

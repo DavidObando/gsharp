@@ -65,6 +65,7 @@ Useful `migrate` options:
 | `--config <name>` | Build configuration used to find tools; default is `Release`. |
 | `--baseline <file>` | Gate on the gap ledger. New and regressed fingerprints fail; known-open gaps are tolerated. |
 | `--baseline-strict` | Also fail on stale ledger entries. Intended for nightly checks. |
+| `--stop-after <stage>` | Run the stages up to and including `translate`, `compile`, `ilverify` or `test-parity` (the default). `compile` includes the redundant-`!!` polish, so the migrated tree is final without running test parity. `--translate-only` is `--stop-after translate`. |
 | `--format` | Run the canonical formatter over emitted G#. This is the default since ADR-0179 phase 7b. |
 | `--no-format` | Keep the printer's own layout instead of the canonical one. Useful for A/B measurement against the formatter; the emitted G# is the same program either way, only its line breaks differ. |
 
