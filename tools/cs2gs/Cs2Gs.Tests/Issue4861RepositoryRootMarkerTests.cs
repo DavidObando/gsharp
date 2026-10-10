@@ -91,6 +91,13 @@ public sealed class Issue4861RepositoryRootMarkerTests : IDisposable
         Assert.Equal(
             RepositoryRootMarker.SolutionFileNames.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
             spellings);
+
+        // The retained-C# Visual Studio test island carries its own copy rather than linking the shared file.
+        string island = SourceOf(Path.Combine(repo, "src", "vs-gsharp", "test", "VsGsharp.UnitTests", "RepositoryRootMarker"));
+        Assert.Equal(
+            spellings,
+            Regex.Matches(island, "\"(GSharp\\.slnx?)\"").Select(m => m.Groups[1].Value)
+                .OrderBy(s => s, StringComparer.Ordinal).ToArray());
     }
 
     /// <summary>
@@ -110,6 +117,7 @@ public sealed class Issue4861RepositoryRootMarkerTests : IDisposable
         var allowed = new[]
         {
             "test/Shared/RepositoryRootMarker",
+            "src/vs-gsharp/test/VsGsharp.UnitTests/RepositoryRootMarker",
             "tools/cs2gs/Cs2Gs.Pipeline/RepositoryRootMarker",
             "tools/cs2gs/Cs2Gs.Tests/Issue4861RepositoryRootMarkerTests",
             "test/Core.Tests/TestSourceTests",
