@@ -527,6 +527,53 @@ static class Program
         self.assertIn("overlaps", result.stderr)
 
 
+class ReportVerifierTests(unittest.TestCase):
+    """The integrated script trusts verify-stage2-report.py over the exit code."""
+
+    @staticmethod
+    def good() -> dict:
+        return {
+            "schema": 1, "certified": True,
+            "comparison": [
+                {"assembly": "Core/GSharp.Core.dll", "normalizedEqual": True},
+                {"assembly": "Compiler/gsc.dll", "normalizedEqual": True},
+            ],
+            "tests": [{"executed": 5, "failed": 0, "outcome": "Completed"}],
+        }
+
+    def check(self, report: dict, tests: int = 1) -> str | None:
+        spec = importlib.util.spec_from_file_location(
+            "verify_stage2_report", REPO / "build" / "verify-stage2-report.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        try:
+            module.verify(
+                report, ["Core/GSharp.Core.dll", "Compiler/gsc.dll"], tests)
+        except module.ReportError as error:
+            return str(error)
+        return None
+
+    def test_genuine_report_passes(self) -> None:
+        self.assertIsNone(self.check(self.good()))
+
+    def test_every_forged_shape_is_rejected(self) -> None:
+        for name, mutate in {
+            "uncertified": lambda r: r.update(certified=False),
+            "error": lambda r: r.update(error="boom"),
+            "unequal": lambda r: r["comparison"][1].update(normalizedEqual=False),
+            "missing assembly": lambda r: r["comparison"].pop(),
+            "no tests": lambda r: r.update(tests=[]),
+            "zero executed": lambda r: r["tests"][0].update(executed=0),
+            "failed": lambda r: r["tests"][0].update(failed=1),
+            "bool executed": lambda r: r["tests"][0].update(executed=True),
+            "incomplete": lambda r: r["tests"][0].update(outcome="Aborted"),
+        }.items():
+            report = self.good()
+            mutate(report)
+            with self.subTest(name):
+                self.assertIsNotNone(self.check(report))
+
+
 class ControllerBoundaryTests(unittest.TestCase):
     def setUp(self) -> None:
         suffix = self.id().rsplit(".", 1)[-1]

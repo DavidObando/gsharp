@@ -22,6 +22,7 @@ import re
 import secrets
 import shlex
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -1388,6 +1389,11 @@ def is_sandbox_vstest_process(root_host_pid: int | None, claimed: Any) -> bool:
     return False
 
 
+# IL verification needs the dotnet-ilverify tool, which the offline sandbox does
+# not provide; stage equality is proven by the complete-PE comparison instead.
+TEST_ENVIRONMENT_ALLOWLIST = frozenset({"GSHARP_SKIP_ILVERIFY"})
+
+
 def dotnet_root() -> Path:
     return trusted_dotnet().parent
 
@@ -1422,6 +1428,7 @@ class Controller:
             "assemblies": args.assembly or list(DEFAULT_ASSEMBLIES),
             "tests": args.test,
             "testAdapterSha256": sorted(args.test_adapter_sha256),
+            "testEnvironment": sorted(getattr(args, "test_env", [])),
         }
         self.stage_packages: dict[str, Path] = {}
         self.accepted_restore_outputs: dict[str, dict[str, str]] = {}
@@ -1483,6 +1490,11 @@ class Controller:
         if not self.report["tests"]:
             raise CertificationError(
                 "at least one --test is required for positive certification evidence")
+        for item in getattr(self.args, "test_env", []):
+            name, separator, value = item.partition("=")
+            if not separator or name not in TEST_ENVIRONMENT_ALLOWLIST or value != "1":
+                raise CertificationError(
+                    f"--test-env must be one of {sorted(TEST_ENVIRONMENT_ALLOWLIST)}=1: {item!r}")
         if (len(self.args.test_adapter_sha256) != len(set(self.args.test_adapter_sha256))
                 or any(not re.fullmatch(r"[0-9a-f]{64}", value)
                        for value in self.args.test_adapter_sha256)):
@@ -1734,6 +1746,13 @@ class Controller:
             captured, _ = process.communicate(timeout=self.args.command_timeout)
         except subprocess.TimeoutExpired as error:
             process.kill()
+            if command_host_pid is not None:
+                # Killing the PID-1 launcher tears down the whole sandbox
+                # namespace; killing bwrap alone leaves it running.
+                try:
+                    os.kill(command_host_pid, signal.SIGKILL)
+                except OSError:
+                    pass
             captured, _ = process.communicate()
             atomic_bytes(log, captured)
             if event_parent is not None:
@@ -3180,6 +3199,9 @@ class Controller:
             # at the immutable stage tree instead of letting them search upward
             # from the controller-owned output directory.
             env["CS2GS_TEST_SOURCE_ROOT"] = str(tree)
+            for item in getattr(self.args, "test_env", []):
+                name, _, value = item.partition("=")
+                env[name] = value
             test_target = self.project_target(test_plan, project)
             validate_vstest_extensions(
                 self.writable("stage-2", "out"),
@@ -3357,6 +3379,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--test", action="append", default=[])
     parser.add_argument(
         "--test-adapter-sha256", action="append", default=[], metavar="SHA256")
+    parser.add_argument(
+        "--test-env", action="append", default=[], metavar="NAME=VALUE",
+        help="allowlisted test-host environment, recorded in the report")
     parser.add_argument("--config", default="Release")
     parser.add_argument("--stage1-version")
     parser.add_argument(
