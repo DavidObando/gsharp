@@ -144,9 +144,20 @@ internal static class RepositoryVerbatimSources
                     bool referenced = false;
                     foreach (ItemOperation operation in list)
                     {
-                        if (operation.Matches.Any(r => r.IsMatch(normalized)))
+                        if (!operation.Matches.Any(r => r.IsMatch(normalized)))
                         {
-                            referenced = !operation.Remove && !operation.Excludes.Any(r => r.IsMatch(normalized));
+                            continue;
+                        }
+
+                        // Exclude only stops THIS Include from adding the file; an
+                        // earlier item that already added it still stands.
+                        if (operation.Remove)
+                        {
+                            referenced = false;
+                        }
+                        else if (!operation.Excludes.Any(r => r.IsMatch(normalized)))
+                        {
+                            referenced = true;
                         }
                     }
 

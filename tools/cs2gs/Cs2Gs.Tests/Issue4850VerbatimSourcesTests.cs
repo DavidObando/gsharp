@@ -228,21 +228,82 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
     }
 
     [Fact]
-    public void DualOwnedSourceWithCheckedInGsTwin_IsACollision()
+    public void ExcludeOnALaterInclude_DoesNotUnreferenceAnEarlierOne()
     {
-        this.Write("a/a.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><None Include=\"Shared.cs\" /></ItemGroup></Project>");
-        this.Write("a/Shared.cs", "class A {}");
-        this.Write("a/Shared.gs", "package a");
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+            "<None Include=\"Data.cs\" /><None Include=\"*.cs\" Exclude=\"Data.cs\" />" +
+            "</ItemGroup></Project>");
+        this.Write("a/Data.cs", "class A {}");
+        this.Write("a/Other.cs", "class B {}");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
+
+        Assert.Equal(new[] { "a/Data.cs", "a/Other.cs" }, verbatim.OrderBy(p => p, StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
+    public void DataOnlySourceWithAGsTwin_IsNotACollision()
+    {
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><Compile Remove=\"Data.cs\" /><None Include=\"Data.cs\" /></ItemGroup></Project>");
+        this.Write("a/Data.cs", "class A {}");
+        this.Write("a/Data.gs", "package a");
         string destination = Path.Combine(Path.GetTempPath(), "cs2gs-4850-out-" + Guid.NewGuid().ToString("N"));
-
-        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(
-            () => RepositoryMirror.Prepare(this.root, destination));
-
-        Assert.Contains("Shared.gs", ex.Message);
-        if (Directory.Exists(destination))
+        try
         {
-            Directory.Delete(destination, recursive: true);
+            RepositoryMirror.Prepare(this.root, destination);
+
+            Assert.Equal("class A {}", File.ReadAllText(Path.Combine(destination, "a", "Data.cs")));
+            Assert.Equal("package a", File.ReadAllText(Path.Combine(destination, "a", "Data.gs")));
         }
+        finally
+        {
+            if (Directory.Exists(destination))
+            {
+                Directory.Delete(destination, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A source that is both compiled and referenced as data must not have its
+    /// translation silently overwrite a checked-in same-name <c>.gs</c>.
+    /// </summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Fact]
+    public async Task Pipeline_DualOwnedSourceWithCheckedInGsTwin_FailsInsteadOfOverwriting()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        this.Write(
+            "source/src/Widget/Widget.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>" +
+            "<ItemGroup><None Include=\"Shared.cs\" /></ItemGroup></Project>");
+        this.Write("source/src/Widget/Shared.cs", "namespace Widget { public static class Shared { public static int One() => 1; } }");
+        this.Write("source/src/Widget/Shared.gs", "package Widget\n\nfunc checkedIn() {}\n");
+        string destination = Path.Combine(this.root, "destination");
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            SourceRoot = Path.Combine(this.root, "source"),
+            OutputRoot = destination,
+            ArtifactRoot = Path.Combine(this.root, "runs"),
+            OutputLayout = MigrationOutputLayout.Repository,
+            Config = "Release",
+        };
+        var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
+
+        RunResult result = await pipeline.RunAsync(RepositoryDiscovery.Discover(Path.Combine(this.root, "source")));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("checkedIn", File.ReadAllText(Path.Combine(destination, "src", "Widget", "Shared.gs")));
     }
 
     /// <summary>

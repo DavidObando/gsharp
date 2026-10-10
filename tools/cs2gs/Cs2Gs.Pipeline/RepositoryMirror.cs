@@ -322,7 +322,7 @@ internal static class RepositoryMirror
         var destinations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (string source in files)
         {
-            foreach (string destination in DestinationRelativePaths(source, verbatim, reserveTranslation: true))
+            foreach (string destination in DestinationRelativePaths(source, verbatim))
             {
                 if (destinations.TryGetValue(destination, out string prior))
                 {
@@ -530,10 +530,7 @@ internal static class RepositoryMirror
     //
     // Issue #4850: a `.cs` file in `verbatim` (RepositoryVerbatimSources) is
     // copied as itself, not translated to `.gs`.
-    private static IEnumerable<string> DestinationRelativePaths(
-        string source,
-        ISet<string> verbatim,
-        bool reserveTranslation = false)
+    private static IEnumerable<string> DestinationRelativePaths(string source, ISet<string> verbatim)
     {
         string extension = Path.GetExtension(source);
         if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)
@@ -541,15 +538,6 @@ internal static class RepositoryMirror
             && verbatim.Contains(source))
         {
             yield return source;
-
-            // A verbatim file a translated project also compiles is dual-owned;
-            // collision validation reserves its translated destination too, so
-            // a checked-in same-name `.gs` is never silently overwritten.
-            if (reserveTranslation)
-            {
-                yield return Path.ChangeExtension(source, ".gs");
-            }
-
             yield break;
         }
 
