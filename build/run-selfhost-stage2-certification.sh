@@ -68,13 +68,15 @@ mkdir -p "$work/bootstrap"
 cp "out/bin/Release/nupkgs/Gsharp.NET.Sdk.$pin.nupkg" "$work/bootstrap/"
 bootstrap="$work/bootstrap/Gsharp.NET.Sdk.$pin.nupkg"
 
+core_test="test/Core.Tests/Core.Tests.gsproj::$(python3 build/selfhost/stage2-test-filter.py Core.Tests)"
+compiler_test="test/Compiler.Tests/Compiler.Tests.gsproj::$(python3 build/selfhost/stage2-test-filter.py Compiler.Tests)"
+
 python3 build/selfhost-stage2.py \
   --tree "$work/migrated" --bootstrap "$bootstrap" --work "$work/controller" \
   --command-timeout "${STAGE2_COMMAND_TIMEOUT:-7200}" \
   --project src/Core/Core.gsproj --project src/Compiler/Compiler.gsproj \
   --assembly Core/GSharp.Core.dll --assembly Compiler/gsc.dll \
-  --test "test/Core.Tests/Core.Tests.gsproj::$(python3 build/selfhost/stage2-test-filter.py Core.Tests)" \
-  --test "test/Compiler.Tests/Compiler.Tests.gsproj::$(python3 build/selfhost/stage2-test-filter.py Compiler.Tests)" \
+  --test "$core_test" --test "$compiler_test" \
   --test-env GSHARP_SKIP_ILVERIFY=1 \
   --test-adapter-sha256 c5ac41b36fac0fcef9714fb80fea0175913530fb53dd7bb8e5e1470339667100 \
   --test-adapter-sha256 194458c816e0ea9ff0c5eac8896c52133fe9205661833b3d0f57e85a4e66936b \
@@ -82,4 +84,5 @@ python3 build/selfhost-stage2.py \
   --test-adapter-sha256 3166dc70323fb30ccf1cedb0fe86f2ad122c46d254542342d90386efc4c9285c
 
 python3 build/verify-stage2-report.py "$work/controller/reports/stage2-report.json" \
-  --assembly Core/GSharp.Core.dll --assembly Compiler/gsc.dll --tests 2
+  --assembly Core/GSharp.Core.dll --assembly Compiler/gsc.dll \
+  --test "$core_test" --test "$compiler_test"

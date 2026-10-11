@@ -18,7 +18,7 @@ class ReportError(Exception):
     pass
 
 
-def verify(report: Any, assemblies: list[str], tests: int) -> None:
+def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
     if not isinstance(report, dict):
         raise ReportError("report is not a JSON object")
     if report.get("schema") != 1:
@@ -38,24 +38,35 @@ def verify(report: Any, assemblies: list[str], tests: int) -> None:
         if row.get("normalizedEqual") is not True:
             raise ReportError(f"stage 1 and stage 2 differ: {assembly}")
     ran = report.get("tests")
-    if not isinstance(ran, list) or len(ran) != tests:
-        raise ReportError(f"expected {tests} test selections, found {ran!r}")
+    if not isinstance(ran, list):
+        raise ReportError("report has no test rows")
+    seen: set[str] = set()
     for row in ran:
-        executed = row.get("executed") if isinstance(row, dict) else None
+        if not isinstance(row, dict):
+            raise ReportError(f"malformed test row: {row!r}")
+        key = f"{row.get('project')}::{row.get('filter')}"
+        if key in seen:
+            raise ReportError(f"duplicate test selection: {key[:120]}")
+        seen.add(key)
+        executed = row.get("executed")
         if (not isinstance(executed, int) or isinstance(executed, bool)
                 or executed <= 0 or row.get("failed") != 0
                 or row.get("outcome") != "Completed"):
             raise ReportError(f"test selection has no positive passing evidence: {row!r}")
+    if seen != set(tests):
+        raise ReportError(
+            f"test selections differ from the expected set: "
+            f"missing={sorted(set(tests) - seen)!r:.200}, unexpected={sorted(seen - set(tests))!r:.200}")
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
     parser.add_argument("--assembly", action="append", default=[])
-    parser.add_argument("--tests", type=int, default=0)
+    parser.add_argument("--test", action="append", default=[], metavar="PROJECT::FILTER")
     args = parser.parse_args(argv)
     try:
-        verify(json.loads(args.report.read_text(encoding="utf-8")), args.assembly, args.tests)
+        verify(json.loads(args.report.read_text(encoding="utf-8")), args.assembly, args.test)
     except (OSError, ValueError, ReportError) as error:
         print(f"verify-stage2-report: {error}", file=sys.stderr)
         return 1

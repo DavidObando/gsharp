@@ -59,8 +59,9 @@ result unless the report is a real `certified: true` with equal
 `GSharp.Core.dll` and `gsc.dll` and positive passing tests. The
 `selfhost-stage2` workflow runs it nightly, on demand, and for pull requests
 that touch the controller. A recorded run on the 0.4.1326 line certified with
-both assemblies byte-identical (the MVID slot happened to match too), 11229
-Core.Tests and 6990 Compiler.Tests passing under stage 2.
+both assemblies byte-identical (the MVID slot happened to match too), with 11229
+Core.Tests and 6990 Compiler.Tests passing under stage 2. Those counts are the
+selected tests: the environment-bound exclusions above are not included.
 
 Stage-2 v1 rejects symbolic links, hard links, dirty Git inputs, versioned
 project SDK overrides, multitargeting, context-changing or build-disabled

@@ -554,10 +554,14 @@ class ReportVerifierTests(unittest.TestCase):
                 {"assembly": "Core/GSharp.Core.dll", "normalizedEqual": True},
                 {"assembly": "Compiler/gsc.dll", "normalizedEqual": True},
             ],
-            "tests": [{"executed": 5, "failed": 0, "outcome": "Completed"}],
+            "tests": [
+                {"project": "a", "filter": "f", "executed": 5, "failed": 0, "outcome": "Completed"},
+                {"project": "b", "filter": "g", "executed": 2, "failed": 0, "outcome": "Completed"},
+            ],
         }
 
-    def check(self, report: dict, tests: int = 1) -> str | None:
+    def check(self, report: dict, tests: list[str] | None = None) -> str | None:
+        tests = ["a::f", "b::g"] if tests is None else tests
         spec = importlib.util.spec_from_file_location(
             "verify_stage2_report", REPO / "build" / "verify-stage2-report.py")
         module = importlib.util.module_from_spec(spec)
@@ -579,6 +583,9 @@ class ReportVerifierTests(unittest.TestCase):
             "unequal": lambda r: r["comparison"][1].update(normalizedEqual=False),
             "missing assembly": lambda r: r["comparison"].pop(),
             "no tests": lambda r: r.update(tests=[]),
+            "wrong selection": lambda r: r["tests"][1].update(project="c"),
+            "duplicate selection": lambda r: r["tests"].__setitem__(1, dict(r["tests"][0])),
+            "extra selection": lambda r: r["tests"].append({"project": "x", "filter": "y", "executed": 1, "failed": 0, "outcome": "Completed"}),
             "zero executed": lambda r: r["tests"][0].update(executed=0),
             "failed": lambda r: r["tests"][0].update(failed=1),
             "bool executed": lambda r: r["tests"][0].update(executed=True),

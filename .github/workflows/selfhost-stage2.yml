@@ -15,6 +15,7 @@ on:
     paths:
       - 'build/selfhost-stage2.py'
       - 'build/selfhost_pe.py'
+      - 'build/selfhost-pack-stage1.py'
       - 'build/selfhost/**'
       - 'build/verify-stage2-report.py'
       - 'build/run-selfhost-stage2-certification.sh'
