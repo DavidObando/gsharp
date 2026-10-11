@@ -846,6 +846,13 @@ def verify_output_inventory(roots: list[Path], expected_hashes: dict[str, str]) 
         raise CertificationError("accepted runtime output closure changed")
 
 
+def verify_caller_unchanged(caller: Path, git_identity: dict[str, str] | None) -> None:
+    """Re-prove that the caller is the same clean commit that was frozen."""
+    _, current = git_snapshot_entries(caller)
+    if current != git_identity:
+        raise CertificationError("caller tree changed during certification")
+
+
 def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dict[str, str] | None]:
     entries, git_identity = git_snapshot_entries(caller)
     snapshot.mkdir()
@@ -3372,6 +3379,10 @@ class Controller:
             self.revalidate("stage-1", self.stage1, roots, stage1_build, "final")
             self.revalidate("stage-2", self.stage2, roots, stage2_build, "final")
             self.verify_receipts()
+            # Final trust-boundary check, immediately before the verdict: the
+            # frozen snapshot and the caller worktree must both be unchanged.
+            verify_manifest(self.source, manifest)
+            verify_caller_unchanged(self.caller, git_identity)
             self.report["certified"] = True
             atomic_json(self.reports / "stage2-report.json", self.report)
             print(f"self-host stage 2: CERTIFIED ({self.reports / 'stage2-report.json'})")

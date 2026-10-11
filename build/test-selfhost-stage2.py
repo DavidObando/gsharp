@@ -862,6 +862,21 @@ class ControllerBoundaryTests(unittest.TestCase):
         # This test process is neither vstest.console nor in a nested PID namespace.
         self.assertFalse(check(os.getppid(), os.getpid()))
 
+    def test_caller_change_after_freezing_is_rejected_at_the_final_boundary(self) -> None:
+        tree = self.tree()
+        (tree / "a.txt").write_text("one\n", encoding="utf-8")
+        self.commit_tree(tree)
+        _, identity = stage2.git_snapshot_entries(tree)
+        stage2.verify_caller_unchanged(tree, identity)
+        (tree / "a.txt").write_text("two\n", encoding="utf-8")
+        with self.assertRaises(stage2.CertificationError):
+            stage2.verify_caller_unchanged(tree, identity)
+        subprocess.run(["git", "-C", tree, "commit", "-qam", "next"], check=True,
+                       env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x",
+                            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@x"})
+        with self.assertRaises(stage2.CertificationError):
+            stage2.verify_caller_unchanged(tree, identity)
+
     def test_imported_runtime_path_override_is_rejected(self) -> None:
         tree = self.tree()
         imported = tree / "package.props"
