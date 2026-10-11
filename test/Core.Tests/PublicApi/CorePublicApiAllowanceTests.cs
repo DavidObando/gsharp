@@ -65,6 +65,11 @@ public sealed class CorePublicApiAllowanceTests : IDisposable
         using var csharp = new CSharpFixture("namespace Demo; public record Pair(int A);");
         Assert.False(CorePublicApiAllowance.IsBuiltByGsc(csharp.AssemblyPath));
 
+        // The marker string in an unrelated attribute must not count.
+        using var lookalike = new CSharpFixture(
+            "[assembly: System.Reflection.AssemblyDescription(\"GSharp.TypeSemantics\")]\nnamespace Demo; public record Pair(int A);");
+        Assert.False(CorePublicApiAllowance.IsBuiltByGsc(lookalike.AssemblyPath));
+
         var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
             GSharp.Core.CodeAnalysis.Text.SourceText.From("package Demo\ndata class Pair(A int32)\n"));
         var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(tree) { IsLibrary = true };

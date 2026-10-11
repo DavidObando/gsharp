@@ -164,11 +164,30 @@ internal static class CorePublicApiAllowance
         using var stream = System.IO.File.OpenRead(assemblyPath);
         using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
         System.Reflection.Metadata.MetadataReader reader = pe.GetMetadataReader();
-        byte[] marker = System.Text.Encoding.UTF8.GetBytes("GSharp.TypeSemantics");
         foreach (var handle in reader.GetAssemblyDefinition().GetCustomAttributes())
         {
-            byte[] blob = reader.GetBlobBytes(reader.GetCustomAttribute(handle).Value);
-            if (blob.AsSpan().IndexOf(marker) >= 0)
+            CustomAttribute attribute = reader.GetCustomAttribute(handle);
+            if (attribute.Constructor.Kind != HandleKind.MemberReference)
+            {
+                continue;
+            }
+
+            EntityHandle parent = reader.GetMemberReference((MemberReferenceHandle)attribute.Constructor).Parent;
+            if (parent.Kind != HandleKind.TypeReference)
+            {
+                continue;
+            }
+
+            TypeReference type = reader.GetTypeReference((TypeReferenceHandle)parent);
+            if (reader.GetString(type.Name) != "AssemblyMetadataAttribute"
+                || reader.GetString(type.Namespace) != "System.Reflection")
+            {
+                continue;
+            }
+
+            // Fixed arguments: the key is the first serialized string after the prolog.
+            BlobReader blob = reader.GetBlobReader(attribute.Value);
+            if (blob.ReadUInt16() == 1 && blob.ReadSerializedString() == "GSharp.TypeSemantics")
             {
                 return true;
             }
