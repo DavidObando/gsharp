@@ -34,7 +34,7 @@ mkdir -p "$TMPDIR"
 source "$repo_root/build/selfmig-common.sh"
 
 cd "$repo_root"
-dotnet restore GSharp.sln
+dotnet restore GSharp.sln --locked-mode
 selfmig_build_prerequisites
 dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj -c Release
 

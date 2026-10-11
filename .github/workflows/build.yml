@@ -224,8 +224,10 @@ jobs:
 
       - name: Verify isolated stage-2 certification contract
         run: |
-          dotnet build build/selfhost/PackageContentHash.csproj --configuration Release --nologo
-          dotnet build build/selfhost/TestSupervisorLogger.csproj --configuration Release --nologo
+          dotnet restore build/selfhost/PackageContentHash.csproj --locked-mode
+          dotnet restore build/selfhost/TestSupervisorLogger.csproj --locked-mode
+          dotnet build build/selfhost/PackageContentHash.csproj --configuration Release --no-restore --nologo
+          dotnet build build/selfhost/TestSupervisorLogger.csproj --configuration Release --no-restore --nologo
           python3 build/test-selfhost-stage2.py
 
       - name: Restore
