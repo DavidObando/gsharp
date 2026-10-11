@@ -37,6 +37,10 @@ def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
         if row["assembly"] in compared:
             raise ReportError(f"duplicate comparison row: {row['assembly']}")
         compared[row["assembly"]] = row
+    if set(compared) != set(assemblies):
+        raise ReportError(
+            f"compared assemblies differ from the expected set: "
+            f"{sorted(set(compared) ^ set(assemblies))!r:.200}")
     for assembly in assemblies:
         row = compared.get(assembly)
         if row is None:

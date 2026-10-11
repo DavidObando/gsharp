@@ -598,6 +598,8 @@ class ReportVerifierTests(unittest.TestCase):
             "unequal": lambda r: r["comparison"][1].update(normalizedEqual=False),
             "unequal then equal duplicate": lambda r: r["comparison"].append(
                 {"assembly": "Compiler/gsc.dll", "normalizedEqual": True}),
+            "extra unequal row": lambda r: r["comparison"].append(
+                {"assembly": "Other.dll", "normalizedEqual": False}),
             "non-object row": lambda r: r["comparison"].append("Compiler/gsc.dll"),
             "missing assembly": lambda r: r["comparison"].pop(),
             "no tests": lambda r: r.update(tests=[]),
