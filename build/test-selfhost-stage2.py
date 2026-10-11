@@ -196,6 +196,21 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("section raw data overlaps PE headers", result.stderr)
 
+    def test_section_table_outside_size_of_headers_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+        optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+        section_count = struct.unpack_from("<H", data, pe_offset + 6)[0]
+        table_end = pe_offset + 24 + optional_size + section_count * 40
+        # Shrink SizeOfHeaders so it ends inside the section table, as a crafted
+        # image would to let section raw data alias the section headers.
+        struct.pack_into("<I", data, pe_offset + 24 + 60, table_end - 1)
+        mutant = self.mutants / "section-table-outside-headers.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("section table exceeds SizeOfHeaders", result.stderr)
+
     def test_managed_resource_mutation_is_rejected(self) -> None:
         data = self.fixture.read_bytes()
         offset = data.find(b"ADR0198-MANAGED-RESOURCE-MARKER")
@@ -581,6 +596,9 @@ class ReportVerifierTests(unittest.TestCase):
             "uncertified": lambda r: r.update(certified=False),
             "error": lambda r: r.update(error="boom"),
             "unequal": lambda r: r["comparison"][1].update(normalizedEqual=False),
+            "unequal then equal duplicate": lambda r: r["comparison"].append(
+                {"assembly": "Compiler/gsc.dll", "normalizedEqual": True}),
+            "non-object row": lambda r: r["comparison"].append("Compiler/gsc.dll"),
             "missing assembly": lambda r: r["comparison"].pop(),
             "no tests": lambda r: r.update(tests=[]),
             "wrong selection": lambda r: r["tests"][1].update(project="c"),
@@ -837,6 +855,22 @@ class ControllerBoundaryTests(unittest.TestCase):
         result = run_driver("--validate-import", tree, imported)
         self.assertEqual(2, result.returncode)
         self.assertIn("protected properties", result.stderr)
+
+    def test_import_inventory_comes_from_the_engine_document_not_a_property(self) -> None:
+        imported = self.root / "x.targets"
+        imported.write_text("<Project />", encoding="utf-8")
+        project = self.root / "p.proj"
+        project.write_text("<Project />", encoding="utf-8")
+        bar = "=" * 40
+        document = (
+            "An issue was encountered verifying workloads.\n"
+            f"<!--\n{bar}\n{project}\n{bar}\n-->\n<Project>\n"
+            f"  <!--\n{bar}\n  <Import Project=\"x.targets\">\n{imported}\n{bar}\n-->\n"
+            "  <!-- /etc/not-a-real-import -->\n</Project>\n").encode()
+        paths = stage2.preprocessed_import_paths(document)
+        self.assertEqual({str(imported.resolve())}, paths)
+        with self.assertRaises(stage2.CertificationError):
+            stage2.preprocessed_import_paths(b"no markup here")
 
     def test_runtime_producer_closure_follows_item_transforms(self) -> None:
         tree = self.tree()

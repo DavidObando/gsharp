@@ -30,7 +30,13 @@ def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
     rows = report.get("comparison")
     if not isinstance(rows, list):
         raise ReportError("report has no comparison rows")
-    compared = {row.get("assembly"): row for row in rows if isinstance(row, dict)}
+    compared: dict[Any, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("assembly"), str):
+            raise ReportError(f"malformed comparison row: {row!r}")
+        if row["assembly"] in compared:
+            raise ReportError(f"duplicate comparison row: {row['assembly']}")
+        compared[row["assembly"]] = row
     for assembly in assemblies:
         row = compared.get(assembly)
         if row is None:

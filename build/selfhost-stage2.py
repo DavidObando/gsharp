@@ -1179,6 +1179,29 @@ def xml_definition_hash(element: ET.Element) -> str:
     return sha256_bytes(ET.tostring(element, encoding="utf-8"))
 
 
+def preprocessed_import_paths(data: bytes) -> set[str]:
+    """Absolute files whose content the engine inlined into `-preprocess` output."""
+    parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+    # MSBuild may print host notices (stderr is merged) before the document.
+    start = data.find(b"<")
+    if start < 0:
+        raise CertificationError("preprocessed project document is empty")
+    try:
+        parser.feed(data[start:])
+        root = parser.close()
+    except ET.ParseError as error:
+        raise CertificationError(f"invalid preprocessed project document: {error}") from error
+    paths = set()
+    for element in root.iter():
+        if element.tag is not ET.Comment:
+            continue
+        lines = [line.strip() for line in (element.text or "").splitlines()]
+        lines = [line for line in lines if line and set(line) != {"="}]
+        if lines and lines[-1].startswith("/") and Path(lines[-1]).is_file():
+            paths.add(str(real(Path(lines[-1]))))
+    return paths
+
+
 def preprocessed_property_names(data: bytes) -> list[str]:
     start = data.find(b"<Project")
     if start < 0:
@@ -2319,11 +2342,21 @@ class Controller:
         if not isinstance(all_projects, str) or not all_projects:
             raise CertificationError(
                 f"MSBuild returned no evaluated import inventory for {relative}")
-        imports = sorted({
+        # MSBuildAllProjects is an ordinary property that a project can
+        # overwrite after an <Import>, so it is never the inventory. The
+        # engine's own import graph (the -preprocess document) is, and the
+        # property may only name files that graph contains.
+        engine_imports = preprocessed_import_paths(preprocessed) - {str(real(project))}
+        claimed_imports = {
             item
             for item in all_projects.split(";")
             if Path(item).is_absolute() and Path(item).is_file()
-        })
+        } - {str(real(project))}
+        if not claimed_imports <= engine_imports:
+            raise CertificationError(
+                f"MSBuildAllProjects names files the evaluated import graph does not "
+                f"contain for {relative}: {sorted(claimed_imports - engine_imports)[:3]}")
+        imports = sorted(engine_imports)
         for name, expected in properties.items():
             if str(properties_out.get(name, "")) != str(expected):
                 raise CertificationError(
@@ -2508,6 +2541,7 @@ class Controller:
             if not (contains(tree, path)
                     or contains(self.writable(stage, "packages"), path)
                     or contains(self.stage_toolchain(stage), path)
+                    or contains(self.toolchains / "controller-inputs", path)
                     or accepted_restore):
                 raise CertificationError(f"import outside accepted roots: {path}")
             if contains(tree, path) and path != project:

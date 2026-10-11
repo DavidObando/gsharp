@@ -105,6 +105,8 @@ def inspect_layout(data: bytes) -> PeLayout:
     size_of_headers = _u32(data, optional + 60)
     _range(0, size_of_headers, len(data), "PE headers")
     _range(sections_offset, section_count * 40, len(data), "section table")
+    if sections_offset + section_count * 40 > size_of_headers:
+        raise PeError("PE section table exceeds SizeOfHeaders")
     sections: list[tuple[int, int, int, int]] = []
     raw_ranges: list[tuple[int, int]] = []
     for index in range(section_count):
