@@ -1441,6 +1441,16 @@ def is_sandbox_vstest_process(root_host_pid: int | None, claimed: Any) -> bool:
 TEST_ENVIRONMENT_ALLOWLIST = frozenset({"GSHARP_SKIP_ILVERIFY"})
 
 
+def verify_published_primary(destination: Path, target: Path, expected_sha256: str) -> None:
+    """The packaged primary assembly must be the accepted build output, byte for byte."""
+    published = destination / target.name
+    if not published.is_file() or published.is_symlink():
+        raise CertificationError(f"publish has no primary assembly {target.name}")
+    if sha256_file(published) != expected_sha256:
+        raise CertificationError(
+            f"published {target.name} is not the accepted build output")
+
+
 def project_key(project: Path) -> str:
     """Stable per-project directory key shared by obj, PDB and graph state."""
     return hashlib.sha256(project.as_posix().encode()).hexdigest()[:16]
@@ -3032,6 +3042,9 @@ class Controller:
                 })
         if not published:
             raise CertificationError(f"publish produced no files for {project}")
+        target = self.project_target(plan, project)
+        verify_published_primary(
+            destination, target, self.accepted_output_hash(stage, target))
         self.verify_output_closure(stage)
         atomic_json(
             self.evidence / f"stage-1-publish-{token}-outputs.json",

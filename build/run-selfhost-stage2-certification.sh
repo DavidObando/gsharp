@@ -38,6 +38,12 @@ dotnet restore GSharp.sln --locked-mode
 selfmig_build_prerequisites
 dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj -c Release
 
+# The compile stage builds the migrated tree through the PACKED Gsharp.NET.Sdk
+# nupkg, which cs2gs picks by recency. Repack the Release SDK last, strictly
+# before migrate (the same ordering run-cs2gs-selfmig-pr-guard.sh depends on),
+# so the stage-0 compiler is this checkout's, never a stale package.
+dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Release -graph
+
 # `cs2gs migrate` exits 1 when any app fails any stage. The certification
 # tolerates only test-parity failures (the controller re-runs the tests under
 # stage 2 itself); a translate, compile or ILVerify failure anywhere stops here.

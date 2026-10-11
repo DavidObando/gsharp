@@ -999,6 +999,20 @@ class ControllerBoundaryTests(unittest.TestCase):
             stage2.stage_package(tree, package)
         self.assertEqual(b"different", staged.read_bytes())
 
+    def test_published_primary_assembly_must_be_the_accepted_build_output(self) -> None:
+        destination = self.root / "published"
+        destination.mkdir()
+        target = self.root / "out" / "gsc.dll"
+        accepted = hashlib.sha256(b"accepted").hexdigest()
+        (destination / "gsc.dll").write_bytes(b"accepted")
+        stage2.verify_published_primary(destination, target, accepted)
+        (destination / "gsc.dll").write_bytes(b"replaced by a publish item")
+        with self.assertRaises(stage2.CertificationError):
+            stage2.verify_published_primary(destination, target, accepted)
+        (destination / "gsc.dll").unlink()
+        with self.assertRaises(stage2.CertificationError):
+            stage2.verify_published_primary(destination, target, accepted)
+
     def test_imported_runtime_path_override_is_rejected(self) -> None:
         tree = self.tree()
         imported = tree / "package.props"
