@@ -40,6 +40,28 @@ python3 build/selfhost-stage2.py \
   --test-adapter-sha256 3166dc70323fb30ccf1cedb0fe86f2ad122c46d254542342d90386efc4c9285c
 ```
 
+Tests run from a verified disposable copy of the accepted stage-2 outputs,
+because suites write scratch files next to their own assembly. The copy is
+checked against the accepted hashes before the run, and the certified outputs
+stay read-only and are re-verified afterwards. The test host gets
+`CS2GS_TEST_SOURCE_ROOT` (the immutable stage tree) and only the allowlisted
+`--test-env GSHARP_SKIP_ILVERIFY=1`, which is recorded in the report; the
+sandbox has no `dotnet-ilverify`. Tests that cannot run outside the repository
+layout fail identically under stage 1 and are excluded by name in
+`build/selfhost/stage2-env-bound-tests.json` until
+[#4873](https://github.com/DavidObando/gsharp/issues/4873) is fixed.
+
+`build/run-selfhost-stage2-certification.sh <new-work-root>` is the integrated
+positive control. It migrates the repository, commits the migrated tree to a
+throwaway Git repository, runs the controller with the Core.Tests and
+Compiler.Tests selections, and then `build/verify-stage2-report.py` rejects the
+result unless the report is a real `certified: true` with equal
+`GSharp.Core.dll` and `gsc.dll` and positive passing tests. The
+`selfhost-stage2` workflow runs it nightly, on demand, and for pull requests
+that touch the controller. A recorded run on the 0.4.1326 line certified with
+both assemblies byte-identical (the MVID slot happened to match too), 11229
+Core.Tests and 6990 Compiler.Tests passing under stage 2.
+
 Stage-2 v1 rejects symbolic links, hard links, dirty Git inputs, versioned
 project SDK overrides, multitargeting, context-changing or build-disabled
 references, secret-bearing restore configuration, and unmodeled project targets
