@@ -2671,11 +2671,13 @@ class Controller:
             for name, root in restore_roots.items()
         })
         version = package_version(package)
-        sdk_version = subprocess.run(
-            [str(self.stage_dotnet(stage) / "dotnet"), "--version"],
-            capture_output=True, text=True, check=True).stdout.strip()
+        # The copied toolchain contains exactly the pinned SDK directory, so no
+        # process (with an inherited environment) is needed to ask for it.
         resolved_sdk = (
-            self.stage_dotnet(stage) / "sdk" / sdk_version / "Sdks" / SDK_ID)
+            self.stage_dotnet(stage) / "sdk" / TRUSTED_DOTNET_SDK_VERSION / "Sdks" / SDK_ID)
+        if not resolved_sdk.is_dir():
+            raise CertificationError(
+                f"the pinned SDK {TRUSTED_DOTNET_SDK_VERSION} is not in the {stage} toolchain")
         payload_identity = verify_resolved_sdk_payload(package, resolved_sdk)
         expected_compiler = real(resolved_sdk / "tools/compiler/gsc.dll")
         expected_task = real(resolved_sdk / "tools/task/Gsharp.NET.Sdk.dll")

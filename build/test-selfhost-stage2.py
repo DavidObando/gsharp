@@ -647,6 +647,9 @@ class ReportVerifierTests(unittest.TestCase):
                 {"assembly": "Other.dll", "normalizedEqual": False}),
             "stage fingerprints differ": lambda r: r["comparison"][0]["stage2"].update(
                 normalized_sha256="b" * 64),
+            "missing stage-1 raw hash": lambda r: r["comparison"][0]["stage1"].pop("raw_sha256"),
+            "rawEqual contradicts hashes": lambda r: r["comparison"][0]["stage1"].update(
+                raw_sha256="d" * 64),
             "missing fingerprints": lambda r: r["comparison"][0].pop("stage1"),
             "tests on other binaries": lambda r: r["tests"][0]["assemblySha256"].update(
                 {"Core/GSharp.Core.dll": "c" * 64}),

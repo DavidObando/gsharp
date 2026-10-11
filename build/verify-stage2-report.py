@@ -59,9 +59,12 @@ def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
             raise ReportError(f"stage 1 and stage 2 differ: {assembly}")
         stage1, stage2 = row.get("stage1"), row.get("stage2")
         if (not isinstance(stage1, dict) or not isinstance(stage2, dict)
-                or not digest(stage1.get("normalized_sha256"))
-                or stage1.get("normalized_sha256") != stage2.get("normalized_sha256")
-                or not isinstance(row.get("rawEqual"), bool)):
+                or not all(digest(stage.get(field))
+                           for stage in (stage1, stage2)
+                           for field in ("normalized_sha256", "raw_sha256"))
+                or stage1["normalized_sha256"] != stage2["normalized_sha256"]
+                or not isinstance(row.get("rawEqual"), bool)
+                or row["rawEqual"] != (stage1["raw_sha256"] == stage2["raw_sha256"])):
             raise ReportError(f"comparison lacks consistent stage fingerprints: {assembly}")
     ran = report.get("tests")
     if not isinstance(ran, list):
