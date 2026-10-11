@@ -283,6 +283,7 @@ internal static class DataPrintMembersModel
             && slot.Type == TypeSymbol.Bool
             && slot.ReturnRefKind == RefKind.None
             && !slot.IsAsync
+            && !slot.IsSuspending
             && slot.TypeParameters.IsDefaultOrEmpty;
 
     /// <summary>A member printed by <c>PrintMembers</c>.</summary>

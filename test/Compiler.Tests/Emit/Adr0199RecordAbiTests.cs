@@ -706,6 +706,24 @@ public class Adr0199RecordAbiTests
     }
 
     [Fact]
+    public void SuspendingIntermediarySlot_IsNotTheInheritedSlot()
+    {
+        const string source = """
+            package W
+            import System
+            import System.Text
+
+            open class Middle {
+                protected open suspend func PrintMembers(builder StringBuilder) bool -> true
+            }
+            data class Leaf(Z int32) : Middle
+            """;
+        var assembly = Adr0199RecordAbiWitness.CompileGSharp(source);
+        var leaf = assembly.GetTypes().Single(t => t.Name == "Leaf");
+        Assert.Equal("Leaf { Z = 3 }", Activator.CreateInstance(leaf, 3).ToString());
+    }
+
+    [Fact]
     public void HandWrittenPrintMembers_OfTheWrongShape_IsRejectedWithGS0623()
     {
         const string source = """
