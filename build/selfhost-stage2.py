@@ -1433,6 +1433,11 @@ def is_sandbox_vstest_process(root_host_pid: int | None, claimed: Any) -> bool:
 TEST_ENVIRONMENT_ALLOWLIST = frozenset({"GSHARP_SKIP_ILVERIFY"})
 
 
+def project_key(project: Path) -> str:
+    """Stable per-project directory key shared by obj, PDB and graph state."""
+    return hashlib.sha256(project.as_posix().encode()).hexdigest()[:16]
+
+
 def dotnet_root() -> Path:
     return trusted_dotnet().parent
 
@@ -1583,6 +1588,11 @@ class Controller:
                 sort_keys=True, separators=(",", ":")).encode()),
         }
 
+    def pdb_directory(self, stage: str, project: str) -> Path:
+        path = self.writable(stage, "pdb") / project_key(Path(project))
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def writable(self, stage: str, purpose: str) -> Path:
         path = self.mutable / stage / purpose
         path.mkdir(parents=True, exist_ok=True)
@@ -1642,21 +1652,27 @@ class Controller:
             if path.exists():
                 arguments.extend(("--ro-bind", str(path), str(path)))
         arguments.extend(("--ro-bind", str(tree), str(tree)))
-        canonical_build = len(command) > 1 and command[1] == "build"
+        uses_pdb_root = any("Adr0198PdbDirectory=" in argument for argument in command)
+        canonical_build = uses_pdb_root and len(command) > 2 and command[1] == "build"
+        pdb_key = project_key(Path(command[2])) if uses_pdb_root else ""
         if canonical_build:
             arguments.extend((
                 "--dir", "/adr0198",
                 "--ro-bind", str(tree), "/adr0198/tree",
                 "--dir", "/adr0198/pdb",
-                "--bind", str(self.writable(env["ADR0198_STAGE"], "pdb")),
-                "/adr0198/pdb",
+                # Only this project's keyed directory: a build can never touch
+                # another producer's PDB.
+                "--dir", f"/adr0198/pdb/{pdb_key}",
+                "--bind", str(self.pdb_directory(env["ADR0198_STAGE"], command[2])),
+                f"/adr0198/pdb/{pdb_key}",
             ))
-        elif len(command) > 1 and command[1] == "publish":
+        elif uses_pdb_root and len(command) > 2 and command[1] == "publish":
             arguments.extend((
                 "--dir", "/adr0198",
                 "--dir", "/adr0198/pdb",
-                "--ro-bind", str(self.writable(env["ADR0198_STAGE"], "pdb")),
-                "/adr0198/pdb",
+                "--dir", f"/adr0198/pdb/{pdb_key}",
+                "--ro-bind", str(self.pdb_directory(env["ADR0198_STAGE"], command[2])),
+                f"/adr0198/pdb/{pdb_key}",
             ))
         toolchain = self.stage_toolchain(env["ADR0198_STAGE"])
         arguments.extend(("--ro-bind", str(toolchain), str(toolchain)))
@@ -2220,7 +2236,7 @@ class Controller:
         return seen
 
     def properties(self, stage: str, project: Path) -> dict[str, str]:
-        key = hashlib.sha256(project.as_posix().encode()).hexdigest()[:16]
+        key = project_key(project)
         output = self.writable(stage, "out")
         obj = self.writable(stage, "obj") / key
         obj.mkdir(parents=True, exist_ok=True)
@@ -2815,6 +2831,10 @@ class Controller:
             if output_root.exists() and output_inventory([output_root]):
                 raise CertificationError(
                     f"build output root is not empty before execution: {output_root}")
+            pdb_root = self.pdb_directory(stage, root)
+            if output_inventory([pdb_root]):
+                raise CertificationError(
+                    f"PDB root is not empty before execution: {pdb_root}")
             producer_evidence = []
             accepted_inputs = self.accepted_build_outputs.get(stage, {})
             for row in project_plan["isolated"][root]["inputs"]:
@@ -2842,13 +2862,14 @@ class Controller:
                 producer_evidence)
             receipt = self.command(
                 stage, "build", tree, command, command_identity, writable, env,
-                outputs=outputs, output_roots=[output_root], read_only=[
+                outputs=outputs, output_roots=[output_root, pdb_root], read_only=[
                     self.writable(stage, "packages"),
                     self.writable(stage, "out"),
                 ])
             document = json.loads(Path(receipt.receipt).read_text(encoding="utf-8"))
             accepted = self.accepted_build_outputs.setdefault(stage, {})
-            self.accepted_output_roots.setdefault(stage, set()).add(output_root)
+            self.accepted_output_roots.setdefault(stage, set()).update(
+                {output_root, pdb_root})
             for output in document["outputs"]:
                 accepted[output["path"]] = {
                     "sha256": output["sha256"],

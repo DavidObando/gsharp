@@ -564,6 +564,9 @@ class MigrationRunVerifierTests(unittest.TestCase):
         for stage in ("translate", "compile", "ilverify"):
             with self.subTest(stage), self.assertRaises(ValueError):
                 module.check({"apps": [self.app(**{stage: "failed"})]})
+        for status in ("skipped", "unknown", None):
+            with self.subTest(status), self.assertRaises(ValueError):
+                module.check({"apps": [self.app(**{"test-parity": status})]})
         with self.assertRaises(ValueError):
             module.check({"apps": []})
 

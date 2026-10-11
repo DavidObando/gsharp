@@ -28,8 +28,12 @@ def check(summary: Any) -> list[str]:
             if stages.get(stage) != "passed":
                 raise ValueError(
                     f"{app.get('appId')}: {stage} is {stages.get(stage)!r}, not 'passed'")
-        if stages.get("test-parity") != "passed":
+        parity = stages.get("test-parity")
+        if parity == "failed":
             parity_only.append(str(app.get("appId")))
+        elif parity != "passed":
+            raise ValueError(
+                f"{app.get('appId')}: test-parity is {parity!r}; only 'passed' or 'failed' is accepted")
     return parity_only
 
 
