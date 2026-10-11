@@ -48,6 +48,10 @@ dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
   "${selfmig_project_filters[@]}" | tee "$work/migrate.log"
 migrate_exit=${PIPESTATUS[0]}
 set -e
+if [[ $migrate_exit -ne 0 && $migrate_exit -ne 1 ]]; then
+  echo "cs2gs migrate crashed (exit $migrate_exit); see $work/migrate.log" >&2
+  exit 1
+fi
 summary=$(find "$work/runs" -maxdepth 2 -name summary.json | sort | tail -1)
 if [[ -z "$summary" || ! -f "$work/migrated/global.json" ]]; then
   echo "migration produced no summary or tree (exit $migrate_exit)" >&2

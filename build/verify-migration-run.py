@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 REQUIRED = ("translate", "compile", "ilverify")
+KNOWN_STAGES = frozenset({*REQUIRED, "test-parity"})
 
 
 def check(summary: Any) -> list[str]:
@@ -23,7 +24,14 @@ def check(summary: Any) -> list[str]:
         raise ValueError("migration summary has no apps")
     parity_only = []
     for app in summary["apps"]:
-        stages = {row.get("stage"): row.get("status") for row in app.get("stages", [])}
+        stages: dict[Any, Any] = {}
+        for row in app.get("stages", []):
+            name = row.get("stage") if isinstance(row, dict) else None
+            if name not in KNOWN_STAGES:
+                raise ValueError(f"{app.get('appId')}: unknown stage {name!r}")
+            if name in stages:
+                raise ValueError(f"{app.get('appId')}: duplicate stage {name!r}")
+            stages[name] = row.get("status")
         for stage in REQUIRED:
             if stages.get(stage) != "passed":
                 raise ValueError(
