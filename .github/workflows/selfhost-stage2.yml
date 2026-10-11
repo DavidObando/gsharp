@@ -40,6 +40,14 @@ jobs:
         with:
           global-json-file: global.json
 
+      # The controller copies exactly this SDK (TRUSTED_DOTNET_SDK_VERSION in
+      # build/selfhost-stage2.py), so install it explicitly rather than relying
+      # on whatever servicing SDK the runner image carries.
+      - name: Setup the controller's trusted .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.400'
+
       - name: Install stage-2 sandbox
         run: |
           sudo apt-get update

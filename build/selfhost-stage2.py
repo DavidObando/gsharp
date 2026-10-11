@@ -119,6 +119,15 @@ PROTECTED_PROPERTIES = {
     "restoreprojectreferences", "restorerecursive",
     "msbuildcopycontenttransitively",
     "vstesttestcasefilter", "vstestlogger", "vstesttestadapterpath",
+    # Properties that make trusted common targets execute arbitrary commands
+    # (Exec of $(PreBuildEvent)/$(PostBuildEvent)) or import caller files.
+    "prebuildevent", "postbuildevent", "runpostbuildevent",
+    "custombeforemicrosoftcommonprops", "customaftermicrosoftcommonprops",
+    "custombeforemicrosoftcommontargets",
+    # Restore sources can carry credentials that evaluation would log.
+    "restoresources", "restoreadditionalprojectsources",
+    "restorefallbackfolders", "restoreadditionalprojectfallbackfolders",
+    "restoreconfigfile",
 }
 ALLOWED_PROJECT_TARGETS = {
     ("src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj",
@@ -2237,6 +2246,13 @@ class Controller:
             "UseAppHost": str(use_app_host).lower(),
             "RestorePackagesPath": str(self.writable(stage, "packages")),
             "RestoreConfigFile": str(self.write_offline_config(stage)),
+            "RestoreSources": str(self.offline_feed(stage)),
+            "RestoreAdditionalProjectSources": "",
+            "RestoreFallbackFolders": "",
+            "RestoreAdditionalProjectFallbackFolders": "",
+            "PreBuildEvent": "",
+            "PostBuildEvent": "",
+            "RunPostBuildEvent": "Never",
             "BuildProjectReferences": "false",
             "MSBuildCopyContentTransitively": "false",
             "RestoreProjectReferences": "false",
