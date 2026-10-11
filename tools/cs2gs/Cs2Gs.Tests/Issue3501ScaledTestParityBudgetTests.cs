@@ -186,13 +186,7 @@ public sealed class Issue3501ScaledTestParityBudgetTests
     public void TheAppThisUnblocksReceivesMoreThanTheOldConstant()
     {
         string suite = Path.Combine(RepoRoot(), "tools", "cs2gs", "Cs2Gs.Tests");
-        string[] csharpSources = Directory
-            .EnumerateFiles(suite, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                    StringComparison.Ordinal) &&
-                !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                    StringComparison.Ordinal))
-            .ToArray();
+        string[] csharpSources = SuiteCSharpSources(suite);
         if (csharpSources.Length == 0)
         {
             // The migrated mirror of ourselves. Prove that is what we are
@@ -216,6 +210,48 @@ public sealed class Issue3501ScaledTestParityBudgetTests
         Assert.True(
             budget > SdkCompileRunner.MirroredTestRunTimeout,
             $"Cs2Gs.Tests ({declared} tests) still gets only {budget}.");
+    }
+
+    /// <summary>
+    /// The suite's own C# test sources. <c>Fixtures/</c> holds C# DATA the tests
+    /// read as text (issue #4850: the mirror now carries it verbatim), which is
+    /// neither compiled nor a source of <c>[Fact]</c> methods, so a migrated tree
+    /// that has only fixture <c>.cs</c> files is still the G# mirror of the suite.
+    /// </summary>
+    /// <param name="suite">The suite directory.</param>
+    /// <returns>The C# sources, excluding build output and fixture data.</returns>
+    internal static string[] SuiteCSharpSources(string suite)
+    {
+        char separator = Path.DirectorySeparatorChar;
+        return Directory
+            .EnumerateFiles(suite, "*.cs", SearchOption.AllDirectories)
+            .Where(path =>
+            {
+                string relative = Path.GetRelativePath(suite, path);
+                return !relative.Contains($"bin{separator}", StringComparison.Ordinal)
+                    && !relative.Contains($"obj{separator}", StringComparison.Ordinal)
+                    && !relative.StartsWith($"Fixtures{separator}", StringComparison.Ordinal);
+            })
+            .ToArray();
+    }
+
+    [Fact]
+    public void FixtureDataAndBuildOutputAreNotSuiteSources()
+    {
+        string suite = Path.Combine(AppContext.BaseDirectory, "issue-4850-suite", Guid.NewGuid().ToString("N"));
+        foreach (string relative in new[] { "A.cs", "Fixtures/Data.cs", "Fixtures/Nested/Deep.cs", "bin/B.cs", "obj/C.cs", "Sub/D.cs" })
+        {
+            string path = Path.Combine(suite, relative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(path, "class X {}");
+        }
+
+        string[] sources = SuiteCSharpSources(suite)
+            .Select(path => Path.GetRelativePath(suite, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(new[] { "A.cs", "Sub/D.cs" }, sources);
     }
 
     private static StageExecutionContext Context()
