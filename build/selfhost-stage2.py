@@ -1597,6 +1597,8 @@ class Controller:
         for path in (
             Path("/etc/passwd"), Path("/etc/group"), Path("/etc/nsswitch.conf"),
             Path("/etc/ssl"), Path("/etc/ca-certificates"),
+            # /usr/bin/awk and similar tools are symlinks into here.
+            Path("/etc/alternatives"),
         ):
             if path.exists():
                 arguments.extend(("--ro-bind", str(path), str(path)))
