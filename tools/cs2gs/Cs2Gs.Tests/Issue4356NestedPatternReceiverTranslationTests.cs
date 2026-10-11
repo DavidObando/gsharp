@@ -615,7 +615,7 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
     private static string CompileAndRun(string printed, string callExpression)
     {
         string? compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string workDir = System.IO.Path.Combine(AppContext.BaseDirectory, "issue-4356-e2e", Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(workDir);

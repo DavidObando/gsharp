@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
+using GSharp.Tests;
 using Gsharp.NET.Sdk.Tools;
 using Microsoft.Build.Utilities;
 using Xunit;
@@ -78,7 +79,7 @@ public sealed class Issue3782WarningsNotAsErrorsTests : IDisposable
     private static string RepoRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+        while (directory is not null && !RepositoryRootMarker.IsRoot(directory.FullName))
         {
             directory = directory.Parent;
         }

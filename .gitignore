@@ -350,6 +350,8 @@ test/Core.Tests/Baselines/*.actual
 # Golden-mismatch artifacts: every GoldenFile assertion writes a sibling
 # `.actual` when it fails, and one of those was committed by a `git add -A`.
 *.golden.txt.actual
+tools/cs2gs/Cs2Gs.Tests/Fixtures/FrozenCompiler/**/*.actual
+tools/cs2gs/Cs2Gs.Tests/Fixtures/FrozenCompiler/*.actual
 
 # ADR-0174 D11: the concurrency benchmark's working directory. The runner
 # compiles the G# scenario program here, and a compiled program is not source.

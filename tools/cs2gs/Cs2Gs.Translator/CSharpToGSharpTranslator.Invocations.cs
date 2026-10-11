@@ -2168,7 +2168,8 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 targetRequiresNonNull =
                     (this.TargetWillRemainNonNullableReference(targetType, targetParameter)
-                        && !targetIsPromotedMigratedSibling)
+                        && !targetIsPromotedMigratedSibling
+                        && !this.IsObliviousImportedInferredTypeParameterTarget(targetParameter, argument.Expression))
                     || (analyzerNullableArgument
                         && !targetIsPromotedMigratedSibling
                         && this.AnalyzerBridgeTargetIsNonNull(

@@ -61,13 +61,10 @@ public static class DiagnosticDescriptors
     /// <returns>A live Roslyn analyzer instance.</returns>
     public static DiagnosticAnalyzer CompileRoslynAnalyzer(string analyzerFileName, string analyzerTypeName)
     {
-        string analyzerDirectory = Path.Combine(
-            FindRepoRoot(), "src", "Analyzers", "InternalAnalyzers");
-
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
-            (analyzerFileName, File.ReadAllText(Path.Combine(analyzerDirectory, analyzerFileName))),
-            ("DiagnosticDescriptors.cs", File.ReadAllText(Path.Combine(analyzerDirectory, "DiagnosticDescriptors.cs"))),
+            (analyzerFileName, FrozenCompilerSnapshots.Analyzer(analyzerFileName)),
+            ("DiagnosticDescriptors.cs", FrozenCompilerSnapshots.Analyzer("DiagnosticDescriptors.cs")),
         });
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
 
@@ -114,11 +111,9 @@ public static class DiagnosticDescriptors
         string assemblyName,
         string descriptorSource = null)
     {
-        string analyzerDirectory = Path.Combine(
-            FindRepoRoot(), "src", "Analyzers", "InternalAnalyzers");
-        string analyzerSource = File.ReadAllText(Path.Combine(analyzerDirectory, analyzerFileName));
+        string analyzerSource = FrozenCompilerSnapshots.Analyzer(analyzerFileName);
         string descriptors = descriptorSource
-            ?? File.ReadAllText(Path.Combine(analyzerDirectory, "DiagnosticDescriptors.cs"));
+            ?? FrozenCompilerSnapshots.Analyzer("DiagnosticDescriptors.cs");
 
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {

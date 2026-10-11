@@ -311,7 +311,7 @@ internal static class TriageCommand
         gapsPath ??= DefaultGapsPath();
         if (gapsPath is null)
         {
-            Console.Error.WriteLine("cs2gs triage: GSharp.sln not found above the current directory; pass --gaps.");
+            Console.Error.WriteLine("cs2gs triage: repository root (GSharp.sln or GSharp.slnx) not found above the current directory; pass --gaps.");
             return 2;
         }
 
@@ -424,7 +424,7 @@ internal static class TriageCommand
         gapsPath ??= DefaultGapsPath();
         if (gapsPath is null)
         {
-            Console.Error.WriteLine("cs2gs triage: GSharp.sln not found above the current directory; pass --gaps.");
+            Console.Error.WriteLine("cs2gs triage: repository root (GSharp.sln or GSharp.slnx) not found above the current directory; pass --gaps.");
             return false;
         }
 
@@ -441,7 +441,7 @@ internal static class TriageCommand
         var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return Path.Combine(dir.FullName, GapLedger.RepoRelativePath.Replace('/', Path.DirectorySeparatorChar));
             }
@@ -566,7 +566,7 @@ internal static class TriageCommand
     private static bool HasRegressionTest(int issue)
     {
         var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+        while (dir != null && !RepositoryRootMarker.IsRoot(dir.FullName))
         {
             dir = dir.Parent;
         }

@@ -101,7 +101,7 @@ public class CoverageMatrixGoldenTests
         var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(CoverageMatrixGoldenTests).Assembly.Location));
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return Path.Combine(dir.FullName, "test", "Core.Tests", "CoverageMatrix", "coverage-matrix.golden.txt");
             }

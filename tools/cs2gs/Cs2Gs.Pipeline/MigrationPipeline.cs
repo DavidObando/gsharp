@@ -109,7 +109,7 @@ public sealed class MigrationPipeline
         if (gscPath is null)
         {
             throw new InvalidOperationException(
-                "Could not resolve gsc.dll. Build GSharp.sln or pass --gsc <path>.");
+                "Could not resolve gsc.dll. Build the repository solution or pass --gsc <path>.");
         }
 
         // Issue #2215: best-effort — an app with no analyzer references never
@@ -501,7 +501,7 @@ public sealed class MigrationPipeline
         if (gscPath is null)
         {
             throw new InvalidOperationException(
-                "Could not resolve gsc.dll. Build GSharp.sln or pass --gsc <path>.");
+                "Could not resolve gsc.dll. Build the repository solution or pass --gsc <path>.");
         }
 
         string gsgenPath = GscInvoker.ResolveGsgenTool(

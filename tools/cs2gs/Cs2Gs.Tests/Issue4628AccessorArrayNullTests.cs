@@ -31,20 +31,12 @@ public class Issue4628AccessorArrayNullTests
     [Fact]
     public async Task CoreTestsSelfMigration_NeverAssertsAPropertyAccessor()
     {
-        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
-        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
-            Path.Combine(repoRoot, "test", "Core.Tests", "Core.Tests.csproj"));
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Core.Tests should bind with no C# errors: "
-                + string.Join(Environment.NewLine, project.ErrorDiagnostics));
-
-        LoadedDocument document = Assert.Single(
-            project.Documents,
-            candidate => Path.GetFileName(candidate.FilePath) == "Issue4589ExplicitPropertyAccessorEmitTests.cs");
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        string printed = GSharpPrinter.Print(
-            new CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(document, context));
+        // G# translated from the C# until the cut-over, the committed .gs after (#4661).
+        var files = await SelfMigratedCompilerSource.LoadAsync(
+            "test/Core.Tests",
+            preservePartialParts: true,
+            "Issue4589ExplicitPropertyAccessorEmitTests");
+        string printed = SelfMigratedCompilerSource.Compact(files["Issue4589ExplicitPropertyAccessorEmitTests"].Text);
 
         Assert.Contains("PropertyAccessors_AreSpecialName", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("GetMethod!!", printed, StringComparison.Ordinal);

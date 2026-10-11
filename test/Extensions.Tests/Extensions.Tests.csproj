@@ -14,4 +14,8 @@
     <ProjectReference Include="..\..\src\Compiler\Compiler.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\RepositoryRootMarker.cs" Link="RepositoryRootMarker.cs" />
+  </ItemGroup>
+
 </Project>

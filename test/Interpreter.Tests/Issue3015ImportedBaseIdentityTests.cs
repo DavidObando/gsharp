@@ -417,7 +417,7 @@ public class Issue3015ImportedBaseIdentityTests
     private static string GetRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+        while (directory != null && !RepositoryRootMarker.IsRoot(directory.FullName))
         {
             directory = directory.Parent;
         }

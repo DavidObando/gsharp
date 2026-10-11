@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.Pipeline;
 using GSharp.Tests;
 using Xunit;
 
@@ -97,7 +98,7 @@ public class CodeModelSurfaceTests
         var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(CodeModelSurfaceTests).Assembly.Location));
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return dir.FullName;
             }
@@ -105,6 +106,6 @@ public class CodeModelSurfaceTests
             dir = dir.Parent;
         }
 
-        throw new InvalidOperationException("GSharp.sln not found above the test assembly.");
+        throw new InvalidOperationException("GSharp.sln or GSharp.slnx not found above the test assembly.");
     }
 }

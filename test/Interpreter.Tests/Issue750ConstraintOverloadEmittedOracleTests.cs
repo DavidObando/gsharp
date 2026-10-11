@@ -150,7 +150,7 @@ public class Issue750ConstraintOverloadEmittedOracleTests
         var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(Issue750ConstraintOverloadEmittedOracleTests).Assembly.Location));
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 foreach (var cfg in new[] { "Debug", "Release" })
                 {

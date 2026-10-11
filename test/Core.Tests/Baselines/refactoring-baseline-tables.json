@@ -1,0 +1,3778 @@
+{
+  "samples/AddressBook.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=9 sha256=800FFBB82CF71E88"
+    ],
+    "MemberRef": [
+      "rows=14 sha256=41F341567CAB0970"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=FCC11B1C52D2F27B"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=98D1D85E24EB49F3"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=89D072A7B23D078F"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=C57688EAFC8A357C"
+    ]
+  },
+  "samples/AnonymousVariadicFunctionType.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=EFCD763D0DFFA711"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=D27BCD4AEBD5E6A3"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=A4D679EFA5C3142E"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=47376A6BFB6D3828"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=4AFA87763067F1DE"
+    ],
+    "TypeRef": [
+      "rows=11 sha256=2211188D7EA2D544"
+    ]
+  },
+  "samples/Arithmetic.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=C7AA2C7873EAA4EA"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=499B77DCEBD0652F"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=BAC119FD78958AAF"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=CAEDB2B5324552CE"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=EA8D14889BE9699F"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/Arrays.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=802B88FB142A48BC"
+    ],
+    "MemberRef": [
+      "rows=6 sha256=59008A9BE84399A4"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=DE815EC0F33596D7"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=172D8A8F37A7B522"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=7D39E12718711311"
+    ]
+  },
+  "samples/ArrowFunctionTypeClause.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=11 sha256=0B33F622A8A10F11"
+    ],
+    "MemberRef": [
+      "rows=30 sha256=93A0CFED4E497AA0"
+    ],
+    "MethodBodies": [
+      "rows=14 sha256=BE88B15872A098E0"
+    ],
+    "MethodDef": [
+      "rows=14 sha256=024A38A8411D603B"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=672BF3A93427CF82"
+    ],
+    "TypeRef": [
+      "rows=20 sha256=ECBB2AFDDDD77CC5"
+    ]
+  },
+  "samples/ArrowLambda.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=7 sha256=75F8B126605154A2"
+    ],
+    "MemberRef": [
+      "rows=14 sha256=813755BD8D099611"
+    ],
+    "MethodBodies": [
+      "rows=10 sha256=CF7A526B8E9AFD0C"
+    ],
+    "MethodDef": [
+      "rows=10 sha256=E022503DC9FE40C5"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=93AFDC048CF1CA07"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=8035CF24E04CD113"
+    ]
+  },
+  "samples/AsyncAwaitInLoop.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=0BA3D004E6D7B414"
+    ],
+    "MemberRef": [
+      "rows=23 sha256=0CB9E5A6E724E3D1"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=D0A87317F879276A"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=DBDA366374F79CD5"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=A3FE1CF8A57EC76D"
+    ],
+    "TypeRef": [
+      "rows=16 sha256=B37BC20AA5A67D83"
+    ]
+  },
+  "samples/AsyncAwaitInNestedLoop.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=FBA404C96F5621C6"
+    ],
+    "MemberRef": [
+      "rows=23 sha256=0CB9E5A6E724E3D1"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=F5456E464407381F"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=DBDA366374F79CD5"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=570E51D92D5E270A"
+    ],
+    "TypeRef": [
+      "rows=16 sha256=B37BC20AA5A67D83"
+    ]
+  },
+  "samples/AsyncClassMethod.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=17 sha256=86B5FDDC91550BE4"
+    ],
+    "MemberRef": [
+      "rows=32 sha256=F552ED687F1E20BC"
+    ],
+    "MethodBodies": [
+      "rows=14 sha256=D6A5E7BDD569DE50"
+    ],
+    "MethodDef": [
+      "rows=14 sha256=A872D1B2602F57A9"
+    ],
+    "TypeDef": [
+      "rows=7 sha256=85A497078E203DE7"
+    ],
+    "TypeRef": [
+      "rows=19 sha256=912F24305490ACC4"
+    ]
+  },
+  "samples/AsyncGoScopeJoin.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=D1E76268F06CCAB4"
+    ],
+    "MemberRef": [
+      "rows=24 sha256=E823FC28A94D1A91"
+    ],
+    "MethodBodies": [
+      "rows=7 sha256=7C539FE4DE372306"
+    ],
+    "MethodDef": [
+      "rows=7 sha256=E322E2F55ACE1137"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=6F8E278AC5FB32CF"
+    ],
+    "TypeRef": [
+      "rows=21 sha256=0560397D775C37B9"
+    ]
+  },
+  "samples/AsyncLet.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=35 sha256=1F7A0897B74DD9D3"
+    ],
+    "MemberRef": [
+      "rows=56 sha256=11706CF8B9E6FC25"
+    ],
+    "MethodBodies": [
+      "rows=14 sha256=510A55E344B9DB59"
+    ],
+    "MethodDef": [
+      "rows=14 sha256=3FA3FCFBC56A0B2E"
+    ],
+    "TypeDef": [
+      "rows=7 sha256=326B9235AC7085FB"
+    ],
+    "TypeRef": [
+      "rows=33 sha256=D0EFFC8553650A93"
+    ]
+  },
+  "samples/AsyncMultiAwaitInLoop.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=0BA3D004E6D7B414"
+    ],
+    "MemberRef": [
+      "rows=23 sha256=0CB9E5A6E724E3D1"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=B097AF34751A60D8"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=DBDA366374F79CD5"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=072D5B310C03E37D"
+    ],
+    "TypeRef": [
+      "rows=16 sha256=B37BC20AA5A67D83"
+    ]
+  },
+  "samples/AsyncTask.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=11 sha256=AC9A4A7AE4819B35"
+    ],
+    "MemberRef": [
+      "rows=31 sha256=7190EA16F9D42182"
+    ],
+    "MethodBodies": [
+      "rows=10 sha256=DBEECAD3FCB947BA"
+    ],
+    "MethodDef": [
+      "rows=10 sha256=448021CC6FCD1A5E"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=DBD409D6B373BB77"
+    ],
+    "TypeRef": [
+      "rows=24 sha256=319A38A58A901A87"
+    ]
+  },
+  "samples/AsyncValueReturns.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=20 sha256=01044DC4FD60864E"
+    ],
+    "MemberRef": [
+      "rows=49 sha256=2602C85168D68276"
+    ],
+    "MethodBodies": [
+      "rows=16 sha256=00E3684EAB283201"
+    ],
+    "MethodDef": [
+      "rows=16 sha256=739C7B6700B8E80E"
+    ],
+    "TypeDef": [
+      "rows=7 sha256=35F3F49E2434475A"
+    ],
+    "TypeRef": [
+      "rows=25 sha256=E2F258FAA29DC9BB"
+    ]
+  },
+  "samples/BaseConstructor.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=7 sha256=503F58CB8602766D"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=CE7F0D9AD708D36E"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=04C1AD7A0FC5202D"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=F607CE0454D2FCFF"
+    ],
+    "TypeDef": [
+      "rows=6 sha256=7F00B277E8F166DC"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=058C88C25E9FC38B"
+    ]
+  },
+  "samples/ChannelOwnership.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=14 sha256=C8D6151768BDD2B7"
+    ],
+    "MemberRef": [
+      "rows=32 sha256=2CB23D2C97462F74"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=1633B0E054CF8189"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=6E56F84F57A90972"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=4C133658E8E63166"
+    ],
+    "TypeRef": [
+      "rows=30 sha256=EFB8DC202846B5D7"
+    ]
+  },
+  "samples/Channels.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=CA4D3C5EBD605421"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=F8EBE2AA739AAB16"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=2941B5B013226589"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=A8735E63BE1855A7"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=A2BBFDFAE2C5C0C8"
+    ]
+  },
+  "samples/Class.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=16 sha256=DF0B557F3EF1178B"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=D269CA10F7C31F99"
+    ],
+    "MethodBodies": [
+      "rows=18 sha256=BADFDAEDAEB808AE"
+    ],
+    "MethodDef": [
+      "rows=18 sha256=BE57A01B86219474"
+    ],
+    "TypeDef": [
+      "rows=9 sha256=D5FCE3B510B4025A"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=E888C06C9EE46D75"
+    ]
+  },
+  "samples/ClrMethodGroupToDelegate.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=C7363DB663E5F97C"
+    ],
+    "MemberRef": [
+      "rows=16 sha256=AF612F391855306A"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=4113AE9DE957ED87"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=FD76ACDF97F896F3"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=32980BD93F458F4B"
+    ]
+  },
+  "samples/CollectionInitializers.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=7 sha256=38B8B86A57968132"
+    ],
+    "MemberRef": [
+      "rows=28 sha256=D97D1D467594C3DE"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=65628482087C1600"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=A48C99CBE4A3DB75"
+    ],
+    "TypeRef": [
+      "rows=11 sha256=1533182C4302D58F"
+    ]
+  },
+  "samples/ConversionOperators.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=FCDCD87116C8A0F9"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=1D1D57177CB705CA"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=744F2DADA3C166E4"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=A4AA904FAFBC6834"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=2B64AAE6D337079F"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/CountWords.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=408B4EFCB6334D6E"
+    ],
+    "MemberRef": [
+      "rows=19 sha256=24EBD9EFE17121BF"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=F391B23BD9FF8873"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=99F134E055CFB784"
+    ],
+    "TypeRef": [
+      "rows=11 sha256=3CD10A0C5BBBEAC9"
+    ]
+  },
+  "samples/DataStruct.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=475CFC8A87A7C07A"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=5BBA157C427343BB"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=757B5C698CC67932"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=5332D68AB11393E3"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=C7C5B090F3C07407"
+    ],
+    "TypeRef": [
+      "rows=13 sha256=28D49D0EF86A0912"
+    ]
+  },
+  "samples/DataStructErgonomics.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=11 sha256=47F0DF8931F45DF2"
+    ],
+    "MemberRef": [
+      "rows=13 sha256=52D8C73EB5F4A0AF"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=054591CE4FD0522C"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=5332D68AB11393E3"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=62900A03013A930C"
+    ],
+    "TypeRef": [
+      "rows=13 sha256=28D49D0EF86A0912"
+    ]
+  },
+  "samples/DefaultExpression.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=E06CE79358FA8500"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=33DC299F9EEE94E8"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=C831E7EE577F1FDB"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=0A80809F8F0F066D"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=1B19F5FE8432036A"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=5CF01CCC7E15CB8A"
+    ]
+  },
+  "samples/DefaultInterfaceMethods.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=9FC1275305C15982"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=6CFB83742E3E9514"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=1432B980BF8AEDDC"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=E734813DB52F0BC7"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=CE54C59F2856A694"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=437158E686CA2182"
+    ]
+  },
+  "samples/Defer.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=5579EC743EC78BCA"
+    ],
+    "MemberRef": [
+      "rows=13 sha256=C75EA7474B66A491"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=14DA29DBC47C5313"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=4B07CEBEEA674BF6"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=1A46BA779BB20A7E"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=1577EBB3194666D8"
+    ]
+  },
+  "samples/Deinit.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=7589787677A250EF"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=5D5065C5D65FBB80"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=0A34C6FB8D16CE40"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=B3A5A96073CAC3A3"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=18D10CDCAF2AF1A6"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=FEC1172A3689B6DC"
+    ]
+  },
+  "samples/DelegateCallSyntax.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=FEE7FFD0D7373B41"
+    ],
+    "MemberRef": [
+      "rows=15 sha256=9B83B31A650B2161"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=81C013715B8EA714"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=835233AD4D282DC4"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=15BDDAB0DF594E9A"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=27B9C46CFFB9093D"
+    ]
+  },
+  "samples/DiscriminatedUnion.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=42DCB762A0F4E9FF"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=84F62CCF2D4298C4"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=C3075DB97739B734"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=337F539A8ACEF34B"
+    ],
+    "TypeDef": [
+      "rows=6 sha256=BDD5F7E4491E3412"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=34916121BADBD564"
+    ]
+  },
+  "samples/Enum.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=1FE4B8AC08D78D24"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=C1C5E0C8F6897588"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=E804B41EF9EFCBF3"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=B138DB8332F66D4A"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=B8DF66F711D46878"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=C7C8732108A3EDB5"
+    ]
+  },
+  "samples/EventSubscription.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=63779E84ABA530D3"
+    ],
+    "MemberRef": [
+      "rows=8 sha256=EE037AB567850489"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=3FA1362D68E5332C"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=CC73D35140E60998"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=B12067C2341D8EEC"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=78CECE22CEC4D602"
+    ]
+  },
+  "samples/Exceptions.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=EEC478C891F4D673"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=4B522B9653B56A49"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=A60D2CF2524F2F1E"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=AB6E0DB00FFC3E6E"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=20087078C8F32073"
+    ]
+  },
+  "samples/Exhaustiveness.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=1FE4B8AC08D78D24"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=313A41803355DD9E"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=167C9715998BECA3"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=B138DB8332F66D4A"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=51506119F8C5842C"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=F54ECBB18FE3A44F"
+    ]
+  },
+  "samples/ExplicitConstructor.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=10 sha256=F9B258CDEA43EFD7"
+    ],
+    "MemberRef": [
+      "rows=13 sha256=095E0FCE5A9B1E37"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=213CD15BB1A42F1D"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=DF40B8825F199B9B"
+    ],
+    "TypeDef": [
+      "rows=7 sha256=BE2081ECA626FC39"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=DD8CD5BB2A4E4BC9"
+    ]
+  },
+  "samples/ExpressionEval.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=057A3C5E07D2B2D1"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=E7BC72BEEE4DEE8D"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=A4909A4E3EDB9E54"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=9730BB9E006BAECB"
+    ],
+    "TypeDef": [
+      "rows=6 sha256=4800EDCBD4513684"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=34916121BADBD564"
+    ]
+  },
+  "samples/ExtensionFunctions.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=B942D45541E34A6B"
+    ],
+    "MemberRef": [
+      "rows=6 sha256=EA465C6512B93EA1"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=9E78DAEBFC58CC55"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=A8A4AA8EAA3E5F38"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=D2FE30921FA566FF"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=5747A082712BDF82"
+    ]
+  },
+  "samples/FanInMerge.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=49 sha256=90B0AB7D2AF36E89"
+    ],
+    "MemberRef": [
+      "rows=42 sha256=9D034EA7490B517A"
+    ],
+    "MethodBodies": [
+      "rows=22 sha256=B81D6249B4C9A330"
+    ],
+    "MethodDef": [
+      "rows=22 sha256=4259794D2579BE7A"
+    ],
+    "TypeDef": [
+      "rows=10 sha256=5D7928C314F62C4B"
+    ],
+    "TypeRef": [
+      "rows=31 sha256=D69E7284699FD818"
+    ]
+  },
+  "samples/ForIn.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=819132A0C3E54F96"
+    ],
+    "MemberRef": [
+      "rows=22 sha256=E63057E1CC9E3897"
+    ],
+    "MethodBodies": [
+      "rows=7 sha256=DE08A69000652E83"
+    ],
+    "MethodDef": [
+      "rows=7 sha256=0718394006E87932"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=F9EC12C778777069"
+    ],
+    "TypeRef": [
+      "rows=13 sha256=CCE2C1FBC91AD8A2"
+    ]
+  },
+  "samples/FriendlyNumericAliases.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=E46D99B2A76C9D6C"
+    ],
+    "MemberRef": [
+      "rows=8 sha256=12A444E7CEADF539"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=3A84968B681DB505"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=88551B580E3AB161"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=18AF73E73B16476C"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/FuncToDelegate.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=E0DE7608C727E7A1"
+    ],
+    "MemberRef": [
+      "rows=13 sha256=1D27622BE3A6ECCE"
+    ],
+    "MethodBodies": [
+      "rows=7 sha256=9C0CF9F73486CE97"
+    ],
+    "MethodDef": [
+      "rows=7 sha256=5E705B1BA61E988B"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=6AC515CD13A5FE29"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=3959EA2015559C14"
+    ]
+  },
+  "samples/FuncToSystemDelegate.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=59A78E9E57F28991"
+    ],
+    "MemberRef": [
+      "rows=8 sha256=FC568AD457824F97"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=7258215E44F37939"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=E0AC4692DC9581F7"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=A8CDDE7903CD8970"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=A572CA15D8BE5D7C"
+    ]
+  },
+  "samples/GenericConstruction.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=950F7CE6F3195DCF"
+    ],
+    "MemberRef": [
+      "rows=25 sha256=A39F6B3FD9310ABE"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=B5DB965D04617BDF"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=B50116256D1B5A9B"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=E5DBDA32247F7F3B"
+    ]
+  },
+  "samples/GenericEquality.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=6 sha256=96D18F0703FC03C6"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=04694572D290B099"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=52AE43483D4D3106"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=48638991E4937019"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/GenericExtensionFunctions.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=7A4EF08644AE82B4"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=2AB232783EEA16D5"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=856341753BCDA035"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=4381E885E1FB6272"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=41FB2C506FC17E00"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=5747A082712BDF82"
+    ]
+  },
+  "samples/GenericLocalRecursion.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=B7BDD1784DF85D4F"
+    ],
+    "MethodBodies": [
+      "rows=12 sha256=3952CD753A1D467E"
+    ],
+    "MethodDef": [
+      "rows=12 sha256=7CF7E5811F5AF6AE"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=2710EA2D473692BE"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=437158E686CA2182"
+    ]
+  },
+  "samples/GenericMethodDelegates.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=00CB465A3344916B"
+    ],
+    "MemberRef": [
+      "rows=25 sha256=2DF958A780F06884"
+    ],
+    "MethodBodies": [
+      "rows=12 sha256=90A5B1A2936BDA0E"
+    ],
+    "MethodDef": [
+      "rows=12 sha256=8985A2FF337DB3D0"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=4F99B77E52928FB5"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=CEAC908F09669465"
+    ]
+  },
+  "samples/GenericMethodTypeArgs.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=7C8A18F5562E1587"
+    ],
+    "MemberRef": [
+      "rows=17 sha256=4C49C51327682187"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=93013373438D0510"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=9380D6037B9C9307"
+    ],
+    "TypeRef": [
+      "rows=12 sha256=E757F20D105E3C09"
+    ]
+  },
+  "samples/GenericMethodUserTypeArg.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=9A8FE943DFF4B99B"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=1FE29442258D95E9"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=462ABB40189D99B9"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=BBFEC6762B37D7CC"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=442271ABC6C498ED"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=162EF998073FEC3D"
+    ]
+  },
+  "samples/GenericMethods.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=2216A35BE26D52AC"
+    ],
+    "MemberRef": [
+      "rows=13 sha256=CB0089C0F5CEB159"
+    ],
+    "MethodBodies": [
+      "rows=10 sha256=B8FAB59A75A9D0FC"
+    ],
+    "MethodDef": [
+      "rows=10 sha256=D59F239D3B5ECD5E"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=5904BAF9E32C8EEC"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=E888C06C9EE46D75"
+    ]
+  },
+  "samples/GenericNamedDelegate.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=F22C70ADBBD2DF4A"
+    ],
+    "MemberRef": [
+      "rows=15 sha256=C0AD0D7EFDCBE806"
+    ],
+    "MethodBodies": [
+      "rows=11 sha256=BFD8BE34E074F720"
+    ],
+    "MethodDef": [
+      "rows=11 sha256=1362C077E7C89936"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=736639E514C42555"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=8A91D71B5C8A7051"
+    ]
+  },
+  "samples/GenericTypeParameterAsTypeArgument.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=6EE6139831FBD66B"
+    ],
+    "MemberRef": [
+      "rows=14 sha256=A97856B19A6C4505"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=64B2BF44A12E9427"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=DACC195C0887A264"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=DC27A84C16CDCFA6"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=2686C473FF806779"
+    ]
+  },
+  "samples/GetOnlyCollectionInit.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=0FA5DE3BE29535F2"
+    ],
+    "MemberRef": [
+      "rows=20 sha256=6F9F4B4B21BD8759"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=FEC50B3AE814F280"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=D86B8239C953841B"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=3DEAE78EEC95DA27"
+    ],
+    "TypeRef": [
+      "rows=15 sha256=0DE8FC09CA3C0CA6"
+    ]
+  },
+  "samples/GoScope.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=16 sha256=90B489B8C0B68983"
+    ],
+    "MemberRef": [
+      "rows=26 sha256=BEF55E20786F0459"
+    ],
+    "MethodBodies": [
+      "rows=11 sha256=17FA0B560950DF47"
+    ],
+    "MethodDef": [
+      "rows=11 sha256=504E661B38B1855F"
+    ],
+    "TypeDef": [
+      "rows=6 sha256=65D820E350799046"
+    ],
+    "TypeRef": [
+      "rows=24 sha256=E31FBD681B5EB22C"
+    ]
+  },
+  "samples/HelloWorld.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=B3D5115281538125"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=EB0B3CA72F24CEF4"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=63E9C70F573611A4"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/IfExpression.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=8 sha256=A5F78F954A7C263C"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=1ADA42ECA79F0AA0"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=69B46A3C6FEE10D7"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=F34A653C3E20A99B"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=04EBED127DD842E6"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=605CFF0177EED379"
+    ]
+  },
+  "samples/IfLetGuardLet.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=7E2483E846190F3F"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=D694090F762E3CF7"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=CD5B8A487369E6D6"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=24D77411FD2F13FE"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=38CAF24915E84EA4"
+    ]
+  },
+  "samples/ImplicitImport.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=B3D5115281538125"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=EB0B3CA72F24CEF4"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=E12976C99393CCA6"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/ImportAlias.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=B3D5115281538125"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=EB0B3CA72F24CEF4"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=6462824C4A142C99"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/ImportedBaseClass.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=C861371CF2BD8AFF"
+    ],
+    "MemberRef": [
+      "rows=19 sha256=5D048FC8B273C78D"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=AC16965CF61E24C5"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=5F1740447D616701"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=50611DD74C978C71"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=E0EBD526FDF6B94C"
+    ]
+  },
+  "samples/ImportedTypeCtorInFunc.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=86374AA0225D1FEA"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=8F9B45D8A73486F3"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=02D341250F891F57"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=1DD95B9F109E0375"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=F07EDB14CA359233"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=21100B196698E946"
+    ]
+  },
+  "samples/InPlaceElementWrites.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=10 sha256=E0A04734017A3A57"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=499B77DCEBD0652F"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=08FDD48425F8AE7F"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=6BEC6E7745F99DD4"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=9E5DCF5FFBA7D7B8"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/InlineStruct.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=8 sha256=DEA0D9CCBA79E57D"
+    ],
+    "MemberRef": [
+      "rows=14 sha256=2C6DD366822E2443"
+    ],
+    "MethodBodies": [
+      "rows=19 sha256=A84A6DEFE76CCF36"
+    ],
+    "MethodDef": [
+      "rows=19 sha256=2746190F6F8EF6BF"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=0DAB918C08860C81"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=6F914C75279C8B47"
+    ]
+  },
+  "samples/InterfaceDiamondDisambiguation.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=C402C9A4C958C992"
+    ],
+    "MemberRef": [
+      "rows=8 sha256=5CCC946DC8111E1C"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=5F557080D5FF9CC0"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=6B9847653E5F8832"
+    ],
+    "TypeDef": [
+      "rows=7 sha256=B5627F4807D421ED"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=A269833A693CAD50"
+    ]
+  },
+  "samples/InterfaceUpcast.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=799A9D668B4EDC92"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=BCFA72DB258946DD"
+    ],
+    "MethodBodies": [
+      "rows=10 sha256=53DB35D8D6503AC3"
+    ],
+    "MethodDef": [
+      "rows=10 sha256=1E8307A45AE7C800"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=6E85F07B3E992071"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=8C53E77E784EB9BD"
+    ]
+  },
+  "samples/InterpolatedString.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=078627EED1AB18AE"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=D2A8D85CC119A824"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=E1F918D9A69016D3"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=711C87208E5AFFEE"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=68727DAAD0F897FD"
+    ]
+  },
+  "samples/InterpolatedStringFormat.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=313382D22EA23D84"
+    ],
+    "MemberRef": [
+      "rows=13 sha256=FCF6275AB00FA93C"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=53B3650ACF67AFEC"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=615CAB33B46725EC"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=42799E473810DC84"
+    ]
+  },
+  "samples/InterpolatedStringFormattable.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=00E861296E3698B9"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=045CD2CC496A90A9"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=57177F006A1F8385"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=8E9FCA9B867C3507"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=9CEA6B1A9AED55AD"
+    ],
+    "TypeRef": [
+      "rows=12 sha256=6303FCDC7D86D3D6"
+    ]
+  },
+  "samples/InterpolatedStringRichHoles.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=7A4EF08644AE82B4"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=8089FB4C5B986DC2"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=02FC5A74BA058D88"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=92E48E6B1D3DA95A"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=38CAF24915E84EA4"
+    ]
+  },
+  "samples/LambdaBindingInference.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=9 sha256=073420EE9CD0F29A"
+    ],
+    "MemberRef": [
+      "rows=16 sha256=2A1161FB9C50C679"
+    ],
+    "MethodBodies": [
+      "rows=10 sha256=4D001F5791120C72"
+    ],
+    "MethodDef": [
+      "rows=10 sha256=84DCDA3D651299E2"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=08F163E8CABF1C65"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=8035CF24E04CD113"
+    ]
+  },
+  "samples/LinqExtensions.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=BD1E9EB8BB4CE33E"
+    ],
+    "MemberRef": [
+      "rows=17 sha256=8EF5B31F34FF0451"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=42DCA27C0EBB7B06"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=42A418CD6FA1FDFE"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=98E7FFA4BC3DA960"
+    ],
+    "TypeRef": [
+      "rows=13 sha256=9C84E8E1259EDC11"
+    ]
+  },
+  "samples/Loop.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=2770AE9E92B50881"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=D2A8D85CC119A824"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=E372515A8D325FBA"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=48A07BEC85F26380"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=68727DAAD0F897FD"
+    ]
+  },
+  "samples/MapForIn.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=DA1F9FAF9CAEAB41"
+    ],
+    "MemberRef": [
+      "rows=22 sha256=6990D617076C61D0"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=471E24EE541D59EB"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=63CFF0221AB42F51"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=6B96F8B5D86874F2"
+    ],
+    "TypeRef": [
+      "rows=14 sha256=90171FB9E98F44F2"
+    ]
+  },
+  "samples/MethodGroupToDelegate.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=F2F3277982659B8C"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=BC6F0FCE0F2ED828"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=C35E42088A8F6742"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=824C6E55C3F9730D"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=40B86F962F609B18"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=96254BB5000CCC02"
+    ]
+  },
+  "samples/MethodsWithReceivers.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=46630DF90F6562D8"
+    ],
+    "MemberRef": [
+      "rows=6 sha256=4979C669D9B53BEA"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=3F68FEFD6F69E77B"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=0F37AE8525322980"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=C90BE4DA9EF6BBBD"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=E888C06C9EE46D75"
+    ]
+  },
+  "samples/MixedInitializers.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=47CB122C604C0CA3"
+    ],
+    "MemberRef": [
+      "rows=19 sha256=B392870834D057D0"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=B7F54A664C3FDB5D"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=78385536F99CE962"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=B60043A7A587DAB3"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=BEC8AEBCF3DAE452"
+    ]
+  },
+  "samples/MutuallyRecursiveGenericTypes.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=13 sha256=D432841F2B0D2AD9"
+    ],
+    "MemberRef": [
+      "rows=28 sha256=DC3CEDF629595B2B"
+    ],
+    "MethodBodies": [
+      "rows=14 sha256=7B5EA5025F162752"
+    ],
+    "MethodDef": [
+      "rows=14 sha256=86680F62BB62A3E4"
+    ],
+    "TypeDef": [
+      "rows=10 sha256=73914B37AB712B61"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=6D3A9C7B475F4AB8"
+    ]
+  },
+  "samples/NamedArguments.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=382D71C12D24A9C8"
+    ],
+    "MemberRef": [
+      "rows=8 sha256=FB406BCAF2C3AE45"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=6F3835C1087CC20C"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=3D04631AAEC7D43B"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=54B60A647BDB8334"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=95403842E14612D2"
+    ]
+  },
+  "samples/NamedDelegate.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=B1956B3658494364"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=82181251498CFD67"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=002EF5BC55B49CEF"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=E18F06FEA963D924"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=08C3C879A51CB099"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=7C22022C2EB673FD"
+    ]
+  },
+  "samples/NamedTupleElements.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=DDCC3CA2ADFA72BC"
+    ],
+    "MemberRef": [
+      "rows=33 sha256=1D210D678C331F03"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=8D413F65A06D8179"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=401F70F6F0CC9D61"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=DD1E7D39D3C0E871"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=F7A3C397E81B4ED7"
+    ]
+  },
+  "samples/NativeSlices.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Values, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=6C5DC09FD69C17BE"
+    ],
+    "MemberRef": [
+      "rows=17 sha256=7B9461AFF31B33FC"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=AF3F99E29D11F72F"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=4F9EC7E0B4E1A7D9"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=D2594B16A19C1DF7"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=D1289CFF8DBBBA4C"
+    ]
+  },
+  "samples/NestedTypeOfConstructedGeneric.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=B5CED5E23900D5F2"
+    ],
+    "MemberRef": [
+      "rows=17 sha256=105AAA6E85BEC55B"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=940CECB36198D2C9"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=B50116256D1B5A9B"
+    ],
+    "TypeRef": [
+      "rows=11 sha256=303C79B75043CBD8"
+    ]
+  },
+  "samples/NullCoalescingAssignment.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=25310F205A27844A"
+    ],
+    "MemberRef": [
+      "rows=14 sha256=98E4474564022B26"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=4EE1AAADE6DAE5D9"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=5DB72F485463988D"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=0983CB7FFF21A2B7"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=3CDBC459B77F9280"
+    ]
+  },
+  "samples/NullConditionalIndexing.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=611AFB3315A813B2"
+    ],
+    "MemberRef": [
+      "rows=13 sha256=FBB7925684D09A16"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=3919C93E978001F4"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=D65996E8FB823767"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=C9B94DE93AEB9B38"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=33C76EEF6F2AF1E3"
+    ]
+  },
+  "samples/NullableFlow.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=8DA85BB1ACEF48C0"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=5C8A26284280A781"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=5B60EDD8B6559A37"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=7F732BAC9501AB75"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=71E44028E4D6C162"
+    ]
+  },
+  "samples/Operators.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=A130B73B87EBF7DA"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=3F2CA3E336CD0155"
+    ],
+    "MethodBodies": [
+      "rows=7 sha256=91992C471F7A3C86"
+    ],
+    "MethodDef": [
+      "rows=7 sha256=3ED3464E46EB3905"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=7698CEFD10D21022"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=E888C06C9EE46D75"
+    ]
+  },
+  "samples/OptionalExtensionArgs.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=59E2DBEF36704949"
+    ],
+    "MemberRef": [
+      "rows=15 sha256=88BA94F0C3B8E74C"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=AEFE03061B138161"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=5281E2F490C91E51"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=B49797BB2211E8D1"
+    ],
+    "TypeRef": [
+      "rows=15 sha256=55DA805607431AC9"
+    ]
+  },
+  "samples/PInvoke.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=49807FE7385FB81B"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=BB7D4D35ABF0C3B8"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=2F15CBD63F5A5F45"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=9F4A0145A00EF1AE"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/PInvokeFunctionPointer.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Runtime.InteropServices, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=C9A641ECB294B56F"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=389BEFCBF22F8D43"
+    ],
+    "MethodBodies": [
+      "rows=7 sha256=746B63B15CB5A297"
+    ],
+    "MethodDef": [
+      "rows=7 sha256=A3583A029FAD28CD"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=81DE1D5B515BA73C"
+    ],
+    "TypeRef": [
+      "rows=11 sha256=9CD03C2A986B43DD"
+    ]
+  },
+  "samples/PInvokeLibraryImport.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Runtime.InteropServices, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=B8384644E62DFFB6"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=A4E574DD4516DCD0"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=8A26B36F7B7D10F8"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=2590A00FB8CA0BF6"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=1B19799387F242EA"
+    ]
+  },
+  "samples/PInvokeLibraryImportStringReturn.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Runtime.InteropServices, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=B66D1FF11CA79F12"
+    ],
+    "MemberRef": [
+      "rows=8 sha256=4A922D136B575571"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=8317AABC8B5E7C1D"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=6028F9CCDFFD5C54"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=346F713019C59D91"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=1B19799387F242EA"
+    ]
+  },
+  "samples/PInvokeMarshalAs.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=F4139DFDF4FCA3E1"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=38DFBDB138CC2CE9"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=C5FB38948820CD0F"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=A88D005E46948840"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/PInvokeRefOutIn.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=E565996F236CAA65"
+    ],
+    "MemberRef": [
+      "rows=6 sha256=EFE79A7B81409343"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=950C30B3181EAEC0"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=1D1395170743C86E"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=CEF14A2438687488"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/PInvokeStructMarshalling.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=7 sha256=DEA0154EFA5C8943"
+    ],
+    "MemberRef": [
+      "rows=6 sha256=FDFA4010BA62002F"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=E475573FD2F0305E"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=A22BE19658A9C5FC"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=C29DDCD8C901A411"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/ParenthesizedReceiver.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=9A2EEC3C01BC3E77"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=7251102B2C8E54AD"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=1728A9FDC58CCFFD"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=3F98E7D8EDAC10B0"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=D50B7A163931234E"
+    ]
+  },
+  "samples/PatternSwitch.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=0D7F5786CDCBAEA2"
+    ],
+    "MemberRef": [
+      "rows=19 sha256=7A8E844FF92C8270"
+    ],
+    "MethodBodies": [
+      "rows=16 sha256=12B9A457142999D3"
+    ],
+    "MethodDef": [
+      "rows=16 sha256=3147AF16DFB09C14"
+    ],
+    "TypeDef": [
+      "rows=6 sha256=09463398EE356D5F"
+    ],
+    "TypeRef": [
+      "rows=14 sha256=BEE058A0226FCFB6"
+    ]
+  },
+  "samples/Patterns.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=75618A53FC91197E"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=E3710BA37EB3B4F9"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=BB1F941D7DEFAE6E"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=B59EE197D3397D48"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=BEEB064ACC77D43D"
+    ]
+  },
+  "samples/Pipeline.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=25 sha256=2A43298E7AC42F18"
+    ],
+    "MemberRef": [
+      "rows=41 sha256=8C7A75C1E9D8F91B"
+    ],
+    "MethodBodies": [
+      "rows=12 sha256=A2AE659BD4C17FD3"
+    ],
+    "MethodDef": [
+      "rows=12 sha256=8F5B6036D38138EB"
+    ],
+    "TypeDef": [
+      "rows=6 sha256=95CC9B34189A001A"
+    ],
+    "TypeRef": [
+      "rows=32 sha256=5EDD5490918E349C"
+    ]
+  },
+  "samples/PortScan.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Threading.Thread, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=19 sha256=46B9861CAFBA3656"
+    ],
+    "MemberRef": [
+      "rows=37 sha256=0E5F7757286052E5"
+    ],
+    "MethodBodies": [
+      "rows=13 sha256=CD3363BB9D59FA1C"
+    ],
+    "MethodDef": [
+      "rows=13 sha256=5ECFC39E55F65927"
+    ],
+    "TypeDef": [
+      "rows=7 sha256=F5192922507CD130"
+    ],
+    "TypeRef": [
+      "rows=27 sha256=E13623B821A3AAD1"
+    ]
+  },
+  "samples/PrimaryCtorVariadic.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=14 sha256=F6064DD17146AC07"
+    ],
+    "MemberRef": [
+      "rows=30 sha256=06566DEDD17EFA0B"
+    ],
+    "MethodBodies": [
+      "rows=29 sha256=11FB8EF9E6FA7FBF"
+    ],
+    "MethodDef": [
+      "rows=29 sha256=A2EAE9D8EAFB4958"
+    ],
+    "TypeDef": [
+      "rows=6 sha256=4A70EF582F0FDA5F"
+    ],
+    "TypeRef": [
+      "rows=19 sha256=119B5CA681CDFEA9"
+    ]
+  },
+  "samples/PrivateInterfaceHelpers.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=A29374C5E2C02BEB"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=81DCF30224302B32"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=EC92751F355E88CA"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=075672BED55E880D"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=0770D30DC54922B9"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=E888C06C9EE46D75"
+    ]
+  },
+  "samples/RawString.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=B3D5115281538125"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=863F6BECCCBEB304"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=EA81F1572933831E"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/Records.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=475CFC8A87A7C07A"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=5BBA157C427343BB"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=757B5C698CC67932"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=5332D68AB11393E3"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=5B3E7CAE3302E35C"
+    ],
+    "TypeRef": [
+      "rows=13 sha256=28D49D0EF86A0912"
+    ]
+  },
+  "samples/RefIncrement.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=7A4EF08644AE82B4"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=499B77DCEBD0652F"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=8DCC404F7C4B4885"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=B5F9E362D9C1D93A"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=32B78BD82709A258"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/RefStructGenericField.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=C71ADE01A1D3F1F6"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=C4650A7E8D44564E"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=A3383663B74CBC17"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=E268275B8C22BA7A"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=1B6282675DBD1604"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=71922E711700AC95"
+    ]
+  },
+  "samples/RefStructSpan.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Memory, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=A8F0AEF936EBD7D1"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=3BA0A7FC02723E37"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=DC2839D1BD38558F"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=FEE155BA95128E2F"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=4D38E59EF0D64738"
+    ]
+  },
+  "samples/ReifiedGenerics.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=9 sha256=3ABDD8A980810029"
+    ],
+    "MemberRef": [
+      "rows=31 sha256=199B6178664C3840"
+    ],
+    "MethodBodies": [
+      "rows=12 sha256=CD246792B8463675"
+    ],
+    "MethodDef": [
+      "rows=12 sha256=90592E575A934FC7"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=6FB7F7BD72260117"
+    ],
+    "TypeRef": [
+      "rows=13 sha256=A30BF53E063AC287"
+    ]
+  },
+  "samples/ScopeAll.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=30 sha256=F5A0807CC61D6266"
+    ],
+    "MemberRef": [
+      "rows=52 sha256=2111F555C8CF9A3D"
+    ],
+    "MethodBodies": [
+      "rows=14 sha256=E5722CBF722ED5A4"
+    ],
+    "MethodDef": [
+      "rows=14 sha256=7026EC22593872BD"
+    ],
+    "TypeDef": [
+      "rows=7 sha256=267A936757874F38"
+    ],
+    "TypeRef": [
+      "rows=40 sha256=D5295C747026A06C"
+    ]
+  },
+  "samples/Sealed.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=FBDF8E49A01E785C"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=AD872D5BCA1B1C4D"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=163A8F7B5673B89C"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=5387263787DBD941"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=96EFED11887A24AA"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=34916121BADBD564"
+    ]
+  },
+  "samples/Select.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Threading.Thread, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=12 sha256=799BD38987989D9E"
+    ],
+    "MemberRef": [
+      "rows=42 sha256=0B4FE8A8F05D9FBA"
+    ],
+    "MethodBodies": [
+      "rows=7 sha256=53046CE1FB5107B9"
+    ],
+    "MethodDef": [
+      "rows=7 sha256=58BE7B87451B6E19"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=65B295743EC48C6A"
+    ],
+    "TypeRef": [
+      "rows=29 sha256=559F9991C076F67B"
+    ]
+  },
+  "samples/SliceLinqUntypedLambda.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=B89EE1B0D55C133F"
+    ],
+    "MemberRef": [
+      "rows=30 sha256=15B25CCE45E79CB9"
+    ],
+    "MethodBodies": [
+      "rows=18 sha256=D8D4DF0DFFCBE091"
+    ],
+    "MethodDef": [
+      "rows=18 sha256=6720A2FD536B74DB"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=1B1473110A8BFBAA"
+    ],
+    "TypeRef": [
+      "rows=20 sha256=FBBBD61BAF33ACBF"
+    ]
+  },
+  "samples/SlicePattern.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=1A417A3041074FC4"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=8537BC0727ADEEAD"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=E9AAD7FD6F09CFA3"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=B8AF780795104B74"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=CCE609A483D39AB0"
+    ]
+  },
+  "samples/Slices.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=8A1641ED36D29664"
+    ],
+    "MemberRef": [
+      "rows=16 sha256=288BFAD8F8BF1212"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=A0E6128B9F4A7B94"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=30C66D6DA3FF2FCC"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=DB4E3458789E75FD"
+    ]
+  },
+  "samples/SmartCast.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=31CFA13C53D5C362"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=8E232E398B217F31"
+    ],
+    "MethodBodies": [
+      "rows=14 sha256=92ACDDC35BB919F7"
+    ],
+    "MethodDef": [
+      "rows=14 sha256=9F3DFE6771DFE69C"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=93EA8A0D7F067B80"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=A269833A693CAD50"
+    ]
+  },
+  "samples/SmartCastExtensions.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=31CFA13C53D5C362"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=C51A99D969BF8663"
+    ],
+    "MethodBodies": [
+      "rows=14 sha256=D77138C37BAD5C70"
+    ],
+    "MethodDef": [
+      "rows=14 sha256=E5303BAEAAD35472"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=F12FB2C3A7309478"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=A269833A693CAD50"
+    ]
+  },
+  "samples/SpanComprehensive.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=81F8DFACCCE84934"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=BB6A6FBE23723F2D"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=32A87DB74DC53246"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=5545F0D56CD7CBDE"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=AAF7601360479913"
+    ]
+  },
+  "samples/SpanIndexing.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=56AF383F7FEC2FCD"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=FCB953C8CD604E12"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=F6149E0F4F0CF6B1"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=10C6DFFD8A7DC5BC"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=AA2E28E979A179C2"
+    ]
+  },
+  "samples/StaticVirtualInterfaces.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=81DCF30224302B32"
+    ],
+    "MethodBodies": [
+      "rows=11 sha256=4EBE872EEBF910AF"
+    ],
+    "MethodDef": [
+      "rows=11 sha256=73349C9793156625"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=263295516D983C15"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=E888C06C9EE46D75"
+    ]
+  },
+  "samples/Struct.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=A232E203DF3A73CB"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=499B77DCEBD0652F"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=55885C7479607425"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=B138DB8332F66D4A"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=D81E6E84295B73DB"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/SwitchExpression.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=10 sha256=7BCEE9D9122D1559"
+    ],
+    "MemberRef": [
+      "rows=20 sha256=302AF19AFD124B67"
+    ],
+    "MethodBodies": [
+      "rows=13 sha256=C9210406F36F95EC"
+    ],
+    "MethodDef": [
+      "rows=13 sha256=A77D0683A97C65FE"
+    ],
+    "TypeDef": [
+      "rows=6 sha256=FECF9355D07BBAB2"
+    ],
+    "TypeRef": [
+      "rows=15 sha256=000B3B3D4F8FDF20"
+    ]
+  },
+  "samples/TryParseOutVar.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=7EF020F471879A8A"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=E89B401D1D7E4302"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=07681AB98D8FCD71"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=46D3A105C1C86780"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=2F2BBE0FFD1C3A2E"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/TupleArrowElements.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=11 sha256=99250FF3006659C1"
+    ],
+    "MemberRef": [
+      "rows=24 sha256=14D8EF247436DF45"
+    ],
+    "MethodBodies": [
+      "rows=12 sha256=FDE435C10D8D3986"
+    ],
+    "MethodDef": [
+      "rows=12 sha256=6ADD9C8AEB728498"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=C06857CED2E5CC6E"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=F935575BEADBE88C"
+    ]
+  },
+  "samples/TupleEquality.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=99BEA94A0BB7A8F6"
+    ],
+    "MemberRef": [
+      "rows=51 sha256=6128C2C2208E4C1D"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=C35AF103824CF2FF"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=8ECA181DC0D41201"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=B59EF825EE428D87"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=5C2A0F2DAE17E1D0"
+    ]
+  },
+  "samples/TupleSequenceIterators.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=17 sha256=7EA96B7DDFEBC6E4"
+    ],
+    "MemberRef": [
+      "rows=58 sha256=0AE450A5D149C002"
+    ],
+    "MethodBodies": [
+      "rows=21 sha256=D4FACD7135BAE78C"
+    ],
+    "MethodDef": [
+      "rows=21 sha256=C0BEB3E07AAC07C4"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=25B379CFD9ACF338"
+    ],
+    "TypeRef": [
+      "rows=16 sha256=351AB6AA02572561"
+    ]
+  },
+  "samples/UserRefStruct.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=4BD4DA59D0845D98"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=9931327C0C1302F0"
+    ],
+    "MethodBodies": [
+      "rows=6 sha256=0D217B97D69891F0"
+    ],
+    "MethodDef": [
+      "rows=6 sha256=DE22C85F9B1FE184"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=CB1787E0708327FA"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=9799288E87EC4C34"
+    ]
+  },
+  "samples/ValueTypeObjectMethods.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=5 sha256=62168CA051C785DE"
+    ],
+    "MemberRef": [
+      "rows=13 sha256=AD33268BE8D8189E"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=90029249C53F9B4F"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=98DB277F21F3E784"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=7F16F9BC96783AAB"
+    ]
+  },
+  "samples/Variadic.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=FE9FA3171FE35EA1"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=611D816D72A9606B"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=A7C0C00FED8D87D3"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=949E44040D672185"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=9594732CC410F61B"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=107F42683457F586"
+    ]
+  },
+  "samples/VariadicCarriers.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=22 sha256=76B6FA3FB37614DF"
+    ],
+    "MethodBodies": [
+      "rows=7 sha256=5D0A76A5F16256D5"
+    ],
+    "MethodDef": [
+      "rows=7 sha256=AB43CC77A9266348"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=BBEECB148B2BDFE3"
+    ],
+    "TypeRef": [
+      "rows=16 sha256=EB8060B746ED0D54"
+    ]
+  },
+  "samples/VariadicDelegate.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=3936FB503565973E"
+    ],
+    "MemberRef": [
+      "rows=8 sha256=167A39880425F226"
+    ],
+    "MethodBodies": [
+      "rows=5 sha256=1D4B27781BE368A4"
+    ],
+    "MethodDef": [
+      "rows=5 sha256=05183E3211322EA8"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=8F2CC3FC6218DB74"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=922DECE9203C3326"
+    ]
+  },
+  "samples/VariadicMethods.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=12 sha256=532BE8678B82B1BE"
+    ],
+    "MemberRef": [
+      "rows=16 sha256=AFBD7A237630ACB9"
+    ],
+    "MethodBodies": [
+      "rows=12 sha256=513F778E9EF3229B"
+    ],
+    "MethodDef": [
+      "rows=12 sha256=E0B09A8F340FCDE6"
+    ],
+    "TypeDef": [
+      "rows=7 sha256=797902598B9B0D16"
+    ],
+    "TypeRef": [
+      "rows=12 sha256=BE241864EC5D261F"
+    ]
+  },
+  "samples/WebsiteBindings.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=7FFCC6D7602BC9B9"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=DBF73417703B36C8"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=B995E2F04146F3A1"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=12CC0727983A8B6F"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=3A2CCBDDF9350F2B"
+    ]
+  },
+  "samples/WebsiteConcurrency.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=11 sha256=90E3565405659082"
+    ],
+    "MemberRef": [
+      "rows=26 sha256=BEF55E20786F0459"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=1D572E9C117CCA34"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=C1023BCF8D798716"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=3BCD25422ACC0A43"
+    ],
+    "TypeRef": [
+      "rows=24 sha256=E31FBD681B5EB22C"
+    ]
+  },
+  "samples/WebsiteData.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=945BF3E98F83737D"
+    ],
+    "MemberRef": [
+      "rows=18 sha256=3A1A75FAAFE67281"
+    ],
+    "MethodBodies": [
+      "rows=17 sha256=C25D80ADB44D38D4"
+    ],
+    "MethodDef": [
+      "rows=17 sha256=4154DB0AE4F2B3C1"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=31F16F7B2430AC19"
+    ],
+    "TypeRef": [
+      "rows=17 sha256=F4AAA8D12A551227"
+    ]
+  },
+  "samples/WebsiteFallthrough.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=6 sha256=3B4F0673DE1CA7D6"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=E261403F2649C208"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=6EA9F46AD2813E9A"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=23B3D2934D596595"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=662D3FDF75743CB1"
+    ]
+  },
+  "samples/WebsiteInterop.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=EA98DA15C21C4774"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=25EEB0EB56BF76E9"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=B8BE0C1BB15903B3"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=9B44107EB09AF59D"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=45CEF73074F48F64"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=AE4B62CC9786D222"
+    ]
+  },
+  "samples/WebsiteKotlin.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=622A39F24309CED9"
+    ],
+    "MemberRef": [
+      "rows=18 sha256=D8BD95472EAA7173"
+    ],
+    "MethodBodies": [
+      "rows=18 sha256=2751AE57F048C6AA"
+    ],
+    "MethodDef": [
+      "rows=18 sha256=7EB11471440374C0"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=CAF7DA01C752D648"
+    ],
+    "TypeRef": [
+      "rows=17 sha256=F4AAA8D12A551227"
+    ]
+  },
+  "samples/WebsiteNullable.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=10 sha256=EBFBB734D9B17495"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=5AC21CE080FAE4EB"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=7931CC795E829813"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=F3911C1451EE20C4"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=B7B4CA21AE2C05C6"
+    ]
+  },
+  "samples/WebsiteSwift.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=08912E7C988DD285"
+    ],
+    "MemberRef": [
+      "rows=19 sha256=7750A2FA03EB4A85"
+    ],
+    "MethodBodies": [
+      "rows=10 sha256=B15418987E56E151"
+    ],
+    "MethodDef": [
+      "rows=10 sha256=B8C88F2AC5F37FD1"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=D63F299448E3A8A0"
+    ],
+    "TypeRef": [
+      "rows=15 sha256=0B4F5711D9BF2300"
+    ]
+  },
+  "samples/WhileAndLabeledLoops.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=4 sha256=BE267BD582EC796C"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=D2A8D85CC119A824"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=99852E15F7FB2477"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=E22FC9B3DAAF69AE"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=68727DAAD0F897FD"
+    ]
+  },
+  "samples/WorkerPool.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=23 sha256=9E2E586E173C3FFB"
+    ],
+    "MemberRef": [
+      "rows=41 sha256=44DB63CD1736A016"
+    ],
+    "MethodBodies": [
+      "rows=7 sha256=AD082C50AFEEFFDA"
+    ],
+    "MethodDef": [
+      "rows=7 sha256=4865EA111C2A72D2"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=C349CD2A4F74D226"
+    ],
+    "TypeRef": [
+      "rows=33 sha256=E20CD0EDB948FD83"
+    ]
+  },
+  "samples/ZeroValues.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=3EEBA9B462BC0E16"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=D2A8D85CC119A824"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=C60B0B4009833373"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=1048EA946BC88A83"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=68727DAAD0F897FD"
+    ]
+  },
+  "samples/refactoring-baseline/AwaitInFieldAssignment.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=9 sha256=2BB8666F01F6E14E"
+    ],
+    "MemberRef": [
+      "rows=23 sha256=44F08B6D74E60633"
+    ],
+    "MethodBodies": [
+      "rows=9 sha256=2D51B7C9DC217A8D"
+    ],
+    "MethodDef": [
+      "rows=9 sha256=E5E7CD245A8872AB"
+    ],
+    "TypeDef": [
+      "rows=5 sha256=68AC7ED788BBFEC2"
+    ],
+    "TypeRef": [
+      "rows=18 sha256=7D073550EEED1F0A"
+    ]
+  },
+  "samples/refactoring-baseline/AwaitInIndexAssignment.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=11 sha256=9D80A2C58202FD40"
+    ],
+    "MemberRef": [
+      "rows=22 sha256=2D30D43BF45F3A76"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=FC3FF0F38BA2677F"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=40C4D8559539691F"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=EBAA6EE928CA6E54"
+    ],
+    "TypeRef": [
+      "rows=18 sha256=647B2A0B82D717A1"
+    ]
+  },
+  "samples/refactoring-baseline/AwaitInUnary.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=8 sha256=6C3F8540BA48BA38"
+    ],
+    "MemberRef": [
+      "rows=22 sha256=E65F201507D3BEFB"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=91C7E282A5442CF5"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=40C4D8559539691F"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=9019551BB7A94330"
+    ],
+    "TypeRef": [
+      "rows=17 sha256=7A99E5F0BA8D9E42"
+    ]
+  },
+  "samples/refactoring-baseline/EnumBitwise.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=E6EA4BD1C56B2A64"
+    ],
+    "MemberRef": [
+      "rows=5 sha256=91B3FB3FA18E786B"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=31958ED6D64085D0"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=BCDBDBC4CD3403DF"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=88DF08FDAAD2D6D4"
+    ]
+  },
+  "samples/refactoring-baseline/ForInIEnumerable.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=0 sha256=E3B0C44298FC1C14"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=BA7B365C32848FAB"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=D96B11117FB31230"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=78C6A121EEBEBD47"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=03515FD043779318"
+    ],
+    "TypeRef": [
+      "rows=12 sha256=7F5A32A78C802B99"
+    ]
+  },
+  "samples/refactoring-baseline/GenericMethodSpec.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=B794E61DDEA18AEA"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=898E10FFC673452F"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=B45645AA616D8408"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=E7BEC0BA637A511A"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=56CF35FA8F9F4748"
+    ],
+    "TypeRef": [
+      "rows=10 sha256=68D0ECA100766C00"
+    ]
+  },
+  "samples/refactoring-baseline/NullablePropertyRead.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=23A46168D442B022"
+    ],
+    "MemberRef": [
+      "rows=9 sha256=B958335413A8ABE2"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=91FCA4F48AB247D5"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=C327519A3817ACEF"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=1EF2DBBFBF4E66D6"
+    ]
+  },
+  "samples/refactoring-baseline/NullableValueMember.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=0F870B97F564D1AB"
+    ],
+    "MemberRef": [
+      "rows=11 sha256=B9D079159F606D6A"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=037FD48007137592"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=14E03AD81077F84B"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=672E298F5EBBE2CF"
+    ]
+  },
+  "samples/refactoring-baseline/ReadOnlyAttr.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=2 sha256=23BC4B60C857065B"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=7792894E9634C0C7"
+    ],
+    "MethodBodies": [
+      "rows=11 sha256=E238A41E5C291BAC"
+    ],
+    "MethodDef": [
+      "rows=11 sha256=26C51513AF335A1A"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=A923DD2A2C005857"
+    ],
+    "TypeRef": [
+      "rows=9 sha256=6F914C75279C8B47"
+    ]
+  },
+  "samples/refactoring-baseline/RefStructByRefLike.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=9D10D6B502E1F090"
+    ],
+    "MemberRef": [
+      "rows=7 sha256=07791B7EB1592CCD"
+    ],
+    "MethodBodies": [
+      "rows=4 sha256=AB4B1FD2934D518A"
+    ],
+    "MethodDef": [
+      "rows=4 sha256=E8CD105A7CBB2A90"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=356E945693462DF3"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=FC180747698349BD"
+    ]
+  },
+  "samples/refactoring-baseline/ReturnInTryFinally.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=1 sha256=5579EC743EC78BCA"
+    ],
+    "MemberRef": [
+      "rows=8 sha256=AE8D674BF4C57AD9"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=DF0FEF029AFDC17E"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=50756C5344A5383B"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=5286EA4B6FAEFB9D"
+    ],
+    "TypeRef": [
+      "rows=8 sha256=15A4B642644F17CA"
+    ]
+  },
+  "samples/refactoring-baseline/ShortCircuitAnd.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=2212C0B3270D3103"
+    ],
+    "MemberRef": [
+      "rows=6 sha256=18E42D0532547243"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=2E1AB2986985AEB7"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=E19B36294678012B"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=886463049B2BAC7D"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/refactoring-baseline/ShortCircuitOr.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=2212C0B3270D3103"
+    ],
+    "MemberRef": [
+      "rows=6 sha256=18E42D0532547243"
+    ],
+    "MethodBodies": [
+      "rows=3 sha256=0058CE01C2F3E75F"
+    ],
+    "MethodDef": [
+      "rows=3 sha256=E19B36294678012B"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=E818439A5D1BE6EF"
+    ],
+    "TypeRef": [
+      "rows=6 sha256=0E560A98E4B4045D"
+    ]
+  },
+  "samples/refactoring-baseline/YieldInTryFinally.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=2232BDBE2240E555"
+    ],
+    "MemberRef": [
+      "rows=12 sha256=7862233B28EF2995"
+    ],
+    "MethodBodies": [
+      "rows=11 sha256=941FDF5A2CD3B447"
+    ],
+    "MethodDef": [
+      "rows=11 sha256=34BA3A13E7383AAD"
+    ],
+    "TypeDef": [
+      "rows=3 sha256=25B3D98AB90D57A6"
+    ],
+    "TypeRef": [
+      "rows=14 sha256=26327213980D9A48"
+    ]
+  }
+}

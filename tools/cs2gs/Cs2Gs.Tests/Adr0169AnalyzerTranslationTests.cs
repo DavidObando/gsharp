@@ -1758,9 +1758,7 @@ func Run(v object) string {
         // The real GSA0001 file end-to-end: everything maps or lowers, the
         // divergences surface as CS2GS-ANALYZER-SHAPE review warnings, and
         // the output binds against GSharp.Core.
-        string realSource = File.ReadAllText(Path.Combine(
-            FindRepoRoot(),
-            "src", "Analyzers", "InternalAnalyzers", "StructFieldDefsReadAnalyzer.cs"));
+        string realSource = FrozenCompilerSnapshots.Analyzer("StructFieldDefsReadAnalyzer.cs");
         string descriptors = @"
 using Microsoft.CodeAnalysis;
 
@@ -1793,8 +1791,7 @@ public static class DiagnosticDescriptors
     [InlineData("RewriterClonePreservationAnalyzer.cs")]
     public void RealAnalyzerSources_TranslateWithReviewWarningsOnly(string fileName)
     {
-        string realSource = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "src", "Analyzers", "InternalAnalyzers", fileName));
+        string realSource = FrozenCompilerSnapshots.Analyzer(fileName);
         string descriptors = @"
 using Microsoft.CodeAnalysis;
 

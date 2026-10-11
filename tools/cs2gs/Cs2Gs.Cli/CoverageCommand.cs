@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator.Coverage;
 
 namespace Cs2Gs.Cli;
@@ -49,7 +50,7 @@ internal static class CoverageCommand
         repoRoot ??= LocateRepoRoot();
         if (repoRoot is null)
         {
-            Console.Error.WriteLine("cs2gs coverage: GSharp.sln not found above the current directory; pass --repo-root.");
+            Console.Error.WriteLine("cs2gs coverage: repository root (GSharp.sln or GSharp.slnx) not found above the current directory; pass --repo-root.");
             return 2;
         }
 
@@ -150,7 +151,7 @@ internal static class CoverageCommand
 
     /// <summary>
     /// Walks up from the current directory to the directory containing
-    /// <c>GSharp.sln</c>.
+    /// <c>GSharp.sln</c> or <c>GSharp.slnx</c>.
     /// </summary>
     /// <returns>The repo root, or <see langword="null"/> when not found.</returns>
     private static string LocateRepoRoot()
@@ -158,7 +159,7 @@ internal static class CoverageCommand
         var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return dir.FullName;
             }

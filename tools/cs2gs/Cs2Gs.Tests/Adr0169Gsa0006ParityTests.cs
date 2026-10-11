@@ -235,12 +235,10 @@ class Walker
     /// <returns>The analyzer assembly path.</returns>
     private string CompileTranslatedGsa0006()
     {
-        string repoRoot = Adr0169TranslatedAnalyzerHarness.FindRepoRoot();
-        string analyzerDirectory = Path.Combine(repoRoot, "src", "Analyzers", "InternalAnalyzers");
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
-            ("BaseClassCycleUnsafeWalkAnalyzer.cs", File.ReadAllText(Path.Combine(analyzerDirectory, "BaseClassCycleUnsafeWalkAnalyzer.cs"))),
-            ("DiagnosticDescriptors.cs", File.ReadAllText(Path.Combine(analyzerDirectory, "DiagnosticDescriptors.cs"))),
+            ("BaseClassCycleUnsafeWalkAnalyzer.cs", FrozenCompilerSnapshots.Analyzer("BaseClassCycleUnsafeWalkAnalyzer.cs")),
+            ("DiagnosticDescriptors.cs", FrozenCompilerSnapshots.Analyzer("DiagnosticDescriptors.cs")),
         });
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
         Assert.True(AnalyzerProjectDetector.IsAnalyzerProject(project.Compilation));

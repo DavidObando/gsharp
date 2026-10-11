@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.LanguageConformance;
@@ -71,7 +72,7 @@ public class MultiPackageEmitShapeTests
         while (dir != null)
         {
             var candidate = Path.Combine(dir.FullName, "samples");
-            if (Directory.Exists(candidate) && File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (Directory.Exists(candidate) && RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return candidate;
             }

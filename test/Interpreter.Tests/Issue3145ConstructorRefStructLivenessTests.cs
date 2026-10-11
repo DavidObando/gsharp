@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -154,7 +155,7 @@ public class Issue3145ConstructorRefStructLivenessTests
     private static string GetRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+        while (directory != null && !RepositoryRootMarker.IsRoot(directory.FullName))
         {
             directory = directory.Parent;
         }

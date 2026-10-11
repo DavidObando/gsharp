@@ -111,20 +111,12 @@ public class Issue4611BranchValueSequenceTests
     [Fact]
     public async Task TranslatorSelfMigration_NeverAssertsABlockBranchValue()
     {
-        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
-        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
-            Path.Combine(repoRoot, "tools", "cs2gs", "Cs2Gs.Translator", "Cs2Gs.Translator.csproj"));
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Translator should bind with no C# errors: "
-                + string.Join(Environment.NewLine, project.ErrorDiagnostics));
-
-        LoadedDocument document = Assert.Single(
-            project.Documents,
-            candidate => Path.GetFileName(candidate.FilePath) == "CSharpToGSharpTranslator.Statements.cs");
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        string printed = GSharpPrinter.Print(
-            new CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(document, context));
+        // G# translated from the C# until the cut-over, the committed .gs after (#4661).
+        var files = await SelfMigratedCompilerSource.LoadAsync(
+            "tools/cs2gs/Cs2Gs.Translator",
+            preservePartialParts: true,
+            "CSharpToGSharpTranslator.Statements");
+        string printed = SelfMigratedCompilerSource.Compact(files["CSharpToGSharpTranslator.Statements"].Text);
 
         Assert.Contains("BlockOperationsAndBranchValue", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("BranchValue!!", printed, StringComparison.Ordinal);

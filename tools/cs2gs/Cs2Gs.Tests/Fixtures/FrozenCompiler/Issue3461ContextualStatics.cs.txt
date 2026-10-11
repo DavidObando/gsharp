@@ -1,0 +1,55 @@
+/// <summary>Imported static contextual method fixture.</summary>
+public static class ImportedContextualStatics
+{
+    /// <summary>Returns one.</summary>
+    public static int @nameof() => 1;
+
+    /// <summary>Returns two.</summary>
+    public static int @typeof() => 2;
+
+    /// <summary>Returns four.</summary>
+    public static int @sizeof() => 4;
+
+    /// <summary>Returns eight.</summary>
+    public static int @checked() => 8;
+
+    /// <summary>Returns sixteen.</summary>
+    public static int @unchecked() => 16;
+
+    /// <summary>Returns generic value.</summary>
+    public static T @base<T>(T value) => value;
+
+    /// <summary>Returns generic value.</summary>
+    public static T @stackalloc<T>(T value) => value;
+
+    /// <summary>Returns generic value.</summary>
+    public static T @nameof<T>(T value) => value;
+}
+
+#nullable enable annotations
+
+/// <summary>Imported contextual static field fixture.</summary>
+public static class ImportedContextualStaticFields
+{
+    /// <summary>Reserved index-prefix field.</summary>
+    public static readonly int[]? @base = { 3 };
+
+    /// <summary>Reserved index-prefix field.</summary>
+    public static readonly int[]? @stackalloc = { 5 };
+
+    /// <summary>Reserved invocation field.</summary>
+    public static readonly Func<int>? @nameof = () => 7;
+}
+
+/// <summary>Imported contextual static property fixture.</summary>
+public static class ImportedContextualStaticProperties
+{
+    /// <summary>Reserved index-prefix property.</summary>
+    public static int[]? @base { get; } = new[] { 4 };
+
+    /// <summary>Reserved index-prefix property.</summary>
+    public static int[]? @stackalloc { get; } = new[] { 6 };
+
+    /// <summary>Reserved invocation property.</summary>
+    public static Func<int>? @nameof { get; } = () => 8;
+}

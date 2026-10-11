@@ -150,7 +150,7 @@ public class TestParityLibraryLiveTests
         while (dir is not null)
         {
             if (File.Exists(Path.Combine(dir.FullName, "nuget.config")) &&
-                File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+                RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 return dir.FullName;
             }

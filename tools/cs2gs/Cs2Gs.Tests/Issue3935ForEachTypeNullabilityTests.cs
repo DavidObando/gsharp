@@ -232,7 +232,7 @@ public sealed class Issue3935ForEachTypeNullabilityTests
     private static (string DllPath, string Stdout, int Exit) CompileVerifyAndRun(string printed, string caseName)
     {
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string workDir = Path.Combine(
             AppContext.BaseDirectory, nameof(Issue3935ForEachTypeNullabilityTests), caseName);

@@ -170,7 +170,7 @@ public sealed class Issue4776ValueCopySampleEmitTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory != null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(directory.FullName))
             {
                 return directory.FullName;
             }

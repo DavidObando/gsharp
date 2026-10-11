@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -205,7 +206,7 @@ public class Issue750ConstraintOverloadEmitTests
         var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(Issue750ConstraintOverloadEmitTests).Assembly.Location));
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(dir.FullName))
             {
                 foreach (var cfg in new[] { "Debug", "Release" })
                 {

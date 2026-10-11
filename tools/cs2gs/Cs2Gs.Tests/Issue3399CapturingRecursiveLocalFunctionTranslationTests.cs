@@ -314,7 +314,7 @@ namespace Demo
     private static string CompileAndCaptureRun(string printed, string callExpression)
     {
         string compiler = LocalFunctionHoistTranslationTests.FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string workDir = Path.Combine(AppContext.BaseDirectory, "issue-3399-e2e", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);

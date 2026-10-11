@@ -147,7 +147,7 @@ public class Issue4400ImplicitInArgumentTranslationTests
     private static (string DllPath, string Stdout, int Exit) CompileAndRun(string workDir, string printed)
     {
         string compiler = LocalFunctionHoistTranslationTests.FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string gsPath = Path.Combine(workDir, "Program.gs");
         File.WriteAllText(gsPath, printed);

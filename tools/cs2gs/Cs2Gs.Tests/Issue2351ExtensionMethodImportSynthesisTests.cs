@@ -354,7 +354,7 @@ namespace Acme.App
     private static void AssertCompiles(string printed, params string[] extraReferences)
     {
         string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        Assert.True(compiler != null, "gsc.dll must be built (build the repository solution) before running this test.");
 
         string workDir = Path.Combine(AppContext.BaseDirectory, "issue-2351-e2e", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);

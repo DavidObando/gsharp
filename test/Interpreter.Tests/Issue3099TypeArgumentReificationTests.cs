@@ -10,6 +10,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using GSharp.Compiler;
 using GSharp.Repl.Engine;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -488,7 +489,7 @@ public class Issue3099TypeArgumentReificationTests
     private static string GetRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+        while (directory != null && !RepositoryRootMarker.IsRoot(directory.FullName))
         {
             directory = directory.Parent;
         }

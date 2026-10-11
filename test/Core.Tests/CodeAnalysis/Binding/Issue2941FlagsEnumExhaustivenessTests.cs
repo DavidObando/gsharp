@@ -10,6 +10,7 @@ using System.Text;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -191,7 +192,7 @@ public class Issue2941FlagsEnumExhaustivenessTests
         var directory = Path.GetDirectoryName(typeof(Issue2941FlagsEnumExhaustivenessTests).Assembly.Location);
         while (!string.IsNullOrEmpty(directory))
         {
-            if (File.Exists(Path.Combine(directory, "GSharp.sln")))
+            if (RepositoryRootMarker.IsRoot(directory))
             {
                 return directory;
             }

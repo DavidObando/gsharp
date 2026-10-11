@@ -25,11 +25,12 @@ namespace Cs2Gs.Tests;
 public sealed class Issue3461IdentifierSanitizationTests
 {
     [Fact]
-    public async Task ImportedContextualFixtures_PreserveObliviousMethodsAndNullableMembers()
+    public void ImportedContextualFixtures_PreserveObliviousMethodsAndNullableMembers()
     {
-        string projectPath = TestFixtureSource.Resolve(
-            "tools", "cs2gs", "Cs2Gs.Tests", "Cs2Gs.Tests.csproj");
-        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
+        // The fixture types are pinned as a frozen C# snapshot (#4661), not read
+        // from the Cs2Gs.Tests project, which is G# after the cut-over.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ContextualStatics.cs", "using System;\n\nnamespace Cs2Gs.Tests;\n\n" + FrozenCompilerSnapshots.Read("Issue3461ContextualStatics.cs.txt")) });
         Assert.True(
             project.BoundWithoutErrors,
             string.Join(Environment.NewLine, project.ErrorDiagnostics));

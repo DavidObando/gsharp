@@ -1811,6 +1811,92 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.ShouldPromoteToNullableReference(targetSymbol));
         }
 
+        // Issue #4843: whether <paramref name="parameter"/> is declared as one of
+        // an IMPORTED, OBLIVIOUS method's own type parameters
+        // (`DecodeSignature<TType, TGenericContext>(provider, TGenericContext
+        // genericContext)`), on a call whose type arguments are inferred, and
+        // that type parameter does not appear in the method's return type.
+        // gsc reads such a position as a platform type: the argument is not
+        // checked against Roslyn's substituted `object`, and no result carries
+        // the inferred argument onward. A `T?` value therefore needs no bridge,
+        // and a runtime `!!` would turn a legal C# null forward into a
+        // NullReferenceException (the migrated test/Core.Tests
+        // CorePublicApiSnapshotTests). Everything else keeps its bridge: an
+        // annotated method (`Assert.Contains<T>`), an explicit type argument
+        // (`Identity<SyntaxNode>(x)`), a type parameter the result depends on
+        // (`List<string> names = Wrap(x)`), and a CLASS type parameter
+        // (`List<string>.Add(T)`), which the receiver fixes before the
+        // argument is seen. A constrained type parameter and a reduced
+        // extension invocation (whose `this` receiver is not in the parameter
+        // list) keep their bridge: gsc would reject a nullable type argument
+        // against the constraint, and the receiver's variance goes unexamined.
+        private bool IsObliviousImportedInferredTypeParameterTarget(
+            IParameterSymbol parameter,
+            ExpressionSyntax argumentExpression)
+        {
+            if (parameter.OriginalDefinition is not { Type: ITypeParameterSymbol typeParameter } original
+                || typeParameter.TypeParameterKind != TypeParameterKind.Method
+                || original.ContainingSymbol is not IMethodSymbol method
+                || method.ReducedFrom != null
+                || typeParameter.HasReferenceTypeConstraint
+                || typeParameter.HasValueTypeConstraint
+                || typeParameter.HasNotNullConstraint
+                || typeParameter.HasConstructorConstraint
+                || typeParameter.ConstraintTypes.Length > 0
+                || !IsInferredGenericParameterTarget(parameter, argumentExpression)
+                || !this.TargetContractIsFrozenInMetadata(parameter))
+            {
+                return false;
+            }
+
+            // The inferred argument must not reach a result, and every other
+            // parameter that mentions it may do so only through an INVARIANT
+            // type argument: there the argument itself (`this` as an
+            // `ISignatureTypeProvider<string, object>`) fixes the type
+            // argument. A covariant or array position (`Assert.Contains<T>(T,
+            // IEnumerable<T>)`) lets the value widen the element instead, so
+            // those keep their bridge.
+            return !MentionsTypeParameter(method.ReturnType, typeParameter)
+                && method.Parameters.All(other =>
+                    SymbolEqualityComparer.Default.Equals(other, original)
+                    || !MentionsTypeParameter(other.Type, typeParameter)
+                    || MentionsTypeParameterOnlyInvariantly(other.Type, typeParameter));
+        }
+
+        private static bool MentionsTypeParameterOnlyInvariantly(ITypeSymbol type, ITypeParameterSymbol typeParameter)
+        {
+            switch (type)
+            {
+                case INamedTypeSymbol { IsGenericType: true } named:
+                    // A nested type also carries its containing types' type
+                    // parameters, which no variance annotation covers.
+                    if (MentionsTypeParameter(named.ContainingType, typeParameter))
+                    {
+                        return false;
+                    }
+
+                    for (int i = 0; i < named.TypeArguments.Length; i++)
+                    {
+                        ITypeSymbol argument = named.TypeArguments[i];
+                        if (!MentionsTypeParameter(argument, typeParameter))
+                        {
+                            continue;
+                        }
+
+                        if (named.TypeParameters[i].Variance != VarianceKind.None
+                            || (argument is not ITypeParameterSymbol
+                                && !MentionsTypeParameterOnlyInvariantly(argument, typeParameter)))
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                default:
+                    return !MentionsTypeParameter(type, typeParameter);
+            }
+        }
+
         // Issue #3886: whether <paramref name="symbol"/> is a parameter that
         // `TranslateParameter` emits as an ADR-0173 variadic carrier (`...T` /
         // `...List[T]`). Kept in lockstep with the `variadic` local there: only

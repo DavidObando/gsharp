@@ -441,11 +441,23 @@ public class GsharpTestProjectRunner
             return ResolveConfiguredSourceRoot(configuredRoot, Environment.CurrentDirectory);
         }
 
-        string dir = Path.GetDirectoryName(typeof(GsharpTestProjectRunner).Assembly.Location);
+        string location = typeof(GsharpTestProjectRunner).Assembly.Location;
+        return FindRepoRootAbove(Path.GetDirectoryName(location))
+            ?? throw new DirectoryNotFoundException(
+                $"Could not locate the repository source root above " +
+                $"{location}. Set " +
+                $"{SourceRootEnvironmentVariable} to the original source tree.");
+    }
+
+    // The repository root is the nearest ancestor holding nuget.config and the
+    // solution (GSharp.sln, or GSharp.slnx after the cut-over); issue #4861.
+    internal static string FindRepoRootAbove(string startDirectory)
+    {
+        string dir = startDirectory;
         while (!string.IsNullOrEmpty(dir))
         {
             if (File.Exists(Path.Combine(dir, "nuget.config")) &&
-                File.Exists(Path.Combine(dir, "GSharp.sln")))
+                RepositoryRootMarker.IsRoot(dir))
             {
                 return dir;
             }
@@ -453,10 +465,7 @@ public class GsharpTestProjectRunner
             dir = Path.GetDirectoryName(dir);
         }
 
-        throw new DirectoryNotFoundException(
-            $"Could not locate the repository source root above " +
-            $"{typeof(GsharpTestProjectRunner).Assembly.Location}. Set " +
-            $"{SourceRootEnvironmentVariable} to the original source tree.");
+        return null;
     }
 
     internal static string ResolveConfiguredSourceRoot(string configuredRoot, string baseDirectory)

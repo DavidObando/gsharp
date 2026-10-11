@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using GSharp.Tests;
 
 namespace GSharp.Core.Tests;
 
@@ -289,7 +290,7 @@ internal static class TestSource
         relative.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar);
 
     private static bool HasSolution(string directory) =>
-        File.Exists(Path.Combine(directory, "GSharp.sln")) || File.Exists(Path.Combine(directory, "GSharp.slnx"));
+        RepositoryRootMarker.IsRoot(directory);
 
     // Callers have already established that `root` holds a solution file.
     private static bool HasParserInOneLanguage(string root)

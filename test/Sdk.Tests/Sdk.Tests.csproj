@@ -23,4 +23,8 @@
     <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.13.9" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\RepositoryRootMarker.cs" Link="RepositoryRootMarker.cs" />
+  </ItemGroup>
+
 </Project>

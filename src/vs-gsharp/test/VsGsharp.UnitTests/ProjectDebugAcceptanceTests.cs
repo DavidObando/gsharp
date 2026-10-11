@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Xml.Linq;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.VisualStudio;
@@ -287,7 +288,7 @@ public sealed class ProjectDebugAcceptanceTests
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+        while (directory != null && !RepositoryRootMarker.IsRoot(directory.FullName))
         {
             directory = directory.Parent;
         }
