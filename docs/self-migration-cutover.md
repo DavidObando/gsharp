@@ -152,8 +152,8 @@ overlaying it onto the checkout (`cutover.py` stage `assemble`):
 - **Retained C#** (kept on purpose, not translated): the VS extension; the C# sample
   and benchmark apparatus; `samples/ForeignCompile/ThisAssembly.cs` (a foreign `.cs`
   the SDK translates at build time); `tools/cs2gs/Cs2Gs.Tests/Fixtures/Adr0169FunnelSurface/*.cs`
-  (C# data the tests read as text). The mirror does not carry the last two, so
-  the assemble step keeps them from the original tree.
+  (C# data the tests read as text). The mirror carries the last two verbatim (#4850),
+  so the assemble step has nothing extra to keep.
 
 ## The hand-fix list, audited against the repository
 
@@ -180,7 +180,7 @@ Items found by the dry run that the plan did not list:
 | Reformat with `gsfmt --write` | The plan expected `gsfmt --check` clean. After polish it is not: 394 of 4,350 `.gs` files re-wrap (#4858). The script writes them and requires a clean re-check; commit the result as its own commit. | gsfmt stage |
 | Keep the pin to the published artefacts | A source build of the C# solution (which `capture-test-oracle` triggers) packs `Gsharp.NET.Sdk.<v>-g<sha>` and `GSharp.CodeAnalysis.Analyzers.Testing.<v>-g<sha>`; a tool without `--sdk-version` then pins the whole tree to them (#4849). The script deletes every source-built copy before translating. | translate |
 | Regenerate `packages.lock.json` | Established from the mirror: the 35 translated product projects (src, test, tools) DO carry a `packages.lock.json`, copied from their C# projects, while samples and templates never had one. The copies are stale for the `.gsproj` projects: the locked-mode restore CI uses fails with NU1004 on the first test project. | 8 |
-| Keep untranslated C# the mirror drops | `ForeignCompile` and the Adr0169 fixtures would otherwise be deleted and their projects broken. | assemble |
+| Retain untranslated C# the mirror lacks | Since #4850 the mirror carries `ForeignCompile` and the fixtures, so nothing is expected; any tracked `.cs` with no mirror twin is retained, listed, and fails the step for review. | assemble |
 
 ## Validation sequence (what the script runs)
 
