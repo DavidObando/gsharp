@@ -881,7 +881,8 @@ internal static class Program
         Console.WriteLine("  --stop-after <s>  Run the stages up to and including <s> (translate, compile, ilverify or");
         Console.WriteLine("                    test-parity; default test-parity). 'compile' includes the redundant-!!");
         Console.WriteLine("                    polish, so the migrated tree is final without running test parity");
-        Console.WriteLine("                    (issue #4853). --translate-only is --stop-after translate.");
+        Console.WriteLine("                    (issue #4853). --translate-only selects the same stages as");
+        Console.WriteLine("                    --stop-after translate but does not mark apps unverified.");
         Console.WriteLine("  --sdk-version <v> Repository migration only: pin Gsharp.NET.Sdk to exactly <v> (default:");
         Console.WriteLine("                    the newest local nupkg). A local nupkg of <v> is staged into .nugs;");
         Console.WriteLine("                    otherwise <v> must be on nuget.org (e.g. a published release).");
