@@ -1612,14 +1612,14 @@ public sealed partial class CSharpToGSharpTranslator
             // reason: `yield [` parses as indexing a variable named `yield`.
             // Everything else prints inline.
             //
-            // The one other reason to materialize: a branching expression
+            // The one other reason to materialize: a target-typed value (a branching expression or a lambda)
             // needs the iterator element type as its target (a common type for
             // `b ? s : n` into `object`, user conversions inside tuple leaves,
             // #4719), which a bare `yield if ...` does not provide because G#
             // binds yield operands without the element type.
             if (value is not TupleLiteralExpression
                 && (YieldValuePrintsAmbiguously(GSharpPrinter.RenderExpressionText(value))
-                    || value is IfExpression or SwitchExpression or IfLetExpression or BlockExpression))
+                    || value is IfExpression or SwitchExpression or IfLetExpression or BlockExpression or LambdaExpression))
             {
                 string name = this.FreshYieldedValueName(node);
                 GTypeReference type = null;

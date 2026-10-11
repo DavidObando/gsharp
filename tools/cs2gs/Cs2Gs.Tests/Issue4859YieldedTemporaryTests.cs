@@ -210,6 +210,40 @@ public sealed class Issue4859YieldedTemporaryTests
     }
 
     [Fact]
+    public void LambdaYield_IsMaterializedSoTheDelegateTypeIsItsTarget()
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+
+            public static class Obj
+            {
+                public static IEnumerable<Func<Task<object>>> Rows(bool b, string s, int n)
+                {
+                    yield return async () => b ? s : n;
+                }
+
+                public static int Run()
+                {
+                    int total = 0;
+                    foreach (Func<Task<object>> row in Rows(false, "x", 4))
+                    {
+                        total += (int)row().GetAwaiter().GetResult();
+                    }
+
+                    return total;
+                }
+            }
+            """);
+
+        Assert.Matches(@"let item(_\d+)? ", printed);
+        EmittedOracleResult result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Obj.Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Equal(4, result.Value);
+    }
+
+    [Fact]
     public void InlineArrayYield_BindsAndRuns()
     {
         string printed = Translate("""
