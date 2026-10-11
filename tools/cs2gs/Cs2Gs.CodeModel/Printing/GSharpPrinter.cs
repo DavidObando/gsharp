@@ -67,6 +67,16 @@ public static class GSharpPrinter
     public static string RenderTypeReference(GTypeReference type) => RenderType(type);
 
     /// <summary>
+    /// Renders one expression exactly as <see cref="Print"/> would print it at
+    /// statement-expression position, so callers can make decisions about the
+    /// printed text (for example whether it starts with a parenthesis) instead
+    /// of duplicating printer rules.
+    /// </summary>
+    /// <param name="expression">The expression to render.</param>
+    /// <returns>The printed G# text.</returns>
+    public static string RenderExpressionText(GExpression expression) => RenderExpression(expression, 0);
+
+    /// <summary>
     /// ADR-0192: renders a method's signature — everything but its body and
     /// its method-level attributes (which gsc unions across partial parts),
     /// keeping parameter annotations and defaults — exactly as the printer
