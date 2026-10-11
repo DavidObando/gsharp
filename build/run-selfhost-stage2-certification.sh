@@ -38,9 +38,9 @@ dotnet restore GSharp.sln --locked-mode
 selfmig_build_prerequisites
 dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj -c Release
 
-# The migrate exit code also reflects per-app test-parity results, which this
-# certification does not consume (the controller rebuilds and tests the tree
-# itself and fails closed). Keep going when the tree itself was produced.
+# `cs2gs migrate` exits 1 when any app fails any stage. The certification
+# tolerates only test-parity failures (the controller re-runs the tests under
+# stage 2 itself); a translate, compile or ILVerify failure anywhere stops here.
 set +e
 dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
   --corpus "$repo_root" --sdk-pin global-json \
@@ -48,13 +48,12 @@ dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
   "${selfmig_project_filters[@]}" | tee "$work/migrate.log"
 migrate_exit=${PIPESTATUS[0]}
 set -e
-if [[ ! -f "$work/migrated/global.json" ]]; then
-  echo "migration produced no tree (exit $migrate_exit)" >&2
+summary=$(find "$work/runs" -maxdepth 2 -name summary.json | sort | tail -1)
+if [[ -z "$summary" || ! -f "$work/migrated/global.json" ]]; then
+  echo "migration produced no summary or tree (exit $migrate_exit)" >&2
   exit 1
 fi
-if [[ $migrate_exit -ne 0 ]]; then
-  echo "note: cs2gs migrate exited $migrate_exit; see $work/migrate.log" >&2
-fi
+python3 build/verify-migration-run.py "$summary"
 
 git -C "$work/migrated" init -q
 git -C "$work/migrated" add -A

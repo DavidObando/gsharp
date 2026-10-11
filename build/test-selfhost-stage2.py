@@ -542,6 +542,32 @@ static class Program
         self.assertIn("overlaps", result.stderr)
 
 
+class MigrationRunVerifierTests(unittest.TestCase):
+    @staticmethod
+    def load():
+        spec = importlib.util.spec_from_file_location(
+            "verify_migration_run", REPO / "build" / "verify-migration-run.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def app(**statuses: str) -> dict:
+        stages = {"translate": "passed", "compile": "passed", "ilverify": "passed",
+                  "test-parity": "passed", **statuses}
+        return {"appId": "a", "stages": [{"stage": k, "status": v} for k, v in stages.items()]}
+
+    def test_only_test_parity_failures_are_tolerated(self) -> None:
+        module = self.load()
+        self.assertEqual([], module.check({"apps": [self.app()]}))
+        self.assertEqual(["a"], module.check({"apps": [self.app(**{"test-parity": "failed"})]}))
+        for stage in ("translate", "compile", "ilverify"):
+            with self.subTest(stage), self.assertRaises(ValueError):
+                module.check({"apps": [self.app(**{stage: "failed"})]})
+        with self.assertRaises(ValueError):
+            module.check({"apps": []})
+
+
 class TestSelectionTests(unittest.TestCase):
     def test_filter_excludes_each_recorded_test_exactly_once(self) -> None:
         spec = importlib.util.spec_from_file_location(
@@ -563,16 +589,28 @@ class ReportVerifierTests(unittest.TestCase):
 
     @staticmethod
     def good() -> dict:
+        digest = "a" * 64
+
+        def comparison(name: str) -> dict:
+            return {
+                "assembly": name, "normalizedEqual": True, "rawEqual": True,
+                "stage1": {"normalized_sha256": digest},
+                "stage2": {"normalized_sha256": digest},
+            }
+
+        def selection(project: str, filter_: str, executed: int) -> dict:
+            return {
+                "project": project, "filter": filter_, "executed": executed,
+                "failed": 0, "outcome": "Completed", "receipt": "/r.json",
+                "eventSha256": digest, "loggerSha256": digest,
+                "testAssembly": {"path": "/t.dll", "sha256": digest},
+                "assemblySha256": {"Core/GSharp.Core.dll": digest},
+            }
+
         return {
             "schema": 1, "certified": True,
-            "comparison": [
-                {"assembly": "Core/GSharp.Core.dll", "normalizedEqual": True},
-                {"assembly": "Compiler/gsc.dll", "normalizedEqual": True},
-            ],
-            "tests": [
-                {"project": "a", "filter": "f", "executed": 5, "failed": 0, "outcome": "Completed"},
-                {"project": "b", "filter": "g", "executed": 2, "failed": 0, "outcome": "Completed"},
-            ],
+            "comparison": [comparison("Core/GSharp.Core.dll"), comparison("Compiler/gsc.dll")],
+            "tests": [selection("a", "f", 5), selection("b", "g", 2)],
         }
 
     def check(self, report: dict, tests: list[str] | None = None) -> str | None:
@@ -591,6 +629,10 @@ class ReportVerifierTests(unittest.TestCase):
     def test_genuine_report_passes(self) -> None:
         self.assertIsNone(self.check(self.good()))
 
+    def test_empty_expectations_are_rejected(self) -> None:
+        self.assertIsNotNone(self.check({"schema": 1, "certified": True,
+                                         "comparison": [], "tests": []}, []))
+
     def test_every_forged_shape_is_rejected(self) -> None:
         for name, mutate in {
             "uncertified": lambda r: r.update(certified=False),
@@ -600,6 +642,12 @@ class ReportVerifierTests(unittest.TestCase):
                 {"assembly": "Compiler/gsc.dll", "normalizedEqual": True}),
             "extra unequal row": lambda r: r["comparison"].append(
                 {"assembly": "Other.dll", "normalizedEqual": False}),
+            "stage fingerprints differ": lambda r: r["comparison"][0]["stage2"].update(
+                normalized_sha256="b" * 64),
+            "missing fingerprints": lambda r: r["comparison"][0].pop("stage1"),
+            "missing event hash": lambda r: r["tests"][0].pop("eventSha256"),
+            "missing test assembly": lambda r: r["tests"][1].pop("testAssembly"),
+            "missing receipt": lambda r: r["tests"][0].update(receipt=""),
             "non-object row": lambda r: r["comparison"].append("Compiler/gsc.dll"),
             "missing assembly": lambda r: r["comparison"].pop(),
             "no tests": lambda r: r.update(tests=[]),

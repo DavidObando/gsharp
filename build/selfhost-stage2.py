@@ -1696,6 +1696,7 @@ class Controller:
         network: bool = False,
         capture_test_events: bool = False,
         read_only: list[Path] | None = None,
+        protected_files: list[Path] | None = None,
     ) -> CommandResult:
         self.verify_toolchain(stage)
         nonce = secrets.token_hex(32)
@@ -1763,7 +1764,7 @@ class Controller:
         protected = [
             Path(path)
             for path in self.accepted_restore_outputs.get(stage, {})
-        ]
+        ] + list(protected_files or [])
         sandboxed = self.sandbox_command(
             tree, writable, command, command_env, network, read_only, protected,
             status_write)
@@ -3301,13 +3302,26 @@ class Controller:
                 name: sha256_file(self.writable("stage-2", "out") / name)
                 for name in self.report["assemblies"]
             }
+            closure = {
+                workspace / Path(path).relative_to(out_root): details["sha256"]
+                for path, details in accepted_outputs.items()
+                if contains(out_root, Path(path))
+            }
             receipt = self.command(
                 "stage-2", "test", tree, command, test_plan["identity"],
                 [*runtime_writable, scratch, workspace], env, capture_test_events=True,
                 read_only=[
                     self.writable("stage-2", "packages"),
                     self.writable("stage-2", "out"),
-                ])
+                ],
+                # Every accepted file in the copy is bind-mounted read-only over
+                # the writable workspace, so a test can add scratch files next to
+                # its assembly but cannot replace or remove a certified binary.
+                protected_files=sorted(closure))
+            for copied, expected in closure.items():
+                if not copied.is_file() or sha256_file(copied) != expected:
+                    raise CertificationError(
+                        f"test execution changed the copied runtime closure: {copied}")
             after = {
                 name: sha256_file(self.writable("stage-2", "out") / name)
                 for name in self.report["assemblies"]

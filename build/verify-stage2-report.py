@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,16 @@ class ReportError(Exception):
     pass
 
 
+HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+def digest(value: Any) -> bool:
+    return isinstance(value, str) and HEX64.fullmatch(value) is not None
+
+
 def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
+    if not assemblies or not tests:
+        raise ReportError("expected assemblies and test selections must not be empty")
     if not isinstance(report, dict):
         raise ReportError("report is not a JSON object")
     if report.get("schema") != 1:
@@ -47,6 +57,12 @@ def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
             raise ReportError(f"assembly was not compared: {assembly}")
         if row.get("normalizedEqual") is not True:
             raise ReportError(f"stage 1 and stage 2 differ: {assembly}")
+        stage1, stage2 = row.get("stage1"), row.get("stage2")
+        if (not isinstance(stage1, dict) or not isinstance(stage2, dict)
+                or not digest(stage1.get("normalized_sha256"))
+                or stage1.get("normalized_sha256") != stage2.get("normalized_sha256")
+                or not isinstance(row.get("rawEqual"), bool)):
+            raise ReportError(f"comparison lacks consistent stage fingerprints: {assembly}")
     ran = report.get("tests")
     if not isinstance(ran, list):
         raise ReportError("report has no test rows")
@@ -63,6 +79,14 @@ def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
                 or executed <= 0 or row.get("failed") != 0
                 or row.get("outcome") != "Completed"):
             raise ReportError(f"test selection has no positive passing evidence: {row!r}")
+        assembly = row.get("testAssembly")
+        hashes = row.get("assemblySha256")
+        if (not isinstance(row.get("receipt"), str) or not row["receipt"]
+                or not digest(row.get("eventSha256")) or not digest(row.get("loggerSha256"))
+                or not isinstance(assembly, dict) or not digest(assembly.get("sha256"))
+                or not isinstance(hashes, dict) or not hashes
+                or not all(digest(value) for value in hashes.values())):
+            raise ReportError(f"test selection lacks authenticated evidence fields: {key[:120]}")
     if seen != set(tests):
         raise ReportError(
             f"test selections differ from the expected set: "
