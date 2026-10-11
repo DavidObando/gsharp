@@ -594,8 +594,8 @@ class ReportVerifierTests(unittest.TestCase):
         def comparison(name: str) -> dict:
             return {
                 "assembly": name, "normalizedEqual": True, "rawEqual": True,
-                "stage1": {"normalized_sha256": digest},
-                "stage2": {"normalized_sha256": digest},
+                "stage1": {"normalized_sha256": digest, "raw_sha256": digest},
+                "stage2": {"normalized_sha256": digest, "raw_sha256": digest},
             }
 
         def selection(project: str, filter_: str, executed: int) -> dict:
@@ -604,7 +604,7 @@ class ReportVerifierTests(unittest.TestCase):
                 "failed": 0, "outcome": "Completed", "receipt": "/r.json",
                 "eventSha256": digest, "loggerSha256": digest,
                 "testAssembly": {"path": "/t.dll", "sha256": digest},
-                "assemblySha256": {"Core/GSharp.Core.dll": digest},
+                "assemblySha256": {"Core/GSharp.Core.dll": digest, "Compiler/gsc.dll": digest},
             }
 
         return {
@@ -645,6 +645,10 @@ class ReportVerifierTests(unittest.TestCase):
             "stage fingerprints differ": lambda r: r["comparison"][0]["stage2"].update(
                 normalized_sha256="b" * 64),
             "missing fingerprints": lambda r: r["comparison"][0].pop("stage1"),
+            "tests on other binaries": lambda r: r["tests"][0]["assemblySha256"].update(
+                {"Core/GSharp.Core.dll": "c" * 64}),
+            "extra test binary": lambda r: r["tests"][1]["assemblySha256"].update(
+                {"Other.dll": "a" * 64}),
             "missing event hash": lambda r: r["tests"][0].pop("eventSha256"),
             "missing test assembly": lambda r: r["tests"][1].pop("testAssembly"),
             "missing receipt": lambda r: r["tests"][0].update(receipt=""),

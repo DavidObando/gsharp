@@ -87,6 +87,10 @@ def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
                 or not isinstance(hashes, dict) or not hashes
                 or not all(digest(value) for value in hashes.values())):
             raise ReportError(f"test selection lacks authenticated evidence fields: {key[:120]}")
+        # The tests must have run against exactly the binaries that were compared.
+        if hashes != {name: compared[name]["stage2"].get("raw_sha256") for name in assemblies}:
+            raise ReportError(
+                f"test evidence is not bound to the certified stage-2 binaries: {key[:120]}")
     if seen != set(tests):
         raise ReportError(
             f"test selections differ from the expected set: "
