@@ -3210,9 +3210,26 @@ class Controller:
             validate_certified_runtime_closure(
                 test_target, self.writable("stage-2", "out"),
                 self.report["assemblies"])
+            # Tests write scratch files next to their own assembly, so they run
+            # from a disposable copy of the accepted output closure. The copy is
+            # verified against the accepted hashes first; the certified outputs
+            # themselves stay read-only and are re-verified after the run.
+            out_root = self.writable("stage-2", "out")
+            workspace = self.mutable / "stage-2" / f"test-{index}-run"
+            if workspace.exists():
+                raise CertificationError(f"test workspace already exists: {workspace}")
+            self.verify_output_closure("stage-2")
+            shutil.copytree(out_root, workspace, symlinks=False)
+            accepted_outputs = self.accepted_build_outputs.get("stage-2", {})
+            verify_output_inventory([workspace], {
+                str(workspace / Path(path).relative_to(out_root)): details["sha256"]
+                for path, details in accepted_outputs.items()
+                if contains(out_root, Path(path))
+            })
+            run_target = workspace / test_target.relative_to(out_root)
             command = [
                 str(self.stage_dotnet("stage-2") / "dotnet"), "vstest",
-                str(test_target),
+                str(run_target),
                 "--Logger:ADR0198",
                 f"--TestAdapterPath:{logger.parent}",
                 f"--ResultsDirectory:{scratch}",
@@ -3227,7 +3244,7 @@ class Controller:
             }
             receipt = self.command(
                 "stage-2", "test", tree, command, test_plan["identity"],
-                [*runtime_writable, scratch], env, capture_test_events=True,
+                [*runtime_writable, scratch, workspace], env, capture_test_events=True,
                 read_only=[
                     self.writable("stage-2", "packages"),
                     self.writable("stage-2", "out"),
@@ -3250,7 +3267,7 @@ class Controller:
                     Path(receipt.events).read_bytes(), receipt.event_key)
             except (OSError, CertificationError) as error:
                 raise CertificationError(f"invalid test supervisor evidence: {error}") from error
-            total = positive_test_count(events, test_target)
+            total = positive_test_count(events, run_target)
             failed = 0
             self.revalidate(
                 "stage-2", tree, [project], test_plan, f"after-test-{index}")
