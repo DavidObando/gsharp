@@ -1013,6 +1013,21 @@ class ControllerBoundaryTests(unittest.TestCase):
         with self.assertRaises(stage2.CertificationError):
             stage2.verify_published_primary(destination, target, accepted)
 
+    def test_compiler_tool_overrides_outside_the_copied_sdk_are_rejected(self) -> None:
+        toolchain = self.root / "toolchain"
+        (toolchain / "sdk").mkdir(parents=True)
+        inside = toolchain / "sdk" / "csc"
+        inside.write_text("", encoding="utf-8")
+        stage2.validate_tool_selection("p", {"CscToolPath": str(inside)}, toolchain)
+        stage2.validate_tool_selection("p", {}, toolchain)
+        for properties in (
+            {"CscToolPath": str(self.root)},
+            {"CscToolExe": "evil"},
+            {"VbcToolPath": "/usr/bin"},
+        ):
+            with self.subTest(properties), self.assertRaises(stage2.CertificationError):
+                stage2.validate_tool_selection("p", properties, toolchain)
+
     def test_imported_runtime_path_override_is_rejected(self) -> None:
         tree = self.tree()
         imported = tree / "package.props"

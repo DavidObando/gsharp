@@ -1376,7 +1376,10 @@ def trusted_dotnet() -> Path:
     )
     for candidate in system_candidates:
         executable = real(candidate)
-        if executable.is_file():
+        # An installation without the pinned SDK cannot be copied as the
+        # toolchain, so it must not shadow one that has it.
+        if executable.is_file() and (
+                executable.parent / "sdk" / TRUSTED_DOTNET_SDK_VERSION).is_dir():
             info = executable.stat()
             if (info.st_uid == 0 and not info.st_mode & 0o022
                     and system_owned_tree(executable.parent)):
@@ -1384,6 +1387,7 @@ def trusted_dotnet() -> Path:
     for candidate in (account_home / ".dotnet/dotnet",):
         executable = real(candidate)
         if (executable.is_file()
+                and (executable.parent / "sdk" / TRUSTED_DOTNET_SDK_VERSION).is_dir()
                 and sha256_file(executable) in ALLOWED_DOTNET_HOST_HASHES
                 and dotnet_manifest_sha256(executable.parent)
                 in ALLOWED_DOTNET_ROOT_MANIFESTS):
@@ -1449,6 +1453,26 @@ def verify_published_primary(destination: Path, target: Path, expected_sha256: s
     if sha256_file(published) != expected_sha256:
         raise CertificationError(
             f"published {target.name} is not the accepted build output")
+
+
+# The C#, VB and F# compiler tasks take their executable straight from these.
+TOOL_SELECTION_PROPERTIES = (
+    "CscToolPath", "CscToolExe", "VbcToolPath", "VbcToolExe",
+    "FscToolPath", "FscToolExe",
+)
+
+
+def validate_tool_selection(
+    relative: str, properties: dict[str, Any], toolchain: Path,
+) -> None:
+    """Compiler executables may only come from the copied SDK."""
+    for name in TOOL_SELECTION_PROPERTIES:
+        value = str(properties.get(name, "") or "")
+        if value and not (
+                Path(value).is_absolute() and contains(toolchain, real(Path(value)))):
+            raise CertificationError(
+                f"{relative} selects a compiler tool outside the copied SDK: "
+                f"{name}={value!r}")
 
 
 def project_key(project: Path) -> str:
@@ -2373,6 +2397,7 @@ class Controller:
         property_names = sorted({
             *preprocessed_property_names(preprocessed),
             *properties,
+            *TOOL_SELECTION_PROPERTIES,
             "MSBuildAllProjects",
         })
         property_command = [
@@ -2408,6 +2433,7 @@ class Controller:
                 f"MSBuildAllProjects names files the evaluated import graph does not "
                 f"contain for {relative}: {sorted(claimed_imports - engine_imports)[:3]}")
         imports = sorted(engine_imports)
+        validate_tool_selection(str(relative), properties_out, self.stage_toolchain(stage))
         for name, expected in properties.items():
             if str(properties_out.get(name, "")) != str(expected):
                 raise CertificationError(
