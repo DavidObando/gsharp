@@ -89,7 +89,8 @@ public sealed class CorePublicApiSnapshotTests
         string baselines = Path.Combine(LocateRepoRoot(), "test", "Core.Tests", "Baselines");
         CorePublicApiAllowance.Result allowance = CorePublicApiAllowance.Apply(
             lines,
-            CorePublicApiAllowance.Parse(File.ReadAllText(Path.Combine(baselines, CorePublicApiAllowance.AllowanceFileName))));
+            CorePublicApiAllowance.Parse(File.ReadAllText(Path.Combine(baselines, CorePublicApiAllowance.AllowanceFileName))),
+            CorePublicApiAllowance.IsBuiltByGsc(assemblyPath));
         this.output.WriteLine($"Allowed additions present (ADR-0199): {allowance.Present.Count}");
         foreach (string present in allowance.Present)
         {

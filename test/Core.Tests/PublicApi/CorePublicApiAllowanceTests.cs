@@ -48,6 +48,36 @@ public sealed class CorePublicApiAllowanceTests : IDisposable
     }
 
     [Fact]
+    public void MatchingAdditionInNonGscAssembly_StillFails()
+    {
+        string[] golden = NativeSurface();
+        string[] native = WithMember(golden, Deconstruct);
+
+        var result = CorePublicApiAllowance.Apply(native, Allow(Record, Deconstruct), builtByGsc: false);
+
+        Assert.Empty(result.Present);
+        Assert.False(Compare(golden, result.Lines).IsMatch);
+    }
+
+    [Fact]
+    public void IsBuiltByGsc_DistinguishesGscFromCSharpAssemblies()
+    {
+        using var csharp = new CSharpFixture("namespace Demo; public record Pair(int A);");
+        Assert.False(CorePublicApiAllowance.IsBuiltByGsc(csharp.AssemblyPath));
+
+        var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+            GSharp.Core.CodeAnalysis.Text.SourceText.From("package Demo\ndata class Pair(A int32)\n"));
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(tree) { IsLibrary = true };
+        string path = Path.Combine(this.directory, "gsc.dll");
+        using (var stream = File.Create(path))
+        {
+            Assert.True(compilation.Emit(stream).Success);
+        }
+
+        Assert.True(CorePublicApiAllowance.IsBuiltByGsc(path));
+    }
+
+    [Fact]
     public void NativeSurface_PassesWithoutTheAllowedEntries()
     {
         string[] golden = NativeSurface();

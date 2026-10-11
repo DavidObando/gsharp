@@ -5,6 +5,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 
 namespace GSharp.Core.Tests.PublicApi;
 
@@ -85,9 +87,19 @@ internal static class CorePublicApiAllowance
     /// </summary>
     /// <param name="rendered">The rendered public API lines.</param>
     /// <param name="allowance">The allow-list entries.</param>
+    /// <param name="builtByGsc">
+    /// Whether the rendered assembly was produced by gsc. The waiver covers
+    /// G#-synthesized members only, so for any other assembly (the native C#
+    /// build) nothing is removed and an authored matching member still fails.
+    /// </param>
     /// <returns>The remaining lines and the allowed additions that were present.</returns>
-    internal static Result Apply(IReadOnlyList<string> rendered, IReadOnlyList<Entry> allowance)
+    internal static Result Apply(IReadOnlyList<string> rendered, IReadOnlyList<Entry> allowance, bool builtByGsc = true)
     {
+        if (!builtByGsc)
+        {
+            return new Result(rendered.ToList(), new List<string>());
+        }
+
         var drop = new HashSet<int>();
         var present = new List<string>();
         foreach (Entry entry in allowance)
@@ -138,6 +150,31 @@ internal static class CorePublicApiAllowance
 
         var lines = rendered.Where((_, index) => !drop.Contains(index)).ToList();
         return new Result(lines, present);
+    }
+
+    /// <summary>
+    /// Reports whether the assembly was emitted by gsc: gsc stamps every
+    /// assembly that declares data types with the <c>GSharp.TypeSemantics</c>
+    /// assembly-metadata attribute, which the C# compiler never writes.
+    /// </summary>
+    /// <param name="assemblyPath">The assembly to inspect.</param>
+    /// <returns><see langword="true"/> when the marker is present.</returns>
+    internal static bool IsBuiltByGsc(string assemblyPath)
+    {
+        using var stream = System.IO.File.OpenRead(assemblyPath);
+        using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+        System.Reflection.Metadata.MetadataReader reader = pe.GetMetadataReader();
+        byte[] marker = System.Text.Encoding.UTF8.GetBytes("GSharp.TypeSemantics");
+        foreach (var handle in reader.GetAssemblyDefinition().GetCustomAttributes())
+        {
+            byte[] blob = reader.GetBlobBytes(reader.GetCustomAttribute(handle).Value);
+            if (blob.AsSpan().IndexOf(marker) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static int FindType(IReadOnlyList<string> rendered, string typeName)
