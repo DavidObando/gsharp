@@ -3210,7 +3210,7 @@ class Controller:
                     if key.casefold() not in {
                         "buildprojectreferences", "baseoutputpath",
                         "baseintermediateoutputpath", "msbuildprojectextensionspath",
-                        "restorepackagespath", "restoreconfigfile",
+                        "restorepackagespath", "restoreconfigfile", "restoresources",
                         "documentationfile", "errorlog",
                     }
                 },
