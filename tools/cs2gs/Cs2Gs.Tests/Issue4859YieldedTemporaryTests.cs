@@ -18,8 +18,8 @@ namespace Cs2Gs.Tests;
 /// Issue #4859: <c>yield return</c> values only need a temporary when their
 /// printed form starts with <c>(</c> and is not a tuple literal (#4705), or
 /// when it starts with a nonempty <c>[</c> (a sized array, <c>yield [3]T</c>
-/// parses as indexing), or when it is a branching expression, which needs the
-/// iterator element type as its target (#4719).
+/// parses as indexing), or when it is a branching expression or a lambda, which need the
+/// iterator element type as their target (#4719).
 /// Everything else prints inline, and a remaining temporary has a readable name, never <c>__yielded{N}</c>.
 /// </summary>
 public sealed class Issue4859YieldedTemporaryTests
