@@ -64,6 +64,7 @@ cs2gs_synthetic_families=(
   '__init|retired (object-initializer temporary)'
   '__spread|retired (collection-spread temporary)'
   '__using|retired (using-statement temporary)'
+  '__yielded|retired by #4859 (iterator yield-value temporary; a needed hoist is a readable item local)'
   '__cs2gs_|never emitted; reserved alias prefix was not implemented (#4299)'
 )
 
