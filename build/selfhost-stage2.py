@@ -1695,17 +1695,22 @@ class Controller:
                 arguments.extend(("--ro-bind", str(path), str(path)))
         arguments.extend(("--ro-bind", str(tree), str(tree)))
         uses_pdb_root = any("Adr0198PdbDirectory=" in argument for argument in command)
-        canonical_build = uses_pdb_root and len(command) > 2 and command[1] == "build"
-        pdb_key = project_key(Path(command[2])) if uses_pdb_root else ""
+        # Evaluation and build see the same canonical source path, so a project
+        # cannot condition anything on where the tree really lives (and the PEs
+        # of the two stage trees embed identical paths).
+        canonical_build = (
+            uses_pdb_root and len(command) > 2 and command[1] in {"build", "msbuild"})
+        pdb_key = project_key(Path(command[2])) if uses_pdb_root and len(command) > 2 else ""
         if canonical_build:
             arguments.extend((
                 "--dir", "/adr0198",
                 "--ro-bind", str(tree), "/adr0198/tree",
                 "--dir", "/adr0198/pdb",
                 # Only this project's keyed directory: a build can never touch
-                # another producer's PDB.
+                # another producer's PDB; evaluation only reads it.
                 "--dir", f"/adr0198/pdb/{pdb_key}",
-                "--bind", str(self.pdb_directory(env["ADR0198_STAGE"], command[2])),
+                "--bind" if command[1] == "build" else "--ro-bind",
+                str(self.pdb_directory(env["ADR0198_STAGE"], command[2])),
                 f"/adr0198/pdb/{pdb_key}",
             ))
         elif uses_pdb_root and len(command) > 2 and command[1] == "publish":
@@ -1972,7 +1977,12 @@ class Controller:
             stage, purpose, tree, command, graph_identity, writable, env,
             read_only=read_only)
         receipt = json.loads(Path(result.receipt).read_text(encoding="utf-8"))
-        return Path(receipt["stdout"]["path"]).read_bytes()
+        output = Path(receipt["stdout"]["path"]).read_bytes()
+        if any("Adr0198PdbDirectory=" in argument for argument in command):
+            # Evaluation ran under the canonical source path; report the tree's
+            # real location so every consumer sees ordinary tree paths.
+            output = output.replace(b"/adr0198/tree", str(tree).encode())
+        return output
 
     def seed_sdk_cache(self, stage: str, package: Path) -> dict[str, Any]:
         version = package_version(package)

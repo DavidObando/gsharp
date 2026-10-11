@@ -34,6 +34,7 @@ python3 build/selfhost-stage2.py \
   --assembly Core/GSharp.Core.dll \
   --assembly Compiler/gsc.dll \
   --test 'test/Core.Tests/Core.Tests.gsproj::<filter>' \
+  --test-env GSHARP_SKIP_ILVERIFY=1 \
   --test-adapter-sha256 c5ac41b36fac0fcef9714fb80fea0175913530fb53dd7bb8e5e1470339667100 \
   --test-adapter-sha256 194458c816e0ea9ff0c5eac8896c52133fe9205661833b3d0f57e85a4e66936b \
   --test-adapter-sha256 ec705ad62e33f31fc46ad5800c9b1694c02d0ec4e1ee704712da9f24ebbea22e \
@@ -45,8 +46,8 @@ because suites write scratch files next to their own assembly. The copy is
 checked against the accepted hashes before the run, and the certified outputs
 stay read-only and are re-verified afterwards. The test host gets
 `CS2GS_TEST_SOURCE_ROOT` (the immutable stage tree) and only the allowlisted
-`--test-env GSHARP_SKIP_ILVERIFY=1`, which is recorded in the report; the
-sandbox has no `dotnet-ilverify`. Tests that cannot run outside the repository
+`--test-env GSHARP_SKIP_ILVERIFY=1` (shown above, required because the
+sandbox has no `dotnet-ilverify`), which is recorded in the report. Tests that cannot run outside the repository
 layout fail identically under stage 1 and are excluded by name in
 `build/selfhost/stage2-env-bound-tests.json` until
 [#4873](https://github.com/DavidObando/gsharp/issues/4873) is fixed.

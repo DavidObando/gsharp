@@ -44,14 +44,15 @@ dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj -c Release
 # so the stage-0 compiler is this checkout's, never a stale package.
 dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Release -graph
 
-# `cs2gs migrate` exits 1 when any app fails any stage. The certification
-# tolerates only test-parity failures (the controller re-runs the tests under
-# stage 2 itself); a translate, compile or ILVerify failure anywhere stops here.
+# Migration stops after ILVerify (compile carries the `!!` polish): test parity
+# is not run here because the controller runs the tests under stage 2 itself.
+# `cs2gs migrate` exits 1 when any app fails; a translate, compile or ILVerify
+# failure anywhere is rejected from the summary below.
 set +e
 dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
   --corpus "$repo_root" --sdk-pin global-json \
   --out "$work/migrated" --artifacts "$work/runs" --config Release \
-  "${selfmig_project_filters[@]}" | tee "$work/migrate.log"
+  --stop-after ilverify "${selfmig_project_filters[@]}" | tee "$work/migrate.log"
 migrate_exit=${PIPESTATUS[0]}
 set -e
 if [[ $migrate_exit -ne 0 && $migrate_exit -ne 1 ]]; then
@@ -63,7 +64,7 @@ if [[ -z "$summary" || ! -f "$work/migrated/global.json" ]]; then
   echo "migration produced no summary or tree (exit $migrate_exit)" >&2
   exit 1
 fi
-python3 build/verify-migration-run.py "$summary"
+python3 build/verify-migration-run.py --stopped-after-ilverify "$summary"
 
 git -C "$work/migrated" init -q
 git -C "$work/migrated" add -A

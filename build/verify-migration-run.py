@@ -2,9 +2,11 @@
 """Accept a cs2gs migrate run for stage-2 certification.
 
 `cs2gs migrate` exits 1 when any app fails any stage. The certification only
-needs a tree that translated, compiled and passed IL verification everywhere;
-test parity is re-established by the controller's own stage-2 test run, so only
-`test-parity` failures are tolerated (and listed).
+needs a tree that translated, compiled and passed IL verification everywhere.
+Test parity is re-established by the controller's own stage-2 test run: the
+integrated script stops migration after ILVerify (`--stopped-after-ilverify`
+requires every parity row to be `skipped`); a full run tolerates only
+`test-parity` failures (listed).
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ REQUIRED = ("translate", "compile", "ilverify")
 KNOWN_STAGES = frozenset({*REQUIRED, "test-parity"})
 
 
-def check(summary: Any) -> list[str]:
+def check(summary: Any, stopped_after_ilverify: bool = False) -> list[str]:
     """Return the apps whose only failure is test parity; raise on anything else."""
     if not isinstance(summary, dict) or not isinstance(summary.get("apps"), list) \
             or not summary["apps"]:
@@ -37,7 +39,14 @@ def check(summary: Any) -> list[str]:
                 raise ValueError(
                     f"{app.get('appId')}: {stage} is {stages.get(stage)!r}, not 'passed'")
         parity = stages.get("test-parity")
-        if parity == "failed":
+        if stopped_after_ilverify:
+            # `cs2gs migrate --stop-after ilverify` never runs parity: every app
+            # must report it as skipped, and nothing else.
+            if parity != "skipped":
+                raise ValueError(
+                    f"{app.get('appId')}: test-parity is {parity!r}, expected 'skipped' "
+                    "for a run stopped after ilverify")
+        elif parity == "failed":
             parity_only.append(str(app.get("appId")))
         elif parity != "passed":
             raise ValueError(
@@ -46,11 +55,14 @@ def check(summary: Any) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 1:
-        print("usage: verify-migration-run.py <summary.json>", file=sys.stderr)
+    stopped = "--stopped-after-ilverify" in argv
+    paths = [item for item in argv if item != "--stopped-after-ilverify"]
+    if len(paths) != 1:
+        print("usage: verify-migration-run.py [--stopped-after-ilverify] <summary.json>",
+              file=sys.stderr)
         return 2
     try:
-        parity = check(json.loads(Path(argv[0]).read_text(encoding="utf-8")))
+        parity = check(json.loads(Path(paths[0]).read_text(encoding="utf-8")), stopped)
     except (OSError, ValueError) as error:
         print(f"verify-migration-run: {error}", file=sys.stderr)
         return 1

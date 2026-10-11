@@ -567,6 +567,13 @@ class MigrationRunVerifierTests(unittest.TestCase):
         for status in ("skipped", "unknown", None):
             with self.subTest(status), self.assertRaises(ValueError):
                 module.check({"apps": [self.app(**{"test-parity": status})]})
+        # A run stopped after ilverify must report parity as skipped everywhere.
+        self.assertEqual([], module.check(
+            {"apps": [self.app(**{"test-parity": "skipped"})]}, stopped_after_ilverify=True))
+        for status in ("passed", "failed", None):
+            with self.subTest(f"stopped {status}"), self.assertRaises(ValueError):
+                module.check({"apps": [self.app(**{"test-parity": status})]},
+                             stopped_after_ilverify=True)
         duplicate = self.app()
         duplicate["stages"].append({"stage": "compile", "status": "failed"})
         unknown = self.app()
