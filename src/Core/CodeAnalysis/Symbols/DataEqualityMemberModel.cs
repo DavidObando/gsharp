@@ -305,9 +305,8 @@ internal static class DataEqualityMemberModel
 
         for (var i = 0; i < parameters.Length; i++)
         {
-            if (arguments[i] is not TypeParameterSymbol parameter
-                || parameter.Ordinal != parameters[i].Ordinal
-                || parameter.Name != parameters[i].Name)
+            // Ordinals restart per declaring type, so only the symbol itself is identity.
+            if (!ReferenceEquals(arguments[i], parameters[i]))
             {
                 return false;
             }
