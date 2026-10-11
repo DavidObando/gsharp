@@ -1137,7 +1137,15 @@ def stage_package(tree: Path, package: Path) -> Path:
     destination = feed / package.name
     if destination.exists() and (destination.is_symlink() or destination.stat().st_nlink != 1):
         raise CertificationError(f"package feed destination is aliased: {destination}")
-    atomic_bytes(destination, package.read_bytes())
+    content = package.read_bytes()
+    if destination.exists():
+        # A tracked file at the destination is part of the frozen snapshot: an
+        # identical one is left alone, a different one is a collision.
+        if destination.read_bytes() != content:
+            raise CertificationError(
+                f"package feed destination collides with a different tracked file: {destination}")
+        return destination
+    atomic_bytes(destination, content)
     return destination
 
 

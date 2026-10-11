@@ -978,6 +978,20 @@ class ControllerBoundaryTests(unittest.TestCase):
         with self.assertRaises(stage2.CertificationError):
             stage2.verify_caller_unchanged(tree, identity)
 
+    def test_prestaged_package_must_match_or_be_absent(self) -> None:
+        tree = self.tree()
+        package = self.root / "Pkg.1.0.0.nupkg"
+        package.write_bytes(b"package")
+        staged = stage2.stage_package(tree, package)
+        self.assertEqual(b"package", staged.read_bytes())
+        before = staged.stat().st_mtime_ns
+        stage2.stage_package(tree, package)  # identical: untouched
+        self.assertEqual(before, staged.stat().st_mtime_ns)
+        staged.write_bytes(b"different")
+        with self.assertRaises(stage2.CertificationError):
+            stage2.stage_package(tree, package)
+        self.assertEqual(b"different", staged.read_bytes())
+
     def test_imported_runtime_path_override_is_rejected(self) -> None:
         tree = self.tree()
         imported = tree / "package.props"
