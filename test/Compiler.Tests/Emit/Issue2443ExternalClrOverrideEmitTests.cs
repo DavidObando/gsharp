@@ -290,8 +290,8 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
                 SHARED-43
                 SHARED-OVERRIDDEN-43
                 SHARED-OVERRIDDEN-43
-                DataValue(Number=7)
-                DataValue(Number=7)
+                DataValue { Number = 7 }
+                DataValue { Number = 7 }
                 Issue2896.DefaultValue
                 Issue2896.DefaultValue
                 """.ReplaceLineEndings(Environment.NewLine) + Environment.NewLine,

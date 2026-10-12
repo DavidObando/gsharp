@@ -179,6 +179,52 @@ internal static class DataEqualityMemberModel
             isOverride: isOverride);
     }
 
+    /// <summary>
+    /// ADR-0199: the <c>IEquatable&lt;Self&gt;</c> every data type implements
+    /// through its compiler-owned typed <c>Equals</c> slot, constructed over the
+    /// type itself (over its own type parameters when it is generic).
+    /// </summary>
+    /// <param name="owner">The data type.</param>
+    /// <returns>The symbolic <c>IEquatable[Self]</c>.</returns>
+    internal static TypeSymbol CreateSelfEquatable(StructSymbol owner)
+    {
+        TypeSymbol self = owner.TypeParameters.IsDefaultOrEmpty
+            ? owner
+            : StructSymbol.Construct(owner, owner.TypeParameters.Cast<TypeSymbol>().ToImmutableArray());
+        return ImportedTypeSymbol.GetConstructed(
+            typeof(IEquatable<object>),
+            typeof(IEquatable<>),
+            ImmutableArray.Create(self));
+    }
+
+    /// <summary>
+    /// ADR-0199: tests whether <paramref name="interfaces"/> already lists
+    /// <c>IEquatable[Self]</c> for <paramref name="owner"/>, so the implicit
+    /// interface is added exactly once (a cs2gs-translated record carries the
+    /// native one over from the C# symbol).
+    /// </summary>
+    /// <param name="owner">The data type.</param>
+    /// <param name="interfaces">The imported interfaces the type names.</param>
+    /// <returns><see langword="true"/> when the self interface is already listed.</returns>
+    internal static bool ListsSelfEquatable(StructSymbol owner, System.Collections.Generic.IEnumerable<TypeSymbol> interfaces)
+    {
+        var ownerDefinition = owner.Definition ?? owner;
+        foreach (var candidate in interfaces)
+        {
+            if (MemberLookup.TryGetSymbolicClrGenericInterface(candidate, out var open, out var arguments)
+                && ClrTypeUtilities.AreSame(open, typeof(IEquatable<>))
+                && arguments.Length == 1
+                && StripReferenceNullability(arguments[0]) is StructSymbol argument
+                && ReferenceEquals(argument.Definition ?? argument, ownerDefinition)
+                && IsOwnConstruction(owner, argument))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Creates the existing synthesized override of object equality.</summary>
     /// <param name="owner">The declaring data type.</param>
     /// <returns>The compiler-owned object equality signature.</returns>
@@ -200,5 +246,72 @@ internal static class DataEqualityMemberModel
             receiverType: owner,
             isOpen: owner.IsClass && (owner.IsOpen || owner.IsSealedHierarchy),
             isOverride: true);
+    }
+
+    // `IEquatable[Item?]` and `IEquatable[Item]` are one runtime interface: `?` and
+    // platform marks on a reference type are metadata only. A nullable VALUE type
+    // (`Item?` on a data struct) is `Nullable<Item>`, a different interface.
+    private static TypeSymbol StripReferenceNullability(TypeSymbol type)
+    {
+        while (true)
+        {
+            switch (type)
+            {
+                case NullableTypeSymbol { UnderlyingType: StructSymbol { IsClass: true } referenceType }:
+                    type = referenceType;
+                    continue;
+                case PlatformTypeSymbol platform:
+                    type = platform.UnderlyingType;
+                    continue;
+                default:
+                    return type;
+            }
+        }
+    }
+
+    // `IEquatable[Item[int32]]` is a different interface from `IEquatable[Item[T]]`:
+    // the argument must be the type itself, closed over its own type parameters.
+    private static bool IsOwnConstruction(StructSymbol owner, StructSymbol argument)
+    {
+        // The enclosing construction counts too: `Outer[int32].Item` is not `Outer[T].Item`.
+        var enclosingParameters = StructSymbol.CollectEnclosingTypeParameters(owner);
+        var enclosingArguments = argument.EnclosingTypeArguments;
+        if (!enclosingArguments.IsDefaultOrEmpty && !SameParameters(enclosingArguments, enclosingParameters))
+        {
+            return false;
+        }
+
+        var ownParameters = owner.TypeParameters;
+        var closedOver = argument.TypeArguments;
+        if (ownParameters.IsDefaultOrEmpty)
+        {
+            return closedOver.IsDefaultOrEmpty;
+        }
+
+        if (closedOver.IsDefaultOrEmpty || closedOver.Length != ownParameters.Length)
+        {
+            return false;
+        }
+
+        return SameParameters(closedOver, ownParameters);
+    }
+
+    private static bool SameParameters(ImmutableArray<TypeSymbol> arguments, ImmutableArray<TypeParameterSymbol> parameters)
+    {
+        if (arguments.Length != parameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            // Ordinals restart per declaring type, so only the symbol itself is identity.
+            if (!ReferenceEquals(arguments[i], parameters[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

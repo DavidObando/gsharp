@@ -86,8 +86,10 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
             Assert.True(HasPreserveBaseOverridesAttribute(reader, leafClone));
 
             var describe = FindMethod(reader, baseType, "Describe");
+            // ADR-0199 adds the synthesized PrintMembers row after the other
+            // synthesized members, ahead of the user's Describe.
             Assert.Equal(
-                8,
+                9,
                 MetadataTokens.GetRowNumber(describe) - MetadataTokens.GetRowNumber(baseClone));
         }
         finally

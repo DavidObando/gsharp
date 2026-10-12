@@ -106,7 +106,7 @@ public sealed class Adr0157PrettyDisplaySpikeTests
         var toString = valueType.GetMethod("ToString", Type.EmptyTypes);
         Assert.Equal(valueType, toString.DeclaringType);
 
-        Assert.Equal("Point(X=1, Y=2)", SpikeValueFormatter.Format(result.Value));
+        Assert.Equal("Point { X = 1, Y = 2 }", SpikeValueFormatter.Format(result.Value));
     }
 
     /// <summary>

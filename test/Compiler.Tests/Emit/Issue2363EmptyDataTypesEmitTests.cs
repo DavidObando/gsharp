@@ -18,8 +18,8 @@ namespace GSharp.Compiler.Tests.Emit;
 /// positional <c>record struct Name();</c> — previously failed to bind at
 /// all (<c>GS0104</c>, unconditionally rejecting any <c>IsData</c>
 /// declaration with zero fields). These tests exercise the full emit-level
-/// contract for the degenerate zero-field case: <c>ToString()</c> renders a
-/// fixed <c>"Name()"</c> literal, <c>GetHashCode()</c> is a stable
+/// contract for the degenerate zero-field case: <c>ToString()</c> renders the
+/// C# record form <c>"Name { }"</c> (ADR-0199), <c>GetHashCode()</c> is a stable
 /// (non-process-randomized) constant derived from the type name,
 /// <c>Equals</c>/<c>==</c>/<c>!=</c> are trivially true for two instances of
 /// the same concrete type, <c>Deconstruct</c> is correctly ABSENT from the
@@ -97,7 +97,7 @@ public class Issue2363EmptyDataTypesEmitTests
     }
 
     [Fact]
-    public void DataClass_ZeroFields_ToString_RendersFixedNameWithEmptyParens()
+    public void DataClass_ZeroFields_ToString_RendersRecordFormatWithEmptyBraces()
     {
         var output = CompileAndRun("""
             package MyLib
@@ -113,11 +113,11 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal($"Empty(){Environment.NewLine}Empty(){Environment.NewLine}", output);
+        Assert.Equal($"Empty {{ }}{Environment.NewLine}Empty {{ }}{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void DataStruct_ZeroFields_ToString_RendersFixedNameWithEmptyParens()
+    public void DataStruct_ZeroFields_ToString_RendersRecordFormatWithEmptyBraces()
     {
         var output = CompileAndRun("""
             package MyLib
@@ -132,7 +132,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal($"Empty(){Environment.NewLine}", output);
+        Assert.Equal($"Empty {{ }}{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -309,7 +309,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal($"mfa{Environment.NewLine}cvf{Environment.NewLine}approval{Environment.NewLine}MfaChallenge(){Environment.NewLine}", output);
+        Assert.Equal($"mfa{Environment.NewLine}cvf{Environment.NewLine}approval{Environment.NewLine}MfaChallenge {{ Kind = mfa }}{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -377,11 +377,11 @@ public class Issue2363EmptyDataTypesEmitTests
             """);
 
         Assert.Equal(
-            $"captcha: CaptchaChallenge(ImageBytes=7){Environment.NewLine}" +
-            $"mfa: MfaChallenge(){Environment.NewLine}" +
-            $"cvf: CvfChallenge(){Environment.NewLine}" +
-            $"approval: ApprovalChallenge(){Environment.NewLine}" +
-            $"external-login: ExternalLoginChallenge(LoginUri=https://example.test){Environment.NewLine}",
+            $"captcha: CaptchaChallenge {{ Kind = captcha, ImageBytes = 7 }}{Environment.NewLine}" +
+            $"mfa: MfaChallenge {{ Kind = mfa }}{Environment.NewLine}" +
+            $"cvf: CvfChallenge {{ Kind = cvf }}{Environment.NewLine}" +
+            $"approval: ApprovalChallenge {{ Kind = approval }}{Environment.NewLine}" +
+            $"external-login: ExternalLoginChallenge {{ Kind = external-login, LoginUri = https://example.test }}{Environment.NewLine}",
             output);
     }
 

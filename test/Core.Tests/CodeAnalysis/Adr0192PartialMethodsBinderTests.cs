@@ -1710,7 +1710,7 @@ Console.WriteLine(""Obsolete: ${typeof(Url).GetMethod(""Describe"")!!.GetCustomA
         Assert.Equal(
             new[]
             {
-                "Url(Owner=o, Name=n)",
+                "Url { Owner = o, Name = n }",
                 "True",
                 "False",
                 "o/m",

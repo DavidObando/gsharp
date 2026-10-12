@@ -158,16 +158,19 @@ public sealed class Issue4633TestNameParityTests
     }
 
     /// <summary>
-    /// A C# record argument renders as <c>R { A = 1 }</c> and the G# data type
-    /// as <c>R(A=1)</c> (ADR-0029); the existing #2833 normalization applies.
+    /// A C# record argument and a G# data type both render as <c>R { A = 1 }</c>
+    /// (ADR-0199), so the names match verbatim; the retired Kotlin spelling does not.
     /// </summary>
     [Fact]
-    public void Compare_RecordRendering_IsNormalized()
+    public void Compare_RecordRendering_MatchesVerbatim()
     {
         TestNameParityResult result = TestNameParity.Compare(
-            new[] { "Own.Tests.A.M(r: R { A = 1 })" }, Passed("Own.Tests.A.M(r: R(A=1))"));
-
+            new[] { "Own.Tests.A.M(r: R { A = 1 })" }, Passed("Own.Tests.A.M(r: R { A = 1 })"));
         Assert.True(result.IsMatch);
+
+        TestNameParityResult kotlin = TestNameParity.Compare(
+            new[] { "Own.Tests.A.M(r: R { A = 1 })" }, Passed("Own.Tests.A.M(r: R(A=1))"));
+        Assert.False(kotlin.IsMatch);
     }
 
     // ---------------------------------------------------------------------
