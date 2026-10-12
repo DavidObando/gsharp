@@ -5,22 +5,23 @@ analyzers. At the cut-over the project is translated to G# with the rest of the
 repository, like the other analyzers cs2gs migrates
 ([cs2gs analyzer translation](cs2gs-analyzer-translation.md)).
 
-## Status: retired at the cut-over (a step the cut-over PR performs)
+## Status: GSA0001-GSA0003 retired at the cut-over (a step the cut-over PR performs)
 
 Owner decision (2026-10-09): GSA0001-GSA0003 are retired. They are not ported.
-The G# analyzers meant to replace the C# ones are GSA0007 and GSA0008 (ADR-0193
-phases 2-3). **They are not implemented yet**, and they enforce the nullability
-funnel, not these three rules.
+The project also defines GSA0004-GSA0007 (GSA0007 is the ADR-0193 producer-funnel
+analyzer, live in every Core build). Those stay, together with the project and the
+`src/Core` reference. GSA0008 (ADR-0193) is not implemented yet and will enforce the
+nullability funnel, not the three retired rules.
 
 **Retirement is not automatic.** The cs2gs migration keeps the analyzer reference
 of `src/Core` (rewritten to `OutputItemType="GsharpCodeAnalyzer"`), and
 `cs2gs-analyzer-translation.md` states that the translated rules keep guarding
-the migrated compiler. Neither `apply.sh` nor `cutover_edits.py` removes them.
-To retire them the cut-over PR must, by hand: drop the `InternalAnalyzers`
-reference from `src/Core/Core.gsproj`, and delete the analyzer project and its
-tests (or keep the project as a reference but unreferenced). If the owner prefers
-to keep the translated rules running, skip that step and delete this section
-instead.
+the migrated compiler. Neither `apply.sh` nor `cutover_edits.py` removes any rule.
+To retire GSA0001-GSA0003 the cut-over PR must, by hand: delete those three
+analyzers, their descriptors and their tests, and keep everything else in
+`src/Analyzers/InternalAnalyzers` and the reference in `src/Core/Core.gsproj`.
+If the owner prefers to keep the translated rules running, skip that step and
+delete this section instead.
 
 **Enforcement gap once retired.** The three rules below are **not enforced by the
 build**. They stay as written conventions for compiler source and must be checked

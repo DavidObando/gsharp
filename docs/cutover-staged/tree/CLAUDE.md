@@ -216,14 +216,14 @@ names in `.gs` files. Before touching it, read:
     receiver-aware `MemberLookup.GetClr*TypeSymbol` family) instead of calling
     `TypeSymbol.FromClrType` or `MapOpenClrTypeToSymbolic` on a signature
     position directly.
-  - **Phase 1:** adds `NullabilityImportRule`, the single place that decides
-    how an imported position's nullability maps to a G# type, plus the first
-    `TypeSymbol` query members. From then on, route new decisions through it.
-  - **Phases 2-3:** add the rest of the query API, and the analyzers that
-    enforce the funnel (GSA0007/GSA0008, now written as G# analyzers; GSA0009
-    for cs2gs is Phase 5). After they land, consumers use the query API
-    instead of writing their own `is NullableTypeSymbol` tests. Until then,
-    review for the pattern by hand.
+  - **Landed:** `NullabilityImportRule` (the single place that decides how an
+    imported position's nullability maps to a G# type), the first `TypeSymbol`
+    query members, and the GSA0007 analyzer that enforces the producer funnel.
+    Route new decisions through them.
+  - **Still ahead:** the rest of the query API, GSA0008 and the consumer
+    migration (after which consumers use the query API instead of writing their
+    own `is NullableTypeSymbol` tests), and GSA0009 for cs2gs (Phase 5). Until
+    then, review for the consumer pattern by hand.
 - **Settled decisions** (don't reopen them without the maintainer):
   - `[Nullable(2)]` on an open type-parameter slot: a reference-type argument
     gives `T?`; a value-type argument is left unchanged, with no wrapping

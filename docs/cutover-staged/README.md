@@ -113,16 +113,18 @@ Verified 2026-10-12 against `main` at `d4943a122`:
 
 ## Owner decisions (answered 2026-10-09) and what remains
 
-1. **GSA0001-GSA0003: retired at the cut-over**, replaced by the G#
-   GSA0007/GSA0008 analyzers (ADR-0193 phases 2-3). **Enforcement gap:** those
-   analyzers enforce the nullability funnel, not the three retired rules. Until
+1. **GSA0001-GSA0003: retired at the cut-over** (GSA0004-GSA0007 stay).
+   **Enforcement gap:** the ADR-0193 funnel analyzers (GSA0007 live, GSA0008 not
+   yet) enforce the nullability funnel, not the three retired rules. Until
    someone writes G# equivalents, struct-field-token reads (GSA0001), imported
    CLR `Type` reference comparisons (GSA0002) and strong static reflection
    caches (GSA0003) are caught only in review. `docs/internal-analyzers.md`
    states this. If one of those bug classes recurs, port that rule. **The
    retirement is a manual step in the cut-over PR**, not done by `apply.sh`: the
-   migration keeps the translated analyzer reference in `src/Core`, so remove it
-   (and the project) by hand; GSA0007/GSA0008 are not implemented yet.
+   migration keeps the translated analyzer reference in `src/Core`, so delete only
+   the three rules, their descriptors and tests by hand. Keep the project, the
+   reference and GSA0004-GSA0007 (GSA0007, the ADR-0193 producer funnel, is live);
+   GSA0008 is not implemented yet.
 2. **What the apps nightly tests, and the C# branch policy.** The tool under
    test is cs2gs built from the checked-out `main` tree (G# source, pinned
    toolchain). Its inputs are C# programs: `cs2gs/csharp-0.4` at a pinned SHA
