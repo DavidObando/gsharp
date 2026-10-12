@@ -647,6 +647,14 @@ class MigrationRunVerifierTests(unittest.TestCase):
         for name, app in (("duplicate", duplicate), ("unknown", unknown)):
             with self.subTest(name), self.assertRaises(ValueError):
                 module.check({"apps": [app]})
+        self.assertEqual([], module.check({"apps": [self.app()]},
+                                           required_apps=("a",), minimum_apps=1))
+        with self.assertRaises(ValueError):
+            module.check({"apps": [self.app()]}, required_apps=("b",))
+        with self.assertRaises(ValueError):
+            module.check({"apps": [self.app()]}, minimum_apps=2)
+        with self.assertRaises(ValueError):
+            module.check({"apps": [self.app(), self.app()]})  # duplicate app id
         with self.assertRaises(ValueError):
             module.check({"apps": []})
 

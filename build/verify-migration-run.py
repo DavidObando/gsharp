@@ -19,12 +19,21 @@ REQUIRED = ("translate", "compile", "ilverify")
 KNOWN_STAGES = frozenset({*REQUIRED, "test-parity"})
 
 
-def check(summary: Any, stopped_after_ilverify: bool = False) -> list[str]:
+def check(summary: Any, stopped_after_ilverify: bool = False,
+          required_apps: tuple[str, ...] = (), minimum_apps: int = 1) -> list[str]:
     """Return the apps whose only failure is test parity; raise on anything else."""
     if not isinstance(summary, dict) or not isinstance(summary.get("apps"), list) \
             or not summary["apps"]:
         raise ValueError("migration summary has no apps")
     parity_only = []
+    present = {app.get("appId") for app in summary["apps"]}
+    if len(present) != len(summary["apps"]) or len(present) < minimum_apps:
+        raise ValueError(
+            f"migration summary has {len(summary['apps'])} apps ({len(present)} unique), "
+            f"expected at least {minimum_apps}")
+    missing = sorted(set(required_apps) - present)
+    if missing:
+        raise ValueError(f"migration summary lacks required apps: {missing[:5]}")
     for app in summary["apps"]:
         stages: dict[Any, Any] = {}
         for row in app.get("stages", []):
@@ -55,14 +64,31 @@ def check(summary: Any, stopped_after_ilverify: bool = False) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    stopped = "--stopped-after-ilverify" in argv
-    paths = [item for item in argv if item != "--stopped-after-ilverify"]
-    if len(paths) != 1:
-        print("usage: verify-migration-run.py [--stopped-after-ilverify] <summary.json>",
-              file=sys.stderr)
+    stopped = False
+    required: list[str] = []
+    minimum = 1
+    paths: list[str] = []
+    items = iter(argv)
+    for item in items:
+        if item == "--stopped-after-ilverify":
+            stopped = True
+        elif item == "--require-app":
+            required.append(next(items, ""))
+        elif item == "--min-apps":
+            value = next(items, "")
+            if not value.isdigit():
+                print("verify-migration-run: --min-apps needs a number", file=sys.stderr)
+                return 2
+            minimum = int(value)
+        else:
+            paths.append(item)
+    if len(paths) != 1 or "" in required:
+        print("usage: verify-migration-run.py [--stopped-after-ilverify] [--min-apps N] "
+              "[--require-app ID]... <summary.json>", file=sys.stderr)
         return 2
     try:
-        parity = check(json.loads(Path(paths[0]).read_text(encoding="utf-8")), stopped)
+        parity = check(json.loads(Path(paths[0]).read_text(encoding="utf-8")),
+                       stopped, tuple(required), minimum)
     except (OSError, ValueError) as error:
         print(f"verify-migration-run: {error}", file=sys.stderr)
         return 1
