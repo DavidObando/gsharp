@@ -352,6 +352,30 @@ public sealed class Issue4850VerbatimSourcesTests : IDisposable
     }
 
     [Fact]
+    public void SharedCompileItems_OnlyApplyToGsharpImporters_AndAnchoredIncludesToTheFile()
+    {
+        this.Write("g/g.gsproj", "<Project Sdk=\"Gsharp.NET.Sdk\"><Import Project=\"..\\shared\\shared.props\" /></Project>");
+        this.Write("c/c.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><Import Project=\"..\\shared\\shared.props\" /></Project>");
+        this.Write(
+            "shared/shared.props",
+            "<Project><ItemGroup><Compile Include=\"Foreign.cs\" />" +
+            "<Compile Include=\"$(MSBuildThisFileDirectory)Anchored.cs\" />" +
+            "<None Include=\"Data.cs\" /></ItemGroup></Project>");
+        this.Write("g/Foreign.cs", "class A {}");
+        this.Write("c/Foreign.cs", "class B {}");
+        this.Write("shared/Anchored.cs", "class C {}");
+        this.Write("g/Anchored.cs", "class D {}");
+        this.Write("g/Data.cs", "class E {}");
+        this.Write("c/Data.cs", "class F {}");
+
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory());
+
+        Assert.Equal(
+            new[] { "c/Data.cs", "g/Data.cs", "g/Foreign.cs", "shared/Anchored.cs" },
+            verbatim.OrderBy(p => p, StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
     public void SharedFileWithNoGsprojImporter_KeepsItsCompileItemsTranslated()
     {
         this.Write("Directory.Build.targets", "<Project><ItemGroup><Compile Include=\"Own.cs\" /></ItemGroup></Project>");

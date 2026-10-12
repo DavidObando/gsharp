@@ -227,10 +227,13 @@ public sealed class Issue3501ScaledTestParityBudgetTests
             .EnumerateFiles(suite, "*.cs", SearchOption.AllDirectories)
             .Where(path =>
             {
-                string relative = Path.GetRelativePath(suite, path);
-                return !relative.Contains($"bin{separator}", StringComparison.Ordinal)
-                    && !relative.Contains($"obj{separator}", StringComparison.Ordinal)
-                    && !relative.StartsWith($"Fixtures{separator}", StringComparison.Ordinal);
+                string[] segments = Path.GetRelativePath(suite, path)
+                    .Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+                string[] directories = segments.Take(segments.Length - 1).ToArray();
+                return !directories.Any(segment =>
+                        segment.Equals("bin", StringComparison.OrdinalIgnoreCase)
+                        || segment.Equals("obj", StringComparison.OrdinalIgnoreCase))
+                    && !(directories.Length > 0 && directories[0].Equals("Fixtures", StringComparison.Ordinal));
             })
             .ToArray();
     }
@@ -239,7 +242,7 @@ public sealed class Issue3501ScaledTestParityBudgetTests
     public void FixtureDataAndBuildOutputAreNotSuiteSources()
     {
         string suite = Path.Combine(AppContext.BaseDirectory, "issue-4850-suite", Guid.NewGuid().ToString("N"));
-        foreach (string relative in new[] { "A.cs", "Fixtures/Data.cs", "Fixtures/Nested/Deep.cs", "bin/B.cs", "obj/C.cs", "Sub/D.cs" })
+        foreach (string relative in new[] { "A.cs", "Fixtures/Data.cs", "Fixtures/Nested/Deep.cs", "bin/B.cs", "obj/C.cs", "Sub/D.cs", "Robin/E.cs", "Subobj/F.cs" })
         {
             string path = Path.Combine(suite, relative.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(path));
@@ -251,7 +254,7 @@ public sealed class Issue3501ScaledTestParityBudgetTests
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(new[] { "A.cs", "Sub/D.cs" }, sources);
+        Assert.Equal(new[] { "A.cs", "Robin/E.cs", "Sub/D.cs", "Subobj/F.cs" }, sources);
     }
 
     private static StageExecutionContext Context()

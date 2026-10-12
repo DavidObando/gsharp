@@ -140,7 +140,12 @@ internal static class RepositoryVerbatimSources
         {
             string directory = DirectoryOf(projectPath.Replace('\\', '/'));
             string fileName = Path.GetFileName(projectPath.Replace('\\', '/'));
-            var baseDirectories = new List<string> { directory };
+
+            // Relative includes resolve against the importing project, an include
+            // anchored with MSBuildThisFileDirectory against the file itself. A
+            // Compile item only means "foreign C#" for G# importers.
+            var allImporterDirectories = new List<string> { directory };
+            var gsharpDirectories = new List<string> { directory };
             bool translatedProject;
             if (IsSharedFile(projectPath))
             {
@@ -154,8 +159,9 @@ internal static class RepositoryVerbatimSources
                     continue;
                 }
 
-                baseDirectories.AddRange(owners.Select(i => i.Directory));
-                translatedProject = !owners.Any(i => i.IsGsharp);
+                allImporterDirectories = owners.Select(i => i.Directory).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                gsharpDirectories = owners.Where(i => i.IsGsharp).Select(i => i.Directory).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                translatedProject = gsharpDirectories.Count == 0;
             }
             else
             {
@@ -170,7 +176,10 @@ internal static class RepositoryVerbatimSources
                 && e.Parent.Name.LocalName.Equals("ItemGroup", StringComparison.OrdinalIgnoreCase)))
             {
                 string itemName = item.Name.LocalName;
-                if (translatedProject && itemName.Equals("Compile", StringComparison.OrdinalIgnoreCase))
+                bool isCompile = itemName.Equals("Compile", StringComparison.OrdinalIgnoreCase);
+                IReadOnlyList<string> relativeDirectories = isCompile ? gsharpDirectories : allImporterDirectories;
+                var anchoredDirectories = new[] { directory };
+                if (translatedProject && isCompile)
                 {
                     // Compiled by a translated project: the translation owns it.
                     continue;
@@ -187,7 +196,7 @@ internal static class RepositoryVerbatimSources
                 string remove = item.Attribute("Remove")?.Value;
                 if (remove is not null && !IsConditionalOrDynamic(item))
                 {
-                    list.Add(new ItemOperation(true, Patterns(remove, baseDirectories, null).ToArray(), Array.Empty<Regex>()));
+                    list.Add(new ItemOperation(true, Patterns(remove, relativeDirectories, anchoredDirectories, null).ToArray(), Array.Empty<Regex>()));
                 }
 
                 // Update changes metadata of items already in the list; it never
@@ -201,8 +210,8 @@ internal static class RepositoryVerbatimSources
                 List<string> unresolved = warnings is null ? null : new List<string>();
                 list.Add(new ItemOperation(
                     false,
-                    Patterns(value, baseDirectories, unresolved).ToArray(),
-                    Patterns(item.Attribute("Exclude")?.Value, baseDirectories, null).ToArray()));
+                    Patterns(value, relativeDirectories, anchoredDirectories, unresolved).ToArray(),
+                    Patterns(item.Attribute("Exclude")?.Value, relativeDirectories, anchoredDirectories, null).ToArray()));
                 if (unresolved is not null)
                 {
                     foreach (string text in unresolved)
@@ -251,7 +260,8 @@ internal static class RepositoryVerbatimSources
 
     private static IEnumerable<Regex> Patterns(
         string itemValue,
-        IReadOnlyList<string> baseDirectories,
+        IReadOnlyList<string> relativeDirectories,
+        IReadOnlyList<string> anchoredDirectories,
         ICollection<string> unresolved)
     {
         if (string.IsNullOrWhiteSpace(itemValue))
@@ -264,6 +274,7 @@ internal static class RepositoryVerbatimSources
             // The two directory anchors resolve to the file's own directory,
             // which Resolve prepends once below; substituting the directory
             // here too would duplicate it.
+            bool anchoredToFile = raw.Contains("$(MSBuildThisFileDirectory)", StringComparison.OrdinalIgnoreCase);
             string text = raw.Trim()
                 .Replace("$(MSBuildThisFileDirectory)", string.Empty, StringComparison.OrdinalIgnoreCase)
                 .Replace("$(MSBuildProjectDirectory)", string.Empty, StringComparison.OrdinalIgnoreCase)
@@ -282,7 +293,7 @@ internal static class RepositoryVerbatimSources
                 continue;
             }
 
-            foreach (string baseDirectory in baseDirectories)
+            foreach (string baseDirectory in anchoredToFile ? anchoredDirectories : relativeDirectories)
             {
                 string resolved = Resolve(baseDirectory, text);
                 if (resolved is not null)
