@@ -292,9 +292,8 @@ DOC_EDITS = [
         "build. See",
         "were enforced at\nbuild time by the internal Roslyn analyzers in\n"
         "[`src/Analyzers/InternalAnalyzers`](../src/Analyzers/InternalAnalyzers) while\n"
-        "the compiler was C#. Those analyzers read C# syntax and do not run on the\n"
-        "G# source of `Core`, so the rules were retired at the cut-over and are review conventions until"
-        " G# equivalents exist. See",
+        "the compiler was C#. GSA0001-GSA0003 were retired at the cut-over by owner\n"
+        "decision and are review conventions until G# equivalents exist; the other analyzers in the project stay. See",
     ),
     (
         "docs/self-host-bootstrap.md",

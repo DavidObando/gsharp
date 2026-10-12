@@ -108,7 +108,8 @@ deleted = ["cs2gs-selfmig-nightly", "run-cs2gs-selfmig-pr-guard", "test-cs2gs-se
 link = re.compile(r"\]\(([^)#\s]+)")
 tick = re.compile(r"`((?:src|test|tools|build|e2etests)/[A-Za-z0-9_./-]+\.[a-z]+)`")
 found = 0
-files = [p for d in ("docs", "website/docs") for p in (root / d).rglob("*.md")] + [root / "tools/cs2gs/README.md"]
+skip_dirs = {"node_modules", "out", "bin", "obj", ".git"}
+files = [p for p in root.rglob("*.md") if not skip_dirs & set(p.relative_to(root).parts)]
 for p in sorted(files):
     rel = p.relative_to(root).as_posix()
     if rel.startswith(("docs/adr/", "docs/cutover-staged/", "website/versioned_docs/")) or not p.exists():
