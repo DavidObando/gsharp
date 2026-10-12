@@ -18,6 +18,70 @@ except for the exact validated `Module.Mvid` GUID slot. Draft PR #4693 is an
 in-place prototype and discrimination inventory. It is not a landable
 certification gate.
 
+The replacement controller is `build/selfhost-stage2.py`. It creates a new
+controller-owned work root, freezes one source snapshot, derives separate stage
+trees, runs graph discovery, restore, build, pack, test, and output acceptance
+inside restricted command boundaries, and writes evidence outside both build
+trees. The work path must not exist before the run.
+
+```sh
+python3 build/selfhost-stage2.py \
+  --tree <prepared-migrated-tree> \
+  --bootstrap <stage-0-Gsharp.NET.Sdk.nupkg> \
+  --work <new-controller-root-under-cache> \
+  --project src/Core/Core.gsproj \
+  --project src/Compiler/Compiler.gsproj \
+  --assembly Core/GSharp.Core.dll \
+  --assembly Compiler/gsc.dll \
+  --test 'test/Core.Tests/Core.Tests.gsproj::<filter>' \
+  --test-env GSHARP_SKIP_ILVERIFY=1 \
+  --test-adapter-sha256 c5ac41b36fac0fcef9714fb80fea0175913530fb53dd7bb8e5e1470339667100 \
+  --test-adapter-sha256 194458c816e0ea9ff0c5eac8896c52133fe9205661833b3d0f57e85a4e66936b \
+  --test-adapter-sha256 ec705ad62e33f31fc46ad5800c9b1694c02d0ec4e1ee704712da9f24ebbea22e \
+  --test-adapter-sha256 3166dc70323fb30ccf1cedb0fe86f2ad122c46d254542342d90386efc4c9285c
+```
+
+Tests run from a verified disposable copy of the accepted stage-2 outputs,
+because suites write scratch files next to their own assembly. The copy is
+checked against the accepted hashes before the run, and the certified outputs
+stay read-only and are re-verified afterwards. The test host gets
+`CS2GS_TEST_SOURCE_ROOT` (the immutable stage tree) and only the allowlisted
+`--test-env GSHARP_SKIP_ILVERIFY=1` (shown above, required because the
+sandbox has no `dotnet-ilverify`), which is recorded in the report. Tests that cannot run outside the repository
+layout fail identically under stage 1 and are excluded by name in
+`build/selfhost/stage2-env-bound-tests.json` until
+[#4873](https://github.com/DavidObando/gsharp/issues/4873) is fixed.
+
+`build/run-selfhost-stage2-certification.sh <new-work-root>` is the integrated
+positive control. It migrates the repository, commits the migrated tree to a
+throwaway Git repository, runs the controller with the Core.Tests and
+Compiler.Tests selections, and then `build/verify-stage2-report.py` rejects the
+result unless the report is a real `certified: true` with equal
+`GSharp.Core.dll` and `gsc.dll` and positive passing tests. The
+`selfhost-stage2` workflow runs it on demand on a self-hosted runner: the
+controller trusts only a pinned .NET layout and the run takes about eight hours,
+so it fits neither a hosted runner's toolchain nor its six-hour limit
+([#4885](https://github.com/DavidObando/gsharp/issues/4885)); the workflow's
+first step reports in seconds whether the runner qualifies
+(`python3 build/selfhost-stage2.py --probe-toolchain`). Recorded runs on the
+0.4.13xx line certified with
+both assemblies byte-identical (the MVID slot happened to match too), with 11229
+Core.Tests and 6990 Compiler.Tests passing under stage 2. Those counts are the
+selected tests: the environment-bound exclusions above are not included.
+
+Stage-2 v1 rejects symbolic links, hard links, dirty Git inputs, versioned
+project SDK overrides, multitargeting, context-changing or build-disabled
+references, secret-bearing restore configuration, and unmodeled project targets
+or tasks. The current-closure hash allowlist contains the
+`Gsharp.Extensions` compile-item reset, SDK packing targets, bootstrap imported
+targets and task declaration, plus exact definitions from the pinned
+Nerdbank.GitVersioning, Microsoft.SourceLink, Microsoft.Build.Tasks.Git,
+Microsoft.NET.Test.Sdk, Microsoft.CodeAnalysis.Analyzers, and coverlet.collector
+packages, and Microsoft.CodeCoverage and Microsoft.Extensions.Logging.Abstractions
+and Microsoft.Extensions.Options packages.
+Restore is offline inside the restricted boundary; required packages must
+already be available from the frozen local inputs.
+
 ## Packing stage 1
 
 ```sh

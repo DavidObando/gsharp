@@ -1,0 +1,5 @@
+{
+  "reason": "Lower bounds on executed tests per selection (about 98% of the recorded counts of 11229 and 6990). A discovery, translation or filter regression that collapses a suite fails certification instead of passing on a handful of tests. Raise when suites grow.",
+  "test/Core.Tests/Core.Tests.gsproj": 11000,
+  "test/Compiler.Tests/Compiler.Tests.gsproj": 6800
+}

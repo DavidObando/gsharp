@@ -1,0 +1,71 @@
+name: selfhost-stage2
+
+# ADR-0198 integrated positive control, run on demand. It migrates the
+# repository C# -> G#, runs the isolated stage-2 controller (stage-1 pack,
+# stage-2 rebuild, complete-PE comparison of GSharp.Core.dll and gsc.dll,
+# Core.Tests and Compiler.Tests under stage 2 in the sandbox) and fails unless
+# the report is a real `certified: true`.
+#
+# Why this is not a pull-request or scheduled check: the controller's trust
+# anchor is a specific, pinned .NET layout (see TRUSTED_DOTNET_SDK_VERSION and
+# the approved host and manifest hashes in build/selfhost-stage2.py), and the
+# run takes about eight hours (the migration alone took 4.5 hours on a hosted
+# 4-core runner), which is more than the six-hour limit of a GitHub-hosted job.
+# It therefore targets a self-hosted runner whose dotnet installation matches the
+# pin; the first step fails in seconds, with the reason, when it does not.
+# Tracking: https://github.com/DavidObando/gsharp/issues/4885
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: 'runs-on label of a runner with the pinned .NET installation'
+        required: true
+        default: 'self-hosted'
+
+env:
+  NBGV_SetCloudBuildVersionVars: false
+
+jobs:
+  certify:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 720
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check the controller's trusted toolchain
+        run: python3 build/selfhost-stage2.py --probe-toolchain
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Check the sandbox
+        run: |
+          command -v bwrap
+          bwrap --ro-bind / / --unshare-user --unshare-pid --unshare-net true
+
+      - name: Build controller helpers
+        run: |
+          dotnet restore build/selfhost/PackageContentHash.csproj --locked-mode
+          dotnet restore build/selfhost/TestSupervisorLogger.csproj --locked-mode
+          dotnet build build/selfhost/PackageContentHash.csproj --configuration Release --no-restore --nologo
+          dotnet build build/selfhost/TestSupervisorLogger.csproj --configuration Release --no-restore --nologo
+
+      - name: Certify (migrate, stage 1, stage 2, compare, test)
+        run: build/run-selfhost-stage2-certification.sh "$RUNNER_TEMP/stage2-certification"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: stage2-report
+          path: |
+            ${{ runner.temp }}/stage2-certification/controller/reports/stage2-report.json
+            ${{ runner.temp }}/stage2-certification/migrate.log
+          if-no-files-found: warn
