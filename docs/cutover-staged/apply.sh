@@ -12,7 +12,7 @@
 #
 # Run it in the cut-over PR AFTER the translation and the hand-fix list, on a
 # tree whose compiler source is G#. It refuses otherwise, because several edits
-# (.csproj -> .gsproj, GSharp.sln -> GSharp.slnx) would break a C# main.
+# (.csproj -> .gsproj, GSharp.sln -> GSharp.slnx in scripts and workflows) would break a C# main.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -121,9 +121,6 @@ for p in sorted(files):
     for name in deleted:
         if name in text and rel not in ("docs/release/final-csharp-release.md", "docs/self-migration-policy.md"):
             print(f"  {rel}: mentions removed {name!r}"); found += 1
-for p in sorted(root.rglob("*.gs")):
-    if "GSharp.sln\"" in p.read_text(encoding="utf-8", errors="replace"):
-        print(f"  {p.relative_to(root)}: still probes for GSharp.sln"); found += 1
 print("  none" if not found else f"  {found} finding(s)")
 PY
 

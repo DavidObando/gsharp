@@ -7,8 +7,11 @@ name: cs2gs-apps-nightly
 # every real-world app we cover, in ONE run with one end-of-run report.
 #
 # The tool under test is cs2gs as built from the checked-out MAIN tree (the
-# migrator is G# now), built with the pinned toolchain from global.json. The
-# apps are its INPUT:
+# migrator is written in G# now), built with the pinned toolchain from
+# global.json. The apps are its INPUT, and all of them are C#. After the
+# cut-over this nightly therefore runs the G#-built cs2gs against the C# source
+# on the semi-frozen branch cs2gs/csharp-0.4 (plus Oahu and Code Exploder); it
+# never translates anything on `main`, which is already G#:
 #
 #   gsharp-csharp  C# input: branch cs2gs/csharp-0.4 at the SHA pinned in
 #                  tools/cs2gs/external/gsharp-csharp.json, checked out beside
@@ -20,14 +23,21 @@ name: cs2gs-apps-nightly
 #   oahu           C# input: tools/cs2gs/external/oahu.json
 #   code-exploder  C# input: tools/cs2gs/external/code-exploder.json
 #
-# Oahu and Code Exploder used to be PR jobs in build.yml (and `publish`
-# dependencies). They run only here now, so they no longer slow or block PRs.
+# Oahu and Code Exploder used to be the PR jobs cs2gs-oahu and cs2gs-code-exploder
+# in build.yml (and `publish` dependencies). They are out of PR and official
+# builds and run only here, as legs of this one nightly job, so they no longer
+# slow or block PRs. Their accounting is part of the end-of-run stats below.
 # The self-host stage-2 check is separate: selfhost-stage2-nightly.yml.
 #
-# Failure handling: every app leg writes result-<app>.json. The `gate` job
-# merges them into the run summary and, for every red app, files or updates ONE
-# GitHub issue (build/cs2gs-apps-gate-issues.py), deduplicated by
-# gate/app/failure fingerprint, with the gate report in the body. Priority per
+# End-of-run stats: every app leg writes result-<app>.json, optionally with a
+# "stats" object (stage counts, floors and readability counters, for ALL three
+# apps including Oahu and Code Exploder). The `gate` job prints one table of
+# them in the run summary.
+#
+# Failure handling: a failed gate opens a GitHub issue. For every red app the
+# `gate` job files or updates ONE issue (build/cs2gs-apps-gate-issues.py),
+# deduplicated by gate/app/failure fingerprint, whose body carries the gate
+# report (summary, log tail, run URL), labeled cs2gs-nightly. Priority per
 # CLAUDE.md: P0 only when a banked app (tools/cs2gs/apps-nightly-banked.json)
 # goes red on main, otherwise P1.
 #
@@ -39,7 +49,11 @@ name: cs2gs-apps-nightly
 #     tools/cs2gs/apps-nightly-banked.json (a {"banked": [...]} list; an app is
 #     added only after it has been seen green on main).
 #   * Per-app accounting from the old gate (stage floors, readability counters)
-#     is produced by the leg scripts; fold it into result-<app>.json "summary".
+#     is produced by the leg scripts; fold it into result-<app>.json "stats"
+#     for every app, Oahu and Code Exploder included. The corpus of the
+#     gsharp-csharp leg is 56 apps with greenFloor 56 once #4865 lands (the
+#     untracked ildump scratch project no longer counts); carry those numbers
+#     into the stats rather than the pre-#4865 57.
 
 on:
   schedule:
@@ -176,7 +190,7 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import glob, json
           print("### cs2gs apps nightly")
-          print("| app | status | summary |\n|---|---|---|")
+          print("| app | status | summary | stats |\n|---|---|---|---|")
           seen = {}
           # Artifacts extract relative to their common ancestor, so results can be nested.
           for p in sorted(glob.glob("results/**/result-*.json", recursive=True)):
@@ -184,7 +198,8 @@ jobs:
               seen[r["app"]] = r
           for app in ("gsharp-csharp", "oahu", "code-exploder"):
               r = seen.get(app) or {"status": "red", "summary": "no result: the leg crashed before reporting"}
-              print(f"| {app} | {r['status']} | {r.get('summary','')} |")
+              stats = ", ".join(f"{k}={v}" for k, v in sorted((r.get("stats") or {}).items())) or "n/a"
+              print(f"| {app} | {r['status']} | {r.get('summary','')} | {stats} |")
           PY
           python3 build/cs2gs-apps-gate-issues.py \
             --results results \

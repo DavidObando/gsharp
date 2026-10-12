@@ -19,6 +19,16 @@ import re
 import sys
 from pathlib import Path
 
+# `GSharp.sln` is a prefix of `GSharp.slnx`, and build/cutover.py (hand-fix 4b) has already renamed the
+# solution in scripts and workflows by the time these edits run, so a plain str.replace would produce
+# `GSharp.slnxx`. Same pattern as cutover.rewrite_sln_literal.
+SLN_LITERAL = re.compile(r"(?<![\w.])GSharp\.sln\b")
+
+
+def to_slnx(text: str) -> str:
+    return SLN_LITERAL.sub("GSharp.slnx", text)
+
+
 problems: list[str] = []
 writes: dict[Path, str] = {}
 
@@ -50,7 +60,7 @@ def sub_dotnet_lines(root: Path, rel: str) -> None:
         # The Visual Studio extension and the ADR-0198 controller's C# helper
         # projects (build/selfhost/*.csproj) stay C# on purpose.
         if "vs-gsharp" not in line and "VsGsharp" not in line and "build/selfhost/" not in line:
-            line = line.replace("GSharp.sln", "GSharp.slnx")
+            line = to_slnx(line)
             if "dotnet" in line or "csproj" in line:
                 line = re.sub(r"\.csproj\b", ".gsproj", line)
         out.append(line)
@@ -199,44 +209,21 @@ SCRIPT_PRODUCT = re.compile(
 
 
 def stage2_controller(root: Path) -> None:
-    """Retarget the one product project the ADR-0198 controller names.
+    """Nothing to retarget in the ADR-0198 controller; check the one literal it names.
 
-    build/selfhost-stage2.py arrives with PR #4842 and is not edited there. Its
-    C# helper projects (build/selfhost/PackageContentHash.csproj and
-    TestSupervisorLogger.csproj) stay C#. Audit the controller for any other
-    product .csproj path with: grep -n 'csproj' build/selfhost-stage2.py
+    build/selfhost-stage2.py arrives with PR #4842. The only product project it
+    names that is not a `.gsproj` is src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj,
+    which stays a `.csproj` on purpose (it is already G# source, excluded from the
+    migration, see build/selfmig-common.sh and docs/self-migration-cutover.md hand-fix 3).
+    Its C# helper projects (build/selfhost/*.csproj) stay C# too. Audit any other
+    product path with: grep -n 'csproj' build/selfhost-stage2.py
     """
     rel = "build/selfhost-stage2.py"
     if not (root / rel).exists():
-        print(f"note: {rel} not present; apply this edit after PR #4842 lands", file=sys.stderr)
+        print(f"note: {rel} not present; audit it for product .csproj paths after PR #4842 lands", file=sys.stderr)
         return
-    text = read(root, rel)
-    old = "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj"
-    if old not in text:
-        problems.append(f"{rel}: expected {old} not found")
-        return
-    put(root, rel, text.replace(old, old[: -len(".csproj")] + ".gsproj"))
-
-
-REPO_ROOT_PROBE = '"GSharp.sln"'
-
-
-def repo_root_probes(root: Path) -> None:
-    """Repo-root anchors embedded in source: GSharp.sln no longer exists.
-
-    Tests and cs2gs flows locate the repository by looking for the solution
-    file. Rewrite the string literal in translated .gs files and in the
-    Visual Studio extension's C# tests (which still run from the same root).
-    """
-    skip = {"out", "node_modules", "website", ".git", "bin", "obj"}
-    files = [p for p in root.rglob("*.gs") if not skip & set(p.relative_to(root).parts)]
-    vs = root / "src" / "vs-gsharp"
-    if vs.exists():
-        files += [p for p in vs.rglob("*.cs") if not skip & set(p.relative_to(root).parts)]
-    for p in files:
-        text = p.read_text(encoding="utf-8", errors="replace")
-        if REPO_ROOT_PROBE in text:
-            put(root, p.relative_to(root).as_posix(), text.replace(REPO_ROOT_PROBE, '"GSharp.slnx"'))
+    if "Gsharp.Extensions.gsproj" in read(root, rel):
+        problems.append(f"{rel}: Gsharp.Extensions stays a .csproj; do not name a .gsproj for it")
 
 
 def scripts(root: Path) -> None:
@@ -251,7 +238,15 @@ def scripts(root: Path) -> None:
                 "build/run-go2gs-prerequisite-spike.py", "build/generate-quality-dashboard.py",
                 "tools/cs2gs/scripts/migrate-l1.sh", *sorted(p.relative_to(root).as_posix() for p in (root / "e2etests").glob("*.sh"))]:
         text = read(root, rel)
-        new = SCRIPT_PRODUCT.sub(lambda m: m.group(1) + ".gsproj", text).replace("GSharp.sln", "GSharp.slnx")
+        # Rename only when the .gsproj twin exists and the .csproj is gone: projects such as
+        # src/Sdk/Gsharp.Extensions stay .csproj and must not be touched.
+        def retarget(m: re.Match) -> str:
+            stem = m.group(1)
+            if (root / (stem + ".gsproj")).exists() and not (root / (stem + ".csproj")).exists():
+                return stem + ".gsproj"
+            return m.group(0)
+
+        new = to_slnx(SCRIPT_PRODUCT.sub(retarget, text))
         if new != text:
             put(root, rel, new)
     for rel in (
@@ -261,7 +256,7 @@ def scripts(root: Path) -> None:
     ):
         text = read(root, rel)
         # Includes the lowercase predicate in generate-ci-test-matrix.py.
-        text = text.replace("GSharp.sln", "GSharp.slnx").replace(".csproj", ".gsproj").replace(".tests.csproj", ".tests.gsproj")
+        text = to_slnx(text).replace(".csproj", ".gsproj")
         put(root, rel, text)
 
 
@@ -344,7 +339,7 @@ def main() -> int:
     ap.add_argument("--root", type=Path, required=True)
     ap.add_argument("--check", action="store_true")
     a = ap.parse_args()
-    for step in (workflows, scripts, stage2_controller, repo_root_probes, docs):
+    for step in (workflows, scripts, stage2_controller, docs):
         step(a.root)
     for rel_path in writes:
         pass

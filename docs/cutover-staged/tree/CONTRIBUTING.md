@@ -25,6 +25,8 @@ cs2gs. **Fixes happen in G#, on `main`.** Do not open bug-fix or feature PRs
 against the C# branch. It receives only code back-ported from G# to C# when that
 code merits exercising cs2gs, and a security fix released as `0.4.NNNN+k`. Both
 are made by the maintainer, and the cs2gs nightly pins a SHA of the branch.
+After the cut-over the cs2gs nightly runs cs2gs as built from `main` (written in
+G#) over the C# source on that branch, plus Oahu and Code Exploder.
 
 ## Prerequisites
 
@@ -52,16 +54,15 @@ See [`docs/self-host-bootstrap.md`](docs/self-host-bootstrap.md) for how stage 0
 ## Restore and build
 
 ```sh
-dotnet restore GSharp.slnx
+dotnet restore GSharp.slnx --locked-mode
 dotnet tool restore
 dotnet build GSharp.slnx --configuration Release --no-restore -graph
 ```
 
-<!-- CUTOVER-VERIFY: restore command. Today `dotnet restore GSharp.sln --locked-mode`
-     uses checked-in packages.lock.json files. Confirm the translated .gsproj files
-     carry lock files (or that the cut-over adds them) before restoring
-     `--locked-mode`; if they do, use it and say "do not update lock files unless
-     dependency changes are part of the PR". Delete this comment. -->
+Restore uses the checked-in NuGet lock files (`packages.lock.json`). The
+cut-over regenerates them for the `.gsproj` projects (the rehearsal found the
+copies carried over from the C# projects stale). Do not update lock files unless
+dependency changes are part of the PR.
 
 `-graph` matters: it prevents duplicate project builds from racing over shared
 compiler outputs. Warnings are errors.
