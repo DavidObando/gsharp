@@ -1490,6 +1490,28 @@ def reject_system_placement(label: str, path: Path) -> None:
                 f"{label} is beneath {mount}, which every sandboxed command can read: {path}")
 
 
+def verify_published_payload(
+    destination: Path, primary: Path, accepted_hashes: set[str], package_hashes: set[str],
+) -> None:
+    """Every published file must be an accepted build output or a locked package file.
+
+    Publish regenerates exactly one file of its own: the primary assembly's
+    `.deps.json`. Anything else that matches neither set was placed by a publish
+    item or property and is rejected before it can be packed.
+    """
+    generated = f"{primary.stem}.deps.json"
+    for path in sorted(destination.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.parent == destination and path.name == generated:
+            continue
+        digest = sha256_file(path)
+        if digest not in accepted_hashes and digest not in package_hashes:
+            raise CertificationError(
+                f"published file is neither an accepted build output nor a locked "
+                f"package file: {path.relative_to(destination)}")
+
+
 def project_key(project: Path) -> str:
     """Stable per-project directory key shared by obj, PDB and graph state."""
     return hashlib.sha256(project.as_posix().encode()).hexdigest()[:16]
@@ -3101,6 +3123,11 @@ class Controller:
         target = self.project_target(plan, project)
         verify_published_primary(
             destination, target, self.accepted_output_hash(stage, target))
+        packages_root = self.writable(stage, "packages")
+        verify_published_payload(
+            destination, target,
+            {row["sha256"] for row in self.accepted_build_outputs.get(stage, {}).values()},
+            {sha256_file(path) for path in packages_root.rglob("*") if path.is_file()})
         self.verify_output_closure(stage)
         atomic_json(
             self.evidence / f"stage-1-publish-{token}-outputs.json",

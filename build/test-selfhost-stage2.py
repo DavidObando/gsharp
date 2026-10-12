@@ -1145,6 +1145,24 @@ class ControllerBoundaryTests(unittest.TestCase):
             stage2.stage_package(tree, package)
         self.assertEqual(b"different", staged.read_bytes())
 
+    def test_every_published_file_must_have_accepted_provenance(self) -> None:
+        destination = self.root / "published2"
+        (destination / "cs").mkdir(parents=True)
+        accepted = hashlib.sha256(b"producer").hexdigest()
+        packaged = hashlib.sha256(b"package").hexdigest()
+        target = self.root / "out" / "gsc.dll"
+        (destination / "Core.dll").write_bytes(b"producer")
+        (destination / "cs" / "res.dll").write_bytes(b"package")
+        (destination / "gsc.deps.json").write_text("{}", encoding="utf-8")
+        stage2.verify_published_payload(destination, target, {accepted}, {packaged})
+        (destination / "Core.dll").write_bytes(b"swapped in by a publish item")
+        with self.assertRaises(stage2.CertificationError):
+            stage2.verify_published_payload(destination, target, {accepted}, {packaged})
+        (destination / "Core.dll").write_bytes(b"producer")
+        (destination / "extra.deps.json").write_text("{}", encoding="utf-8")
+        with self.assertRaises(stage2.CertificationError):
+            stage2.verify_published_payload(destination, target, {accepted}, {packaged})
+
     def test_published_primary_assembly_must_be_the_accepted_build_output(self) -> None:
         destination = self.root / "published"
         destination.mkdir()
