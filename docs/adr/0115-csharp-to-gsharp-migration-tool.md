@@ -117,12 +117,11 @@ generic records, using the self-instantiation rather than the open definition,
 including enclosing generic arguments.
 Issue #4828 makes the shared synthesized representation match Roslyn's remaining
 surface details: positional records have no extra parameterless constructor,
-body-only records have no synthesized `Deconstruct`, equality operators use
+equality operators use
 `left`/`right`, copy constructors use `original`, and object overrides omit
-redundant final flags on already-sealed owners. cs2gs marks translated records
-with the compiler-intrinsic, metadata-free
-`@__Cs2GsRecordProvenance_4828` annotation so native
-G# data types with the same interfaces retain their own deconstruction contract.
+redundant final flags on already-sealed owners. ADR-0199 removed the
+`@__Cs2GsRecordProvenance_4828` marker cs2gs once emitted: a translated
+body-only record keeps G#'s own `Deconstruct`, like any data type.
 Record classes with a protected virtual `PrintMembers` hook retain it once per
 partial type, including sealed derived records; derived hooks call the base hook, including user-authored
 implementations. Generator implementing parts do not introduce C# record hooks
