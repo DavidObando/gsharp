@@ -68,13 +68,10 @@ Neutral:
 ## Amendment 2026-10-07: CLR record ABI convergence (#4828)
 
 The translated C# record contract now distinguishes positional components from
-ordinary body members. A body-only translated record does not gain a synthesized
-`Deconstruct`; its fields and auto-properties still participate in structural
-equality and printing. Native G# body-form data types retain their existing
-field/property deconstruction, including when they explicitly implement
-`IEquatable<Self>`. cs2gs records carry the compiler-intrinsic
-`@__Cs2GsRecordProvenance_4828`
-provenance marker; it affects synthesis and emits no CLR metadata. A data class
+ordinary body members. Body-form data types deconstruct their fields and
+auto-properties. The `@__Cs2GsRecordProvenance_4828` marker this amendment
+introduced, which suppressed `Deconstruct` on a translated body-only record,
+was removed by ADR-0199. A data class
 with a non-empty primary constructor emits that constructor only, not an
 additional public parameterless constructor.
 
