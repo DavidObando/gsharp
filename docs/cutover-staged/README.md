@@ -101,10 +101,10 @@ Verified 2026-10-12 against `main` at `d4943a122`:
 - #4864 (repo root marker), #4855 (dry-run script and doc), #4866
   (`cs2gs migrate --stop-after <stage>`), #4871 and #4875 (ADR-0199 record ABI)
   are merged. This directory is consistent with them.
-- **#4865 (mirror copies referenced `.cs` files verbatim; ildump untracked) is
-  still open.** Once it lands the corpus is **56 apps with greenFloor 56**
-  (`main` still says 57), `EXPECTED_RETAINED_CSHARP` in `build/cutover.py` is
-  empty, and the retained-C# note in `docs/self-migration-cutover.md` changes.
+- **#4865 (mirror copies referenced `.cs` files verbatim; ildump untracked)
+  lands the following in the same change:** the corpus is **56 apps with
+  greenFloor 56**, `EXPECTED_RETAINED_CSHARP` in `build/cutover.py` is empty,
+  and the retained-C# note in `docs/self-migration-cutover.md` is updated.
   Nothing staged here hard-codes a count; the setup list below says 56 only for
   the numbers the `gsharp-csharp` leg's accounting must carry over.
 - **#4842 (stage-2 controller) is still open.** `build/selfhost-stage2.py` does
