@@ -29,7 +29,7 @@ A `data struct Name { F1 T1; F2 T2; … }` declaration emits the same CLR `Value
 1. `public override bool Equals(object other)` — returns `false` if `other` is not an instance of `Name`; otherwise returns `Equals((Name)other)`.
 2. `public bool Equals(Name other)` — returns `true` iff every field `Fi` satisfies `EqualityComparer<Ti>.Default.Equals(this.Fi, other.Fi)`. Fields are compared in source declaration order; first inequality short-circuits.
 3. `public override int GetHashCode()` — combines field hashes via `System.HashCode.Combine(F1, F2, …)`. For data structs with more than 8 fields (the `HashCode.Combine` overload limit), the binder emits a fold using `HashCode.Add` on a stack-allocated `HashCode` then `ToHashCode()`.
-4. `public override string ToString()` — produces `Name(F1=<value>, F2=<value>, …)`. Field values use `Convert.ToString(Fi, CultureInfo.InvariantCulture)` (null becomes empty string). Format chosen for parity with Kotlin and for one-line debuggability.
+4. `public override string ToString()` — produces `Name(F1=<value>, F2=<value>, …)`. Field values use `Convert.ToString(Fi, CultureInfo.InvariantCulture)` (null becomes empty string). Format chosen for parity with Kotlin and for one-line debuggability. **Superseded by [ADR-0199](0199-data-types-synthesize-the-csharp-record-abi.md):** `ToString` now emits the C# record format `Name { F1 = v1, F2 = v2 }` through a synthesized `PrintMembers(StringBuilder)`, formats values with the current culture, prints only public fields and readable public properties, and includes inherited members. The invariant-culture rule and the private-members-in-text rule below are dropped.
 5. `public static bool op_Equality(Name left, Name right)` and `public static bool op_Inequality(Name left, Name right)` — call `left.Equals(right)` and negation thereof. Required because the CLR does **not** synthesize value-type equality operators automatically.
 6. `public void Deconstruct(out T1 F1, out T2 F2, …)` — assigns each field to the corresponding `out`. Emits with the exact field names so C# users can `var (x, y) = point;` (C# uses positional matching but tooling shows the names). Skipped for zero-field data structs.
 
@@ -37,7 +37,7 @@ Additional rules:
 
 - A zero-field `data class`/`data struct` (e.g. `data class Name() {}` or `data class Name {}`) is now permitted — see "Amendment 2026-07-20" below; the original text of this rule required at least one field and is superseded.
 - The user **may not** hand-write any of the six synthesized members on a `data struct`. Diagnostic: `Member 'Name.Equals' is synthesized for 'data struct'; remove the declaration.` This avoids the "did the user intend to override the synthesized one?" ambiguity. (Phase 6+ may relax this if a user-visible `partial` story emerges; the present rule is the conservative one. **Update:** see "Amendment 2026-07-15" below — `ToString` alone is now relaxed under a strict shape-compatibility check.)
-- Field accessibility modifiers (`public` / `internal` / `private` per ADR-0014) are allowed but **the synthesized methods see every field**. A `private` field on a `data struct` is still part of its identity and `ToString`. A user who wants opacity should pick `struct`, not `data struct`. Documented.
+- Field accessibility modifiers (`public` / `internal` / `private` per ADR-0014) are allowed but **the synthesized methods see every field**. A `private` field on a `data struct` is still part of its identity (equality and hashing); since ADR-0199 it no longer appears in `ToString`. A user who wants opacity should pick `struct`, not `data struct`. Documented.
 - The `data` keyword is **context-sensitive**: it is only a keyword immediately before `struct` in a top-level type-declaration position; everywhere else it is an ordinary identifier (so users may still name a variable `data`).
 
 CLR-level identity:
@@ -50,7 +50,7 @@ CLR-level identity:
 
 Positive:
 
-- C# consumers get a value type that satisfies `IEquatable<Name>` informally (operator pair + `Equals(Name)` overload), composes with `HashSet<Name>`, `Dictionary<Name, …>`, and pattern matching. Indistinguishable from a hand-written value-record at the call site.
+- C# consumers get a value type that satisfies `IEquatable<Name>` informally (operator pair + `Equals(Name)` overload; ADR-0199 makes the interface explicit on every data type), composes with `HashSet<Name>`, `Dictionary<Name, …>`, and pattern matching. Indistinguishable from a hand-written value-record at the call site.
 - Phase 3.B.2 is fully testable end-to-end without waiting for Phase 7's `copy` and destructuring *syntax* — the surface measured is the synthesized member contract, which is directly observable via reflection and `Equals`/`ToString` calls.
 - The "user may not hand-write synthesized members" rule keeps semantics under the compiler's control and avoids the partial-class rabbit hole.
 
@@ -85,17 +85,17 @@ runtime behavior and the open data-class inheritance contract.
 
 ## Alternatives considered
 
-- **C# records (`Name { F1 = v1, F2 = v2 }` format, `EqualityContract` property, `Equals(Name)` virtual)**: rejected. The C# record runtime contract is intricate (`<>RawContract` virtual property, `protected virtual Equals`) so that inheritance works; data structs don't inherit, so the simpler Kotlin-flavor contract is enough.
+- **(Superseded by ADR-0199, which adopted the C# record ABI.) C# records (`Name { F1 = v1, F2 = v2 }` format, `EqualityContract` property, `Equals(Name)` virtual)**: rejected. The C# record runtime contract is intricate (`<>RawContract` virtual property, `protected virtual Equals`) so that inheritance works; data structs don't inherit, so the simpler Kotlin-flavor contract is enough.
 - **Allow user-written synthesized members; treat the user's version as authoritative**: rejected. Opens "what does `data struct` actually guarantee?" to a per-type investigation. The teaching value of `data struct` rests on a fixed, learnable contract.
-- **Synthesize `IEquatable<Name>` interface implementation explicitly**: deferred. The `Equals(Name)` overload + operator pair already satisfies the C# pattern; emitting the interface adds a TypeRef row and complicates Phase 3 emit for marginal interop benefit. Phase 6's full interface story can revisit.
+- **Synthesize `IEquatable<Name>` interface implementation explicitly**: deferred (superseded: ADR-0199 implements `IEquatable<Self>` on every data type). The `Equals(Name)` overload + operator pair already satisfies the C# pattern; emitting the interface adds a TypeRef row and complicates Phase 3 emit for marginal interop benefit. Phase 6's full interface story can revisit.
 - **Skip `Deconstruct` until Phase 4+**: rejected. The cost is one `MethodDef` row per data struct; the benefit is that Phase 4 destructuring becomes a parser-only change.
-- **`ToString` format `{ F1 = v1, F2 = v2 }` (C# record style)**: rejected. The Kotlin form `Name(F1=v1, F2=v2)` matches `Point(X=3, Y=4)` in the README's "GSharp is Go shape" vibe better than the braces.
+- **`ToString` format `{ F1 = v1, F2 = v2 }` (C# record style)**: rejected at the time; reversed by ADR-0199. The Kotlin form `Name(F1=v1, F2=v2)` matches `Point(X=3, Y=4)` in the README's "GSharp is Go shape" vibe better than the braces.
 
 ## Amendment 2026-07-15: `ToString` user-override relaxation (#2361)
 
 Issue #2361 found that `cs2gs` faithfully translates a C# `record`/`record struct` with an explicit `ToString` override into a G# `data class`/`data struct` with an in-body `ToString` method — which the original "no hand-written synthesized members" rule unconditionally rejected with GS0232. Since `cs2gs` cannot omit or rewrite a user's C# override without losing behavior, every migrated record with a custom `ToString` (e.g. `Oahu.Core.ProfileKey`/`ProfileKeyEx`, `Oahu.Cli.Tui.Tokens.SemanticColor`) was unmigratable.
 
-**Relaxation, scoped narrowly to `ToString` only.** The other five synthesized members (`Equals(object)`, `Equals(Name)`, `GetHashCode`, `op_Equality`/`op_Inequality`, `Deconstruct`) remain unconditionally forbidden — hand-writing any of them is still GS0232. A user-declared `ToString` is now permitted, but only if it exactly matches the synthesized member's shape: `public string ToString()`, zero parameters, returns `string`, not `static`/`async`/`unsafe`, no type parameters. A declaration with the name `ToString` that does not match this shape (wrong arity, wrong return type, `async`, generic, non-`public`) is rejected with the new diagnostic **GS0487** ("incompatible `ToString` override") rather than GS0232, since the intent is clearly to override `ToString` but the shape is invalid.
+**Relaxation, scoped narrowly to `ToString` only.** The other five synthesized members (`Equals(object)`, `Equals(Name)`, `GetHashCode`, `op_Equality`/`op_Inequality`, `Deconstruct`) remain unconditionally forbidden — hand-writing any of them is still GS0232. (ADR-0199 adds `PrintMembers(StringBuilder)`, which a user may replace under the same compatible-shape rule, with GS0623 for an incompatible one.) A user-declared `ToString` is now permitted, but only if it exactly matches the synthesized member's shape: `public string ToString()`, zero parameters, returns `string`, not `static`/`async`/`unsafe`, no type parameters. A declaration with the name `ToString` that does not match this shape (wrong arity, wrong return type, `async`, generic, non-`public`) is rejected with the new diagnostic **GS0487** ("incompatible `ToString` override") rather than GS0232, since the intent is clearly to override `ToString` but the shape is invalid.
 
 When a compatible user `ToString` is present:
 

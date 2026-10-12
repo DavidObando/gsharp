@@ -563,6 +563,17 @@ Type declarations introduce aggregates with the aggregate keyword (`class`, `str
 
 `data class` and `data struct` synthesize structural ergonomics such as equality and copy/update support; `data class` is reference-typed, `data struct` is value-typed. The `record` keyword was removed; migrate to `data struct Name(...)` (or `data class Name(...)` when reference semantics are desired). `inline struct` is the inline value class form and must have exactly one field.
 
+Every declared `data class` / `data struct` synthesizes the C# `record` ABI (ADR-0199), so a G# data type and a C# `record` / `record struct` look the same to CLR consumers:
+
+* `ToString()` uses the C# record format: `Point { X = 3, Y = 4 }`, or `Empty { }` when nothing prints. A generic type prints its simple name without type arguments. Only public fields and readable public non-indexer properties print, in declaration order, and members inherited from a data base print first. Values format with the **current culture**, as in C#.
+* `PrintMembers(StringBuilder)` is synthesized (`private` on a sealed type that starts the slot, otherwise `protected virtual`). A hand-written `PrintMembers` of the compatible shape replaces it; any other shape is GS0623. A hand-written `ToString` of the compatible shape replaces the synthesized `ToString` (GS0487 otherwise).
+* The type implements `IEquatable<Self>` through the synthesized typed `Equals`; `Equals(object)`, `GetHashCode()`, `==` and `!=` are structural (`left` / `right` operator parameters).
+* A data class has the protected (private when sealed) copy constructor with parameter `original` and the `<Clone>$` method that `with` / `.copy(...)` call. The parameterless constructor exists only for body-only types (and is what `T{X: 1}` uses); a type with a primary constructor has none.
+* `Deconstruct` stays G#'s own: positional components when there is a primary constructor, otherwise all fields and then all auto-properties in declaration order, and none for a type without members. This differs from a C# record only for body-only records.
+* `data object { ... }` and `object { ... }` literals keep G#'s equality surface plus `IEquatable<Self>` and print as `{ X = 1, Y = 2 }` with no type name; they get no `PrintMembers`, copy constructor or clone.
+
+Known gaps: a data class that only synthesizes `PrintMembers` over an inherited abstract `PrintMembers` is rejected with GS0387 (#4876), and an imported non-data class between a record and a data class hides the inherited `PrintMembers` slot (#4877).
+
 ```gsharp title="samples/DataStruct.gs"
 package GSharp.Example.DataStruct
 
@@ -1326,7 +1337,7 @@ evaluated at most once.
 
 ### Anonymous-object literals
 
-`object { ... }` creates an anonymous object. In the field-only form, members are newline- or semicolon-separated `let` / `var` field declarations whose types may be inferred from their initializers or written explicitly. A plain field-only `object` exposes get-only properties for reflection-heavy CLR consumers; `data object { ... }` uses data-struct-style value semantics (`Equals`, `GetHashCode`, `ToString`, deconstruction, and `with`).
+`object { ... }` creates an anonymous object. In the field-only form, members are newline- or semicolon-separated `let` / `var` field declarations whose types may be inferred from their initializers or written explicitly. A plain field-only `object` exposes get-only properties for reflection-heavy CLR consumers; `data object { ... }` uses data-struct-style value semantics (`Equals`, `GetHashCode`, `IEquatable<Self>`, a `ToString` that prints `{ X = 1, Y = 2 }` without a type name, deconstruction, and `with`).
 
 ```gsharp
 let anon = object {

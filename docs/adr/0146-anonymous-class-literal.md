@@ -2,6 +2,7 @@
 
 - **Status**: Accepted (revised under issue #2243 — hard-breaking redesign of the unreleased issue #2224 shape)
 - **Date**: 2026-XX-XX
+- **Partially superseded by [ADR-0199](0199-data-types-synthesize-the-csharp-record-abi.md)**: decision item 6 (`data object` `ToString` format); the rest is retained.
 - **Implementation amendment**: 2026-09-21 — aligned rich-object binding and construction with accepted ADR-0189
 - **Related**: ADR-0029 (`data struct`/`data class` synthesized members — Equals/GetHashCode/ToString/Deconstruct/op_Equality contract the `data object` variant reuses verbatim); ADR-0051 (auto-property backing-field/accessor emission); ADR-0078 (declaration-head spelling); ADR-0115 (cs2gs C#→G# construct mapping, §B.4 tuple lowering this feature supersedes for anonymous objects); ADR-0141 (expression-tree lambda conversions and their construct restrictions, GS0473); ADR-0189 (literal-site rich-object inference, lexical capture, and construction planning)
 - **Implementation**: Issues [#2224](https://github.com/DavidObando/gsharp/issues/2224), [#2243](https://github.com/DavidObando/gsharp/issues/2243), and [#4329](https://github.com/DavidObando/gsharp/issues/4329); see `AnonymousTypeCache` (`src/Core/CodeAnalysis/Binding/AnonymousTypeCache.cs`), `BindAnonymousClassExpression` (`src/Core/CodeAnalysis/Binding/ExpressionBinder.Literals.cs`), rich shell/plan synthesis (`SynthesizeAnonymousClassDeclaration` and `BindRichAnonymousObject` in `src/Core/CodeAnalysis/Binding/Binder.cs`), generated-rich constructor stores (`src/Core/CodeAnalysis/Emit/ConstructorBodyEmitter.cs`), `ParseAnonymousClassExpression` (`src/Core/CodeAnalysis/Syntax/Parser.cs`), and `TranslateAnonymousObjectCreation` (`tools/cs2gs/Cs2Gs.Translator/CSharpToGSharpTranslator.cs`).
@@ -117,7 +118,7 @@ C# anonymous types (`new { A = x, B = y }`) are always property-only with no met
 
 5. **Cross-pass shape unification** (carried over from #2224): identical field-only shapes appearing in both the `BindGlobalScope` and `BindProgram` passes unify separately (two individually-correct synthesized types) rather than as one.
 
-6. **`data object` `ToString()`** follows ADR-0029's Kotlin-style format (`Name(F1=v1, F2=v2)`), reusing the existing synthesized `ToString` rather than C#'s `{ F1 = v1 }` anonymous-type format.
+6. **`data object` `ToString()`** followed ADR-0029's Kotlin-style format (`Name(F1=v1, F2=v2)`), reusing the existing synthesized `ToString` rather than C#'s `{ F1 = v1 }` anonymous-type format. **Superseded by [ADR-0199](0199-data-types-synthesize-the-csharp-record-abi.md):** `data object` and plain `object` literals print the C# anonymous-type form `{ F1 = v1, F2 = v2 }` with no type name, implement `IEquatable<Self>`, and get no `PrintMembers`, copy constructor or clone.
 
 ## Consequences
 

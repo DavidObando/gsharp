@@ -5,6 +5,7 @@
   the same change — `src/Repl/Engine/ReplValueFormatter.cs`, wired at the
   three REPL echo sites and pinned by `Adr0157ReplValueFormatterTests`)
 - **Date**: 2026-08-06
+- **Note**: the spike table below records output at the time; [ADR-0199](0199-data-types-synthesize-the-csharp-record-abi.md) changed the synthesized `data` `ToString` to the C# record format.
 - **Phase**: Language surface / REPL ergonomics (ADR-0156 Phase 3
   semantic-alignment follow-up)
 - **Related**: [#3208](https://github.com/DavidObando/gsharp/issues/3208)
@@ -169,7 +170,7 @@ over values produced by real emitted execution (`test/Shared/EmittedOracle`):
 | Case | Result |
 |---|---|
 | Plain two-field struct | today's contract pinned (`ToString` slot is `ValueType`'s, echo is the CLR type name — #3204), formatter renders `Point{X: 1, Y: 2}` |
-| `data struct` | emitted override confirmed on the type itself (interop-visible), formatter defers: `Point(X=1, Y=2)` |
+| `data struct` | emitted override confirmed on the type itself (interop-visible), formatter defers: `Point(X=1, Y=2)` (spike-time output; since ADR-0199 the synthesized override yields `Point { X = 1, Y = 2 }`) |
 | `override func ToString` on a plain struct | formatter defers: `tag:11` |
 | Nested class + `nil` field | `Node{Name: "root", Next: Node{Name: "leaf", Next: nil}}` |
 | Reference cycle (`a.Next = b; b.Next = a`) | terminates: `Node{Name: "a", Next: Node{Name: "b", Next: ...}}` |
