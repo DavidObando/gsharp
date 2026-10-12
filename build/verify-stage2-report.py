@@ -200,6 +200,9 @@ def verify(report: Any, assemblies: list[str], tests: list[str],
         if hashes != {name: compared[name]["stage2"].get("raw_sha256") for name in assemblies}:
             raise ReportError(
                 f"test evidence is not bound to the certified stage-2 binaries: {key[:120]}")
+    unmatched = set(floors or {}) - {str(row.get("project")) for row in ran}
+    if unmatched:
+        raise ReportError(f"minimum-executed floors name unreported projects: {sorted(unmatched)}")
     if seen != set(tests):
         raise ReportError(
             f"test selections differ from the expected set: "
@@ -218,8 +221,8 @@ def main(argv: list[str]) -> int:
     floors: dict[str, int] = {}
     for item in args.min_executed:
         project, _, count = item.rpartition("=")
-        if not project or not count.isdigit():
-            parser.error(f"--min-executed must be PROJECT=N: {item!r}")
+        if not project or not count.isdigit() or int(count) <= 0 or project in floors:
+            parser.error(f"--min-executed must be a unique PROJECT=N with N > 0: {item!r}")
         floors[project] = int(count)
     try:
         verify(json.loads(args.report.read_text(encoding="utf-8")),

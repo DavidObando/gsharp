@@ -635,6 +635,18 @@ class MigrationRunVerifierTests(unittest.TestCase):
 
 
 class TestSelectionTests(unittest.TestCase):
+    def test_floors_are_loaded_strictly(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "stage2_test_filter", REPO / "build" / "selfhost" / "stage2-test-filter.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        projects = ["test/Core.Tests/Core.Tests.gsproj", "test/Compiler.Tests/Compiler.Tests.gsproj"]
+        self.assertEqual(2, len(module.floors(projects)))
+        with self.assertRaises(SystemExit):
+            module.floors(projects[:1])
+        with self.assertRaises(SystemExit):
+            module.floors([*projects, "test/Other.Tests/Other.Tests.gsproj"])
+
     def test_filter_excludes_each_recorded_test_exactly_once(self) -> None:
         spec = importlib.util.spec_from_file_location(
             "stage2_test_filter", REPO / "build" / "selfhost" / "stage2-test-filter.py")
@@ -746,6 +758,9 @@ class ReportVerifierTests(unittest.TestCase):
     def test_empty_expectations_are_rejected(self) -> None:
         self.assertIsNotNone(self.check({"schema": 1, "certified": True,
                                          "comparison": [], "tests": []}, []))
+
+    def test_floor_for_an_unreported_project_is_rejected(self) -> None:
+        self.assertIsNotNone(self.check(self.good(), floors={"a": 1, "nope": 1}))
 
     def test_results_from_another_assembly_are_rejected(self) -> None:
         # Hashes and counts are all self-consistent; only the result source differs.

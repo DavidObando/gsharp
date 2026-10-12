@@ -1614,10 +1614,17 @@ class Controller:
         if not self.report["tests"]:
             raise CertificationError(
                 "at least one --test is required for positive certification evidence")
+        floor_projects = []
+        selected = {specification.partition("::")[0] for specification in self.report["tests"]}
         for item in getattr(self.args, "min_tests", []):
             floor_project, _, floor = item.rpartition("=")
-            if not floor_project or not floor.isdigit():
-                raise CertificationError(f"--min-tests must be PROJECT=N: {item!r}")
+            if not floor_project or not floor.isdigit() or int(floor) <= 0:
+                raise CertificationError(f"--min-tests must be PROJECT=N with N > 0: {item!r}")
+            floor_projects.append(floor_project)
+        if (len(floor_projects) != len(set(floor_projects))
+                or not set(floor_projects) <= selected):
+            raise CertificationError(
+                "--min-tests must name each selected test project at most once")
         for item in getattr(self.args, "test_env", []):
             name, separator, value = item.partition("=")
             if not separator or name not in TEST_ENVIRONMENT_ALLOWLIST or value != "1":

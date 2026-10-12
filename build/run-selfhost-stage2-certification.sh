@@ -82,16 +82,23 @@ mkdir -p "$work/bootstrap"
 cp "out/bin/Release/nupkgs/Gsharp.NET.Sdk.$pin.nupkg" "$work/bootstrap/"
 bootstrap="$work/bootstrap/Gsharp.NET.Sdk.$pin.nupkg"
 
+core_project="test/Core.Tests/Core.Tests.gsproj"
+compiler_project="test/Compiler.Tests/Compiler.Tests.gsproj"
+# Command substitution under `set -e` aborts when the helper rejects the floors.
+floors_text=$(python3 build/selfhost/stage2-test-filter.py floors "$core_project" "$compiler_project")
 floor_args=()
 controller_floor_args=()
 while IFS= read -r floor; do
-  [[ -n "$floor" ]] || continue
   floor_args+=(--min-executed "$floor")
   controller_floor_args+=(--min-tests "$floor")
-done < <(python3 build/selfhost/stage2-test-filter.py floors)
+done <<< "$floors_text"
+if [[ ${#floor_args[@]} -ne 4 ]]; then
+  echo "expected a test floor for each of the two test projects" >&2
+  exit 1
+fi
 
-core_test="test/Core.Tests/Core.Tests.gsproj::$(python3 build/selfhost/stage2-test-filter.py Core.Tests)"
-compiler_test="test/Compiler.Tests/Compiler.Tests.gsproj::$(python3 build/selfhost/stage2-test-filter.py Compiler.Tests)"
+core_test="$core_project::$(python3 build/selfhost/stage2-test-filter.py Core.Tests)"
+compiler_test="$compiler_project::$(python3 build/selfhost/stage2-test-filter.py Compiler.Tests)"
 
 python3 build/selfhost-stage2.py \
   --tree "$work/migrated" --bootstrap "$bootstrap" --work "$work/controller" \
