@@ -1,34 +1,35 @@
 name: selfhost-stage2
 
-# ADR-0198 integrated positive control. Migrates the repository C# -> G#, runs
-# the isolated stage-2 controller (stage-1 pack, stage-2 rebuild, complete-PE
-# comparison of GSharp.Core.dll and gsc.dll, Core.Tests and Compiler.Tests under
-# stage 2 in the sandbox) and fails unless the report is a real
-# `certified: true`. It is deliberately a separate workflow: it takes hours, so
-# it runs nightly, on demand, and on pull requests that touch the controller.
+# ADR-0198 integrated positive control, run on demand. It migrates the
+# repository C# -> G#, runs the isolated stage-2 controller (stage-1 pack,
+# stage-2 rebuild, complete-PE comparison of GSharp.Core.dll and gsc.dll,
+# Core.Tests and Compiler.Tests under stage 2 in the sandbox) and fails unless
+# the report is a real `certified: true`.
+#
+# Why this is not a pull-request or scheduled check: the controller's trust
+# anchor is a specific, pinned .NET layout (see TRUSTED_DOTNET_SDK_VERSION and
+# the approved host and manifest hashes in build/selfhost-stage2.py), and the
+# run takes about eight hours (the migration alone took 4.5 hours on a hosted
+# 4-core runner), which is more than the six-hour limit of a GitHub-hosted job.
+# It therefore targets a self-hosted runner whose dotnet installation matches the
+# pin; the first step fails in seconds, with the reason, when it does not.
+# Tracking: https://github.com/DavidObando/gsharp/issues/4885
 
 on:
-  schedule:
-    - cron: '47 11 * * *'
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'build/selfhost-stage2.py'
-      - 'build/selfhost_pe.py'
-      - 'build/selfhost-pack-stage1.py'
-      - 'build/selfhost/**'
-      - 'build/verify-stage2-report.py'
-      - 'build/verify-migration-run.py'
-      - 'build/run-selfhost-stage2-certification.sh'
-      - '.github/workflows/selfhost-stage2.yml'
+    inputs:
+      runner:
+        description: 'runs-on label of a runner with the pinned .NET installation'
+        required: true
+        default: 'self-hosted'
 
 env:
   NBGV_SetCloudBuildVersionVars: false
 
 jobs:
   certify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 480
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 720
     permissions:
       contents: read
     steps:
@@ -36,24 +37,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check the controller's trusted toolchain
+        run: python3 build/selfhost-stage2.py --probe-toolchain
+
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
-      # The controller copies exactly this SDK (TRUSTED_DOTNET_SDK_VERSION in
-      # build/selfhost-stage2.py), so install it explicitly rather than relying
-      # on whatever servicing SDK the runner image carries.
-      - name: Setup the controller's trusted .NET SDK
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '10.0.400'
-
-      - name: Install stage-2 sandbox
+      - name: Check the sandbox
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap
-          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          command -v bwrap
+          bwrap --ro-bind / / --unshare-user --unshare-pid --unshare-net true
 
       - name: Build controller helpers
         run: |

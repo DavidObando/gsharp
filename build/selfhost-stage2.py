@@ -1375,25 +1375,39 @@ def trusted_dotnet() -> Path:
         Path("/usr/bin/dotnet"),
         Path("/bin/dotnet"),
     )
+    reasons: list[str] = []
     for candidate in system_candidates:
         executable = real(candidate)
         # An installation without the pinned SDK cannot be copied as the
         # toolchain, so it must not shadow one that has it.
-        if executable.is_file() and (
-                executable.parent / "sdk" / TRUSTED_DOTNET_SDK_VERSION).is_dir():
+        if not executable.is_file():
+            reasons.append(f"{candidate}: not a file")
+        elif not (executable.parent / "sdk" / TRUSTED_DOTNET_SDK_VERSION).is_dir():
+            reasons.append(f"{executable.parent}: no sdk/{TRUSTED_DOTNET_SDK_VERSION}")
+        else:
             info = executable.stat()
-            if (info.st_uid == 0 and not info.st_mode & 0o022
-                    and system_owned_tree(executable.parent)):
+            if info.st_uid != 0 or info.st_mode & 0o022:
+                reasons.append(f"{executable}: not root-owned or group/other-writable")
+            elif not system_owned_tree(executable.parent):
+                reasons.append(
+                    f"{executable.parent}: contains a symbolic link or a file that is "
+                    "not root-owned or is group/other-writable")
+            else:
                 return executable
     for candidate in (account_home / ".dotnet/dotnet",):
         executable = real(candidate)
-        if (executable.is_file()
-                and (executable.parent / "sdk" / TRUSTED_DOTNET_SDK_VERSION).is_dir()
-                and sha256_file(executable) in ALLOWED_DOTNET_HOST_HASHES
-                and dotnet_manifest_sha256(executable.parent)
-                in ALLOWED_DOTNET_ROOT_MANIFESTS):
+        if not executable.is_file():
+            reasons.append(f"{candidate}: not a file")
+        elif not (executable.parent / "sdk" / TRUSTED_DOTNET_SDK_VERSION).is_dir():
+            reasons.append(f"{executable.parent}: no sdk/{TRUSTED_DOTNET_SDK_VERSION}")
+        elif sha256_file(executable) not in ALLOWED_DOTNET_HOST_HASHES:
+            reasons.append(f"{executable}: host hash is not in the approved set")
+        elif dotnet_manifest_sha256(executable.parent) not in ALLOWED_DOTNET_ROOT_MANIFESTS:
+            reasons.append(f"{executable.parent}: layout manifest is not in the approved set")
+        else:
             return executable
-    raise CertificationError("approved dotnet executable not found")
+    raise CertificationError(
+        "approved dotnet executable not found: " + "; ".join(reasons))
 
 
 def is_sandbox_vstest_process(root_host_pid: int | None, claimed: Any) -> bool:
@@ -3652,6 +3666,9 @@ def main(argv: list[str]) -> int:
         "--verify-receipts", nargs="+", metavar="VALUE",
         help="verify a controller receipt set")
     parser.add_argument(
+        "--probe-toolchain", action="store_true",
+        help="print the trusted dotnet installation the controller would use, or why none qualifies")
+    parser.add_argument(
         "--sandbox-probe", nargs="+", type=Path,
         metavar="PATH",
         help="prove caller, controller, environment, and network isolation")
@@ -3744,6 +3761,13 @@ def main(argv: list[str]) -> int:
         try:
             verify_receipt_set(run_id, [real(Path(name)) for name in receipt_names])
         except (CertificationError, OSError, json.JSONDecodeError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.probe_toolchain:
+        try:
+            print(trusted_dotnet())
+        except CertificationError as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0

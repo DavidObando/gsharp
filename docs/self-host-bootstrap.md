@@ -58,8 +58,13 @@ throwaway Git repository, runs the controller with the Core.Tests and
 Compiler.Tests selections, and then `build/verify-stage2-report.py` rejects the
 result unless the report is a real `certified: true` with equal
 `GSharp.Core.dll` and `gsc.dll` and positive passing tests. The
-`selfhost-stage2` workflow runs it nightly, on demand, and for pull requests
-that touch the controller. A recorded run on the 0.4.1326 line certified with
+`selfhost-stage2` workflow runs it on demand on a self-hosted runner: the
+controller trusts only a pinned .NET layout and the run takes about eight hours,
+so it fits neither a hosted runner's toolchain nor its six-hour limit
+([#4885](https://github.com/DavidObando/gsharp/issues/4885)); the workflow's
+first step reports in seconds whether the runner qualifies
+(`python3 build/selfhost-stage2.py --probe-toolchain`). Recorded runs on the
+0.4.13xx line certified with
 both assemblies byte-identical (the MVID slot happened to match too), with 11229
 Core.Tests and 6990 Compiler.Tests passing under stage 2. Those counts are the
 selected tests: the environment-bound exclusions above are not included.
