@@ -1035,6 +1035,12 @@ class ControllerBoundaryTests(unittest.TestCase):
             with self.subTest(properties), self.assertRaises(stage2.CertificationError):
                 stage2.validate_tool_selection("p", properties, toolchain)
 
+    def test_roots_beneath_broad_system_mounts_are_rejected(self) -> None:
+        for path in ("/usr/share/caller", "/usr", "/bin/work", "/lib/x"):
+            with self.subTest(path), self.assertRaises(stage2.CertificationError):
+                stage2.reject_system_placement("caller tree", Path(path))
+        stage2.reject_system_placement("caller tree", self.root)
+
     def test_imported_runtime_path_override_is_rejected(self) -> None:
         tree = self.tree()
         imported = tree / "package.props"

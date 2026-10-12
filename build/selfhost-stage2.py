@@ -1475,6 +1475,18 @@ def validate_tool_selection(
                 f"{name}={value!r}")
 
 
+SANDBOX_SYSTEM_MOUNTS = (Path("/usr"), Path("/bin"), Path("/lib"), Path("/lib64"))
+
+
+def reject_system_placement(label: str, path: Path) -> None:
+    """Roots under a broadly mounted host directory would be visible to sandboxed code."""
+    resolved = real(path)
+    for mount in SANDBOX_SYSTEM_MOUNTS:
+        if contains(real(mount), resolved):
+            raise CertificationError(
+                f"{label} is beneath {mount}, which every sandboxed command can read: {path}")
+
+
 def project_key(project: Path) -> str:
     """Stable per-project directory key shared by obj, PDB and graph state."""
     return hashlib.sha256(project.as_posix().encode()).hexdigest()[:16]
@@ -1527,6 +1539,7 @@ class Controller:
     def preflight(self) -> None:
         for label, path in self.lexical_roots.items():
             reject_path_alias(label, path)
+            reject_system_placement(label, Path(path))
         if not self.caller.is_dir():
             raise CertificationError(f"caller tree does not exist: {self.caller}")
         if not self.bootstrap.is_file():
