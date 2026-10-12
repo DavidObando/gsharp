@@ -108,7 +108,10 @@ documentation, run the project's tests, and review the affected diagnostics.
 ### Known limitations
 
 Translating the compiler from C# to G# lost some things, by decision
-(owner decision D7). None of these changes what the compiler does:
+(owner decision D7). Most items below change only the source form, not what the
+compiler does. The exception is `!!` (see "`!!` density" and the fail-fast
+breaking change above): it is a runtime check, so a violated non-null
+assumption now throws where C#'s compile-time-only `!` carried null onward:
 
 - **Regions.** `#region` blocks are not in the G# source. License headers are
   preserved.

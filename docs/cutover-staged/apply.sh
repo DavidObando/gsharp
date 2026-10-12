@@ -29,6 +29,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "$final_version" && ! "$final_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "--final-version must look like 0.4.1234 (got: $final_version)." >&2
+  exit 2
+fi
+
 if [[ $force -eq 0 ]]; then
   if [[ ! -f "$root/src/Core/Core.gsproj" || -f "$root/src/Core/Core.csproj" ]]; then
     echo "Refusing: $root is not a G# tree (expected src/Core/Core.gsproj and no Core.csproj)." >&2

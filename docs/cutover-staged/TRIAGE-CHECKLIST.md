@@ -48,7 +48,7 @@ line 4551 has a `SpreadElementSyntax spread =>` arm in that function. Confirm a
 test pins it.
 
 ```sh
-grep -n 'SpreadElementSyntax' tools/cs2gs/Cs2Gs.Translator/CSharpToGSharpTranslator.Patterns.cs
+grep -n 'SpreadElementSyntax' tools/cs2gs/Cs2Gs.Translator/CSharpToGSharpTranslator.Patterns.gs
 grep -rlnE 'GetManagedReferenceArrayProjectedCollectionType|\[\.\.widened\]' tools/cs2gs/Cs2Gs.Tests | head
 ```
 

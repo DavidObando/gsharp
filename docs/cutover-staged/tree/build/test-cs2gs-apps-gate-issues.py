@@ -68,6 +68,11 @@ def main():
     assert edits(["P0", "P1"], set()) == [["issue", "edit", "7", "--remove-label", "P1"]]
     assert edits(["P0"], set()) == []
     assert edits(["P1"], set()) == []
+    # A malformed status is red, not green.
+    with tempfile.TemporaryDirectory() as bad:
+        Path(bad, "result-oahu.json").write_text(json.dumps({"app": "oahu", "status": "error"}))
+        Path(bad, "banked.json").write_text(json.dumps({"banked": []}))
+        assert gate.main(["--results", bad, "--banked", str(Path(bad, "banked.json")), "--ref", "feature", "--dry-run"]) == 1
     # Green never touches issues.
     g = FakeGh([])
     gate.process([{"app": "oahu", "status": "green"}], {"oahu"}, "main", g)

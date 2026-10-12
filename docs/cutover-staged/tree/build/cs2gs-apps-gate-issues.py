@@ -131,6 +131,12 @@ def main(argv: list[str]) -> int:
         if not any(r["app"] == app for r in results):
             results.append({"app": app, "status": "red", "summary": "no result file: the leg crashed before reporting",
                             "fingerprint": "missing-result", "log_tail": "", "run_url": "(see the workflow run)"})
+    # A status other than exactly green or red is a malformed result, never a pass.
+    for r in results:
+        if r.get("status") not in ("green", "red"):
+            r["summary"] = f"invalid status {r.get('status')!r} in the leg result; {r.get('summary', '')}"
+            r["fingerprint"] = r.get("fingerprint") or "invalid-status"
+            r["status"] = "red"
     banked = set(json.loads(a.banked.read_text()).get("banked", []))
     process(results, banked, a.ref, Gh(a.dry_run))
     reds = [r["app"] for r in results if r.get("status") == "red"]
