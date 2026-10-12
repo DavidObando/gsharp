@@ -64,9 +64,10 @@ done
 
 # 1b. Resolve the release placeholder in the files just copied.
 if [[ -n "$final_version" ]]; then
-  next="${final_version%.*}.$(( ${final_version##*.} + 1 ))"
+  # Only the literal 0.4.NNNN is concrete. `0.4.NNNN+k` keeps its symbolic +k: the
+  # semi-frozen branch can receive any number of commits before a security release.
   (cd "$here/tree" && find . -type f \( -name '*.md' -o -name '*.yml' \) -print0) | while IFS= read -r -d '' f; do
-    sed -i -e "s/0\.4\.NNNN+k/${next}/g" -e "s/0\.4\.NNNN/${final_version}/g" "$root/$f"
+    sed -i -e "s/0\.4\.NNNN/${final_version}/g" "$root/$f"
   done
 fi
 

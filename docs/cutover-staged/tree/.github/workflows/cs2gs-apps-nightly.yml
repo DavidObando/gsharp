@@ -76,7 +76,12 @@ jobs:
   app:
     name: app (${{ matrix.app }})
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    # 360 is the hosted-runner maximum. The gsharp-csharp leg as written runs the
+    # classic single-job migrate with test parity, which is longer than that (the
+    # nightly it replaces shards it: migrate job plus validate shards). Adapting it
+    # to the sharded pipeline with SELFMIG_SOURCE_ROOT is required Phase 4 work
+    # (README owner list); until then that leg is expected to fail loudly.
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:

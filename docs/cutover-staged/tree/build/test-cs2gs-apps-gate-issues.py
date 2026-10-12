@@ -52,6 +52,11 @@ def main():
     gate.process([red("oahu")], {"oahu"}, "main", g)
     kinds = [w[:2] for w in g.writes]
     assert ["issue", "create"] not in kinds and ["issue", "comment"] in kinds and ["issue", "edit"] in kinds, g.writes
+    # The comment reports the retained priority, not this run's lower one.
+    g = FakeGh([{"number": 7, "labels": [{"name": "P0"}]}])
+    gate.process([red("oahu")], set(), "feature", g)
+    comment = next(w for w in g.writes if w[:2] == ["issue", "comment"])[-1]
+    assert "Priority: P0" in comment and "Priority: P1" not in comment, comment
     # Priority labels are normalized to exactly one and never lowered.
     def edits(existing, banked):
         g = FakeGh([{"number": 7, "labels": [{"name": n} for n in existing]}])

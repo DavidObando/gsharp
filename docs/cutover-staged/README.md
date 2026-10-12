@@ -159,6 +159,12 @@ Owner task list (nothing below is done by this PR or by `apply.sh`):
       `run-cs2gs-selfmig-*.sh` scripts assume the checkout is the C# source). The
       `gsharp-csharp` leg fails loudly until it exists.
 - [ ] Create the `cs2gs-nightly` label.
+- [ ] Move the `gsharp-csharp` leg onto the sharded self-migration pipeline (the
+      migrate job plus validate shards the old `cs2gs-selfmig-nightly` uses),
+      parameterized by `SELFMIG_SOURCE_ROOT`. The staged leg calls the classic
+      single-job `run-cs2gs-selfmig.sh`, whose full run (migration alone took
+      4.5 hours on a hosted runner, per #4842) does not fit a hosted job; the
+      leg's 360 minute cap is the hosted maximum, not evidence that it fits.
 - [ ] Fold the old gate's per-app accounting (stage floors, readability counters)
       into each leg's `result-<app>.json` `stats`, for all three apps. Carry
       greenFloor 56 / 56 apps once #4865 lands.

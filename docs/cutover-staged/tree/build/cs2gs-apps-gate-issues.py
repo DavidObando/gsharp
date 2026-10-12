@@ -98,10 +98,11 @@ def process(results: list[dict], banked: set[str], ref: str, gh: Gh) -> int:
         if found:
             n = str(found[0]["number"])
             current = {l["name"] for l in found[0].get("labels", [])} & set(PRIORITIES)
-            gh.run("issue", "comment", n, "--body", f"Still failing.\n\n{body_for(r, fp, prio)}")
             # Exactly one priority label, never lowered: the highest of the
-            # existing labels and this run's priority (P0 is highest).
+            # existing labels and this run's priority (P0 is highest). The
+            # comment reports that retained target, so it agrees with the label.
             target = min(current | {prio}, key=PRIORITIES.index)
+            gh.run("issue", "comment", n, "--body", f"Still failing.\n\n{body_for(r, fp, target)}")
             for old in sorted(current - {target}):
                 gh.run("issue", "edit", n, "--remove-label", old)
             if target not in current:
