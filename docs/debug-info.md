@@ -211,7 +211,7 @@ The end-to-end debug-info contract is verified at two levels:
   user-visible sequence points), a throw across a non-trivial call
   boundary, and a throw after `await` in an `async` function (validating
   that Phase 5's async state-machine PDB rows resume on the correct line).
-* **`build/debugger-e2e.sh`** — a smoke test that packs the SDK, builds a
+* **`e2etests/debugger-e2e.sh`** — a smoke test that packs the SDK, builds a
   GSharp library, builds a C# console host that calls the library via
   reflection, then drives [`netcoredbg`](https://github.com/Samsung/netcoredbg)
   in MI mode. It sets a breakpoint by `<.gs-file>:<line>`, runs to the
