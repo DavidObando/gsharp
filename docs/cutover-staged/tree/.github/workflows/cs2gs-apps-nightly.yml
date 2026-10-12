@@ -140,10 +140,20 @@ jobs:
           python3 - "$APP" "$status" "$code" <<'PY'
           import json, os, sys
           app, status, code = sys.argv[1:4]
+          # Accounting is mandatory: each leg script must leave stats.json in its
+          # gate root (Phase 4 work). Without it the leg is red, so a missing
+          # Oahu / Code Exploder accounting can never pass silently.
+          root = {"gsharp-csharp": "gsharp-csharp", "oahu": "oahu", "code-exploder": "code-exploder"}[app]
+          stats_path = os.environ["RUNNER_TEMP"] + f"/gsharp-cs2gs-gate/{root}/stats.json"
+          stats, note = None, ""
+          if os.path.exists(stats_path):
+              stats = json.load(open(stats_path))
+          else:
+              status, note = "red", "; no stats.json: per-app accounting was not produced"
           tail = open(os.environ["RUNNER_TEMP"] + "/leg.log", errors="replace").read()[-8000:]
           run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           json.dump({"app": app, "gate": "cs2gs-apps-nightly", "status": status,
-                     "summary": f"leg exited {code}", "log_tail": tail, "run_url": run},
+                     "summary": f"leg exited {code}{note}", "stats": stats, "log_tail": tail, "run_url": run},
                     open(os.environ["RUNNER_TEMP"] + f"/results/result-{app}.json", "w"))
           PY
           # The artifact upload and the gate job report the failure; do not
