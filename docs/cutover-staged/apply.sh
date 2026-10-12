@@ -146,6 +146,10 @@ Manual steps that remain (see docs/cutover-staged/README.md):
   3. GSA0001-GSA0003 are retired by decision, but NOT by this script: delete those
      three analyzers, descriptors and tests by hand, or keep them. Keep the project,
      the src/Core reference and GSA0004-GSA0007 (docs/internal-analyzers.md).
+  3b. After #4842 lands: retire its pre-cut-over workflow
+     .github/workflows/selfhost-stage2.yml and build/run-selfhost-stage2-certification.sh
+     (they migrate the current checkout from C#; on a G# main they cannot work).
+     selfhost-stage2-nightly.yml replaces them.
   4. Add SELFMIG_SOURCE_ROOT to build/selfmig-common.sh, plus
      tools/cs2gs/external/gsharp-csharp.json, tools/cs2gs/apps-nightly-banked.json
      and the cs2gs-nightly label, for cs2gs-apps-nightly.

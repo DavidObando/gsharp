@@ -184,6 +184,10 @@ Owner task list (nothing below is done by this PR or by `apply.sh`):
       packer contract` and `Verify the self-host TRX comparison` and their
       `build/test-selfhost-*.py` scripts from `test-partition`. `apply.sh` does not
       remove them because #4842 edits the same job.
+- [ ] After #4842 lands, retire its pre-cut-over `selfhost-stage2.yml` workflow and
+      `build/run-selfhost-stage2-certification.sh` (they migrate the checkout from
+      C#, and name `GSharp.sln` and migrated `.csproj` paths). The staged
+      `selfhost-stage2-nightly.yml` replaces them.
 - [ ] Wire `STAGE2_ARGS` in `selfhost-stage2-nightly.yml` once #4842 has landed, and
       provide the self-hosted runner it targets (the controller trusts one pinned
       .NET layout and the run takes about eight hours, so a hosted runner cannot

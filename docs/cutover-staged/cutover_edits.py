@@ -234,7 +234,9 @@ def stage2_controller(root: Path) -> None:
     names that is not a `.gsproj` is src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj,
     which stays a `.csproj` on purpose (it is already G# source, excluded from the
     migration, see build/selfmig-common.sh and docs/self-migration-cutover.md hand-fix 3).
-    Its C# helper projects (build/selfhost/*.csproj) stay C# too. Audit any other
+    Its C# helper projects (build/selfhost/*.csproj) stay C# too. #4842 also adds
+    selfhost-stage2.yml and run-selfhost-stage2-certification.sh, which migrate a
+    C# checkout; they cannot work on a G# main and are retired by hand (README). Audit any other
     product path with: grep -n 'csproj' build/selfhost-stage2.py
     """
     rel = "build/selfhost-stage2.py"
