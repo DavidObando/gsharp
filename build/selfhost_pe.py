@@ -214,6 +214,10 @@ def inspect_layout(data: bytes) -> PeLayout:
     ):
         rva = _u32(data, clr + field)
         size = _u32(data, clr + field + 4)
+        if field == 64 and (rva or size):
+            # ReadyToRun headers reference section RVAs whose payloads are not
+            # traversed here; v1 does not model them, so fail closed.
+            raise PeError("CLR managed-native (ReadyToRun) header is unsupported")
         if not rva or not size:
             continue
         start = rva_to_offset(rva, size, label)

@@ -219,6 +219,32 @@ static class Program
                 result = run_driver("--compare-pe", self.fixture, mutant)
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
 
+    def test_managed_native_header_is_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        layout = pe.inspect_layout(data)
+        pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+        optional = pe_offset + 24
+        magic = struct.unpack_from("<H", data, optional)[0]
+        directories = optional + (112 if magic == 0x20B else 96)
+        clr_rva = struct.unpack_from("<I", data, directories + 14 * 8)[0]
+        # Resolve the CLR header's file offset through the section table.
+        section_count = struct.unpack_from("<H", data, pe_offset + 6)[0]
+        optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+        clr_offset = None
+        for index in range(section_count):
+            section = optional + optional_size + index * 40
+            virtual_address, raw_size, raw_offset = struct.unpack_from(
+                "<III", data, section + 12)[0], *struct.unpack_from("<II", data, section + 16)
+            if virtual_address <= clr_rva < virtual_address + raw_size:
+                clr_offset = raw_offset + clr_rva - virtual_address
+        self.assertIsNotNone(clr_offset)
+        struct.pack_into("<II", data, clr_offset + 64, layout.mvid_offset, 16)
+        mutant = self.mutants / "managed-native-header.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("ReadyToRun", result.stderr)
+
     def test_section_table_outside_size_of_headers_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
