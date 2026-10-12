@@ -57,8 +57,8 @@ Where the C# source went (owner decision D2):
   released as `0.4.NNNN+k`.
 - All development, including fixes, happens in G# on `main`, never on the C#
   branch.
-- cs2gs's nightly run migrates a pinned commit of the branch, together with
-  Oahu and Code Exploder.
+- cs2gs's nightly run uses the cs2gs built from `main` (written in G#) to
+  migrate a pinned commit of the branch, together with Oahu and Code Exploder.
 - The Visual Studio extension (`src/vs-gsharp`) is still C#; it is not part of
   the translation.
 
@@ -84,7 +84,11 @@ documentation, run the project's tests, and review the affected diagnostics.
   compiler, language server or tool reports an internal error (`GS9998`) with a
   null-reference trace on input that 0.4.NNNN accepted, please file it with the
   input.
-- *(placeholder)* Language and diagnostic breaking changes merged after
+- **`data class` / `data struct` print and compare like a C# `record`**
+  (ADR-0199). `ToString` renders the C# record format and equality follows the
+  record ABI, which the self-migrated compiler needs for exact public ABI parity.
+  See the Unreleased section of the release notes for the exact format.
+- *(placeholder)* Other language and diagnostic breaking changes merged after
   0.4.NNNN go here, in the format of the existing sections: rule, example,
   **Remedy**.
 

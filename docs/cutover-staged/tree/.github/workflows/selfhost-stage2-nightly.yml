@@ -37,8 +37,14 @@ concurrency:
 
 jobs:
   stage2:
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
+    # Self-hosted, not ubuntu-latest: the controller trusts one pinned .NET layout
+    # (TRUSTED_DOTNET_SDK_VERSION in build/selfhost-stage2.py) that a hosted runner
+    # does not have (`approved dotnet executable not found`), and the run takes
+    # about eight hours, over the six-hour limit of a hosted job. #4842 documents
+    # both and runs its on-demand workflow selfhost-stage2.yml the same way;
+    # tracked in #4885. Use the same runner label as that workflow.
+    runs-on: self-hosted
+    timeout-minutes: 720
     steps:
       - uses: actions/checkout@v5
         with:
@@ -51,15 +57,17 @@ jobs:
             exit 1
           fi
 
+      - name: Check the controller's trusted toolchain
+        run: python3 build/selfhost-stage2.py --probe-toolchain
+
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
-      - name: Install stage-2 sandbox
+      - name: Check the sandbox
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap
-          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          command -v bwrap
+          bwrap --ro-bind / / --unshare-user --unshare-pid --unshare-net true
 
       - name: Certify stage 1 against stage 2
         run: |

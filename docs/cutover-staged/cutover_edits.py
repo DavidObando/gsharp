@@ -50,6 +50,25 @@ def replace(root: Path, rel: str, old: str, new: str, count: int = 1) -> None:
     put(root, rel, text.replace(old, new) if count == 0 else text.replace(old, new, count))
 
 
+PROJECT_PATH = re.compile(r"[A-Za-z0-9_./$-]*?([A-Za-z0-9_.-]+)\.csproj\b")
+
+
+def retarget_project(root: Path, m: re.Match) -> str:
+    """`X.csproj` -> `X.gsproj` only when the checkout has the .gsproj twin and no .csproj.
+
+    A bare name or a path with a variable is judged by name: renamed unless a tracked
+    `.csproj` of that name remains (projects such as Gsharp.Extensions stay C#).
+    """
+    text = m.group(0)
+    stem = text[: -len(".csproj")]
+    if "/" in stem and "$" not in stem:
+        ok = (root / (stem + ".gsproj")).exists() and not (root / (stem + ".csproj")).exists()
+    else:
+        name = m.group(1)
+        ok = any(root.rglob(name + ".gsproj")) and not any(root.rglob(name + ".csproj"))
+    return stem + ".gsproj" if ok else text
+
+
 def sub_dotnet_lines(root: Path, rel: str) -> None:
     """GSharp.sln -> GSharp.slnx and .csproj -> .gsproj on dotnet/test commands.
 
@@ -62,7 +81,7 @@ def sub_dotnet_lines(root: Path, rel: str) -> None:
         if "vs-gsharp" not in line and "VsGsharp" not in line and "build/selfhost/" not in line:
             line = to_slnx(line)
             if "dotnet" in line or "csproj" in line:
-                line = re.sub(r"\.csproj\b", ".gsproj", line)
+                line = PROJECT_PATH.sub(lambda m: retarget_project(root, m), line)
         out.append(line)
     put(root, rel, "\n".join(out))
 
