@@ -130,7 +130,13 @@ def inspect_layout(data: bytes) -> PeLayout:
         if any(max(raw[0], start) < min(raw[1], end) for start, end in raw_ranges):
             raise PeError("overlapping PE section raw ranges")
         raw_ranges.append(raw)
-        sections.append((virtual_address, max(virtual_size, raw_size), raw_offset, raw_size))
+        span = max(virtual_size, raw_size)
+        # Overlapping virtual ranges make an RVA (such as the MVID slot's)
+        # ambiguous between sections, so they are rejected outright.
+        if any(max(virtual_address, other) < min(virtual_address + span, other + length)
+               for other, length, _, _ in sections):
+            raise PeError("overlapping PE section virtual ranges")
+        sections.append((virtual_address, span, raw_offset, raw_size))
 
     def rva_to_offset(rva: int, size: int, label: str) -> int:
         matches = []

@@ -219,6 +219,23 @@ static class Program
                 result = run_driver("--compare-pe", self.fixture, mutant)
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
 
+    def test_overlapping_virtual_section_ranges_are_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+        optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+        section_count = struct.unpack_from("<H", data, pe_offset + 6)[0]
+        self.assertGreaterEqual(section_count, 2)
+        first = pe_offset + 24 + optional_size
+        second = first + 40
+        # Give the second section the first one's virtual address while its raw
+        # data stays disjoint: the same RVA now maps to two sections.
+        data[second + 12:second + 16] = data[first + 12:first + 16]
+        mutant = self.mutants / "overlapping-virtual-sections.dll"
+        mutant.write_bytes(data)
+        result = run_driver("--compare-pe", self.fixture, mutant)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("overlapping PE section virtual ranges", result.stderr)
+
     def test_managed_native_header_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         layout = pe.inspect_layout(data)
