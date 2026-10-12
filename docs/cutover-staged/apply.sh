@@ -144,7 +144,7 @@ Manual steps that remain (see docs/cutover-staged/README.md):
   2. Rebalance the CI shards in build/generate-ci-test-matrix.py with real G#
      timings; run build/verify-ci-test-partition.py.
   3. GSA0001-GSA0003 are retired by decision, but NOT by this script: delete those
-     three analyzers, descriptors and tests by hand, or keep them. Keep the project,
+     three analyzers, descriptors and tests by hand. Keep the project,
      the src/Core reference and GSA0004-GSA0007 (docs/internal-analyzers.md).
   3b. After #4842 lands: retire its pre-cut-over workflow
      .github/workflows/selfhost-stage2.yml and build/run-selfhost-stage2-certification.sh

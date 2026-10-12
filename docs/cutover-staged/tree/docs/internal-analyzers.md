@@ -20,8 +20,6 @@ the migrated compiler. Neither `apply.sh` nor `cutover_edits.py` removes any rul
 To retire GSA0001-GSA0003 the cut-over PR must, by hand: delete those three
 analyzers, their descriptors and their tests, and keep everything else in
 `src/Analyzers/InternalAnalyzers` and the reference in `src/Core/Core.gsproj`.
-If the owner prefers to keep the translated rules running, skip that step and
-delete this section instead.
 
 **Enforcement gap once retired.** The three rules below are **not enforced by the
 build**. They stay as written conventions for compiler source and must be checked
