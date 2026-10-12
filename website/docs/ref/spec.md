@@ -563,7 +563,7 @@ Type declarations introduce aggregates with the aggregate keyword (`class`, `str
 
 `data class` and `data struct` synthesize structural ergonomics such as equality and copy/update support; `data class` is reference-typed, `data struct` is value-typed. The `record` keyword was removed; migrate to `data struct Name(...)` (or `data class Name(...)` when reference semantics are desired). `inline struct` is the inline value class form and must have exactly one field.
 
-Every declared `data class` / `data struct` synthesizes the C# `record` ABI (ADR-0199), so a G# data type and a C# `record` / `record struct` look the same to CLR consumers:
+Every declared `data class` / `data struct` synthesizes the C# `record` ABI (ADR-0199), so a G# data type and a C# `record` / `record struct` present the same CLR surface, with the one `Deconstruct` difference noted below:
 
 * `ToString()` uses the C# record format: `Point { X = 3, Y = 4 }`, or `Empty { }` when nothing prints. A generic type prints its simple name without type arguments. Only public fields and readable public non-indexer properties print, in declaration order, and members printed by a data base's `PrintMembers` come first. Values format with the **current culture**, as in C#.
 * `PrintMembers(StringBuilder)` is synthesized (`private` on a sealed type that starts the slot, otherwise `protected virtual`). A hand-written `PrintMembers` of the compatible shape replaces it; a non-explicit-interface `PrintMembers` with exactly one by-value `StringBuilder` parameter that is not of the compatible shape is GS0623 (other overloads and explicit-interface implementations are ordinary methods). A hand-written `ToString` of the compatible shape replaces the synthesized `ToString` (GS0487 otherwise).
