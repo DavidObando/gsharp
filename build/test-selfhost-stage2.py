@@ -633,6 +633,7 @@ class ReportVerifierTests(unittest.TestCase):
         fixture = getattr(PeComparisonTests, "fixture", None)
         if fixture is None or not Path(fixture).is_file():
             PeComparisonTests.setUpClass()
+            self.addCleanup(PeComparisonTests.tearDownClass)
             fixture = PeComparisonTests.fixture
         # Two real, identical managed PEs: the verifier re-reads them.
         self.fixture_pe = Path(fixture)
@@ -1142,7 +1143,8 @@ class ControllerBoundaryTests(unittest.TestCase):
                 stage2.validate_tool_selection("p", properties, toolchain)
 
     def test_roots_beneath_broad_system_mounts_are_rejected(self) -> None:
-        for path in ("/usr/share/caller", "/usr", "/bin/work", "/lib/x"):
+        for path in ("/usr/share/caller", "/usr", "/bin/work", "/lib/x", "/etc/ssl/x",
+                     "/etc/ca-certificates", "/etc/alternatives/work"):
             with self.subTest(path), self.assertRaises(stage2.CertificationError):
                 stage2.reject_system_placement("caller tree", Path(path))
         stage2.reject_system_placement("caller tree", self.root)

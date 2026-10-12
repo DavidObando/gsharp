@@ -1475,7 +1475,10 @@ def validate_tool_selection(
                 f"{name}={value!r}")
 
 
-SANDBOX_SYSTEM_MOUNTS = (Path("/usr"), Path("/bin"), Path("/lib"), Path("/lib64"))
+SANDBOX_SYSTEM_MOUNTS = (
+    Path("/usr"), Path("/bin"), Path("/lib"), Path("/lib64"),
+    Path("/etc/ssl"), Path("/etc/ca-certificates"), Path("/etc/alternatives"),
+)
 
 
 def reject_system_placement(label: str, path: Path) -> None:
