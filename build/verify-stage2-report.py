@@ -74,6 +74,15 @@ def verify_evidence(report: dict[str, Any], row: dict[str, Any], key: str) -> No
             or completed[0].get("canceled") or completed[0].get("aborted") \
             or any(r.get("outcome") != "Passed" for r in results):
         raise ReportError(f"test event log is not one complete passing run: {key[:120]}")
+    # Every result must come from the assembly the receipt's command executed.
+    arguments = receipt.get("arguments")
+    executed_path = (str(Path(str(arguments[2]).strip()).resolve())
+                     if isinstance(arguments, list) and len(arguments) > 2 else None)
+    if executed_path is None or any(
+            not isinstance(r.get("source"), str)
+            or str(Path(r["source"]).resolve()) != executed_path for r in results):
+        raise ReportError(
+            f"test results do not all come from the executed test assembly: {key[:120]}")
     if not (len(results) == completed[0].get("total") == row["executed"]):
         raise ReportError(
             f"reported test count does not match the event log: {key[:120]} "

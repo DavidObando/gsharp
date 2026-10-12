@@ -638,7 +638,7 @@ class ReportVerifierTests(unittest.TestCase):
         # Two real, identical managed PEs: the verifier re-reads them.
         self.fixture_pe = Path(fixture)
 
-    def good(self) -> dict:
+    def good(self, event_source: str | None = None) -> dict:
         digest = "a" * 64
         run_id = "run-1"
         left, right, _ = pe.compare(self.fixture_pe, self.fixture_pe)
@@ -661,7 +661,9 @@ class ReportVerifierTests(unittest.TestCase):
         def selection(index: int, project: str, filter_: str, executed: int) -> dict:
             events = self.root / f"events-{index}.jsonl"
             lines = [{"type": "started"}]
-            lines += [{"type": "result", "outcome": "Passed"} for _ in range(executed)]
+            assembly = self.root / f"test-{index}.dll"
+            lines += [{"type": "result", "outcome": "Passed", "source": event_source or str(assembly)}
+                      for _ in range(executed)]
             lines.append({"type": "completed", "total": executed, "failed": 0,
                           "canceled": False, "aborted": False})
             events.write_text("".join(
@@ -718,6 +720,10 @@ class ReportVerifierTests(unittest.TestCase):
     def test_empty_expectations_are_rejected(self) -> None:
         self.assertIsNotNone(self.check({"schema": 1, "certified": True,
                                          "comparison": [], "tests": []}, []))
+
+    def test_results_from_another_assembly_are_rejected(self) -> None:
+        # Hashes and counts are all self-consistent; only the result source differs.
+        self.assertIsNotNone(self.check(self.good(event_source="/elsewhere/other.dll")))
 
     def test_vacuous_selection_below_the_floor_is_rejected(self) -> None:
         self.assertIsNone(self.check(self.good(), floors={"a": 5, "b": 2}))
