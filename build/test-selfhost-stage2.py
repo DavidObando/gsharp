@@ -1214,8 +1214,21 @@ class ControllerBoundaryTests(unittest.TestCase):
         target = self.root / "out" / "gsc.dll"
         (destination / "Core.dll").write_bytes(b"producer")
         (destination / "cs" / "res.dll").write_bytes(b"package")
-        (destination / "gsc.deps.json").write_text("{}", encoding="utf-8")
+        deps = {"targets": {".NETCoreApp,Version=v10.0": {"gsc/1.0": {
+            "runtime": {"lib/net6.0/Core.dll": {}},
+            "resources": {"lib/net6.0/cs/res.dll": {"locale": "cs"}}}}}}
+        (destination / "gsc.deps.json").write_text(json.dumps(deps), encoding="utf-8")
         stage2.verify_published_payload(destination, target, {accepted}, {packaged})
+        for bad in ({"runtime": {"missing.dll": {}}}, {"runtime": {"../Core.dll": {}}},
+                    {"native": {"/etc/passwd": {}}}):
+            forged = {"targets": {"t": {"gsc/1.0": bad}}}
+            (destination / "gsc.deps.json").write_text(json.dumps(forged), encoding="utf-8")
+            with self.assertRaises(stage2.CertificationError):
+                stage2.verify_published_payload(destination, target, {accepted}, {packaged})
+        (destination / "gsc.deps.json").write_text("not json", encoding="utf-8")
+        with self.assertRaises(stage2.CertificationError):
+            stage2.verify_published_payload(destination, target, {accepted}, {packaged})
+        (destination / "gsc.deps.json").write_text(json.dumps(deps), encoding="utf-8")
         (destination / "Core.dll").write_bytes(b"swapped in by a publish item")
         with self.assertRaises(stage2.CertificationError):
             stage2.verify_published_payload(destination, target, {accepted}, {packaged})

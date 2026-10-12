@@ -1505,6 +1505,34 @@ def reject_system_placement(label: str, path: Path) -> None:
                 f"{label} is beneath {mount}, which every sandboxed command can read: {path}")
 
 
+def validate_generated_deps(destination: Path, deps: Path) -> None:
+    """The one manifest publish writes itself may only name files that were published."""
+    try:
+        document = json.loads(deps.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CertificationError(f"published dependency manifest is invalid: {deps.name}") from error
+    targets = document.get("targets") if isinstance(document, dict) else None
+    if not isinstance(targets, dict) or not targets:
+        raise CertificationError(f"published dependency manifest has no targets: {deps.name}")
+    for libraries in targets.values():
+        for library in (libraries.values() if isinstance(libraries, dict) else ()):
+            for group in ("runtime", "native", "resources"):
+                assets = library.get(group, {}) if isinstance(library, dict) else {}
+                for asset, metadata in (assets.items() if isinstance(assets, dict) else ()):
+                    relative = Path(str(asset))
+                    # Publish flattens package paths: runtime and native files land
+                    # next to the app, satellite resources under their locale.
+                    locale = ""
+                    if group == "resources" and isinstance(metadata, dict):
+                        locale = str(metadata.get("locale", ""))
+                    placed = destination / locale / relative.name
+                    if (relative.is_absolute() or ".." in relative.parts
+                            or "/" in locale or ".." in locale or not placed.is_file()):
+                        raise CertificationError(
+                            f"published dependency manifest names a file that was not "
+                            f"published: {asset}")
+
+
 def verify_published_payload(
     destination: Path, primary: Path, accepted_hashes: set[str], package_hashes: set[str],
 ) -> None:
@@ -1519,6 +1547,7 @@ def verify_published_payload(
         if not path.is_file():
             continue
         if path.parent == destination and path.name == generated:
+            validate_generated_deps(destination, path)
             continue
         digest = sha256_file(path)
         if digest not in accepted_hashes and digest not in package_hashes:
