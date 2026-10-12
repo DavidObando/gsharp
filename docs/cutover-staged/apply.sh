@@ -69,6 +69,10 @@ if [[ -n "$final_version" ]]; then
   (cd "$here/tree" && find . -type f \( -name '*.md' -o -name '*.yml' \) -print0) | while IFS= read -r -d '' f; do
     sed -i -e "s/0\.4\.NNNN/${final_version}/g" "$root/$f"
   done
+  # The release-notes draft is published text too (step 6 below merges it into the website).
+  if [[ -f "$root/docs/release/release-notes-0.5-draft.md" ]]; then
+    sed -i -e "s/0\.4\.NNNN/${final_version}/g" "$root/docs/release/release-notes-0.5-draft.md"
+  fi
 fi
 
 # 2. Mechanical edits (workflows, CI-matrix scripts, stale docs).
@@ -133,8 +137,9 @@ Manual steps that remain (see docs/cutover-staged/README.md):
      before writing when the text moved).
   2. Rebalance the CI shards in build/generate-ci-test-matrix.py with real G#
      timings; run build/verify-ci-test-partition.py.
-  3. GSA0001-GSA0003 are retired (docs/internal-analyzers.md states the gap);
-     decide whether to delete src/Analyzers/InternalAnalyzers and its tests.
+  3. GSA0001-GSA0003 are retired by decision, but NOT by this script: drop the
+     InternalAnalyzers reference from src/Core/Core.gsproj and delete the project
+     and its tests by hand, or keep them (docs/internal-analyzers.md).
   4. Add SELFMIG_SOURCE_ROOT to build/selfmig-common.sh, plus
      tools/cs2gs/external/gsharp-csharp.json, tools/cs2gs/apps-nightly-banked.json
      and the cs2gs-nightly label, for cs2gs-apps-nightly.

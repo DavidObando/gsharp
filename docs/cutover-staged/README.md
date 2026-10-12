@@ -119,7 +119,10 @@ Verified 2026-10-12 against `main` at `d4943a122`:
    someone writes G# equivalents, struct-field-token reads (GSA0001), imported
    CLR `Type` reference comparisons (GSA0002) and strong static reflection
    caches (GSA0003) are caught only in review. `docs/internal-analyzers.md`
-   states this. If one of those bug classes recurs, port that rule.
+   states this. If one of those bug classes recurs, port that rule. **The
+   retirement is a manual step in the cut-over PR**, not done by `apply.sh`: the
+   migration keeps the translated analyzer reference in `src/Core`, so remove it
+   (and the project) by hand; GSA0007/GSA0008 are not implemented yet.
 2. **What the apps nightly tests, and the C# branch policy.** The tool under
    test is cs2gs built from the checked-out `main` tree (G# source, pinned
    toolchain). Its inputs are C# programs: `cs2gs/csharp-0.4` at a pinned SHA

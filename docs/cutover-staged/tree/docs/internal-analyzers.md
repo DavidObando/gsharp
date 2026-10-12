@@ -1,25 +1,32 @@
 # Internal analyzers
 
 `GSharp.InternalAnalyzers` (`src/Analyzers/InternalAnalyzers`) is a set of Roslyn
-analyzers (translated to G# at the cut-over, like the rest of the repository).
-They analyze C# syntax. Since the compiler became G#
-source they **do not run on `Core`** (a `.gsproj` of `.gs` files), so rules
-GSA0001-GSA0003 below are no longer enforced by the build.
+analyzers. At the cut-over the project is translated to G# with the rest of the
+repository, like the other analyzers cs2gs migrates
+([cs2gs analyzer translation](cs2gs-analyzer-translation.md)).
 
-## Status: retired at the cut-over
+## Status: retired at the cut-over (a step the cut-over PR performs)
 
 Owner decision (2026-10-09): GSA0001-GSA0003 are retired. They are not ported.
-The G# analyzers that replace the C# ones are GSA0007 and GSA0008 (ADR-0193
-phases 2-3), which enforce the nullability funnel, not these three rules.
+The G# analyzers meant to replace the C# ones are GSA0007 and GSA0008 (ADR-0193
+phases 2-3). **They are not implemented yet**, and they enforce the nullability
+funnel, not these three rules.
 
-**Enforcement gap.** From the cut-over until someone writes G# equivalents, the
-three rules below are **not enforced by the build**. They stay as written
-conventions for compiler source and must be checked in review. Violating
-GSA0001 or GSA0002 produced real bugs (the GS0155/0158/0159 clusters); GSA0003
-caused CI out-of-memory failures. If one of them regresses, that is the signal
-to port it as a G# analyzer. The analyzer project and its tests are translated to G# with the rest of the
-repository (they are still Roslyn analyzers over C# syntax) and stay as the
-reference for each rule's detection logic until the owner removes them.
+**Retirement is not automatic.** The cs2gs migration keeps the analyzer reference
+of `src/Core` (rewritten to `OutputItemType="GsharpCodeAnalyzer"`), and
+`cs2gs-analyzer-translation.md` states that the translated rules keep guarding
+the migrated compiler. Neither `apply.sh` nor `cutover_edits.py` removes them.
+To retire them the cut-over PR must, by hand: drop the `InternalAnalyzers`
+reference from `src/Core/Core.gsproj`, and delete the analyzer project and its
+tests (or keep the project as a reference but unreferenced). If the owner prefers
+to keep the translated rules running, skip that step and delete this section
+instead.
+
+**Enforcement gap once retired.** The three rules below are **not enforced by the
+build**. They stay as written conventions for compiler source and must be checked
+in review. Violating GSA0001 or GSA0002 produced real bugs (the GS0155/0158/0159
+clusters); GSA0003 caused CI out-of-memory failures. If one of them regresses,
+that is the signal to port it as a G# analyzer.
 
 ## GSA0001: Struct field token reads
 
