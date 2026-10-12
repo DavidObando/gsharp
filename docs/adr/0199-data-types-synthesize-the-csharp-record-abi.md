@@ -1,7 +1,7 @@
 # ADR-0199: `data class` / `data struct` synthesize the C# record ABI
 
-- **Status**: Proposed (flips to Accepted on merge; owner direction approved
-  October 9, 2026)
+- **Status**: Accepted (owner direction approved October 9, 2026; implemented by
+  seams a #4871, b #4875, c docs)
 - **Date**: 2026-10-09
 - **Phase**: Self-hosting Phase 0 — migrated-Core ABI parity
 - **Supersedes**: the record-ABI parts of

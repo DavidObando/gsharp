@@ -450,6 +450,8 @@ emitted code, where these constructs run natively.
 
 Every `data struct` synthesizes a fixed contract of value-semantics members — `Equals(object)`, `Equals(Name)`, `GetHashCode()`, `ToString()`, `op_Equality(Name, Name)`, `op_Inequality(Name, Name)`, and `Deconstruct(out T1, out T2, …)`. Hand-written versions are rejected so the contract stays predictable and so consumers (G# and external.NET) can rely on the synthesized IL.
 
+**Update (ADR-0199).** `ToString` is no longer the Kotlin `Name(F=v)` form with the invariant culture; it is the C# record format `Name { F = v }` with the current culture, built around a synthesized `PrintMembers(StringBuilder)`, and every data type implements `IEquatable<Self>`. A hand-written `ToString` (GS0487) or `PrintMembers` (GS0623) of the compatible shape replaces the synthesized member. `Deconstruct`, equality and hashing are unchanged. Known gaps: #4876 (GS0387 over an abstract `PrintMembers`), #4877 (imported non-data intermediary), #4874 (cs2gs duplicates a repeated base parameter).
+
 | Code | Severity | Message |
 |------|----------|---------|
 | GS0232 | Error | Data struct `{type}` synthesizes member `{member}`; it cannot be declared explicitly. |

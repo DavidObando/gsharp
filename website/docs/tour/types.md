@@ -72,6 +72,8 @@ func Main() {
 
 `data struct` and `data class` add ergonomic value-record behavior: structural equality, `with`-copy, and deconstruction. `data struct` is value-typed; `data class` is reference-typed.
 
+A data type is what a C# `record` / `record struct` is on the CLR: `ToString()` prints `Point { X = 3, Y = 4 }` (current culture, only public instance fields and readable public instance properties (no static members, indexers or pointer-typed members), plus whatever a data base's `PrintMembers` prints), it implements `IEquatable<T>`, and it carries the record `PrintMembers` slot. A `data class` additionally has the record copy constructor and `<Clone>$`; a `data struct` copies by value and has neither. Earlier releases printed `Point(X=3, Y=4)` with the invariant culture; see the [release notes](../release-notes.md) for the breaking change. `inline struct` is not a data type and keeps its own `UserId(value=u-1)` text. `Deconstruct` is G#'s own: positional components for a primary constructor, otherwise fields then auto-properties.
+
 ```gsharp title="DataStruct.gs"
 package GSharp.Example.DataStruct
 
@@ -212,7 +214,7 @@ func Main() {
 }
 ```
 
-Use `data object { ... }` when you want value-style equality, `ToString`, deconstruction, and `with`-copy support.
+Use `data object { ... }` when you want value-style equality, `ToString`, deconstruction, and `with`-copy support. Its `ToString` prints `{ Name = David, Count = 2 }` with no type name, and it does not get a record `PrintMembers`.
 
 ## Zero values
 
