@@ -20,6 +20,7 @@ import os
 import pwd
 import re
 import secrets
+import select
 import shlex
 import shutil
 import signal
@@ -1888,6 +1889,16 @@ class Controller:
             os.close(status_write)
             status_write = None
             assert status_read is not None
+            # Bounded by the same command timeout: a sandbox that never reports
+            # its child must not hang the controller before communicate() runs.
+            ready, _, _ = select.select([status_read], [], [], self.args.command_timeout)
+            if not ready:
+                process.kill()
+                process.communicate()
+                os.close(status_read)
+                raise CertificationError(
+                    f"{stage} {purpose} sandbox did not start within "
+                    f"{self.args.command_timeout} seconds")
             status_document = json.loads(os.read(status_read, 4096))
             # Keep the read end open until the command exits: bwrap writes its
             # exit status there, and a closed pipe would kill it with SIGPIPE.

@@ -68,20 +68,10 @@ if [[ -z "$summary" || ! -f "$work/migrated/global.json" ]]; then
   echo "migration produced no summary or tree (exit $migrate_exit)" >&2
   exit 1
 fi
-# The whole corpus must have been discovered (59 apps today) and, in
-# particular, every app the certification builds or tests.
-python3 build/verify-migration-run.py --stopped-after-ilverify --min-apps 50 \
-  --require-app src/Core/Core.csproj --require-app src/Compiler/Compiler.csproj \
-  --require-app src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj \
-  --require-app src/Formatting/Gsfmt.Cli/Gsfmt.Cli.csproj \
-  --require-app tools/gsgen/Gsgen.Cli/Gsgen.Cli.csproj \
-  --require-app src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.csproj \
-  --require-app src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.csproj \
-  --require-app src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.csproj \
-  --require-app src/Repl/Repl.csproj \
-  --require-app test/Core.Tests/Core.Tests.csproj \
-  --require-app test/Compiler.Tests/Compiler.Tests.csproj \
-  "$summary"
+# The migrated app set must equal the repository's own C# projects minus the
+# gate's exclusions, derived independently of cs2gs discovery.
+python3 build/verify-migration-run.py --stopped-after-ilverify \
+  --corpus-from-git "$repo_root" "$summary"
 
 git -C "$work/migrated" init -q
 git -C "$work/migrated" add -A

@@ -659,6 +659,27 @@ class MigrationRunVerifierTests(unittest.TestCase):
             module.check({"apps": []})
 
 
+class CorpusDerivationTests(unittest.TestCase):
+    def test_expected_apps_are_tracked_projects_minus_exclusions(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "verify_migration_run", REPO / "build" / "verify-migration-run.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        expected = module.expected_apps(REPO)
+        self.assertIn("src/Core/Core.csproj", expected)
+        self.assertNotIn("src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj", expected)
+        self.assertFalse(any(path.startswith("src/vs-gsharp/") for path in expected))
+        self.assertEqual([], module.check(
+            {"apps": [{"appId": a, "stages": [
+                {"stage": "translate", "status": "passed"}, {"stage": "compile", "status": "passed"},
+                {"stage": "ilverify", "status": "passed"}, {"stage": "test-parity", "status": "skipped"}]}
+                for a in sorted(expected)]}, stopped_after_ilverify=True, exact_apps=expected))
+        short = sorted(expected)[1:]
+        with self.assertRaises(ValueError):
+            module.check({"apps": [{"appId": a, "stages": []} for a in short]},
+                         stopped_after_ilverify=True, exact_apps=expected)
+
+
 class TestSelectionTests(unittest.TestCase):
     def test_floors_are_loaded_strictly(self) -> None:
         spec = importlib.util.spec_from_file_location(
