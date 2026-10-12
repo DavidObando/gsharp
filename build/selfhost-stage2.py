@@ -1589,6 +1589,10 @@ class Controller:
         if not self.report["tests"]:
             raise CertificationError(
                 "at least one --test is required for positive certification evidence")
+        for item in getattr(self.args, "min_tests", []):
+            floor_project, _, floor = item.rpartition("=")
+            if not floor_project or not floor.isdigit():
+                raise CertificationError(f"--min-tests must be PROJECT=N: {item!r}")
         for item in getattr(self.args, "test_env", []):
             name, separator, value = item.partition("=")
             if not separator or name not in TEST_ENVIRONMENT_ALLOWLIST or value != "1":
@@ -3434,6 +3438,11 @@ class Controller:
             except (OSError, CertificationError) as error:
                 raise CertificationError(f"invalid test supervisor evidence: {error}") from error
             total = positive_test_count(events, run_target)
+            for item in getattr(self.args, "min_tests", []):
+                floor_project, _, floor = item.rpartition("=")
+                if floor_project == project and total < int(floor):
+                    raise CertificationError(
+                        f"{project} executed {total} tests, below the expected floor {floor}")
             failed = 0
             self.revalidate(
                 "stage-2", tree, [project], test_plan, f"after-test-{index}")
@@ -3566,6 +3575,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--test", action="append", default=[])
     parser.add_argument(
         "--test-adapter-sha256", action="append", default=[], metavar="SHA256")
+    parser.add_argument(
+        "--min-tests", action="append", default=[], metavar="PROJECT=N",
+        help="minimum executed tests for a selected test project")
     parser.add_argument(
         "--test-env", action="append", default=[], metavar="NAME=VALUE",
         help="allowlisted test-host environment, recorded in the report")

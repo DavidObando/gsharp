@@ -15,5 +15,14 @@ def build_filter(project: str) -> str:
     return "&".join(f"FullyQualifiedName!={name}" for name in names)
 
 
+def floors() -> list[str]:
+    document = json.loads((HERE / "stage2-test-floors.json").read_text(encoding="utf-8"))
+    return [f"{project}={count}" for project, count in document.items()
+            if isinstance(count, int)]
+
+
 if __name__ == "__main__":
-    print(build_filter(sys.argv[1]))
+    if sys.argv[1] == "floors":
+        print("\n".join(floors()))
+    else:
+        print(build_filter(sys.argv[1]))

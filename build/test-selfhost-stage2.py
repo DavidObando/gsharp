@@ -604,9 +604,15 @@ class TestSelectionTests(unittest.TestCase):
 class ReportVerifierTests(unittest.TestCase):
     """The integrated script trusts verify-stage2-report.py over the exit code."""
 
-    @staticmethod
-    def good() -> dict:
+    def setUp(self) -> None:
+        self.root = ARTIFACTS / f"verifier-{self.id().rsplit('.', 1)[-1]}"
+        remove_tree(self.root)
+        self.root.mkdir(parents=True)
+        self.addCleanup(remove_tree, self.root)
+
+    def good(self) -> dict:
         digest = "a" * 64
+        run_id = "run-1"
 
         def comparison(name: str) -> dict:
             return {
@@ -615,22 +621,38 @@ class ReportVerifierTests(unittest.TestCase):
                 "stage2": {"normalized_sha256": digest, "raw_sha256": digest},
             }
 
-        def selection(project: str, filter_: str, executed: int) -> dict:
+        def selection(index: int, project: str, filter_: str, executed: int) -> dict:
+            events = self.root / f"events-{index}.jsonl"
+            events.write_bytes(b"events")
+            assembly = self.root / f"test-{index}.dll"
+            assembly.write_bytes(b"assembly")
+            adapter = self.root / "adapter"
+            adapter.mkdir(exist_ok=True)
+            logger = adapter / "Adr0198.TestLogger.dll"
+            logger.write_bytes(b"logger")
+            receipt = self.root / f"receipt-{index}.json"
+            receipt.write_text(json.dumps({
+                "runId": run_id, "purpose": "test", "exitCode": 0,
+                "events": {"path": str(events)},
+                "arguments": [f"--TestAdapterPath:{adapter}"],
+            }), encoding="utf-8")
+            sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
             return {
                 "project": project, "filter": filter_, "executed": executed,
-                "failed": 0, "outcome": "Completed", "receipt": "/r.json",
-                "eventSha256": digest, "loggerSha256": digest,
-                "testAssembly": {"path": "/t.dll", "sha256": digest},
+                "failed": 0, "outcome": "Completed", "receipt": str(receipt),
+                "eventSha256": sha(events), "loggerSha256": sha(logger),
+                "testAssembly": {"path": str(assembly), "sha256": sha(assembly)},
                 "assemblySha256": {"Core/GSharp.Core.dll": digest, "Compiler/gsc.dll": digest},
             }
 
         return {
-            "schema": 1, "certified": True,
+            "schema": 1, "certified": True, "runId": run_id,
             "comparison": [comparison("Core/GSharp.Core.dll"), comparison("Compiler/gsc.dll")],
-            "tests": [selection("a", "f", 5), selection("b", "g", 2)],
+            "tests": [selection(0, "a", "f", 5), selection(1, "b", "g", 2)],
         }
 
-    def check(self, report: dict, tests: list[str] | None = None) -> str | None:
+    def check(self, report: dict, tests: list[str] | None = None,
+              floors: dict[str, int] | None = None) -> str | None:
         tests = ["a::f", "b::g"] if tests is None else tests
         spec = importlib.util.spec_from_file_location(
             "verify_stage2_report", REPO / "build" / "verify-stage2-report.py")
@@ -638,7 +660,7 @@ class ReportVerifierTests(unittest.TestCase):
         spec.loader.exec_module(module)
         try:
             module.verify(
-                report, ["Core/GSharp.Core.dll", "Compiler/gsc.dll"], tests)
+                report, ["Core/GSharp.Core.dll", "Compiler/gsc.dll"], tests, floors)
         except module.ReportError as error:
             return str(error)
         return None
@@ -649,6 +671,27 @@ class ReportVerifierTests(unittest.TestCase):
     def test_empty_expectations_are_rejected(self) -> None:
         self.assertIsNotNone(self.check({"schema": 1, "certified": True,
                                          "comparison": [], "tests": []}, []))
+
+    def test_vacuous_selection_below_the_floor_is_rejected(self) -> None:
+        self.assertIsNone(self.check(self.good(), floors={"a": 5, "b": 2}))
+        self.assertIsNotNone(self.check(self.good(), floors={"a": 6}))
+
+    def test_evidence_is_rehashed_not_trusted(self) -> None:
+        for name, mutate in {
+            "events changed": lambda r: Path(
+                json.loads(Path(r["tests"][0]["receipt"]).read_text())["events"]["path"]
+            ).write_bytes(b"forged"),
+            "test assembly changed": lambda r: Path(
+                r["tests"][1]["testAssembly"]["path"]).write_bytes(b"forged"),
+            "logger changed": lambda r: (self.root / "adapter" / "Adr0198.TestLogger.dll"
+                                         ).write_bytes(b"forged"),
+            "receipt missing": lambda r: Path(r["tests"][0]["receipt"]).unlink(),
+            "receipt from another run": lambda r: r.update(runId="run-2"),
+        }.items():
+            report = self.good()
+            mutate(report)
+            with self.subTest(name):
+                self.assertIsNotNone(self.check(report))
 
     def test_every_forged_shape_is_rejected(self) -> None:
         for name, mutate in {

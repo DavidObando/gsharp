@@ -78,6 +78,14 @@ mkdir -p "$work/bootstrap"
 cp "out/bin/Release/nupkgs/Gsharp.NET.Sdk.$pin.nupkg" "$work/bootstrap/"
 bootstrap="$work/bootstrap/Gsharp.NET.Sdk.$pin.nupkg"
 
+floor_args=()
+controller_floor_args=()
+while IFS= read -r floor; do
+  [[ -n "$floor" ]] || continue
+  floor_args+=(--min-executed "$floor")
+  controller_floor_args+=(--min-tests "$floor")
+done < <(python3 build/selfhost/stage2-test-filter.py floors)
+
 core_test="test/Core.Tests/Core.Tests.gsproj::$(python3 build/selfhost/stage2-test-filter.py Core.Tests)"
 compiler_test="test/Compiler.Tests/Compiler.Tests.gsproj::$(python3 build/selfhost/stage2-test-filter.py Compiler.Tests)"
 
@@ -87,7 +95,7 @@ python3 build/selfhost-stage2.py \
   --project src/Core/Core.gsproj --project src/Compiler/Compiler.gsproj \
   --assembly Core/GSharp.Core.dll --assembly Compiler/gsc.dll \
   --test "$core_test" --test "$compiler_test" \
-  --test-env GSHARP_SKIP_ILVERIFY=1 \
+  --test-env GSHARP_SKIP_ILVERIFY=1 "${controller_floor_args[@]}" \
   --test-adapter-sha256 c5ac41b36fac0fcef9714fb80fea0175913530fb53dd7bb8e5e1470339667100 \
   --test-adapter-sha256 194458c816e0ea9ff0c5eac8896c52133fe9205661833b3d0f57e85a4e66936b \
   --test-adapter-sha256 ec705ad62e33f31fc46ad5800c9b1694c02d0ec4e1ee704712da9f24ebbea22e \
@@ -95,4 +103,4 @@ python3 build/selfhost-stage2.py \
 
 python3 build/verify-stage2-report.py "$work/controller/reports/stage2-report.json" \
   --assembly Core/GSharp.Core.dll --assembly Compiler/gsc.dll \
-  --test "$core_test" --test "$compiler_test"
+  --test "$core_test" --test "$compiler_test" "${floor_args[@]}"

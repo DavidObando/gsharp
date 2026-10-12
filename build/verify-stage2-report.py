@@ -8,6 +8,7 @@ exit code, a stale file, or a partially written report cannot pass as success.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -26,7 +27,37 @@ def digest(value: Any) -> bool:
     return isinstance(value, str) and HEX64.fullmatch(value) is not None
 
 
-def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
+def file_sha256(path: Any) -> str:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except (OSError, TypeError, ValueError) as error:
+        raise ReportError(f"evidence file cannot be read: {path!r}") from error
+
+
+def verify_evidence(report: dict[str, Any], row: dict[str, Any], key: str) -> None:
+    """Re-read the controller-owned evidence a test row names and rehash it."""
+    try:
+        receipt = json.loads(Path(row["receipt"]).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ReportError(f"test receipt cannot be read: {key[:120]}") from error
+    if (not isinstance(receipt, dict) or not isinstance(report.get("runId"), str)
+            or receipt.get("runId") != report["runId"] or receipt.get("exitCode") != 0
+            or receipt.get("purpose") != "test"):
+        raise ReportError(f"test receipt does not belong to this passing run: {key[:120]}")
+    events = receipt.get("events")
+    if (not isinstance(events, dict)
+            or file_sha256(events.get("path")) != row["eventSha256"]):
+        raise ReportError(f"test event log does not match its recorded hash: {key[:120]}")
+    if file_sha256(row["testAssembly"].get("path")) != row["testAssembly"]["sha256"]:
+        raise ReportError(f"test assembly does not match its recorded hash: {key[:120]}")
+    adapter = next((argument.split(":", 1)[1] for argument in receipt.get("arguments", [])
+                    if isinstance(argument, str) and argument.startswith("--TestAdapterPath:")), None)
+    if adapter is None or file_sha256(Path(adapter) / "Adr0198.TestLogger.dll") != row["loggerSha256"]:
+        raise ReportError(f"test logger does not match its recorded hash: {key[:120]}")
+
+
+def verify(report: Any, assemblies: list[str], tests: list[str],
+           floors: dict[str, int] | None = None) -> None:
     if not assemblies or not tests:
         raise ReportError("expected assemblies and test selections must not be empty")
     if not isinstance(report, dict):
@@ -90,6 +121,11 @@ def verify(report: Any, assemblies: list[str], tests: list[str]) -> None:
                 or not isinstance(hashes, dict) or not hashes
                 or not all(digest(value) for value in hashes.values())):
             raise ReportError(f"test selection lacks authenticated evidence fields: {key[:120]}")
+        floor = (floors or {}).get(str(row.get("project")))
+        if floor is not None and executed < floor:
+            raise ReportError(
+                f"{row.get('project')} executed {executed} tests, below the expected floor {floor}")
+        verify_evidence(report, row, key)
         # The tests must have run against exactly the binaries that were compared.
         if hashes != {name: compared[name]["stage2"].get("raw_sha256") for name in assemblies}:
             raise ReportError(
@@ -105,9 +141,19 @@ def main(argv: list[str]) -> int:
     parser.add_argument("report", type=Path)
     parser.add_argument("--assembly", action="append", default=[])
     parser.add_argument("--test", action="append", default=[], metavar="PROJECT::FILTER")
+    parser.add_argument(
+        "--min-executed", action="append", default=[], metavar="PROJECT=N",
+        help="minimum executed tests for a project (guards against a vacuous selection)")
     args = parser.parse_args(argv)
+    floors: dict[str, int] = {}
+    for item in args.min_executed:
+        project, _, count = item.rpartition("=")
+        if not project or not count.isdigit():
+            parser.error(f"--min-executed must be PROJECT=N: {item!r}")
+        floors[project] = int(count)
     try:
-        verify(json.loads(args.report.read_text(encoding="utf-8")), args.assembly, args.test)
+        verify(json.loads(args.report.read_text(encoding="utf-8")),
+               args.assembly, args.test, floors)
     except (OSError, ValueError, ReportError) as error:
         print(f"verify-stage2-report: {error}", file=sys.stderr)
         return 1
