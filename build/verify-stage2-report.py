@@ -88,6 +88,9 @@ def verify_evidence(report: dict[str, Any], row: dict[str, Any], key: str) -> No
                if isinstance(a, str) and a.startswith("--TestCaseFilter:")]
     if filters != ([row["filter"]] if row.get("filter") else []):
         raise ReportError(f"receipt command does not carry the reported filter: {key[:120]}")
+    executed_copy = file_sha256(arguments[2])
+    if executed_copy != row["testAssembly"]["sha256"]:
+        raise ReportError(f"the executed test assembly is not the reported one: {key[:120]}")
     if file_sha256(row["testAssembly"].get("path")) != row["testAssembly"]["sha256"]:
         raise ReportError(f"test assembly does not match its recorded hash: {key[:120]}")
     adapter = next((argument.split(":", 1)[1] for argument in receipt.get("arguments", [])
@@ -137,6 +140,13 @@ def verify(report: Any, assemblies: list[str], tests: list[str],
                 or not isinstance(row.get("rawEqual"), bool)
                 or row["rawEqual"] != (stage1["raw_sha256"] == stage2["raw_sha256"])):
             raise ReportError(f"comparison lacks consistent stage fingerprints: {assembly}")
+        # The compared files must be the controller-owned stage outputs of one run.
+        suffixes = (f"/mutable/stage-1/out/{assembly}", f"/mutable/stage-2/out/{assembly}")
+        paths = [Path(str(stage.get("path"))).as_posix() for stage in (stage1, stage2)]
+        if (not all(path.endswith(suffix) for path, suffix in zip(paths, suffixes))
+                or paths[0][:-len(suffixes[0])] != paths[1][:-len(suffixes[1])]):
+            raise ReportError(
+                f"compared PEs are not the stage outputs of one controller run: {assembly}")
         # Never trust the reported hashes: re-read both PEs the report names.
         try:
             left, right, equal = selfhost_pe.compare(

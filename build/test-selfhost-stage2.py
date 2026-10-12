@@ -635,23 +635,25 @@ class ReportVerifierTests(unittest.TestCase):
             PeComparisonTests.setUpClass()
             fixture = PeComparisonTests.fixture
         # Two real, identical managed PEs: the verifier re-reads them.
-        self.stage1_pe = self.root / "stage1.dll"
-        self.stage2_pe = self.root / "stage2.dll"
         self.fixture_pe = Path(fixture)
 
     def good(self) -> dict:
         digest = "a" * 64
         run_id = "run-1"
-        shutil.copyfile(self.fixture_pe, self.stage1_pe)
-        shutil.copyfile(self.fixture_pe, self.stage2_pe)
-        left, right, _ = pe.compare(self.stage1_pe, self.stage2_pe)
+        left, right, _ = pe.compare(self.fixture_pe, self.fixture_pe)
 
         def comparison(name: str) -> dict:
+            paths = []
+            for stage in ("stage-1", "stage-2"):
+                path = self.root / "mutable" / stage / "out" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(self.fixture_pe, path)
+                paths.append(str(path))
             return {
                 "assembly": name, "normalizedEqual": True, "rawEqual": True,
-                "stage1": {"path": str(self.stage1_pe), "normalized_sha256": left.normalized_sha256,
+                "stage1": {"path": paths[0], "normalized_sha256": left.normalized_sha256,
                            "raw_sha256": left.raw_sha256},
-                "stage2": {"path": str(self.stage2_pe), "normalized_sha256": right.normalized_sha256,
+                "stage2": {"path": paths[1], "normalized_sha256": right.normalized_sha256,
                            "raw_sha256": right.raw_sha256},
             }
 
@@ -756,6 +758,10 @@ class ReportVerifierTests(unittest.TestCase):
                 r["comparison"][0]["stage1"].update(normalized_sha256="b" * 64),
                 r["comparison"][0]["stage2"].update(normalized_sha256="b" * 64)],
             "compared PE missing": lambda r: Path(r["comparison"][0]["stage1"]["path"]).unlink(),
+            "compared PE outside the stage outputs": lambda r: r["comparison"][0]["stage1"].update(
+                path=str(self.fixture_pe)),
+            "executed test copy differs": lambda r: Path(json.loads(
+                Path(r["tests"][0]["receipt"]).read_text())["arguments"][2]).write_bytes(b"other"),
             "missing stage-1 raw hash": lambda r: r["comparison"][0]["stage1"].pop("raw_sha256"),
             "rawEqual contradicts hashes": lambda r: r["comparison"][0]["stage1"].update(
                 raw_sha256="d" * 64),
