@@ -17,7 +17,6 @@
     "the listed ones."
   ],
   "apps": {
-    "out/scratch/ildump/ildump.csproj": 10.5,
     "src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj": 363.0,
     "src/Analyzers/InternalAnalyzers/InternalAnalyzers.csproj": 6.5,
     "src/Compiler/Compiler.csproj": 400.5,

@@ -24,13 +24,14 @@ internal static class RepositoryMirror
         ValidateDestination(source, destination);
 
         IReadOnlyList<string> files = RepositoryFileInventory.Enumerate(source);
-        ValidateCollisions(files);
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(source, files);
+        ValidateCollisions(files, verbatim);
         Directory.CreateDirectory(destination);
 
         foreach (string relativePath in files)
         {
             string extension = Path.GetExtension(relativePath);
-            if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+            if ((extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) && !verbatim.Contains(relativePath)) ||
                 extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
                 extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
                 extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase))
@@ -225,17 +226,18 @@ internal static class RepositoryMirror
         // filtered (.cs → .gs, .csproj → .gsproj); every other file was
         // copied verbatim by Prepare regardless of scope and stays expected.
         excludedScope ??= RepositoryExcludedScope.None;
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(sourceRoot, sourceFiles);
         var expected = new HashSet<string>(
             sourceFiles
                 .Where(path =>
                 {
                     string extension = Path.GetExtension(path);
                     bool translated =
-                        extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)
+                        (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) && !verbatim.Contains(path))
                         || extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase);
                     return !translated || !excludedScope.IsExcluded(path);
                 })
-                .SelectMany(DestinationRelativePaths),
+                .SelectMany(path => DestinationRelativePaths(path, verbatim)),
             StringComparer.OrdinalIgnoreCase);
         if (additionalFiles is not null)
         {
@@ -252,7 +254,7 @@ internal static class RepositoryMirror
                 translatedSourceFiles
                     .Select(path => Path.GetRelativePath(source, Path.GetFullPath(path)))
                     .Where(path => !RepositoryFileInventory.HasExcludedDirectory(path))
-                    .SelectMany(DestinationRelativePaths));
+                    .SelectMany(path => DestinationRelativePaths(path, null)));
         }
 
         if (!sourceFiles.Any(path =>
@@ -315,12 +317,12 @@ internal static class RepositoryMirror
         }
     }
 
-    private static void ValidateCollisions(IEnumerable<string> files)
+    private static void ValidateCollisions(IEnumerable<string> files, ISet<string> verbatim)
     {
         var destinations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (string source in files)
         {
-            foreach (string destination in DestinationRelativePaths(source))
+            foreach (string destination in DestinationRelativePaths(source, verbatim))
             {
                 if (destinations.TryGetValue(destination, out string prior))
                 {
@@ -525,9 +527,20 @@ internal static class RepositoryMirror
     // the repository root by that file name, so renaming it makes the mirror
     // internally inconsistent) and the `.slnx` conversion is emitted beside it
     // because only the XML format can type-tag a `.gsproj`.
-    private static IEnumerable<string> DestinationRelativePaths(string source)
+    //
+    // Issue #4850: a `.cs` file in `verbatim` (RepositoryVerbatimSources) is
+    // copied as itself, not translated to `.gs`.
+    private static IEnumerable<string> DestinationRelativePaths(string source, ISet<string> verbatim)
     {
         string extension = Path.GetExtension(source);
+        if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)
+            && verbatim is not null
+            && verbatim.Contains(source))
+        {
+            yield return source;
+            yield break;
+        }
+
         if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase))
         {
             yield return Path.ChangeExtension(source, ".gs");

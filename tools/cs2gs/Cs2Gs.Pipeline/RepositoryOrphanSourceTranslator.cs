@@ -40,10 +40,14 @@ internal static class RepositoryOrphanSourceTranslator
     {
         excludedScope ??= RepositoryExcludedScope.None;
         var failures = new List<string>();
+
+        // Issue #4850: a `.cs` a project references as data or foreign input
+        // is mirrored verbatim by RepositoryMirror.Prepare, not an orphan.
+        ISet<string> verbatim = RepositoryVerbatimSources.Compute(sourceRoot, sourceFiles);
         foreach (string relativePath in sourceFiles.Where(path =>
             Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase)))
         {
-            if (excludedScope.IsExcluded(relativePath))
+            if (excludedScope.IsExcluded(relativePath) || verbatim.Contains(relativePath))
             {
                 continue;
             }

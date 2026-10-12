@@ -47,10 +47,10 @@ ALWAYS_KEEP_CSHARP = ("src/vs-gsharp",)
 SDK_PROJECT = "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj"
 EXTENSIONS_PROJECT = "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-# C# files the mirror does not carry that are C# on purpose (reviewed in the first dry run, #4850):
-# the foreign-compile sample's input and the C# data fixtures the Adr0169 parity tests read as text.
-EXPECTED_RETAINED_CSHARP = ("samples/ForeignCompile/ThisAssembly.cs",
-                            "tools/cs2gs/Cs2Gs.Tests/Fixtures/Adr0169FunnelSurface")
+# Tracked C# the mirror neither translates nor carries. Since #4850 the mirror copies the
+# C# a project references as data or foreign input, so none is expected: anything
+# retained is reported as a failure for review.
+EXPECTED_RETAINED_CSHARP = ()
 WORK_ROOT_MARKER = ".cutover-work-root"
 LOCK_REGEN = ["dotnet", "restore", "GSharp.slnx", "--force-evaluate"]
 NUGET_ORG_CONFIG = ('<?xml version="1.0" encoding="utf-8"?>\n<configuration><packageSources><clear />'
