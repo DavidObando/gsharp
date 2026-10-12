@@ -12,8 +12,9 @@ OPEN.
 ### #4302 (`__local_` tracker): already closed
 
 Nothing to do. If it was closed by PR #4582, confirm the `__local_` ceiling in
-`tools/cs2gs/selfmig-baseline.json` is 0 (the file is retired at the cut-over;
-check the last C# nightly's report instead).
+`tools/cs2gs/selfmig-baseline.json` is 0. The file stays after the cut-over: the
+`gsharp-csharp` leg of the apps nightly (`build/run-cs2gs-selfmig.sh`) reads it, and
+so will the sharded pipeline it moves to.
 
 ### #4304 (`__q{N}` transparent-identifier carrier): obsolete
 
