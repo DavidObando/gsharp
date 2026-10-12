@@ -46,8 +46,8 @@ dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Release -graph
 
 # Migration stops after ILVerify (compile carries the `!!` polish): test parity
 # is not run here because the controller runs the tests under stage 2 itself.
-# `cs2gs migrate` exits 1 when any app fails; a translate, compile or ILVerify
-# failure anywhere is rejected from the summary below.
+# Any app failure makes cs2gs migrate exit nonzero, which stops the script; the
+# summary is then re-read independently.
 set +e
 dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
   --corpus "$repo_root" --sdk-pin global-json \
@@ -55,8 +55,10 @@ dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
   --stop-after ilverify "${selfmig_project_filters[@]}" | tee "$work/migrate.log"
 migrate_exit=${PIPESTATUS[0]}
 set -e
-if [[ $migrate_exit -ne 0 && $migrate_exit -ne 1 ]]; then
-  echo "cs2gs migrate crashed (exit $migrate_exit); see $work/migrate.log" >&2
+# A run stopped after ILVerify has no parity stage to fail, so the only
+# acceptable exit is 0 (every app translated, compiled and verified).
+if [[ $migrate_exit -ne 0 ]]; then
+  echo "cs2gs migrate failed (exit $migrate_exit); see $work/migrate.log" >&2
   exit 1
 fi
 summary=$(find "$work/runs" -maxdepth 2 -name summary.json | sort | tail -1)
