@@ -15,6 +15,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import selfhost_pe  # noqa: E402  (the controller's own PE fingerprinting)
+
 
 class ReportError(Exception):
     pass
@@ -50,21 +53,32 @@ def verify_evidence(report: dict[str, Any], row: dict[str, Any], key: str) -> No
         raise ReportError(f"test event log does not match its recorded hash: {key[:120]}")
     if events.get("sha256") != row["eventSha256"]:
         raise ReportError(f"receipt event hash differs from the report: {key[:120]}")
-    # The reported counts must come from the event log itself.
-    results = completed = 0
+    # The reported counts must come from the event log itself, with the same
+    # complete-positive-run invariants the controller enforces. (The envelope
+    # MAC is keyed by a controller-private secret, so only the controller can
+    # check it; sequence continuity and the shape are checked here.)
+    payloads: list[dict[str, Any]] = []
     try:
-        for line in Path(events["path"]).read_text(encoding="utf-8").splitlines():
-            payload = json.loads(json.loads(line)["payload"])
-            if payload.get("type") == "result" and payload.get("outcome") == "Passed":
-                results += 1
-            elif payload.get("type") == "completed":
-                completed = payload.get("total", 0)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        for expected, line in enumerate(
+                Path(events["path"]).read_text(encoding="utf-8").splitlines()):
+            envelope = json.loads(line)
+            if envelope["sequence"] != expected or not isinstance(envelope["mac"], str):
+                raise ValueError("sequence")
+            payloads.append(json.loads(envelope["payload"]))
+    except (OSError, ValueError, KeyError, TypeError) as error:
         raise ReportError(f"test event log is not parseable: {key[:120]}") from error
-    if not (results == completed == row["executed"]):
+    starts = [p for p in payloads if p.get("type") == "started"]
+    completed = [p for p in payloads if p.get("type") == "completed"]
+    results = [p for p in payloads if p.get("type") == "result"]
+    if len(starts) != 1 or len(completed) != 1 or completed[0].get("failed", 0) != 0 \
+            or completed[0].get("canceled") or completed[0].get("aborted") \
+            or any(r.get("outcome") != "Passed" for r in results):
+        raise ReportError(f"test event log is not one complete passing run: {key[:120]}")
+    if not (len(results) == completed[0].get("total") == row["executed"]):
         raise ReportError(
             f"reported test count does not match the event log: {key[:120]} "
-            f"(report {row['executed']}, results {results}, completed {completed})")
+            f"(report {row['executed']}, results {len(results)}, "
+            f"completed {completed[0].get('total')})")
     # The receipt's own command must be the selected test target and filter.
     arguments = receipt.get("arguments")
     if (not isinstance(arguments, list) or len(arguments) < 3
@@ -123,6 +137,17 @@ def verify(report: Any, assemblies: list[str], tests: list[str],
                 or not isinstance(row.get("rawEqual"), bool)
                 or row["rawEqual"] != (stage1["raw_sha256"] == stage2["raw_sha256"])):
             raise ReportError(f"comparison lacks consistent stage fingerprints: {assembly}")
+        # Never trust the reported hashes: re-read both PEs the report names.
+        try:
+            left, right, equal = selfhost_pe.compare(
+                Path(stage1["path"]), Path(stage2["path"]))
+        except (OSError, KeyError, TypeError, selfhost_pe.PeError) as error:
+            raise ReportError(f"compared PE cannot be re-read: {assembly}: {error}") from error
+        if (not equal or left.normalized_sha256 != stage1["normalized_sha256"]
+                or right.normalized_sha256 != stage2["normalized_sha256"]
+                or left.raw_sha256 != stage1["raw_sha256"]
+                or right.raw_sha256 != stage2["raw_sha256"]):
+            raise ReportError(f"re-read PE fingerprints differ from the report: {assembly}")
     ran = report.get("tests")
     if not isinstance(ran, list):
         raise ReportError("report has no test rows")

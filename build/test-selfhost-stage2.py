@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import shutil
+import tempfile
 import struct
 import subprocess
 import sys
@@ -627,27 +628,39 @@ class ReportVerifierTests(unittest.TestCase):
     """The integrated script trusts verify-stage2-report.py over the exit code."""
 
     def setUp(self) -> None:
-        self.root = ARTIFACTS / f"verifier-{self.id().rsplit('.', 1)[-1]}"
-        remove_tree(self.root)
-        self.root.mkdir(parents=True)
+        self.root = Path(tempfile.mkdtemp(prefix="stage2-verifier-"))
         self.addCleanup(remove_tree, self.root)
+        fixture = getattr(PeComparisonTests, "fixture", None)
+        if fixture is None or not Path(fixture).is_file():
+            PeComparisonTests.setUpClass()
+            fixture = PeComparisonTests.fixture
+        # Two real, identical managed PEs: the verifier re-reads them.
+        self.stage1_pe = self.root / "stage1.dll"
+        self.stage2_pe = self.root / "stage2.dll"
+        self.fixture_pe = Path(fixture)
 
     def good(self) -> dict:
         digest = "a" * 64
         run_id = "run-1"
+        shutil.copyfile(self.fixture_pe, self.stage1_pe)
+        shutil.copyfile(self.fixture_pe, self.stage2_pe)
+        left, right, _ = pe.compare(self.stage1_pe, self.stage2_pe)
 
         def comparison(name: str) -> dict:
             return {
                 "assembly": name, "normalizedEqual": True, "rawEqual": True,
-                "stage1": {"normalized_sha256": digest, "raw_sha256": digest},
-                "stage2": {"normalized_sha256": digest, "raw_sha256": digest},
+                "stage1": {"path": str(self.stage1_pe), "normalized_sha256": left.normalized_sha256,
+                           "raw_sha256": left.raw_sha256},
+                "stage2": {"path": str(self.stage2_pe), "normalized_sha256": right.normalized_sha256,
+                           "raw_sha256": right.raw_sha256},
             }
 
         def selection(index: int, project: str, filter_: str, executed: int) -> dict:
             events = self.root / f"events-{index}.jsonl"
             lines = [{"type": "started"}]
             lines += [{"type": "result", "outcome": "Passed"} for _ in range(executed)]
-            lines.append({"type": "completed", "total": executed})
+            lines.append({"type": "completed", "total": executed, "failed": 0,
+                          "canceled": False, "aborted": False})
             events.write_text("".join(
                 json.dumps({"sequence": n, "payload": json.dumps(line), "mac": "x"}) + "\n"
                 for n, line in enumerate(lines)), encoding="utf-8")
@@ -672,7 +685,8 @@ class ReportVerifierTests(unittest.TestCase):
                 "failed": 0, "outcome": "Completed", "receipt": str(receipt),
                 "eventSha256": sha(events), "loggerSha256": sha(logger),
                 "testAssembly": {"path": str(assembly), "sha256": sha(assembly)},
-                "assemblySha256": {"Core/GSharp.Core.dll": digest, "Compiler/gsc.dll": digest},
+                "assemblySha256": {"Core/GSharp.Core.dll": left.raw_sha256,
+                                   "Compiler/gsc.dll": left.raw_sha256},
             }
 
         return {
@@ -738,12 +752,21 @@ class ReportVerifierTests(unittest.TestCase):
                 {"assembly": "Other.dll", "normalizedEqual": False}),
             "stage fingerprints differ": lambda r: r["comparison"][0]["stage2"].update(
                 normalized_sha256="b" * 64),
+            "reported hashes not the PE's": lambda r: [
+                r["comparison"][0]["stage1"].update(normalized_sha256="b" * 64),
+                r["comparison"][0]["stage2"].update(normalized_sha256="b" * 64)],
+            "compared PE missing": lambda r: Path(r["comparison"][0]["stage1"]["path"]).unlink(),
             "missing stage-1 raw hash": lambda r: r["comparison"][0]["stage1"].pop("raw_sha256"),
             "rawEqual contradicts hashes": lambda r: r["comparison"][0]["stage1"].update(
                 raw_sha256="d" * 64),
             "missing fingerprints": lambda r: r["comparison"][0].pop("stage1"),
             "tests on other binaries": lambda r: r["tests"][0]["assemblySha256"].update(
                 {"Core/GSharp.Core.dll": "c" * 64}),
+            "two completed events": lambda r: Path(
+                json.loads(Path(r["tests"][1]["receipt"]).read_text())["events"]["path"]
+            ).write_text(Path(
+                json.loads(Path(r["tests"][1]["receipt"]).read_text())["events"]["path"]
+            ).read_text() * 2),
             "extra test binary": lambda r: r["tests"][1]["assemblySha256"].update(
                 {"Other.dll": "a" * 64}),
             "missing event hash": lambda r: r["tests"][0].pop("eventSha256"),
