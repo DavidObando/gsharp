@@ -86,6 +86,10 @@ def inspect_layout(data: bytes) -> PeLayout:
         raise PeError("invalid PE signature")
 
     coff = pe_offset + 4
+    # A COFF symbol table is never emitted for managed images; a nonzero one
+    # could alias the ignored MVID bytes with symbol data.
+    if _u32(data, coff + 8) != 0 or _u32(data, coff + 12) != 0:
+        raise PeError("PE has a COFF symbol table")
     section_count = _u16(data, coff + 2)
     optional_size = _u16(data, coff + 16)
     optional = coff + 20
@@ -115,6 +119,11 @@ def inspect_layout(data: bytes) -> PeLayout:
         virtual_address = _u32(data, section + 12)
         raw_size = _u32(data, section + 16)
         raw_offset = _u32(data, section + 20)
+        # Legacy COFF relocation and line-number tables are likewise rejected:
+        # their pointers could alias the ignored MVID bytes.
+        if (_u32(data, section + 24) != 0 or _u32(data, section + 28) != 0
+                or _u16(data, section + 32) != 0 or _u16(data, section + 34) != 0):
+            raise PeError("PE section has COFF relocation or line-number tables")
         raw = _range(raw_offset, raw_size, len(data), f"section {index} raw data")
         if raw_size and raw_offset < size_of_headers:
             raise PeError("PE section raw data overlaps PE headers")

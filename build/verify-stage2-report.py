@@ -48,6 +48,32 @@ def verify_evidence(report: dict[str, Any], row: dict[str, Any], key: str) -> No
     if (not isinstance(events, dict)
             or file_sha256(events.get("path")) != row["eventSha256"]):
         raise ReportError(f"test event log does not match its recorded hash: {key[:120]}")
+    if events.get("sha256") != row["eventSha256"]:
+        raise ReportError(f"receipt event hash differs from the report: {key[:120]}")
+    # The reported counts must come from the event log itself.
+    results = completed = 0
+    try:
+        for line in Path(events["path"]).read_text(encoding="utf-8").splitlines():
+            payload = json.loads(json.loads(line)["payload"])
+            if payload.get("type") == "result" and payload.get("outcome") == "Passed":
+                results += 1
+            elif payload.get("type") == "completed":
+                completed = payload.get("total", 0)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        raise ReportError(f"test event log is not parseable: {key[:120]}") from error
+    if not (results == completed == row["executed"]):
+        raise ReportError(
+            f"reported test count does not match the event log: {key[:120]} "
+            f"(report {row['executed']}, results {results}, completed {completed})")
+    # The receipt's own command must be the selected test target and filter.
+    arguments = receipt.get("arguments")
+    if (not isinstance(arguments, list) or len(arguments) < 3
+            or Path(str(arguments[2])).name != Path(row["testAssembly"]["path"]).name):
+        raise ReportError(f"receipt command does not run the reported test assembly: {key[:120]}")
+    filters = [a.split(":", 1)[1] for a in arguments
+               if isinstance(a, str) and a.startswith("--TestCaseFilter:")]
+    if filters != ([row["filter"]] if row.get("filter") else []):
+        raise ReportError(f"receipt command does not carry the reported filter: {key[:120]}")
     if file_sha256(row["testAssembly"].get("path")) != row["testAssembly"]["sha256"]:
         raise ReportError(f"test assembly does not match its recorded hash: {key[:120]}")
     adapter = next((argument.split(":", 1)[1] for argument in receipt.get("arguments", [])

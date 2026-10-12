@@ -196,6 +196,28 @@ static class Program
         self.assertEqual(2, result.returncode)
         self.assertIn("section raw data overlaps PE headers", result.stderr)
 
+    def test_coff_symbol_table_and_legacy_tables_are_rejected(self) -> None:
+        data = bytearray(self.fixture.read_bytes())
+        pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+        optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+        first_section = pe_offset + 24 + optional_size
+        cases = {
+            "symbol table pointer": (pe_offset + 12, "<I", 0x100),
+            "symbol count": (pe_offset + 16, "<I", 1),
+            "relocation pointer": (first_section + 24, "<I", 0x100),
+            "line-number pointer": (first_section + 28, "<I", 0x100),
+            "relocation count": (first_section + 32, "<H", 1),
+            "line-number count": (first_section + 34, "<H", 1),
+        }
+        for name, (offset, fmt, value) in cases.items():
+            mutated = bytearray(data)
+            struct.pack_into(fmt, mutated, offset, value)
+            mutant = self.mutants / f"{name.replace(' ', '-')}.dll"
+            mutant.write_bytes(mutated)
+            with self.subTest(name):
+                result = run_driver("--compare-pe", self.fixture, mutant)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+
     def test_section_table_outside_size_of_headers_is_rejected(self) -> None:
         data = bytearray(self.fixture.read_bytes())
         pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
@@ -623,7 +645,12 @@ class ReportVerifierTests(unittest.TestCase):
 
         def selection(index: int, project: str, filter_: str, executed: int) -> dict:
             events = self.root / f"events-{index}.jsonl"
-            events.write_bytes(b"events")
+            lines = [{"type": "started"}]
+            lines += [{"type": "result", "outcome": "Passed"} for _ in range(executed)]
+            lines.append({"type": "completed", "total": executed})
+            events.write_text("".join(
+                json.dumps({"sequence": n, "payload": json.dumps(line), "mac": "x"}) + "\n"
+                for n, line in enumerate(lines)), encoding="utf-8")
             assembly = self.root / f"test-{index}.dll"
             assembly.write_bytes(b"assembly")
             adapter = self.root / "adapter"
@@ -633,8 +660,11 @@ class ReportVerifierTests(unittest.TestCase):
             receipt = self.root / f"receipt-{index}.json"
             receipt.write_text(json.dumps({
                 "runId": run_id, "purpose": "test", "exitCode": 0,
-                "events": {"path": str(events)},
-                "arguments": [f"--TestAdapterPath:{adapter}"],
+                "events": {"path": str(events), "sha256": hashlib.sha256(
+                    events.read_bytes()).hexdigest()},
+                "arguments": ["dotnet", "vstest", str(assembly),
+                              f"--TestAdapterPath:{adapter}"]
+                             + ([f"--TestCaseFilter:{filter_}"] if filter_ else []),
             }), encoding="utf-8")
             sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
             return {
@@ -687,6 +717,10 @@ class ReportVerifierTests(unittest.TestCase):
                                          ).write_bytes(b"forged"),
             "receipt missing": lambda r: Path(r["tests"][0]["receipt"]).unlink(),
             "receipt from another run": lambda r: r.update(runId="run-2"),
+            "relabeled count": lambda r: r["tests"][0].update(executed=4),
+            "relabeled filter": lambda r: r["tests"][0].update(filter="other"),
+            "relabeled test assembly": lambda r: r["tests"][0]["testAssembly"].update(
+                path=r["tests"][1]["testAssembly"]["path"]),
         }.items():
             report = self.good()
             mutate(report)
