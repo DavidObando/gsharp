@@ -222,7 +222,6 @@ public sealed class Issue3501ScaledTestParityBudgetTests
     /// <returns>The C# sources, excluding build output and fixture data.</returns>
     internal static string[] SuiteCSharpSources(string suite)
     {
-        char separator = Path.DirectorySeparatorChar;
         return Directory
             .EnumerateFiles(suite, "*.cs", SearchOption.AllDirectories)
             .Where(path =>
