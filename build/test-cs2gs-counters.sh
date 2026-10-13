@@ -384,4 +384,19 @@ if SELFMIG_SOURCE_ROOT="$scratch/does-not-exist" bash -c 'repo_root=$1; source "
   exit 1
 fi
 
+# The rule: SELFMIG_SOURCE_ROOT moves the corpus only. The prerequisite builds
+# (compiler, SDK, analyzers-testing) must stay on the checkout, so stub dotnet
+# and record every project path it is asked to build with the override set.
+stubbin="$scratch/stubbin"
+mkdir -p "$stubbin"
+printf '#!/usr/bin/env bash\necho "$@" >> "$DOTNET_STUB_LOG"\n' > "$stubbin/dotnet"
+chmod +x "$stubbin/dotnet"
+DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-src" \
+  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
+assert_eq "$(grep -c "$repo_root/src/" "$scratch/dotnet-stub.log")" "3" "prerequisite builds stay on the checkout"
+if grep -Fq "$scratch/csharp-src" "$scratch/dotnet-stub.log"; then
+  echo "FAIL: a prerequisite build followed SELFMIG_SOURCE_ROOT" >&2
+  exit 1
+fi
+
 echo "cs2gs counter contract tests passed"
