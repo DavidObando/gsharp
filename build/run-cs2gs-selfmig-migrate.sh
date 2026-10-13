@@ -24,7 +24,7 @@ source "$repo_root/build/selfmig-common.sh"
 work_root=${SELFMIG_GATE_ROOT:-"${TMPDIR:-/tmp}/gsharp-cs2gs-selfmig"}
 
 case "$work_root" in
-  ""|"/"|"$repo_root")
+  ""|"/"|"$repo_root"|"$selfmig_source_root")
     echo "Refusing unsafe self-migration gate root: '$work_root'" >&2
     exit 2
     ;;
@@ -40,7 +40,7 @@ selfmig_build_prerequisites
 
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
-  --corpus "$repo_root" \
+  --corpus "$selfmig_source_root" \
   --sdk-pin global-json \
   --out "$migrated_dir" \
   --artifacts "$runs_dir" \
@@ -83,7 +83,7 @@ jq -n \
 # other app still gets a verdict.
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
-  --corpus "$repo_root" \
+  --corpus "$selfmig_source_root" \
   --out "$work_root/csharp-tests" \
   --manifests "$run_dir" \
   "${selfmig_project_filters[@]}" \

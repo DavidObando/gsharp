@@ -10,6 +10,24 @@
 #     format.
 #
 # Sourced, never executed. Callers set `repo_root` before sourcing.
+#
+# SELFMIG_SOURCE_ROOT (optional): the directory holding the C# corpus to
+# migrate. Unset or empty, it is `repo_root`, which is the historical behaviour
+# (the checkout IS the C# source). The cs2gs apps nightly sets it to a separate
+# checkout of the C# branch (cs2gs/csharp-0.4) while the tool under test, cs2gs
+# itself, still runs from `repo_root`. Only the corpus side follows it: the
+# --corpus argument and the Debug prerequisite builds. Scripts, baselines and
+# the cs2gs binary stay under `repo_root`. A value that is not an existing
+# directory is an error, never a silent fallback, so a typo cannot make a leg
+# migrate the wrong tree.
+selfmig_source_root=${SELFMIG_SOURCE_ROOT:-"$repo_root"}
+if [[ ! -d "$selfmig_source_root" ]]; then
+  echo "SELFMIG_SOURCE_ROOT is not a directory: '$selfmig_source_root'" >&2
+  return 2 2>/dev/null || exit 2
+fi
+if [[ "$selfmig_source_root" != "$repo_root" ]]; then
+  selfmig_source_root=$(cd "$selfmig_source_root" && pwd -P)
+fi
 
 # Issue #3501: the counter definitions themselves are shared with the OTHER two
 # corpora (Oahu, code-exploder) so all three report the same table. Only the
@@ -83,10 +101,10 @@ selfmig_project_filters=(
 # build is all it takes — in Release, which is the config the migration runs
 # under and the first one the resolver probes.
 selfmig_build_prerequisites() {
-  dotnet build "$repo_root/src/Compiler/Compiler.csproj" -c Debug -graph
-  dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
+  dotnet build "$selfmig_source_root/src/Compiler/Compiler.csproj" -c Debug -graph
+  dotnet build "$selfmig_source_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
   dotnet build \
-    "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj" \
+    "$selfmig_source_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj" \
     -c Release -graph
 }
 
