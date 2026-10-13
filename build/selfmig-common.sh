@@ -22,12 +22,15 @@
 # i.e. main, so the migrated output targets main's compiler and SDK. A value
 # that is not an existing directory is an error, never a silent fallback, so a
 # typo cannot make a leg migrate the wrong tree.
-selfmig_source_root=${SELFMIG_SOURCE_ROOT:-"$repo_root"}
+# Some callers (the Issue3885 allow-list test) source this file without setting
+# `repo_root`, under `set -u`; fall back to this file's own checkout.
+selfmig_default_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+selfmig_source_root=${SELFMIG_SOURCE_ROOT:-"$selfmig_default_root"}
 if [[ ! -d "$selfmig_source_root" ]]; then
   echo "SELFMIG_SOURCE_ROOT is not a directory: '$selfmig_source_root'" >&2
   return 2 2>/dev/null || exit 2
 fi
-if [[ "$selfmig_source_root" != "$repo_root" ]]; then
+if [[ "$selfmig_source_root" != "$selfmig_default_root" ]]; then
   selfmig_source_root=$(cd "$selfmig_source_root" && pwd -P)
 fi
 
