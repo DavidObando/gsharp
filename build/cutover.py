@@ -124,7 +124,6 @@ def rewrite_sln_literal(text: str) -> tuple[str, int]:
 # {path: [(old, new)]}; a missing `old` is reported, because it means the script changed under this table.
 EXTENSION_FIXES = {
     "build/generate-ci-test-matrix.py": [('.endswith(".tests.csproj")', '.endswith(".tests.gsproj")')],
-    "build/nullable_hygiene.py": [('f.endswith(".csproj")', 'f.endswith((".csproj", ".gsproj"))')],
 }
 
 # Only scripts, workflows and build files: they INVOKE the solution by name (`dotnet restore GSharp.sln`).

@@ -124,12 +124,12 @@ to translate. What gates a PR now:
   on `main` (listed in `tools/cs2gs/apps-nightly-banked.json`) goes red,
   otherwise P1. Fix cs2gs; don't edit the issue's priority down to make the
   dashboard greener.
-- **`nullable-hygiene`** now scopes `build/nullable_hygiene.py` to the C# that
-  remains (`src/vs-gsharp`, test fixtures, cs2gs inputs): the justified-`!`,
-  suppression and `null!` rules still apply there, and the Core coverage check
-  is skipped. The job also runs the release-version-reference check
-  (`build/check-release-version-refs.py`). In G# source, C#'s `!` is `!!`; see
-  "Nullability architecture".
+- **`nullable-hygiene` is retired** (#4906). It existed to keep C# translatable
+  to G#; the C# that remains (`src/vs-gsharp`, fixtures, benchmark apparatus) is
+  never translated, and the compiler's nullable analysis still covers it. There
+  is no comment-on-`!!` or `= nil!!` gate for G# source. The
+  release-version-reference check (`build/check-release-version-refs.py`) now
+  runs in its own `release-version-refs` job.
 - **`Issue3347RemainingSpillInventoryTests`** counts retired synthesized names
   (`__spill`, `__cast`, `__decon`, `__using`) in the committed `.gs` tree.
   If it fails, a new `.gs` file contains one: write the code without it. Don't
