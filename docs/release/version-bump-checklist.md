@@ -129,6 +129,20 @@ Order matters: publish first, then point the website at the published package.
       `npm run test:content`, `python3 website/tests/verify-examples.py` and
       `python3 website/tests/verify-trail.py`).
 
+## Bootstrap pin move (`global.json` `msbuild-sdks`)
+
+The repository is built by the pinned `Gsharp.NET.Sdk` (currently `0.4.1270`),
+whose emitter drops annotations on `shared` fields (fixed in #4911, issue
+#4903). When the pin moves to a release that contains #4911, revert the
+`ThreadLocal<T>` workarounds to `@ThreadStatic` fields (issue #4909):
+
+- `src/Core/CodeAnalysis/Binding/DeclarationBinder.Functions.gs`
+  (`conformanceMatchingDepth`);
+- `src/Sdk/Gsharp.Runtime.Channels/SelectWaiter.gs` (`cache`),
+  `SelectRandom.gs` and `InlineBudget.gs`.
+
+Grep for `#4903` and `#4909` to find every site.
+
 ## Minor release (0.N to 0.N+1)
 
 Everything in the patch procedure, plus:
