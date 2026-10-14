@@ -9,12 +9,6 @@ on:
   pull_request:
     branches:
       - main
-      # Cut-over stack: the Phase 3 PR is based on the Phase 2 branch, so the
-      # workflow must also run for it. Remove once the cut-over has merged.
-      - cutover/phase2-prereqs
-      # TEMPORARY (stack entries; removal tracked in #4900): the 0.5 version-bump
-      # PR is based on the cut-over branch.
-      - cutover/phase3-migrate-to-gsharp
 
 # Cancel superseded PR runs: every push to a PR starts a new run, and without
 # this the older runs of the same PR keep consuming runners (and starve other
