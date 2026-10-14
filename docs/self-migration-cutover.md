@@ -300,9 +300,12 @@ view of the same work, with the facts the dry run added.
 
 - [ ] Freeze in effect; last nightly green; `build.yml` green on the freeze commit
       and `Show Nerdbank.GitVersioning version` prints `0.4.NNNN`.
-- [ ] `version.json`: base stays `0.4` through the final C# release. The 0.5 bump is
-      made later (it also changes `AssemblyVersion`, which trips `GS9303` once for
-      analyzers built against the old line).
+- [ ] `version.json`: base stays `0.4` through the final C# release. The 0.5 bump is its
+      own PR in the cut-over stack (based on the cut-over PR, merged after it): it moves
+      the base to `0.5` and also changes `AssemblyVersion` to `0.5.0.0`, which trips
+      `GS9303` once for analyzers built against the old line. It also adds the temporary
+      publish guard (`build/check-publish-guard.py`) that blocks any 0.5 or stage-2-built
+      publish until the certified publication is wired in.
 - [ ] `website/src/data/release.json`: `version`, `tag`, `docsVersion`. **Today it
       says `0.4.591` while `0.4.1150` is already published**, so the post-publish
       PR for 1150 was never made. Fix it in the freeze PR, not after.

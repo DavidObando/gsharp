@@ -9,9 +9,6 @@ on:
   pull_request:
     branches:
       - main
-      # Cut-over stack: the Phase 3 PR is based on the Phase 2 branch, so the
-      # workflow must also run for it. Remove once the cut-over has merged.
-      - cutover/phase2-prereqs
 
 # Cancel superseded PR runs: every push to a PR starts a new run, and without
 # this the older runs of the same PR keep consuming runners (and starve other
@@ -364,6 +361,11 @@ jobs:
       - name: Check release version references
         run: python3 build/check-release-version-refs.py
 
+      # TEMPORARY: unit tests of the stage-2 publish guard used by the publish
+      # jobs below. Removed together with the guard.
+      - name: Test the stage-2 publish guard
+        run: python3 build/test-check-publish-guard.py
+
   cs2gs-corpus:
     # ADR-0138: the C#→G# migration quality gate. Runs the full in-repo corpus
     # (L1–L5 + the conformance grid) through translate → compile → ilverify →
@@ -555,6 +557,17 @@ jobs:
       actions: read
 
     steps:
+      # TEMPORARY guard (docs/release/final-csharp-release.md, "Stage-2
+      # publication gate"): no 0.5 artifact and no artifact built by the stage-2
+      # compiler may publish, whatever the tag text says, until the
+      # evidence-bound certified publication replaces this step. It runs before
+      # anything is downloaded or uploaded, and again on the downloaded
+      # artifacts below. Remove with build/check-publish-guard.py and its test.
+      - uses: actions/checkout@v5
+
+      - name: Refuse to publish a 0.5 or stage-2-built artifact
+        run: python3 build/check-publish-guard.py
+
       - name: Require stage-2 certification of the tagged commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -583,6 +596,9 @@ jobs:
         with:
           name: visual-studio-gsharp-vsix
           path: ./vsix
+
+      - name: Refuse to publish a 0.5 or stage-2-built artifact (downloaded files)
+        run: python3 build/check-publish-guard.py --artifacts ./nupkgs --artifacts ./vsix
 
       - name: Create GitHub Release with all assets
         env:
@@ -623,6 +639,11 @@ jobs:
         with:
           name: visual-studio-gsharp-vsix
           path: ./vsix
+
+      # TEMPORARY guard, see the `publish` job. Windows runners ship Python as `python`.
+      - name: Refuse to publish a 0.5 or stage-2-built artifact
+        shell: bash
+        run: python build/check-publish-guard.py --artifacts ./vsix
 
       - name: Publish to Visual Studio Marketplace
         shell: pwsh

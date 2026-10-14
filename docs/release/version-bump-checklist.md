@@ -150,7 +150,7 @@ Everything in the patch procedure, plus:
 1. **Before** the first release of the new line: set `version.json` `version`
    to the new base (for example `"0.5"`) on `main`. The height restarts, and
    assembly versions change to `0.N+1.0.0`. For 0.5 this belongs in the
-   cut-over PR. After the final 0.4.x tag, `main` must not produce more
+   separate version-bump PR that follows the cut-over (the 0.5 bump PR, #4902). After the final 0.4.x tag, `main` must not produce more
    `0.4.*` versions, because they would collide with security-fix releases
    from the C# branch. Check the first build's printed version.
 2. After publishing, and after `website/docs` names the new release (patch
@@ -169,6 +169,32 @@ Everything in the patch procedure, plus:
    `nbgv get-version -v SimpleVersion origin/main` plus one in the patch
    number. Check
    it against the merged commit's printed version before tagging.
+
+### The first 0.5 release (docs snapshot)
+
+The `0.5` docs snapshot is deliberately not committed with the `version.json`
+bump. `release.json` still names the published 0.4 release, and the check
+requires `versions.json` to lead with `docsVersion`; a `0.5` snapshot committed
+now fails it (`newest snapshot '0.5' != release docsVersion '0.4'`) and would
+point `/docs` at an unpublished release. After the first 0.5 package is on
+nuget.org, in one post-publish PR:
+
+1. Edit `release.json`: `version` is the full published `0.5.N`, `tag` is
+   `v0.5.N` and only `docsVersion` is `0.5`. Then update every
+   "must equal" row above (patch step 2.2, the `website/docs` pages), so
+   `website/docs` names the 0.5 release.
+2. `cd website && npm ci && npm run docusaurus docs:version 0.5`. A dry run
+   generated `versioned_docs/version-0.5` (52 files, about 1.4 MB),
+   `versioned_sidebars/version-0.5-sidebars.json` and `versions.json`
+   `["0.5","0.4","0.3"]`.
+3. Restore the snapshot's release-notes preamble, update the "refreshed
+   against" sentences, regenerate downloads and evidence (patch steps 2.3 to
+   2.6), and run `python3 build/check-release-version-refs.py`.
+
+The docusaurus config needs no change: it takes versions from `versions.json`.
+`tests/content.test.mjs` and `tests/browser/site.spec.ts` name `0.4` on purpose
+(they read the 0.4 snapshot and its version dropdown entry); check them after
+the cut.
 
 ## Refreshing a docs snapshot
 

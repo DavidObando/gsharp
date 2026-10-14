@@ -6,7 +6,7 @@ description: "Review G# release highlights, compatibility changes, and detailed 
 
 # Release notes
 
-G# is pre-1.0. The repository's version base is currently `0.4`, and product versions are derived by Nerdbank.GitVersioning from that base and the Git commit. Until the project reaches a stable compatibility promise, release notes should be read as implementation status notes rather than a long-term compatibility contract.
+G# is pre-1.0. The repository's version base is currently `0.5`, and product versions are derived by Nerdbank.GitVersioning from that base and the Git commit. Until the project reaches a stable compatibility promise, release notes should be read as implementation status notes rather than a long-term compatibility contract.
 
 ## Reading these notes
 
