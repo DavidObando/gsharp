@@ -136,7 +136,7 @@ Everything in the patch procedure, plus:
 1. **Before** the first release of the new line: set `version.json` `version`
    to the new base (for example `"0.5"`) on `main`. The height restarts, and
    assembly versions change to `0.N+1.0.0`. For 0.5 this belongs in the
-   cut-over PR. After the final 0.4.x tag, `main` must not produce more
+   separate version-bump PR that follows the cut-over (the 0.5 bump PR, #4902). After the final 0.4.x tag, `main` must not produce more
    `0.4.*` versions, because they would collide with security-fix releases
    from the C# branch. Check the first build's printed version.
 2. After publishing, and after `website/docs` names the new release (patch

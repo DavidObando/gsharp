@@ -361,7 +361,7 @@ G# translation is made at the tag commit against the published nupkg, not at
 2. **Version collision on `main`.** NBGV height on `main` keeps counting under
    `"version": "0.4"`, so `main`'s commits after the tag are also 0.4.NNNN+k.
    They would collide with security-fix versions from the branch.
-   `version.json` on `main` must move to `"0.5"` in the cut-over PR, which
+   `version.json` on `main` must move to `"0.5"` in the version-bump PR that follows the cut-over, which
    resets the height. The version-bump checklist says the same.
 3. **Tag name vs package version.** Nothing checks the tag name against the
    package version (#4639).
