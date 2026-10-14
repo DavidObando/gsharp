@@ -368,6 +368,10 @@ internal class TypeDefEmitter {
                     firstField = handle
                 }
                 this.cache.StructFieldDefs[staticField] = handle
+                // Issue #4903: route `@`-annotations bound onto a `shared` field
+                // onto its FieldDef. Without this `@ThreadStatic` was dropped and
+                // the field became one process-wide slot.
+                this.emitUserAttributes(handle, staticField, AttributeTargetKind.Field)
                 this.emitNullableAttributeOnField(handle, staticField.Type)
             }
         }

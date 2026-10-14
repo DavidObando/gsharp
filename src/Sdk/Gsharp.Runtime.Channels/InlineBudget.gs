@@ -6,6 +6,7 @@ package Gsharp.Concurrency
 
 import System
 import System.Runtime.CompilerServices
+import System.Threading
 
 /// Decides whether a hand-off may complete its waiter's continuation INLINE, on
 /// the publishing thread, instead of queueing it to the thread pool
@@ -35,14 +36,14 @@ internal shared class InlineBudget {
     internal struct Scope : IDisposable {
         /// Initializes a new instance of the (cref:Scope) struct.
         init() {
-            InlineBudget.suppressions++
+            InlineBudget.counters.Value.suppressions++
         }
 
         /// ```xmldoc
         /// <inheritdoc />
         /// ```
         func Dispose() {
-            InlineBudget.suppressions--
+            InlineBudget.counters.Value.suppressions--
         }
     }
 
@@ -51,11 +52,18 @@ internal shared class InlineBudget {
     /// any real stack; the environment variable exists to measure the ends.
     private const DefaultLimit int32 = 16
 
-    @ThreadStatic
-    private var depth int32
+    /// The per-thread counters.
+    /// @remarks Held in a (cref:ThreadLocal{T}) rather than `@ThreadStatic` fields: the
+    /// bootstrap compiler pinned in `global.json` drops `@ThreadStatic` on a
+    /// `shared` field (issue #4903), which made the budget one process-wide
+    /// counter. Revert to `@ThreadStatic` fields once the pinned SDK carries
+    /// the emitter fix.
+    private class Counters {
+        internal var depth int32
+        internal var suppressions int32
+    }
 
-    @ThreadStatic
-    private var suppressions int32
+    private let counters ThreadLocal[Counters] = ThreadLocal[Counters](() -> Counters())
 
     /// Gets the nesting limit; `GS_INLINE_DEPTH=0` restores the always-queue behaviour.
     private let _limit int32 = if int32.TryParse(
@@ -77,16 +85,17 @@ internal shared class InlineBudget {
     /// Takes an inline slot when one is available.
     /// @returns True when the caller may publish inline, and must then call (cref:Exit).
     internal func TryEnter() bool {
-        if suppressions > 0 || depth >= Limit || !RuntimeHelpers.TryEnsureSufficientExecutionStack() {
+        let c = counters.Value
+        if c.suppressions > 0 || c.depth >= Limit || !RuntimeHelpers.TryEnsureSufficientExecutionStack() {
             return false
         }
-        depth++
+        c.depth++
         return true
     }
 
     /// Releases a slot taken by (cref:TryEnter).
     internal func Exit() {
-        depth--
+        counters.Value.depth--
     }
 
     /// Forbids inline publication for the duration of the returned scope. Used

@@ -4,6 +4,11 @@
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>GSharp.Sdk.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
+    <!-- Issue #4903: test against the IN-TREE runtime build only. The SDK props otherwise
+         add the pinned SDK package's copy of the same assembly as an explicit reference, and
+         when both carry the same assembly version the SDK's (older, C#-built) copy silently
+         wins in the output directory, masking the in-tree build under test. -->
+    <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
   </PropertyGroup>
 
   <ItemGroup>
