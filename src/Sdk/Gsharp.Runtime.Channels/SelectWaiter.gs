@@ -414,7 +414,7 @@ class SelectWaiter : IValueTaskSource[int32] {
         Volatile.Write(&word, (generation << StateBits) | int64(StateIdle))
         if canPool {
             core.Reset()
-            cache = this
+            cache.Value = this
         }
     }
 
@@ -510,8 +510,12 @@ class SelectWaiter : IValueTaskSource[int32] {
                 continue
             }
             var seen = false
-            for existing in gates {
-                if object.ReferenceEquals(existing.Gate, gate) {
+            // An index loop, not `for existing in gates`: gsc lowers a `for-in` over a
+            // `List` of NAMED tuples through `IEnumerable[T].GetEnumerator()` (so the
+            // element names survive), which boxes the struct enumerator, 48 B per
+            // iteration. That is what made every select allocate.
+            for var g = 0; g < gates.Count; g++ {
+                if object.ReferenceEquals(gates[g].Gate, gate) {
                     seen = true
                     break
                 }
@@ -520,7 +524,7 @@ class SelectWaiter : IValueTaskSource[int32] {
                 gates.Add((descriptor.Order, gate))
             }
         }
-        gates.Sort((a(Order int64, Gate object), b(Order int64, Gate object)) -> a.Order.CompareTo(b.Order))
+        gates.Sort(GateOrder)
         return gates
     }
 
@@ -616,8 +620,18 @@ class SelectWaiter : IValueTaskSource[int32] {
         private const StateIdle int32 = 2
         private const StateBits int32 = 2
 
-        @ThreadStatic
-        private var cache SelectWaiter?
+        // The gate comparison is a cached static delegate: gsc does not (yet) cache a
+        // non-capturing lambda the way Roslyn does, so a lambda written inline at the
+        // `Sort` call would allocate a host object and a delegate on every select.
+        private let GateOrder Comparison[(Order int64, Gate object)] =
+        (a(Order int64, Gate object), b(Order int64, Gate object)) -> a.Order.CompareTo(b.Order)
+
+        // Held in a ThreadLocal rather than a `@ThreadStatic` field: the bootstrap
+        // compiler pinned in `global.json` drops `@ThreadStatic` on a `shared`
+        // field (issue #4903), which made the pool one process-wide slot that
+        // concurrent selects raced on. Revert once the pinned SDK carries the
+        // emitter fix.
+        private let cache ThreadLocal[SelectWaiter?] = ThreadLocal[SelectWaiter?]()
 
         /// Rents a waiter for [`arms`](paramref) arms, cancelled by
         /// [`context`](paramref) (ADR-0174 D7/D8). This is the overload the
@@ -632,8 +646,8 @@ class SelectWaiter : IValueTaskSource[int32] {
         /// @param cancellationToken The ambient cancellation.
         /// @returns A waiter; call (cref:Return()) when the select completes.
         func Rent(arms int32, cancellationToken CancellationToken) SelectWaiter {
-            var waiter SelectWaiter? = cache
-            cache = nil
+            var waiter SelectWaiter? = cache.Value
+            cache.Value = nil
             waiter ??= SelectWaiter()
             waiter!!.Begin(cancellationToken)
             return waiter!!
