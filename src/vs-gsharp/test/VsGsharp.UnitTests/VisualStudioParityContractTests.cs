@@ -105,10 +105,10 @@ public sealed class VisualStudioParityContractTests
             "src",
             "LanguageServer",
             "Server",
-            "ServerCapabilitiesFactory.cs"));
+            "ServerCapabilitiesFactory.gs"));
         Match[] matches = Regex.Matches(
             source,
-            @"^(?<indent>[ \t]*)(?<name>[A-Z]\w+(?:Provider|Sync))\s*=",
+            @"^(?<indent>[ \t]*)(?<name>[A-Z]\w+(?:Provider|Sync))\s*:",
             RegexOptions.Multiline).Cast<Match>().ToArray();
         int topLevelIndent = matches.Min(match => match.Groups["indent"].Value.Length);
         string[] advertised = matches

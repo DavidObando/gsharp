@@ -44,11 +44,11 @@ public sealed class CodeLensCompatibilityBoundaryTests
     {
         string root = FindRepositoryRoot();
         string server = File.ReadAllText(Path.Combine(
-            root, "src", "LanguageServer", "Server", "LspServer.cs"));
+            root, "src", "LanguageServer", "Server", "LspServer.gs"));
         string client = File.ReadAllText(Path.Combine(
             root, "src", "vs-gsharp", "src", "VsGsharp", "GSharpLanguageServerRpc.cs"));
 
-        Assert.Contains("[JsonRpcMethod(\"gsharp/referenceCodeLens\"", server);
+        Assert.Contains("@JsonRpcMethod(\"gsharp/referenceCodeLens\"", server);
         Assert.Contains("CodeLensComputer.ComputeReferenceLenses", server);
         Assert.Contains("ReferenceCodeLensMethod = \"gsharp/referenceCodeLens\"", client);
         Assert.Contains("GetReferenceCodeLensesAsync", client);
