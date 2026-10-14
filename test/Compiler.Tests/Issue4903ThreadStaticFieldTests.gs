@@ -39,8 +39,7 @@ let t = Thread(() -> { other = Holder.Bump() })
 t.Start()
 t.Join()
 let main = Holder.Bump()
-Console.WriteLine("main=$main other=$other")`,
-            "main=3 other=1")
+Console.WriteLine("main=$main other=$other")`, "main=3 other=1")
     }
 
     @Fact
@@ -65,25 +64,25 @@ let t = Thread(() -> { other = Holder.Bump() })
 t.Start()
 t.Join()
 let main = Holder.Bump()
-Console.WriteLine("main=$main other=$other")`,
-            "main=3 other=1")
+Console.WriteLine("main=$main other=$other")`, "main=3 other=1")
     }
 
     shared {
-    private func Run(source string, expected string) {
-        let tempDir = Directory.CreateTempSubdirectory("gs_4903_threadstatic_").FullName
-        try {
-            let appPath = Path.Combine(tempDir, "P.dll")
-            let log = Compile(tempDir, "App.gs", source, appPath, "/target:exe")
-            Assert.True(File.Exists(appPath), log)
-            IlVerifier.Verify(appPath)
-            let (exit, output) = RunDotnet(appPath)
-            Assert.True(exit == 0, "exit $exit: $output")
-            Assert.Equal(expected, output.Trim().Replace("\r\n", "\n"))
-        } finally {
-            Directory.Delete(tempDir, recursive: true)
+        private func Run(source string, expected string) {
+            let tempDir = Directory.CreateTempSubdirectory("gs_4903_threadstatic_").FullName
+            try {
+                let appPath = Path.Combine(tempDir, "P.dll")
+                let log = Compile(tempDir, "App.gs", source, appPath, "/target:exe")
+                Assert.True(File.Exists(appPath), log)
+                IlVerifier.Verify(appPath)
+                let (exit, output) = RunDotnet(appPath)
+                Assert.True(exit == 0, "exit $exit: $output")
+                Assert.Equal(expected, output.Trim().Replace("\r\n", "\n"))
+            } finally {
+                Directory.Delete(tempDir, recursive: true)
+            }
         }
-    }
+
         private func Compile(dir string, fileName string, source string, outPath string, extra ...string) string {
             let srcPath = Path.Combine(dir, fileName)
             File.WriteAllText(srcPath, source)

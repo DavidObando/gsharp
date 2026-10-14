@@ -624,7 +624,7 @@ class SelectWaiter : IValueTaskSource[int32] {
         // non-capturing lambda the way Roslyn does, so a lambda written inline at the
         // `Sort` call would allocate a host object and a delegate on every select.
         private let GateOrder Comparison[(Order int64, Gate object)] =
-            (a(Order int64, Gate object), b(Order int64, Gate object)) -> a.Order.CompareTo(b.Order)
+        (a(Order int64, Gate object), b(Order int64, Gate object)) -> a.Order.CompareTo(b.Order)
 
         // Held in a ThreadLocal rather than a `@ThreadStatic` field: the bootstrap
         // compiler pinned in `global.json` drops `@ThreadStatic` on a `shared`
