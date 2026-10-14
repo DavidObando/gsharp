@@ -368,4 +368,35 @@ assert_eq "$lifts" "2" "form-feed comment line: __local_ CODE count excludes the
 report=$(TMPDIR="$scratch" cs2gs_counter_report "$formfeed_tree" "form-feed comment line")
 grep -Fq '| `__local_` | 2 | 3 |' <<< "$report"
 
+# SELFMIG_SOURCE_ROOT (cut-over Phase 2): unset or empty keeps the checkout as
+# the corpus root, byte-identical to before; a directory redirects only the
+# corpus side; a non-directory fails loudly instead of falling back.
+# `env -u` and the explicit assignment keep an ambient value from leaking in.
+default_root=$(env -u SELFMIG_SOURCE_ROOT bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; echo "$selfmig_source_root"' _ "$repo_root")
+assert_eq "$default_root" "$repo_root" "SELFMIG_SOURCE_ROOT unset defaults to the checkout"
+empty_root=$(SELFMIG_SOURCE_ROOT= bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; echo "$selfmig_source_root"' _ "$repo_root")
+assert_eq "$empty_root" "$repo_root" "SELFMIG_SOURCE_ROOT empty defaults to the checkout"
+mkdir -p "$scratch/csharp-src"
+override_root=$(SELFMIG_SOURCE_ROOT="$scratch/csharp-src" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; echo "$selfmig_source_root"' _ "$repo_root")
+assert_eq "$override_root" "$(cd "$scratch/csharp-src" && pwd -P)" "SELFMIG_SOURCE_ROOT redirects the corpus root"
+if SELFMIG_SOURCE_ROOT="$scratch/does-not-exist" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"' _ "$repo_root" 2>/dev/null; then
+  echo "FAIL: a nonexistent SELFMIG_SOURCE_ROOT was accepted" >&2
+  exit 1
+fi
+
+# The rule: SELFMIG_SOURCE_ROOT moves the corpus only. The prerequisite builds
+# (compiler, SDK, analyzers-testing) must stay on the checkout, so stub dotnet
+# and record every project path it is asked to build with the override set.
+stubbin="$scratch/stubbin"
+mkdir -p "$stubbin"
+printf '#!/usr/bin/env bash\necho "$@" >> "$DOTNET_STUB_LOG"\n' > "$stubbin/dotnet"
+chmod +x "$stubbin/dotnet"
+DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-src" \
+  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
+assert_eq "$(grep -c "$repo_root/src/" "$scratch/dotnet-stub.log")" "3" "prerequisite builds stay on the checkout"
+if grep -Fq "$scratch/csharp-src" "$scratch/dotnet-stub.log"; then
+  echo "FAIL: a prerequisite build followed SELFMIG_SOURCE_ROOT" >&2
+  exit 1
+fi
+
 echo "cs2gs counter contract tests passed"

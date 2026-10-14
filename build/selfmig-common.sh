@@ -10,6 +10,29 @@
 #     format.
 #
 # Sourced, never executed. Callers set `repo_root` before sourcing.
+#
+# SELFMIG_SOURCE_ROOT (optional): the directory the C# corpus is READ from.
+# Unset or empty, it is `repo_root` (the checkout IS the C# source). The cs2gs
+# apps nightly sets it to a separate checkout of the C# branch (cs2gs/csharp-0.4).
+#
+# RULE: it moves the corpus and nothing else. Only the --corpus argument uses
+# `selfmig_source_root`. The tool (cs2gs.dll), these scripts, the baselines and
+# shard-cost files, and the toolchain (the Debug prerequisite builds of the
+# compiler, SDK and analyzers-testing package below) all stay on `repo_root`,
+# i.e. main, so the migrated output targets main's compiler and SDK. A value
+# that is not an existing directory is an error, never a silent fallback, so a
+# typo cannot make a leg migrate the wrong tree.
+# Some callers (the Issue3885 allow-list test) source this file without setting
+# `repo_root`, under `set -u`; fall back to this file's own checkout.
+selfmig_default_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+selfmig_source_root=${SELFMIG_SOURCE_ROOT:-"$selfmig_default_root"}
+if [[ ! -d "$selfmig_source_root" ]]; then
+  echo "SELFMIG_SOURCE_ROOT is not a directory: '$selfmig_source_root'" >&2
+  return 2 2>/dev/null || exit 2
+fi
+if [[ "$selfmig_source_root" != "$selfmig_default_root" ]]; then
+  selfmig_source_root=$(cd "$selfmig_source_root" && pwd -P)
+fi
 
 # Issue #3501: the counter definitions themselves are shared with the OTHER two
 # corpora (Oahu, code-exploder) so all three report the same table. Only the

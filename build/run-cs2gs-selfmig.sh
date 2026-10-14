@@ -31,7 +31,7 @@ baseline="$repo_root/tools/cs2gs/selfmig-baseline.json"
 work_root=${SELFMIG_GATE_ROOT:-"${TMPDIR:-/tmp}/gsharp-cs2gs-selfmig"}
 
 case "$work_root" in
-  ""|"/"|"$repo_root")
+  ""|"/"|"$repo_root"|"$selfmig_source_root")
     echo "Refusing unsafe self-migration gate root: '$work_root'" >&2
     exit 2
     ;;
@@ -50,14 +50,14 @@ selfmig_build_prerequisites
 # already exist. (The sharded gate captures after translation instead.) A
 # capture failure only fails the affected apps, as TEST-ORACLE-MISSING.
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
-  --corpus "$repo_root" \
+  --corpus "$selfmig_source_root" \
   --out "$work_root/csharp-tests" \
   "${selfmig_project_filters[@]}" \
   || echo "self-migration gate: capturing the C# test oracle failed for some test project(s)." >&2
 
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
-  --corpus "$repo_root" \
+  --corpus "$selfmig_source_root" \
   --sdk-pin global-json \
   --out "$migrated_dir" \
   --artifacts "$runs_dir" \
