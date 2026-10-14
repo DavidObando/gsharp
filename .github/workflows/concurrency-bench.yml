@@ -94,6 +94,19 @@ jobs:
       - name: Build Gsharp.Extensions (Release)
         run: dotnet build src/Sdk/Gsharp.Extensions -c Release
 
+      # The artifact records `git status --porcelain` as build.gitDirty, and
+      # website/scripts/update_concurrency.py refuses a dirty snapshot. Fail
+      # here, naming the files, rather than uploading a benchmark the website
+      # import will reject a day later (issue #4915: a build wrote an untracked
+      # Gsharp.Extensions.xml into the source tree).
+      - name: Verify the build left the tree clean
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::The build modified or created files in the checkout:"
+            git status --porcelain
+            exit 1
+          fi
+
       - name: Verify the harness
         run: python3 build/verify-concurrency-bench.py --smoke
 

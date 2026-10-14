@@ -51,10 +51,13 @@
 
     <!-- Force the XML doc file under the canonical assembly name (the
          shared build/gsharp.build.props default uses
-         GSharp.$(MSBuildProjectName)). Written to IntermediateOutputPath
-         so the standard CopyFilesToOutputDirectory step copies it to
-         OutDir alongside the assembly (same convention csc uses). -->
-    <DocumentationFile>$(IntermediateOutputPath)$(AssemblyName).xml</DocumentationFile>
+         GSharp.$(MSBuildProjectName)). Written to OutputPath, alongside the
+         assembly. Do NOT use IntermediateOutputPath here: it is only defined
+         by Microsoft.Common.targets, after the project body is evaluated, so it
+         expands to empty and the XML lands in the source directory as an
+         untracked file (issue #4915: it made the benchmark build report
+         gitDirty). -->
+    <DocumentationFile>$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
 
     <!-- The bootstrap targets resolve gsc + BuildTask from the in-tree
          out/bin/$(Configuration)/{Compiler,Gsharp.NET.Sdk}/ directories.
@@ -155,7 +158,7 @@
     <!-- Issue #845: reassert DocumentationFile after all imports have
          resolved so it uses the correct AssemblyName (Gsharp.Extensions,
          not GSharp.Gsharp.Extensions from gsharp.build.props). -->
-    <DocumentationFile>$(IntermediateOutputPath)$(AssemblyName).xml</DocumentationFile>
+    <DocumentationFile>$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
   </PropertyGroup>
 
 </Project>
