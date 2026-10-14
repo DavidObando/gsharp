@@ -58,10 +58,10 @@ GOOD = make_pe(["netstandard", "Microsoft.Build.Utilities.Core", "NullableAttrib
 BAD = make_pe(["netstandard", "System.Private.CoreLib", "NullableAttribute"])
 
 
-def run(*args: str) -> tuple[int, str]:
+def run(*args: str, root: Path | None = None) -> tuple[int, str]:
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        code = check.main(list(args))
+        code = check.main(list(args), root=root or Path(tempfile.gettempdir()) / "no-global-json-here")
     return code, out.getvalue()
 
 
@@ -112,6 +112,22 @@ class HostReferenceCheckTests(unittest.TestCase):
     def test_package_without_in_scope_assemblies_fails_closed(self) -> None:
         package = self.nupkg("Empty.nupkg", {"lib/net10.0/Lib.dll": GOOD})
         self.assertEqual(run(str(package))[0], 2)
+
+    def pin(self, version: str) -> Path:
+        (self.dir / "global.json").write_text('{"msbuild-sdks": {"Gsharp.NET.Sdk": "%s"}}' % version)
+        return self.dir
+
+    def test_old_bootstrap_pin_skips_the_check(self) -> None:
+        bad = self.write("Bad.dll", BAD)
+        code, out = run(str(bad), root=self.pin("0.4.1270"))
+        self.assertEqual(code, 0)
+        self.assertIn("skipped", out)
+
+    def test_fixed_bootstrap_pin_enforces(self) -> None:
+        bad = self.write("Bad.dll", BAD)
+        self.assertEqual(run(str(bad), root=self.pin("0.5.4"))[0], 1)
+        self.assertEqual(run(str(bad), root=self.pin("0.6.0"))[0], 1)
+        self.assertEqual(run(str(bad), root=self.pin("0.5.3"))[0], 0)
 
     def test_missing_file_fails(self) -> None:
         self.assertEqual(run(str(self.dir / "nope.dll"))[0], 1)
