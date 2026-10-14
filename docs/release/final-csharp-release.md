@@ -27,6 +27,15 @@ commit.
 
 ### Stage-2 publication gate
 
+**Owner decision, 2026-10-14: the gate is removed.** The `publish` job no longer
+requires a `selfhost-stage2-nightly` run on the tagged commit, and the temporary
+workflow guard that refused a 0.5 or stage-2-built artifact is gone, so a 0.5
+release can be tagged and published. Stage-1/stage-2 certification is a local,
+owner-run step: it cannot run on hosted runners, and its reports are kept as
+cut-over evidence in `docs/self-migration-cutover.md` (automating it in the
+publish path was deferred, #4885). The rest of this section records the rule as
+it stood before the decision; it no longer describes the workflow.
+
 The table above describes the final 0.4 C# release. It is not sufficient for an
 artifact whose emitted version is 0.5 or whose build uses the stage-2 compiler.
 This rule applies regardless of tag text.

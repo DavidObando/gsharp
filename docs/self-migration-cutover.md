@@ -303,9 +303,10 @@ view of the same work, with the facts the dry run added.
 - [ ] `version.json`: base stays `0.4` through the final C# release. The 0.5 bump is its
       own PR in the cut-over stack (based on the cut-over PR, merged after it): it moves
       the base to `0.5` and also changes `AssemblyVersion` to `0.5.0.0`, which trips
-      `GS9303` once for analyzers built against the old line. It also adds the temporary
-      publish guard (`build/check-publish-guard.py`) that blocks any 0.5 or stage-2-built
-      publish until the certified publication is wired in.
+      `GS9303` once for analyzers built against the old line. The temporary publish guard
+      and the `publish` job's stage-2 nightly requirement were removed on 2026-10-14
+      (owner decision): certification is a local, owner-run step whose reports are kept
+      here as evidence, and a 0.5 release can publish.
 - [ ] `website/src/data/release.json`: `version`, `tag`, `docsVersion`. **Today it
       says `0.4.591` while `0.4.1150` is already published**, so the post-publish
       PR for 1150 was never made. Fix it in the freeze PR, not after.
