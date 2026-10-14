@@ -78,8 +78,14 @@ with these deliberate differences, all found while preparing the commit:
   `TestSupervisorLogger.gs`; `build/test-selfhost-stage2.py` skips the C# corpus derivation test
   on a G# tree; `build/check-release-version-refs.py` allow-lists the bootstrap pin `0.4.1270`
   in `global.json` and `InternalAnalyzers.Tests.gsproj`.
-- `build.yml` checks the final C# tag out beside the workspace and exports `CS2GS_TEST_SOURCE_ROOT`
-  for the `Cs2Gs.Tests` shard only (see "Source-inspection tests need the final C# tree").
+- `build.yml` checks the final C# tag out beside the workspace, **builds it**, and exports
+  `CS2GS_TEST_SOURCE_ROOT` for the `Cs2Gs.Tests` shards only (see "Source-inspection tests need the
+  final C# tree"). Found by the first PR CI run: the variable names one directory that must hold both
+  the original sources and the built toolchain (`out/bin/<Config>/nupkgs`), so an unbuilt checkout is
+  not enough. The `tests` job timeout is 90 minutes instead of 30 until the shards are rebalanced from
+  the first G# timings.
+- The VS Code grammar test and `VsGsharp.UnitTests` read the compiler's keyword table and the language
+  server sources as `.gs`.
 - `build/cutover.py` itself is left as it was: the `hand-fix` stage rewrites its own `.csproj`
   literals, which would break `dry-run` against a C# commit.
 
@@ -249,7 +255,8 @@ name parity against the tag's last C# nightly TRX files, the stage-2 job.
 those `.cs` files are gone from the tree, so the PR CI must check out the final C# commit (the
 `v0.4.NNNN` tag, or `cs2gs/csharp-0.4`) into a second directory and export that variable, or the
 tests must be rewritten or retired first (gate criterion 9). Do not rely on the migrated tree
-providing them.
+providing them. The checkout alone is not enough: the variable also locates the built toolchain, so the
+cut-over `build.yml` builds the checked-out C# solution before the `Cs2Gs.Tests` shards run.
 
 ## Rollback
 

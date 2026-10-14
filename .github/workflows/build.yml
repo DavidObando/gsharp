@@ -122,7 +122,10 @@ jobs:
   tests:
     name: tests (${{ matrix.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Raised from 30: the G#-built suites compile and run slower than the C# ones did,
+    # and the Cs2Gs.Tests shards also build the final C# tree. Rebalance the shards
+    # (build/generate-ci-test-matrix.py) from this run's timings, then lower it.
+    timeout-minutes: 90
     needs: discover-tests
     strategy:
       fail-fast: false
@@ -144,18 +147,27 @@ jobs:
       - name: Restore .NET local tools
         run: dotnet tool restore
 
-      # The cs2gs source-inspection tests (L1MigrationEndToEndTests,
-      # Issue4545ManagedArrayProjectionSelfMigrationTests, ...) read the C#
-      # originals of the compiler, which no longer exist in this tree
+      # The cs2gs tests were written against a C# tree: the stage-4 contract
+      # (CS2GS_TEST_SOURCE_ROOT) names ONE directory that holds the original
+      # sources and also the built toolchain (out/bin/<Config>/nupkgs, gsc.dll).
+      # The C# originals of the compiler no longer exist in this tree
       # (docs/self-migration-cutover.md, "Source-inspection tests need the
-      # final C# tree"). They are pointed at the final C# commit, checked out
-      # beside the workspace. Only the Cs2Gs.Tests run gets the variable: the
+      # final C# tree"), so the Cs2Gs.Tests shards check out the final C# commit
+      # beside the workspace and build it, and only they get the variable: the
       # Core.Tests guards must keep scanning this G# tree.
-      - name: Check out the final C# tree for the cs2gs source-inspection tests
+      - name: Check out the final C# tree for the cs2gs tests
+        if: contains(matrix.project, 'Cs2Gs.Tests')
         uses: actions/checkout@v5
         with:
           ref: v0.4.1270
           path: csharp-source
+          fetch-depth: 0
+
+      - name: Build the final C# tree for the cs2gs tests
+        if: contains(matrix.project, 'Cs2Gs.Tests')
+        run: |
+          dotnet restore csharp-source/GSharp.sln --locked-mode
+          dotnet build csharp-source/GSharp.sln --configuration Release --no-restore -graph
 
       - name: Build
         run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
