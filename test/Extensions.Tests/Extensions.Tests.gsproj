@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.Extensions.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Keep nullable annotations available to these tests without enabling
+         nullable flow warnings in test projects. -->
+    <Nullable>annotations</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/Compiler/Compiler.gsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\RepositoryRootMarker.gs" Link="RepositoryRootMarker.cs" />
+  </ItemGroup>
+
+</Project>

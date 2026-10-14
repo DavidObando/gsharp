@@ -217,7 +217,7 @@ def in_nullable_context(rel):
     while d.startswith(ROOT) and len(d) >= len(ROOT):
         if d in _PROJECT_NULLABLE:
             return _PROJECT_NULLABLE[d]
-        projs = [f for f in os.listdir(d) if f.endswith(".csproj")] if os.path.isdir(d) else []
+        projs = [f for f in os.listdir(d) if f.endswith((".csproj", ".gsproj"))] if os.path.isdir(d) else []
         if projs:
             oblivious_project = any(
                 re.search(r"<IsTestProject>\s*true\s*</IsTestProject>",

@@ -1,0 +1,400 @@
+// <copyright file="Issue3329CrossAssemblyStructLiteralEmitTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Compiler.Tests.Emit
+
+import GSharp.Compiler
+import GSharp.Compiler.Tests
+import System
+import System.Collections.Generic
+import System.Diagnostics
+import System.IO
+import Xunit
+
+/// Issue #3329 — a struct literal (`S{}`) for a struct type declared in
+/// ANOTHER (already-compiled) assembly lost its ADR-0159 "sound zero value"
+/// instance-field initializer for a magic-collection-typed field (map/slice/
+/// fixed array/sequence), leaving the field at its raw CLR default (a null
+/// reference for a reference-backed collection) and NREing at runtime the
+/// first time the field is used. The REPL hits this identically on a
+/// cross-cell struct, since each submission is a distinct assembly (ADR-0156)
+/// — these tests exercise the SAME code paths (`ImportedTypeSymbol.
+/// BuildSemanticAggregate` for a `data struct`/primary-ctor struct,
+/// `ExpressionBinder.BindImportedTypeObjectInitializer` for a plain
+/// struct) through ordinary cross-assembly `gsc` compilation plus ILVerify,
+/// which is more convenient to drive from a test than a REPL session and
+/// confirms the fix is not REPL-specific.
+open class Issue3329CrossAssemblyStructLiteralEmitTests {
+    @Fact
+    func PlainStruct_EmptyLiteral_SliceField_ZeroInitializesToEmptyNotNull() {
+        const library = `package i3329lib1
+
+struct S {
+    public var Items []int32
+}`
+        const source = `package i3329a
+import i3329lib1
+
+func Main() {
+    let s = S{}
+    System.Console.WriteLine(s.Items.Length)
+}`
+        Assert.Equal("0${Environment.NewLine}", CompileAndRun(source, library, "i3329lib1"))
+    }
+
+    @Fact
+    func DataStruct_EmptyLiteral_SliceField_ZeroInitializesToEmptyNotNull() {
+        const library = `package i3329lib2
+
+data struct S {
+    public var Items []int32
+}`
+        const source = `package i3329b
+import i3329lib2
+
+func Main() {
+    let s = S{}
+    System.Console.WriteLine(s.Items.Length)
+}`
+        Assert.Equal("0${Environment.NewLine}", CompileAndRun(source, library, "i3329lib2"))
+    }
+
+    @Fact
+    func PlainStruct_EmptyLiteral_MapField_ZeroInitializesToEmptyNotNull() {
+        const library = `package i3329lib3
+
+struct S {
+    public var M map[string, int32]
+}`
+        const source = `package i3329c
+import i3329lib3
+
+func Main() {
+    let s = S{}
+    System.Console.WriteLine(s.M.Count)
+}`
+        Assert.Equal("0${Environment.NewLine}", CompileAndRun(source, library, "i3329lib3"))
+    }
+
+    @Fact
+    func PlainStruct_EmptyLiteral_SequenceField_ZeroInitializesToEmptyNotNull() {
+        const library = `package i3329lib4
+
+struct S {
+    public var Seq sequence[int32]
+}`
+        const source = `package i3329d
+import i3329lib4
+
+func Main() {
+    let s = S{}
+    var n = 0
+    for x in s.Seq {
+        n = n + 1
+    }
+    System.Console.WriteLine(n)
+}`
+        Assert.Equal("0${Environment.NewLine}", CompileAndRun(source, library, "i3329lib4"))
+    }
+
+    @Fact
+    func PlainStruct_EmptyLiteral_FixedArrayField_ZeroInitializesToDeclaredLength() {
+        const library = `package i3329lib5
+
+struct S {
+    public var Buf [4]int32
+}`
+        const source = `package i3329e
+import i3329lib5
+
+func Main() {
+    let s = S{}
+    System.Console.WriteLine(s.Buf.Length)
+}`
+        Assert.Equal("4${Environment.NewLine}", CompileAndRun(source, library, "i3329lib5"))
+    }
+
+    @Fact
+    func PlainStruct_LiteralWithExplicitFieldInitializer_MagicCollectionFieldStillZeroInits() {
+        // The literal explicitly sets ONE field; the OTHER (magic-collection)
+        // field is left unset and must still get its sound zero value.
+        const library = `package i3329lib6
+
+struct S {
+    public var X int32
+    public var Items []int32
+}`
+        const source = `package i3329f
+import i3329lib6
+
+func Main() {
+    let s = S{X: 7}
+    System.Console.WriteLine(s.X.ToString() + "," + s.Items.Length.ToString())
+}`
+        Assert.Equal("7,0${Environment.NewLine}", CompileAndRun(source, library, "i3329lib6"))
+    }
+
+    @Fact
+    func NestedStructInStruct_BothDeclaredInLibrary_OuterLiteralWithExplicitInnerWorks() {
+        // Issue #3329 scope note: recursing an OUTER struct literal's own
+        // zero-value synthesis INTO an inner struct-typed field that itself
+        // needs a magic-collection zero value is issue #3319 (same-assembly
+        // recursion — reproduces identically with no library reference at
+        // all, confirmed unrelated to #3329's cross-assembly token gap and
+        // deliberately left out of this issue's scope). This test instead
+        // pins the shape #3329 IS responsible for: an outer struct literal
+        // for a type whose nested-struct field is ALSO declared in another
+        // assembly, explicitly initialized (not recursively zero-valued).
+        const library = `package i3329lib7
+
+struct Inner {
+    public var X int32
+}
+
+struct Outer {
+    public var I Inner
+}`
+        const source = `package i3329g
+import i3329lib7
+
+func Main() {
+    let o = Outer{I: Inner{X: 5}}
+    System.Console.WriteLine(o.I.X)
+}`
+        Assert.Equal("5${Environment.NewLine}", CompileAndRun(source, library, "i3329lib7"))
+    }
+
+    @Fact
+    func NestedStructInStruct_BothDeclaredInLibrary_OuterLiteralZeroInitsInnerMagicField() {
+        // Issue #3329 x #3330 composition: PR #3330 (issue #3319) added
+        // SAME-ASSEMBLY recursion so an outer struct literal's own
+        // zero-value synthesis walks INTO an inner struct-typed field that
+        // itself needs a magic-collection zero value. #3330 postdates this
+        // PR's original design (which explicitly scoped that case OUT, see
+        // the test above), so this pins the case the two fixes need to get
+        // right TOGETHER: `Outer{}` constructed from ANOTHER (consumer)
+        // assembly, where `Outer.I Inner` is left unset and `Inner` itself
+        // has an unset magic-collection field — the composed zero value must
+        // reach all the way through the cross-assembly reconstruction AND
+        // the nested-struct recursion.
+        const library = `package i3329lib8
+
+struct Inner {
+    public var Items []int32
+}
+
+struct Outer {
+    public var I Inner
+}`
+        const source = `package i3329i
+import i3329lib8
+
+func Main() {
+    let o = Outer{}
+    System.Console.WriteLine(o.I.Items.Length)
+}`
+        Assert.Equal("0${Environment.NewLine}", CompileAndRun(source, library, "i3329lib8"))
+    }
+
+    @Fact
+    func DataStructNestedInStruct_BothDeclaredInLibrary_OuterLiteralZeroInitsInnerMagicField() {
+        // Same composed shape as above, but the INNER struct is a `data
+        // struct` (routes through ImportedTypeSymbol.BuildSemanticAggregate
+        // on reconstruction, rather than ExpressionBinder.
+        // BindImportedTypeObjectInitializer's plain-struct fallback) —
+        // confirms the composition holds on both cross-assembly
+        // reconstruction paths, not just the plain-struct one.
+        const library = `package i3329lib9
+
+data struct Inner {
+    public var Items []int32
+}
+
+struct Outer {
+    public var I Inner
+}`
+        const source = `package i3329j
+import i3329lib9
+
+func Main() {
+    let o = Outer{}
+    System.Console.WriteLine(o.I.Items.Length)
+}`
+        Assert.Equal("0${Environment.NewLine}", CompileAndRun(source, library, "i3329lib9"))
+    }
+
+    @Fact
+    func SameAssembly_StructLiteral_SliceField_RegressionPin() {
+        // Control: a same-compilation struct literal must keep working
+        // exactly as before (no library reference at all).
+        const source = `package i3329h
+
+struct S {
+    public var Items []int32
+}
+
+func Main() {
+    let s = S{}
+    System.Console.WriteLine(s.Items.Length)
+}`
+        Assert.Equal("0${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func PlainStruct_MixedCompositeInitializerAddTouchesOmittedField_ZeroInitBeforeOrderedAdd() {
+        // ADR-0180 reviewer finding: the ordered content-element/spread Add(...)
+        // calls a mixed composite initializer lowers to (Basket{ Touches: 0, 1, 2,
+        // ...extra }) must not run before this struct's own #3329/ADR-0159
+        // magic-collection zero-value reconstruction — otherwise Add's own body,
+        // which reads the omitted `Items` slice field, observes the raw (unsound)
+        // CLR null instead of a zero-initialized empty slice and NREs on the very
+        // first Add.
+        const library = `package i3785lib1
+
+struct Basket {
+    public var Items []int32
+    public var Touches int32
+    func Add(item int32) {
+        Touches = Touches + Items.Length + item
+    }
+}`
+        const source = `package i3785a
+import System.Collections.Generic
+import i3785lib1
+
+func Main() {
+    let extra = List[int32]{ 3, 4 }
+    let b = Basket{ Touches: 0, 1, 2, ...extra }
+    System.Console.WriteLine(b.Touches)
+    System.Console.WriteLine(b.Items.Length)
+}`
+        Assert.Equal("10${Environment.NewLine}0${Environment.NewLine}", CompileAndRun(source, library, "i3785lib1"))
+    }
+
+    @Theory
+    @InlineData("", "Basket{ Touches: 0, 1, Items: []int32{ 2 }, Counts: map[string, int32]{ \"last\": 3 } }")
+    @InlineData("data ", "Basket{ Touches: 0, 1, Items: []int32{ 2 }, Counts: map[string, int32]{ \"last\": 3 } }")
+    @InlineData("", "Basket(){ .Touches: 0, 1, .Items: []int32{ 2 }, .Counts: map[string, int32]{ \"last\": 3 } }")
+    @InlineData("data ", "Basket(){ .Touches: 0, 1, .Items: []int32{ 2 }, .Counts: map[string, int32]{ \"last\": 3 } }")
+    func MixedInitializer_LaterExplicitMagicFieldsAreSoundBeforeAdd(modifier string, initializer string) {
+        let library = (`package i3785later
+` + "$modifier" + `struct Basket {
+    public var Items []int32
+    public var Counts map[string, int32]
+    public var Touches int32
+    func Add(item int32) {
+        Touches = Touches + Items.Length + Counts.Count + item
+    }
+}`)
+        let source = (`import i3785later
+let value = ` + "$initializer" + `
+System.Console.WriteLine(value.Touches)
+System.Console.WriteLine(value.Items.Length)
+System.Console.WriteLine(value.Counts.Count)`)
+        Assert.Equal(
+            "1${Environment.NewLine}1${Environment.NewLine}1${Environment.NewLine}",
+            CompileAndRun(source, library, "i3785later")
+        )
+    }
+
+    shared {
+        private func CompileAndRun(source string, library string? = nil, libraryAssemblyName string? = nil) string {
+            let tempDir = Directory.CreateTempSubdirectory("gs_3329_").FullName
+            try {
+                let dllPath = BuildExecutable(tempDir, source, library, libraryAssemblyName, out var libDll)
+                let rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json")
+                if !File.Exists(rtConfig) {
+                    File.WriteAllText(rtConfig, `{
+  "runtimeOptions": {
+    "tfm": "net10.0",
+    "framework": { "name": "Microsoft.NETCore.App", "version": "10.0.0" }
+  }
+}`)
+                }
+                IlVerifier.Verify(
+                    dllPath,
+                    if libDll != nil {
+                        []string{libDll}
+                    } else {
+                        default([]?string)
+                    }
+                )
+                let psi = ProcessStartInfo("dotnet"){
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    WorkingDirectory = tempDir
+                }
+                psi.ArgumentList.Add("exec")
+                psi.ArgumentList.Add("--runtimeconfig")
+                psi.ArgumentList.Add(rtConfig)
+                psi.ArgumentList.Add(dllPath)
+                using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
+                let stdout = proc.StandardOutput.ReadToEnd()
+                let stderr = proc.StandardError.ReadToEnd()
+                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                Assert.True(proc.ExitCode == 0, (`exited ` + "${proc.ExitCode}" + `
+stdout:
+` + "$stdout" + `
+stderr:
+` + "$stderr"))
+                return stdout.ReplaceLineEndings(Environment.NewLine)
+            } finally {
+                try {
+                    Directory.Delete(tempDir, recursive: true)
+                } catch (IOException) { }
+            }
+        }
+
+        private func BuildExecutable(
+            tempDir string,
+            source string,
+            library string?,
+            libraryAssemblyName string?,
+            out libDll string?
+        ) string {
+            libDll = nil
+            if library != nil {
+                // ilverify resolves `-r` references by FILE NAME, so the library
+                // must be written out under its assembly identity.
+                let libSrc = Path.Combine(tempDir, libraryAssemblyName + ".gs")
+                libDll = Path.Combine(tempDir, libraryAssemblyName + ".dll")
+                File.WriteAllText(libSrc, library)
+                Compile([]string{"/out:" + libDll, "/target:library", "/targetframework:net10.0", libSrc})
+                IlVerifier.Verify(libDll!!)
+            }
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let dllPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, source)
+            let args = List[string]{"/out:" + dllPath, "/target:exe", "/targetframework:net10.0"}
+            if libDll != nil {
+                args.Add("/r:" + libDll)
+            }
+            args.Add(srcPath)
+            Compile(args.ToArray())
+            return dllPath
+        }
+
+        private func Compile(args[]string) {
+            using let stdoutWriter = StringWriter()
+            using let stderrWriter = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(stdoutWriter)
+            Console.SetError(stderrWriter)
+            var compileExit int32
+            try {
+                compileExit = Program.Main(args)
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            Assert.True(compileExit == 0, (`gsc failed:
+stdout:
+` + "$stdoutWriter" + `
+stderr:
+` + "$stderrWriter"))
+        }
+    }
+}

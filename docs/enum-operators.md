@@ -1,6 +1,6 @@
 # Enum Operator Rules
 
-G# follows the C# §11.10 enum operator specification. All enum operator rules are centralized in [`EnumOperatorTable`](../src/Core/CodeAnalysis/Binding/EnumOperatorTable.cs) — a single declarative source that the binary binder, unary binder, and emitter all consult.
+G# follows the C# §11.10 enum operator specification. All enum operator rules are centralized in [`EnumOperatorTable`](../src/Core/CodeAnalysis/Binding/EnumOperatorTable.gs) — a single declarative source that the binary binder, unary binder, and emitter all consult.
 
 ## Supported operations
 
@@ -42,6 +42,6 @@ If either operand is `nil`, the result is `nil` (the nullable-no-value represent
 
 To add support for a hypothetical new operator on enums:
 
-1. Add one or more `BinaryRule` entries to the `Rules` dictionary in `EnumOperatorTable.cs`, keyed by the token's `SyntaxKind`.
+1. Add one or more `BinaryRule` entries to the `Rules` dictionary in `EnumOperatorTable.gs`, keyed by the token's `SyntaxKind`.
 2. Add corresponding test methods to `EnumOperatorTableTests.cs` (unit) and an emit-level test class.
 3. The lifted-nullable arm, the emitter's `IsUnsignedOrChar` check, and IL verification all compose automatically — no additional wiring is needed.

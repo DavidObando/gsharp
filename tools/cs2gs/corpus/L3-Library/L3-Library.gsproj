@@ -1,0 +1,8 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Corpus.L3</RootNamespace>
+    <AssemblyName>L3-Library</AssemblyName>
+  </PropertyGroup>
+
+</Project>

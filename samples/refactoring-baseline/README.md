@@ -1,7 +1,7 @@
 # `samples/refactoring-baseline/` — curated fixtures for the IL byte-identical gate
 
 These tiny `.gs` files are the inputs to
-`test/Core.Tests/CodeAnalysis/Emit/RefactoringBaselineTests.cs` — the PR-0
+`test/Core.Tests/CodeAnalysis/Emit/RefactoringBaselineTests.gs` — the PR-0
 gate that pins the SHA-256 of the deterministic emitted content (metadata
 stream with MVID zeroed, plus every method body's IL bytes) for every
 sample. The gate exists so that the upcoming `Binder.cs` /

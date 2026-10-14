@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Corpus.Grid14</RootNamespace>
+    <AssemblyName>G14-Strings-Console</AssemblyName>
+  </PropertyGroup>
+
+</Project>

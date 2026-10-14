@@ -1,0 +1,172 @@
+// <copyright file="Issue813TupleSequenceReturnEmittedSessionTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Interpreter.Tests
+
+import GSharp.Interpreter
+import System
+import System.IO
+import Xunit
+
+/// Issue #813: Emitted-session coverage for tuple sequence return.
+/// Traceability: ADR-0084.
+open class Issue813TupleSequenceReturnEmittedSessionTests {
+    @Fact
+    func SharedStatic_SequenceTupleIntInt_Iterator_Runs() {
+        // Closed instantiation of the `Indexed` shape from the issue.
+        // `yield (a, b)` lowers into the emitted iterator state machine.
+        let source = `import System.Collections.Generic
+
+class Sequences {
+    shared {
+        func Indexed() sequence[(int32, int32)] {
+            var index = 0
+            for v in []int32{10, 20, 30} {
+                yield (index, v)
+                index = index + 1
+            }
+        }
+    }
+}
+
+var sumIdx = 0
+var sumVal = 0
+for p in Sequences.Indexed() {
+    sumIdx = sumIdx + p.Item1
+    sumVal = sumVal + p.Item2
+}
+Console.WriteLine(sumIdx)
+Console.WriteLine(sumVal)`
+        Assert.Equal("3${Environment.NewLine}60${Environment.NewLine}", RunSubmission(source))
+    }
+
+    @Fact
+    func SharedStatic_IEnumerableTupleIntString_Iterator_Runs() {
+        // Confirms the `IEnumerable[(int32, string)]` spelling
+        // dispatches identically.
+        let source = `import System.Collections.Generic
+
+class Sequences {
+    shared {
+        func Indexed(a string, b string, c string) IEnumerable[(int32, string)] {
+            yield (0, a)
+            yield (1, b)
+            yield (2, c)
+        }
+    }
+}
+
+var sumIdx = 0
+var concat = ""
+for p in Sequences.Indexed("a", "b", "c") {
+    sumIdx = sumIdx + p.Item1
+    concat = concat + p.Item2
+}
+Console.WriteLine(sumIdx)
+Console.WriteLine(concat)`
+        Assert.Equal("3${Environment.NewLine}abc${Environment.NewLine}", RunSubmission(source))
+    }
+
+    @Fact
+    func SharedStatic_SequenceTupleStringString_Pairwise_Runs() {
+        // `Pairwise` over a closed string sequence yields tuples
+        // where both element types coincide.
+        let source = `import System.Collections.Generic
+
+class Sequences {
+    shared {
+        func Pairwise(a string, b string, c string) sequence[(string, string)] {
+            yield (a, b)
+            yield (b, c)
+        }
+    }
+}
+
+var concatFirst = ""
+var concatSecond = ""
+for p in Sequences.Pairwise("a", "b", "c") {
+    concatFirst = concatFirst + p.Item1
+    concatSecond = concatSecond + p.Item2
+}
+Console.WriteLine(concatFirst)
+Console.WriteLine(concatSecond)`
+        Assert.Equal("ab${Environment.NewLine}bc${Environment.NewLine}", RunSubmission(source))
+    }
+
+    @Fact
+    func SharedStatic_SequenceThreeTuple_Iterator_Runs() {
+        // 3-arity tuple element type — exercises the recursive walk
+        // over `ElementTypes` past the binary case.
+        let source = `import System.Collections.Generic
+
+class Sequences {
+    shared {
+        func Triples() sequence[(int32, int32, int32)] {
+            yield (0, 10, 100)
+            yield (1, 11, 101)
+            yield (2, 12, 102)
+        }
+    }
+}
+
+var sum1 = 0
+var sum2 = 0
+var sum3 = 0
+for t in Sequences.Triples() {
+    sum1 = sum1 + t.Item1
+    sum2 = sum2 + t.Item2
+    sum3 = sum3 + t.Item3
+}
+Console.WriteLine(sum1)
+Console.WriteLine(sum2)
+Console.WriteLine(sum3)`
+        Assert.Equal("3${Environment.NewLine}33${Environment.NewLine}303${Environment.NewLine}", RunSubmission(source))
+    }
+
+    @Fact
+    func SharedStatic_NestedTuple_Iterator_Runs() {
+        // Nested tuple `(int32, (int32, int32))` verifies emitted iterator
+        // handling of both outer and inner tuple element types.
+        let source = `import System.Collections.Generic
+
+class Sequences {
+    shared {
+        func Nested() sequence[(int32, (int32, int32))] {
+            yield (0, (10, 100))
+            yield (1, (11, 101))
+            yield (2, (12, 102))
+        }
+    }
+}
+
+var sumOuter = 0
+var sumInner1 = 0
+var sumInner2 = 0
+for t in Sequences.Nested() {
+    sumOuter = sumOuter + t.Item1
+    var inner = t.Item2
+    sumInner1 = sumInner1 + inner.Item1
+    sumInner2 = sumInner2 + inner.Item2
+}
+Console.WriteLine(sumOuter)
+Console.WriteLine(sumInner1)
+Console.WriteLine(sumInner2)`
+        Assert.Equal("3${Environment.NewLine}33${Environment.NewLine}303${Environment.NewLine}", RunSubmission(source))
+    }
+
+    shared {
+        private func RunSubmission(text string) string {
+            using let outWriter = StringWriter()
+            let prevOut = Console.Out
+            Console.SetOut(outWriter)
+            try {
+                let repl = GSharpRepl()
+                repl.EvaluateSubmission(text)
+            } finally {
+                Console.SetOut(prevOut)
+            }
+            return outWriter.ToString().ReplaceLineEndings(Environment.NewLine)
+        }
+    }
+}

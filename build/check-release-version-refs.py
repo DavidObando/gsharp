@@ -167,6 +167,12 @@ ALLOWED: tuple[Allowed, ...] = (
     Allowed("samples/HotReload/global.json", frozenset({"0.3.356"}),
             "placeholder: e2etests/hot-reload-e2e.sh rewrites it to the locally built "
             "SDK and restores it on exit"),
+    Allowed("global.json", frozenset({"0.4.1270"}),
+            "the bootstrap pin: the repository is G# source compiled by the final C#-built SDK "
+            "(cut-over, docs/self-migration-cutover.md); it moves to a 0.5 release after the first 0.5 "
+            "publish, independently of the website's release"),
+    Allowed("test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj", frozenset({"0.4.1270"}),
+            "the analyzer-testing package is restored at the bootstrap pin of global.json"),
     Allowed("tools/cs2gs/Cs2Gs.Tests/*", frozenset(),
             "synthetic versions in cs2gs project-transformer test data"),
     Allowed("build/test-selfhost-pack-stage1.py", frozenset(),

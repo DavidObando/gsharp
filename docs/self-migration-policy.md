@@ -1,144 +1,84 @@
-# Self-migration policy: what to do when the PR translation guard is red
+# cs2gs migration policy: what to do when a cs2gs gate is red
 
-Applies to the C# → G# self-migration effort ([#3501](https://github.com/DavidObando/gsharp/issues/3501)) and to
-the `cs2gs-pr-guard` check (`build/run-cs2gs-selfmig-pr-guard.sh`).
+Applies to cs2gs as a product and to the gates that keep it honest: the
+`cs2gs-corpus` PR job and the `cs2gs-apps-nightly` workflow (the C# version of
+G#, Oahu and Code Exploder in one run). The C# to G# self-migration of this
+repository ([#3501](https://github.com/DavidObando/gsharp/issues/3501)) is
+complete: the compiler source on `main` is G#, and the translation guard that
+this document used to govern (`cs2gs-pr-guard`, `hot-core translation guard`,
+`cs2gs-selfmig-nightly`) is retired. How the cut-over was done is recorded in
+[`self-migration-cutover.md`](self-migration-cutover.md) and
+[`self-host-bootstrap.md`](self-host-bootstrap.md).
 
-## Why the migration exists
+## Why cs2gs is still exercised
 
-Three goals, and they are not ranked — a change that serves one at the cost of
-another is usually the wrong change:
+Three goals drove the migration and still drive cs2gs work. They are not
+ranked; a change that serves one at the cost of another is usually the wrong
+change:
 
-1. **Move the repository entirely to G#.**
-2. **Find and fix as many compiler defects as possible.** The C# compiler is
-   being used as a fuzzer of sorts: every construct Roslyn accepts becomes a
-   test case gsc has to answer correctly. A defect found this way is worth more
-   than the migration step it blocked, because it affects every G# user.
-3. **Raise cs2gs to the quality bar G# needs for serious adoption** — readable,
-   maintainable, correct output. Not merely output that compiles.
+1. **Move C# code to G#** readably, maintainably and correctly: output that is
+   idiomatic G#, not merely output that compiles.
+2. **Find and fix compiler defects.** Every construct Roslyn accepts is a test
+   case gsc has to answer correctly. A defect found this way is worth more than
+   the translation step it blocked, because it affects every G# user.
+3. **Keep cs2gs at the quality bar G# adoption needs.**
 
-Goal 2 is why a red guard is good news rather than an obstacle: **the guard
-found a real defect**, and the migration is the mechanism that surfaced it.
+Goal 2 is why a red cs2gs gate is good news rather than an obstacle: **the gate
+found a real defect.**
+
+## What the gates consume
+
+The tool under test is cs2gs built from `main` (it is G# now). The inputs
+below are C#.
+
+- `tools/cs2gs/corpus`: C# programs with expected outputs.
+- `tools/cs2gs/external/*.json`: pinned third-party apps (Oahu, Code Exploder).
+- Branch `cs2gs/csharp-0.4` at a pinned SHA: the C# source of the G# compiler,
+  kept as a large real-world corpus. The branch is semi-frozen: no bug fixes and
+  no features, but code is back-ported from G# to C# when it merits exercising
+  cs2gs. A back-port is a branch commit plus a pin bump on `main`.
 
 ## The rule
 
-**A red translation guard blocks the PR. It is never advisory.**
-
-It is the only check that asks the self-hosting question. CI *compiles* the
-repository's C# sources; the guard *translates* them and compiles the result.
-Those are different questions, and a source file can answer the first perfectly
-while failing the second — which is how a fully CI-green PR takes the nightly
-gate down purely by existing, hours later, attributed to whatever else landed
-nearby (#3831, #3896, #3905, #3915).
+**A red `cs2gs-corpus` PR gate blocks the PR. It is never advisory.** The apps
+nightly is not a PR gate. When an app goes red the nightly files (or updates)
+one issue per gate, app and failure fingerprint, with the gate report. The
+issue is P0 only when an app that was previously green on `main` goes red, and
+P1 otherwise. The fix is to cs2gs or gsc, in G#.
 
 ## What to do, in order
 
 1. **Fix the defect in cs2gs or gsc.** This is the default and it needs no
-   approval — proceed. A guard failure is a found bug, and finding bugs is the
-   point (goal 2). Classify it first: gsc defect, cs2gs translation defect, or
-   a source shape that is simply not worth translating.
-2. **Prefer the simplest possible G# for a given C# input.** cs2gs should
-   translate into ordinary, readable G# — not into clever G#, and not into a
-   shape that merely satisfies the compiler. If the natural translation is
-   ugly, that is usually a defect report about cs2gs, not a reason to accept
-   the ugliness.
-3. **Rewrite new C# into shapes G# already supports** when the construct has no
-   G# equivalent and adding one is not justified on its own merits.
-4. **Never exclude a file or app from migration to get green.** That converts a
-   visible failure into an invisible one — the same trade the test-parity
-   allow-list exists to prevent. An `--exclude` is a statement that a project
-   is *not a migration target*, never a way to dodge a defect.
+   approval. Classify it first: gsc defect, cs2gs translation defect, or a
+   source shape not worth translating.
+2. **Prefer the simplest possible G# for a given C# input.** If the natural
+   translation is ugly, that is usually a defect report about cs2gs.
+3. **No lossy translation.** The one deliberate exception is conditional
+   compilation: cs2gs reports `#if`/`#elif` as an error. License headers are
+   preserved; `#region`, `#pragma` and in-body blank lines are not.
+4. **Never exclude a file or app from a gate to get green.** An exclusion says a
+   project is not a target; it is never a way to dodge a defect.
 5. **Never raise a ratchet ceiling to absorb a regression.** Ceilings move when
-   a metric improves, in the same PR that improves it. Lowering a floor or
-   raising a ceiling to match a regression is how a gate stops meaning
-   anything.
+   a metric improves, in the same PR that improves it.
 
 ## When to stop and ask
 
-Only two categories need sign-off before proceeding:
-
-- **Syntax design changes** — new surface syntax, or a change to how an
-  existing construct is spelled. These are ADR-scale decisions.
+- **Syntax design changes** (ADR-scale).
 - **Breaking changes to the semantics of already-supported constructs.**
-  Changing what existing, working G# code means is not a migration fix.
 
-Adding G# language surface *purely to accommodate the translator* falls under
-the first category. It is the tail wagging the dog unless independently
-justified, and it deserves an ADR rather than a PR comment.
+Adding G# language surface purely to accommodate the translator needs an ADR.
+Everything else proceeds without asking.
 
-Everything else — fixing a binder bug, an emit bug, a translation infidelity,
-a diagnostic that fires wrongly, a construct cs2gs mangles — proceeds without
-asking.
+## If a gate is red for an unrelated reason
 
-## If the guard is red for an unrelated reason
-
-Say so explicitly, with evidence and a link to the run, and do not merge past
-it silently. "Unrelated" is a claim that needs the same standard of proof as
-any other — infrastructure flakes and real regressions look identical from the
-summary line.
-
-## Preserve compiler-test fixture provenance
-
-An imported C# contract must remain C# even when its test harness migrates.
-Compile that contract from source data with Roslyn and pass the resulting
-assembly explicitly to the compiler under test, as
-`ConstantNarrowingCoverageTests` does (#4129/#4206). Using the ambient test
-assembly instead can change the input: cs2gs deliberately seals a class with
-no visible inheritance intent. Assert the relevant metadata and the precise
-negative diagnostic; a missing base type must not masquerade as rejection of
-an out-of-range constructor argument. This preserves the fixture, not an
-exclusion of production source or a relaxation of the parity oracle.
-
-`NativeMetadataContracts.cs.txt` similarly holds the CLR nullability,
-overload-resolution, access-path, documentation-ID and UnscopedRef contracts
-from #4664. It is embedded as source data, never compiled as part of the
-test harness or translated to G#. `NativeMetadataFixtures` delegates to the
-existing Roslyn `CSharpFixture` compiler: reflection-only consumers load its
-bytes through `EmittedFixture`; importer/binder consumers pass its physical
-`AssemblyPath` explicitly and dispose the workspace after their assertions.
-The provenance tests resolve every extracted type from that physical
-assembly and pin native nullable-context/byte-array, optional, params and
-generic-constraint metadata. The property-test candidate set remains intact.
-The nullability contract's enclosing reference-typed signature preserves
-Roslyn's original inherited `NullableContext(1)` placement, including the
-nested value container's `NullableContext(0)` override.
-
-Cross-assembly language-server navigation tests follow the same rule (#4666):
-emit a physical Roslyn assembly and portable sidecar PDB from C# source data,
-reference that assembly explicitly from the G# consumer, and assert the exact
-native `.cs` path and sequence-point span. The ambient Core or test assembly
-is not a native fixture. A missing PDB must fail the positive oracle, and a
-same-named `.gs` document must not satisfy it.
-
-Source-inspection guards have the same provenance requirement. A guard that
-parses C# or inventories literal C# signatures must use the original tree
-selected by `CS2GS_TEST_SOURCE_ROOT` (`Core.Tests.TestSource` or the corresponding
-cs2gs fixture-source helper). An explicitly configured missing or migrated-only
-root must fail, not fall back to another checkout or let an empty `*.cs` scan
-pass. This selects source data, **not** a native replacement for the compiler
-under test.
-
-Attribute constant containers are implementation details, not metadata type
-identities. Preserve symbolic enum-array types through nested boxed arrays, and
-assert both the reflected array type and its values, including empty arrays.
-Matching underlying integer payloads alone does not establish parity.
-
-Keep nullable harness contracts honest as well. Reflection globals and symbol
-lookups can legitimately return null; their helper signatures, collection
-element types, and forwarding helpers must say so. Adding runtime `!!`
-assertions to satisfy an incorrectly non-null contract changes the oracle.
+Say so, with evidence and a link to the run, and do not merge past it silently.
+"Unrelated" needs the same standard of proof as any other claim.
 
 ## Related
 
-- `build/run-cs2gs-selfmig-pr-guard.sh` — what the guard covers, and
-  deliberately does not.
-- `tools/cs2gs/selfmig-baseline.json` — the ratchet, and the discipline for
-  moving its numbers.
-- `tools/cs2gs/selfmig-test-allowlist.json` — the policy register for tests
-  whose premise stops holding after migration. An empty list is its healthiest
-  state.
-- `tools/cs2gs/selfmig-test-name-baseline.json` — the justified per-test-name
-  differences (issue #4633). A mirrored test project must run exactly the cases
-  its C# original discovers; each entry here explains one difference and cites
-  its issue. See the cs2gs README, "Per-test-name parity".
-- ADR-0115 §B — the canonical G# output contract cs2gs must satisfy.
-- ADR-0179 — `gsfmt`, which takes over layout decisions from the printer.
+- `tools/cs2gs/README.md`: the translator.
+- `tools/cs2gs/triage/gaps.json`: the gap ledger the corpus gate enforces.
+- `tools/cs2gs/selfmig-test-allowlist.json` and
+  `tools/cs2gs/selfmig-test-name-baseline.json`: the policy register and
+  per-name baselines for translated test projects. An empty allow-list is its
+  healthiest state.

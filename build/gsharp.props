@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project InitialTargets="InitGsharpProps">
 
   <PropertyGroup>
@@ -7,12 +7,12 @@
 
   <ItemGroup>
     <!-- Core -->
-    <GsharpCore Include="$(GsharpRepoRoot)\src\Core\Core.csproj" />
-    <GsharpCompiler Include="$(GsharpRepoRoot)\src\Compiler\Compiler.csproj" />
-    <GsharpFormatting Include="$(GsharpRepoRoot)\src\Formatting\GSharp.Formatting\GSharp.Formatting.csproj" />
-    <GsharpFormatterCli Include="$(GsharpRepoRoot)\src\Formatting\Gsfmt.Cli\Gsfmt.Cli.csproj" />
-    <GsharpRepl Include="$(GsharpRepoRoot)\src\Repl\Repl.csproj" />
-    <GsharpLanguageServer Include="$(GsharpRepoRoot)\src\LanguageServer\LanguageServer.csproj" />
+    <GsharpCore Include="$(GsharpRepoRoot)/src/Core/Core.gsproj" />
+    <GsharpCompiler Include="$(GsharpRepoRoot)/src/Compiler/Compiler.gsproj" />
+    <GsharpFormatting Include="$(GsharpRepoRoot)/src/Formatting/GSharp.Formatting/GSharp.Formatting.gsproj" />
+    <GsharpFormatterCli Include="$(GsharpRepoRoot)/src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj" />
+    <GsharpRepl Include="$(GsharpRepoRoot)/src/Repl/Repl.gsproj" />
+    <GsharpLanguageServer Include="$(GsharpRepoRoot)/src/LanguageServer/LanguageServer.gsproj" />
 
     <!-- All -->
     <GsharpAll Include="@(GsharpCore)" />

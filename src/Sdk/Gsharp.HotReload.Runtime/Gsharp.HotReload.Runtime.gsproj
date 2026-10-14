@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <AssemblyName>Gsharp.HotReload.Runtime</AssemblyName>
+    <RootNamespace>Gsharp.HotReload.Runtime</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Sdk.Tests" />
+  </ItemGroup>
+
+</Project>

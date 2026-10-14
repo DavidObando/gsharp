@@ -12,8 +12,8 @@ WORKDIR="$(mktemp -d -t gsharp-templates-e2e.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 echo "==> Packing Gsharp.NET.Sdk and Gsharp.Templates"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj   -c Release --nologo -v:q
-dotnet build src/Sdk/Gsharp.Templates/Gsharp.Templates.csproj -c Release --nologo -v:q
+dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj   -c Release --nologo -v:q
+dotnet build src/Sdk/Gsharp.Templates/Gsharp.Templates.gsproj -c Release --nologo -v:q
 
 SDK_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg | head -1)
 TPL_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.Templates.*.nupkg | head -1)

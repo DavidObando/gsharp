@@ -1,0 +1,167 @@
+// <copyright file="Issue4341GoClosureAccessEmitTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Compiler.Tests.Emit
+
+import GSharp.Compiler
+import GSharp.Compiler.Tests
+import System
+import System.Diagnostics
+import System.IO
+import Xunit
+
+/// Issue #4341: synthesized goroutine helpers retain the lexical member's
+/// private/protected accessibility domain.
+open class Issue4341GoClosureAccessEmitTests {
+    @Fact
+    func DirectGoCallsAndMemberReads_RetainLexicalAccess() {
+        const source = `package Issue4341
+import Gsharp.Extensions.Go
+import System
+
+class InstanceWorker {
+    private let value int32 = 1
+    private func work() { Console.WriteLine(value) }
+    func run() { scope { go work() } }
+}
+
+class SharedWorker[T] {
+    shared {
+        private func work() { Console.WriteLine("shared") }
+        func run() { scope { go work() } }
+    }
+}
+
+open class BaseWorker {
+    protected func work() { Console.WriteLine("protected") }
+}
+
+class DerivedWorker : BaseWorker {
+    func run() { scope { go work() } }
+}
+
+struct StructWorker {
+    private func work() { Console.WriteLine("struct") }
+    func run() { scope { go work() } }
+}
+
+class PropertyWorker {
+    private prop Value int32 -> 5
+    func run() { scope { go Console.WriteLine(Value) } }
+}
+
+class AsyncLetWorker {
+    private func work() int32 -> 6
+    func run() int32 {
+        scope {
+            async let value = work()
+            return await value
+        }
+    }
+}
+
+interface InterfaceWorker[T] {
+    private func work() { Console.WriteLine("interface") }
+    func run() { scope { go work() } }
+}
+
+interface VariantInterfaceWorker[out T] {
+    private func work() { Console.WriteLine("variant interface") }
+    func run() { scope { go work() } }
+}
+
+class StringInterfaceWorker : InterfaceWorker[string] {}
+class StringVariantInterfaceWorker : VariantInterfaceWorker[string] {}
+
+InstanceWorker().run()
+SharedWorker[string].run()
+DerivedWorker().run()
+StructWorker{}.run()
+PropertyWorker().run()
+Console.WriteLine(AsyncLetWorker().run())
+let interfaceWorker InterfaceWorker[string] = StringInterfaceWorker()
+interfaceWorker.run()
+let variantInterfaceWorker VariantInterfaceWorker[string] = StringVariantInterfaceWorker()
+variantInterfaceWorker.run()`
+        let output = CompileVerifyAndRun(source)
+        Assert.Equal(
+            "1${Environment.NewLine}shared${Environment.NewLine}protected${Environment.NewLine}struct${Environment.NewLine}5${Environment.NewLine}6${Environment.NewLine}interface${Environment.NewLine}variant interface${Environment.NewLine}",
+            output
+        )
+    }
+
+    shared {
+        private func CompileVerifyAndRun(source string) string {
+            let tempDir = Directory.CreateTempSubdirectory("gs_4341_").FullName
+            try {
+                let sourcePath = Path.Combine(tempDir, "test.gs")
+                let assemblyPath = Path.Combine(tempDir, "test.dll")
+                File.WriteAllText(sourcePath, source)
+                using let stdout = StringWriter()
+                using let stderr = StringWriter()
+                let previousOut = Console.Out
+                let previousErr = Console.Error
+                Console.SetOut(stdout)
+                Console.SetError(stderr)
+                var exitCode int32
+                try {
+                    exitCode = Program.Main(
+                        []string{"/out:" + assemblyPath, "/target:exe", "/targetframework:net10.0", sourcePath}
+                    )
+                } finally {
+                    Console.SetOut(previousOut)
+                    Console.SetError(previousErr)
+                }
+                Assert.True(exitCode == 0, (`gsc failed:
+` + "$stdout" + `
+` + "$stderr"))
+                IlVerifier.Verify(assemblyPath)
+                using let process Process? = Process.Start(
+                    ProcessStartInfo("dotnet"){
+                        ArgumentList = {
+                            "exec",
+                            "--runtimeconfig",
+                            Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"),
+                            assemblyPath
+                        },
+                        WorkingDirectory = tempDir,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false
+                    }
+                )
+                Assert.NotNull(process)
+                let outputTask = process!!.StandardOutput.ReadToEndAsync()
+                let errorTask = process!!.StandardError.ReadToEndAsync()
+                let exited = process!!.WaitForExit(30_000)
+                if !exited {
+                    try {
+                        process!!.Kill(entireProcessTree: true)
+                    } catch (InvalidOperationException) {
+                        // The process exited between the timeout and the kill.
+
+                    }
+                    process!!.WaitForExit()
+                }
+                let output = outputTask.GetAwaiter().GetResult()
+                let error = errorTask.GetAwaiter().GetResult()
+                Assert.True(exited, (`dotnet exec timed out
+stdout:
+` + "$output" + `
+stderr:
+` + "$error"))
+                Assert.True(process!!.ExitCode == 0, (`exited ` + "${process!!.ExitCode}" + `
+stdout:
+` + "$output" + `
+stderr:
+` + "$error"))
+                return output.ReplaceLineEndings(Environment.NewLine)
+            } finally {
+                try {
+                    Directory.Delete(tempDir, recursive: true)
+                } catch { }
+            }
+        }
+    }
+}

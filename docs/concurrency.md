@@ -91,7 +91,7 @@ func run() int32 {
 ```
 
 Design contract (details in the type's doc comments and
-`test/Extensions.Tests/SyncMapTests.cs`):
+`test/Extensions.Tests/SyncMapTests.gs`):
 
 - **Method-based, no index syntax** — `m[k] = m[k] + 1` on a shared map
   looks atomic and races; compound read-modify-write is spelled `Update`

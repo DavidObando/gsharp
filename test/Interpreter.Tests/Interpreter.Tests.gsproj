@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.Interpreter.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="@(GsharpCompiler-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
+    <ProjectReference Include="@(GsharpRepl-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
+    <ProjectReference Include="..\..\src\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" ReferenceOutputAssembly="false" />
+    <Compile Include="..\Shared\Issue3081CompositeLiteralCases.gs" Link="Issue3081CompositeLiteralCases.cs" />
+    <Compile Include="..\Shared\Issue3785MixedInitializerCases.gs" Link="Issue3785MixedInitializerCases.cs" />
+    <Compile Include="..\Shared\EmittedOracle.gs" Link="EmittedOracle.cs" />
+    <Compile Include="..\Shared\EmittedOracleOptions.gs" Link="EmittedOracleOptions.cs" />
+    <Compile Include="..\Shared\EmittedOracleResult.gs" Link="EmittedOracleResult.cs" />
+    <ProjectReference Include="../../test-assets/Issue3119.CrossConstants/Issue3119.CrossConstants.gsproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\RepositoryRootMarker.gs" Link="RepositoryRootMarker.cs" />
+  </ItemGroup>
+
+</Project>

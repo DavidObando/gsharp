@@ -1,0 +1,105 @@
+// <copyright file="Issue3821QualifiedConstructorOverloadDiagnosticTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Core.Tests.CodeAnalysis.Binding
+
+import GSharp.Core.CodeAnalysis
+import GSharp.Tests
+import System.Collections.Immutable
+import Xunit
+
+/// Issue #3821: a FULLY-QUALIFIED constructor call whose arguments match no
+/// constructor reported `GS0157 "Cannot find type <first segment>"`
+/// — a diagnostic about the leading namespace segment, which is perfectly
+/// resolvable — instead of the overload error the same call reports when the
+/// type name is written unqualified.
+///
+/// Cause: `TryBindQualifiedClrConstructorCall` resolves the dotted name to
+/// a CLR type and then asks the shared constructor core to bind. On
+/// no-applicable-overload the shared failure helper only commits to
+/// `GS0267` when the call carries an explicit type-argument list (issue
+/// #2633 fixed exactly this cascade, but only for the generic spelling), so the
+/// non-generic call returned "not handled" and the whole accessor chain
+/// re-bound as a namespace walk — which fails at its head and reports GS0157.
+///
+/// cs2gs emits fully-qualified type names whenever a simple name is ambiguous
+/// (issues #2258 / #3805), so on the self-migration corpus this turns every
+/// genuine argument error at such a call site into the same misleading
+/// "Cannot find type GSharp" line.
+class Issue3821QualifiedConstructorOverloadDiagnosticTests {
+    @Fact
+    func QualifiedConstructorCall_NoApplicableOverload_ReportsOverloadErrorNotMissingType() {
+        // FAILS on origin/main: reports GS0157 "Cannot find type System".
+        const source = `package Demo
+
+func Build() {
+    let sb = System.Text.StringBuilder("a", "b", "c", "d", "e")
+}`
+        let diagnostics = Bind(source)
+        Assert.Contains(diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0267")
+        Assert.DoesNotContain(diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0157")
+    }
+
+    @Fact
+    func QualifiedConstructorCall_WrongArgumentType_ReportsOverloadErrorNotMissingType() {
+        // FAILS on origin/main: reports GS0157 "Cannot find type System".
+        // Four arguments matches `StringBuilder(string, int, int, int)` in
+        // arity only — the second argument is a string, so no overload applies.
+        const source = `package Demo
+
+func Build() {
+    let sb = System.Text.StringBuilder("a", "b", "c", "d")
+}`
+        let diagnostics = Bind(source)
+        Assert.Contains(diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0267")
+        Assert.DoesNotContain(diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0157")
+    }
+
+    @Fact
+    func QualifiedConstructorCall_ThatBinds_StillBinds() {
+        // Anti-vacuity guard rail: PASSES on origin/main and here. The change
+        // must only affect the failure path.
+        const source = `package Demo
+
+func Build() string {
+    let sb = System.Text.StringBuilder("hi")
+    return sb.ToString()
+}`
+        Assert.Empty(Bind(source))
+    }
+
+    @Fact
+    func QualifiedStaticCall_OnTypeReceiver_StillBinds() {
+        // Anti-vacuity guard rail: PASSES on origin/main and here. A dotted
+        // chain whose last prefix segment is a TYPE (not a namespace) must keep
+        // falling through to member binding — the fix is gated on the prefix
+        // being a namespace precisely so this shape is untouched.
+        const source = `package Demo
+
+func Combine() string {
+    return System.IO.Path.Combine("a", "b")
+}`
+        Assert.Empty(Bind(source))
+    }
+
+    @Fact
+    func UnqualifiedConstructorCall_NoApplicableOverload_AlreadyReportsOverloadError() {
+        // Anti-vacuity guard rail: PASSES on origin/main and here. It pins the
+        // asymmetry the fix removes — the unqualified spelling of the very same
+        // call already reports the overload error.
+        const source = `package Demo
+import System.Text
+
+func Build() {
+    let sb = StringBuilder("a", "b", "c", "d", "e")
+}`
+        Assert.DoesNotContain(Bind(source), (diagnostic Diagnostic) -> diagnostic.Id == "GS0157")
+    }
+
+    shared {
+        private func Bind(source string) ImmutableArray[Diagnostic] {
+            return EmittedOracle.Evaluate(source).Diagnostics
+        }
+    }
+}

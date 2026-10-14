@@ -7,7 +7,7 @@ name: macos-nightly
 # too expensive to mirror per PR, so this runs the highest-signal macOS
 # surface instead:
 #
-#   - full Release build of GSharp.sln on macos-latest
+#   - full Release build of GSharp.slnx on macos-latest
 #   - test/Core.Tests (fast, broad compiler front-end coverage)
 #   - test/Sdk.Tests (the Gsharp.NET.Sdk path/tool-resolution logic the
 #     issue calls out as platform-sensitive)
@@ -52,13 +52,13 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
+        run: dotnet restore GSharp.slnx --locked-mode
 
       - name: Restore .NET local tools
         run: dotnet tool restore
 
       - name: Build
-        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+        run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
       - name: Test Core.Tests
         id: core
@@ -66,7 +66,7 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1
         run: |
           set +e
-          dotnet test test/Core.Tests/Core.Tests.csproj \
+          dotnet test test/Core.Tests/Core.Tests.gsproj \
             --configuration Release --no-build --no-restore \
             --logger "trx" --results-directory TestResults \
             | tee core-tests.log
@@ -87,7 +87,7 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1
         run: |
           set +e
-          dotnet test test/Sdk.Tests/Sdk.Tests.csproj \
+          dotnet test test/Sdk.Tests/Sdk.Tests.gsproj \
             --configuration Release --no-build --no-restore \
             --logger "trx" --results-directory TestResults \
             | tee sdk-tests.log

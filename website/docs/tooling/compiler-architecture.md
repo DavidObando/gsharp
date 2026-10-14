@@ -29,6 +29,10 @@ BoundProgram (lowered) → ReflectionMetadataEmitter → PE assembly
 
 `gsc` owns command-line parsing, response-file expansion, output stream creation, optional reference-assembly output, Portable PDB stream selection, and `.runtimeconfig.json` generation for executable outputs. `Gsharp.NET.Sdk` wraps the same driver from MSBuild by building a response file and invoking `dotnet gsc.dll` during `CoreCompile`.
 
+## The compiler is written in G#
+
+From 0.5 the compiler, language server, formatter and tools are G# source. cs2gs translated them from the C# source of the final C#-built release, and that C# source is kept on the semi-frozen `cs2gs/csharp-0.4` branch, a living C# corpus for cs2gs (no fixes or features; occasional back-ports from G# when they exercise cs2gs). The repository builds with the previous released compiler, pinned in `global.json` (the N-1 rule: repository source uses only language features the pinned release supports). A stage-2 check rebuilds the compiler with the stage-1 compiler and requires identical `GSharp.Core.dll` and `gsc.dll`, so the shipped compiler is the self-built one. The Visual Studio extension stays C#.
+
 ## No Roslyn dependency in the emit path
 
 G# stays on the bespoke emitter and does not use Roslyn to write assemblies at runtime. The motivation is practical: NuGet-distributable assemblies and cross-language debugging require standard ECMA-335 metadata and Portable PDBs, and those are available directly through `System.Reflection.Metadata`.
@@ -71,13 +75,13 @@ Constraints (`any`, `comparable`, sealed-interface bounds) round-trip as `Generi
 
 | Area | Representative paths |
 | --- | --- |
-| CLI driver | `src/Compiler/Program.cs` |
+| CLI driver | `src/Compiler/Program.gs` |
 | Lexer/parser/syntax | `src/Core/CodeAnalysis/Syntax/` |
 | Binding and symbols | `src/Core/CodeAnalysis/Binding/`, `src/Core/CodeAnalysis/Symbols/` |
 | Lowering | `src/Core/CodeAnalysis/Lowering/` |
-| Interactive emitted sessions | `src/Repl/Engine/EmittedSessionEngine.cs`, `src/Repl/` (gsi REPL host) |
-| PE emit | `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs` |
-| Portable PDB emit | `src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs` |
+| Interactive emitted sessions | `src/Repl/Engine/EmittedSessionEngine.gs`, `src/Repl/` (gsi REPL host) |
+| PE emit | `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.gs` |
+| Portable PDB emit | `src/Core/CodeAnalysis/Emit/PortablePdbEmitter.gs` |
 | SDK integration | `src/Sdk/Gsharp.NET.Sdk/` |
 | Source-generator host | `src/GeneratorHost/`, `tools/gsgen/` |
 | C# migration tooling | `tools/cs2gs/` |

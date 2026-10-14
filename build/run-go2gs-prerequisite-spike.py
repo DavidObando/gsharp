@@ -286,7 +286,7 @@ def native_aot_environment() -> dict[str, str]:
 
 def build(out: Path, include_aot: bool) -> dict[str, list[str]]:
     run(
-        ["dotnet", "build", "src/Compiler/Compiler.csproj", "-c", "Release", "--nologo", "-v:q"],
+        ["dotnet", "build", "src/Compiler/Compiler.gsproj", "-c", "Release", "--nologo", "-v:q"],
         cwd=REPO,
     )
     gsc = REPO / "out" / "bin" / "Release" / "Compiler" / "gsc"

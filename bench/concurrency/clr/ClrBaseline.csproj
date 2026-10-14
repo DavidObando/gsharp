@@ -29,7 +29,7 @@
   <ItemGroup>
     <!-- ADR-0174 Phase 1: measure the real G# channel runtime alongside the
          BCL reproductions (rendezvous ping-pong, closed receive). -->
-    <ProjectReference Include="..\..\..\src\Sdk\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj" />
+    <ProjectReference Include="..\..\..\src\Sdk\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.gsproj" />
   </ItemGroup>
 
 </Project>

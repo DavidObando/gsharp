@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emit the GitHub Actions matrix for build.yml's ``tests`` job.
 
-Every ``*.Tests.csproj`` in the solution gets a shard automatically, so a new
+Every ``*.Tests.gsproj`` in the solution gets a shard automatically, so a new
 test project can never go unrun. Three of them are too big for one runner and
 are split by test-name band; a handful are so small that a whole runner spends
 three minutes of setup to run under a second of tests, and those share one.
@@ -36,7 +36,7 @@ from pathlib import Path
 # Projects split into bands, each with the substrings that select the band.
 # Exactly one band per project is the remainder and carries no terms.
 SHARDED_PROJECTS = {
-    "test/Compiler.Tests/Compiler.Tests.csproj": {
+    "test/Compiler.Tests/Compiler.Tests.gsproj": {
         # 43m of test time, the largest project in the repo.
         "conformance": ["GSharp.Compiler.Tests.LanguageConformance."],
         "issue1-remainder": ["GSharp.Compiler.Tests.Emit.Issue1"],
@@ -65,7 +65,7 @@ SHARDED_PROJECTS = {
         "emit-remainder": ["GSharp.Compiler.Tests.Emit."],
         "remainder": [],
     },
-    "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj": {
+    "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.gsproj": {
         # 29m. Issue33xx and Issue34xx are 9m of the old 17m remainder between
         # them (Issue3347RemainingSpillInventory alone is 4m).
         "issue1": ["Cs2Gs.Tests.Issue1"],
@@ -85,7 +85,7 @@ SHARDED_PROJECTS = {
         "issue47": ["Cs2Gs.Tests.Issue47"],
         "remainder": [],
     },
-    "test/Core.Tests/Core.Tests.csproj": {
+    "test/Core.Tests/Core.Tests.gsproj": {
         # 8475 tests, 11.5m, previously one unsharded job. Binding is 75% of it.
         "binding": ["GSharp.Core.Tests.CodeAnalysis.Binding."],
         # ADR-0193 §4 / owner decision 6: the reader-agreement differential
@@ -101,11 +101,11 @@ SHARDED_PROJECTS = {
 # full three minutes of checkout/restore/build to do it; together they still
 # make the cheapest shard in the matrix.
 GROUPED_PROJECTS = (
-    "test/Extensions.Tests/Extensions.Tests.csproj",
-    "test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.csproj",
-    "test/LanguageServer.Tests/LanguageServer.Tests.csproj",
-    "test/Sdk.Tests/Sdk.Tests.csproj",
-    "tools/gsgen/GSharp.GeneratorHost.Tests/GSharp.GeneratorHost.Tests.csproj",
+    "test/Extensions.Tests/Extensions.Tests.gsproj",
+    "test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj",
+    "test/LanguageServer.Tests/LanguageServer.Tests.gsproj",
+    "test/Sdk.Tests/Sdk.Tests.gsproj",
+    "tools/gsgen/GSharp.GeneratorHost.Tests/GSharp.GeneratorHost.Tests.gsproj",
 )
 
 GROUPED_NAME = "fast-suites"
@@ -180,7 +180,7 @@ def sharded_entries(project: str, bands: dict[str, list[str]]) -> list[dict]:
 
 
 def main() -> int:
-    solution = sys.argv[1] if len(sys.argv) > 1 else "GSharp.sln"
+    solution = sys.argv[1] if len(sys.argv) > 1 else "GSharp.slnx"
     result = subprocess.run(
         ["dotnet", "sln", solution, "list"],
         check=True,
@@ -190,7 +190,7 @@ def main() -> int:
     projects = sorted(
         line.strip().replace("\\", "/")
         for line in result.stdout.splitlines()
-        if line.strip().lower().endswith(".tests.csproj")
+        if line.strip().lower().endswith(".tests.gsproj")
     )
 
     missing = set(SHARDED_PROJECTS).union(GROUPED_PROJECTS).difference(projects)

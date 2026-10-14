@@ -200,12 +200,6 @@
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
       },
-      "GSharp.Gsharp.Extensions": {
-        "type": "Project",
-        "dependencies": {
-          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
-        }
-      },
       "GSharp.LanguageServer": {
         "type": "Project",
         "dependencies": {
@@ -220,7 +214,6 @@
         "type": "Project",
         "dependencies": {
           "GSharp.Core": "[1.0.0, )",
-          "GSharp.Gsharp.Extensions": "[1.0.0, )",
           "GSharp.LanguageServer": "[1.0.0, )",
           "Gsharp.Runtime.Channels": "[1.0.0, )",
           "Gsharp.Runtime.Values": "[1.0.0, )",

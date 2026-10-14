@@ -33,7 +33,7 @@ GSharp has one execution backend. The emit pipeline produces managed PEs — wri
 
 ## Side-effect spilling
 
-The general `SideEffectSpiller` lowering pass (`src/Core/CodeAnalysis/Lowering/SideEffectSpiller.cs`) runs after interpolated-string lowering and before the async / iterator state-machine rewriters. For each bound-tree context that the emit pipeline historically re-evaluated more than once — currently `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundPropertyAssignmentExpression`, and `BoundClrPropertyAssignmentExpression` — it spills every side-effecting sub-expression (per `SideEffectAnalyzer.HasObservableSideEffect`) into a fresh local inside a `BoundBlockExpression` wrapper, then substitutes a variable read for the original sub-expression. The emit phase therefore sees only `BoundVariableExpression` reads in the duplicating positions, eliminating an entire class of bugs (issue #452 — covers P0-1, P1-1, P1-2, P1-12). Expressions classified as pure (literals, variable reads, conversions of pure operands, pure binary / unary, field / tuple access of pure receivers, `len`/`cap` of pure operands) are left untouched; everything else is conservatively spilled.
+The general `SideEffectSpiller` lowering pass (`src/Core/CodeAnalysis/Lowering/SideEffectSpiller.gs`) runs after interpolated-string lowering and before the async / iterator state-machine rewriters. For each bound-tree context that the emit pipeline historically re-evaluated more than once — currently `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundPropertyAssignmentExpression`, and `BoundClrPropertyAssignmentExpression` — it spills every side-effecting sub-expression (per `SideEffectAnalyzer.HasObservableSideEffect`) into a fresh local inside a `BoundBlockExpression` wrapper, then substitutes a variable read for the original sub-expression. The emit phase therefore sees only `BoundVariableExpression` reads in the duplicating positions, eliminating an entire class of bugs (issue #452 — covers P0-1, P1-1, P1-2, P1-12). Expressions classified as pure (literals, variable reads, conversions of pure operands, pure binary / unary, field / tuple access of pure receivers, `len`/`cap` of pure operands) are left untouched; everything else is conservatively spilled.
 
 ## Async / iterator lowering pipeline
 
@@ -89,7 +89,7 @@ The typedef ordering within the module is:
 ## Portable PDB / debug-info pipeline
 
 When `/debug` is on, `ReflectionMetadataEmitter` collaborates with a sibling
-`PortablePdbEmitter` (`src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs`) to
+`PortablePdbEmitter` (`src/Core/CodeAnalysis/Emit/PortablePdbEmitter.gs`) to
 produce standards-conformant [Portable PDB](https://github.com/dotnet/runtime/blob/main/docs/design/specs/PortablePdb-Metadata.md)
 symbols alongside the PE. Both emitters share the same `MetadataBuilder`
 contract, so the PE and PDB tables stay token-synchronised without an
@@ -155,7 +155,7 @@ The end-to-end correctness of this pipeline is gated by [`e2etests/multitarget-e
 
 ## Where Roslyn fits in
 
-The emit path does **not** depend on Roslyn — `ReflectionMetadataEmitter` writes PE bytes directly via `System.Reflection.Metadata`, and v1.0 ships on this path. [ADR-0027](adr/0027-roslyn-fork-decision.md) records the decision to close the Roslyn-fork track (issue #51) as `wontfix` for v1.0; NuGet-distributable libraries and full cross-language debugger support (Portable PDB, Source Link, embedded sources) are delivered by extending the bespoke emitter rather than by adopting Roslyn. The vendored Roslyn submodule that previously lived at `src/Roslyn` and the dependent `src/CodeAnalysis/` stub project were removed in the follow-up PR called out by ADR-0027; the fork repo (`DavidObando/gsharp-roslyn`) is preserved out-of-tree in case any of the four triggers in issue #51 (analyzer `ISymbol` interop, shared Roslyn workspaces, in-GSharp source generators, shared metadata-import at scale) materialises post-v1.0.
+The compiler is itself written in G# and builds with the previous released compiler (see [`self-host-bootstrap.md`](self-host-bootstrap.md)). The emit path does **not** depend on Roslyn — `ReflectionMetadataEmitter` writes PE bytes directly via `System.Reflection.Metadata`, and v1.0 ships on this path. [ADR-0027](adr/0027-roslyn-fork-decision.md) records the decision to close the Roslyn-fork track (issue #51) as `wontfix` for v1.0; NuGet-distributable libraries and full cross-language debugger support (Portable PDB, Source Link, embedded sources) are delivered by extending the bespoke emitter rather than by adopting Roslyn. The vendored Roslyn submodule that previously lived at `src/Roslyn` and the dependent `src/CodeAnalysis/` stub project were removed in the follow-up PR called out by ADR-0027; the fork repo (`DavidObando/gsharp-roslyn`) is preserved out-of-tree in case any of the four triggers in issue #51 (analyzer `ISymbol` interop, shared Roslyn workspaces, in-GSharp source generators, shared metadata-import at scale) materialises post-v1.0.
 
 ## Unified emitted execution
 
@@ -165,14 +165,14 @@ Since [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md), the emitted pipeline
 
 | Path | What lives there |
 | --- | --- |
-| `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs` | PE emitter. |
-| `src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs` | Portable PDB emitter (Document, MethodDebugInformation, LocalScope, CustomDebugInformation). |
-| `src/Core/CodeAnalysis/Symbols/ReferenceResolver.cs` | Reference-assembly loading + core-type lookup. |
-| `src/Core/CodeAnalysis/Symbols/ClrTypeUtilities.cs` | Cross-context `Type` comparison helpers. |
-| `src/Core/CodeAnalysis/Compilation/Compilation.cs` | Threads the resolver from `Compilation` through to the emitter. |
-| `src/Compiler/Program.cs` | `gsc` command-line driver, response-file expansion, runtimeconfig.json generation. |
+| `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.gs` | PE emitter. |
+| `src/Core/CodeAnalysis/Emit/PortablePdbEmitter.gs` | Portable PDB emitter (Document, MethodDebugInformation, LocalScope, CustomDebugInformation). |
+| `src/Core/CodeAnalysis/Symbols/ReferenceResolver.gs` | Reference-assembly loading + core-type lookup. |
+| `src/Core/CodeAnalysis/Symbols/ClrTypeUtilities.gs` | Cross-context `Type` comparison helpers. |
+| `src/Core/CodeAnalysis/Compilation/Compilation.gs` | Threads the resolver from `Compilation` through to the emitter. |
+| `src/Compiler/Program.gs` | `gsc` command-line driver, response-file expansion, runtimeconfig.json generation. |
 | `src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.Core.Sdk.targets` | MSBuild `CoreCompile` override that invokes `gsc.dll` via the SDK's build task. |
-| `src/Sdk/Gsharp.NET.Sdk/BuildTask.cs` | MSBuild task that materializes a response file and shells out to `dotnet gsc.dll`. |
+| `src/Sdk/Gsharp.NET.Sdk/BuildTask.gs` | MSBuild task that materializes a response file and shells out to `dotnet gsc.dll`. |
 
 ## IL verification gate (Compiler.Tests)
 
@@ -183,7 +183,7 @@ escapes, …) at unit-test granularity instead of waiting for a runtime
 `InvalidProgramException` or a JIT failure.
 
 The integration lives in
-[`test/Compiler.Tests/IlVerifier.cs`](../test/Compiler.Tests/IlVerifier.cs).
+[`test/Compiler.Tests/IlVerifier.gs`](../test/Compiler.Tests/IlVerifier.gs).
 Every test compile helper calls
 `IlVerifier.Verify(outPath, ignoredErrorCodes: …)` right after asserting that
 `gsc` exited successfully, so a verification failure is attributed to the
@@ -203,11 +203,11 @@ specific test that emitted the bad IL.
 
 ## Compiler source invariants (enforced by internal analyzers)
 
-Three recurring bug classes in the emitter/symbol layer are now enforced at
+Three recurring bug classes in the emitter/symbol layer were enforced at
 build time by the internal Roslyn analyzers in
-[`src/Analyzers/InternalAnalyzers`](../src/Analyzers/InternalAnalyzers). They
-run as a `TreatWarningsAsErrors` gate on `Core`, so a violation fails the
-build. See [internal-analyzers.md](./internal-analyzers.md) and
+[`src/Analyzers/InternalAnalyzers`](../src/Analyzers/InternalAnalyzers) while
+the compiler was C#. GSA0001-GSA0003 were retired at the cut-over by owner
+decision and are review conventions until G# equivalents exist; the other analyzers in the project stay. See [internal-analyzers.md](./internal-analyzers.md) and
 [ADR-0147](./adr/0147-internal-source-analyzers.md) for the full rules and
 suppression guidance.
 

@@ -99,17 +99,17 @@ selfmig_project_filters=(
 # that version from a LOCALLY BUILT nupkg under out/bin/<Config>/nupkgs (then
 # the .nugs folder feed), and `TranslateStage` throws
 # "Could not resolve a local GSharp.CodeAnalysis.Analyzers.Testing package …"
-# when there is none. The same PR dropped Compiler.csproj's ProjectReference to
+# when there is none. The same PR dropped Compiler.gsproj's ProjectReference to
 # that project, so nothing in this script's build closure produces the nupkg any
 # more: on a clean runner the translate stage crashed outright (nightly run
 # 35227489660). The project is packable (GeneratePackageOnBuild), so an ordinary
 # build is all it takes — in Release, which is the config the migration runs
 # under and the first one the resolver probes.
 selfmig_build_prerequisites() {
-  dotnet build "$repo_root/src/Compiler/Compiler.csproj" -c Debug -graph
-  dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
+  dotnet build "$repo_root/src/Compiler/Compiler.gsproj" -c Debug -graph
+  dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj" -c Debug -graph
   dotnet build \
-    "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj" \
+    "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" \
     -c Release -graph
 }
 

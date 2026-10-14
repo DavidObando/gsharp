@@ -1,0 +1,98 @@
+name: selfhost-stage2-nightly
+
+# Nightly hook for the stage-2 self-host certification (ADR-0198, plan item C5).
+# The certification controller itself is build/selfhost-stage2.py, added by
+# PR #4842; this workflow only schedules it and must not re-implement or loosen
+# it. Fill in STAGE2_ARGS from the invocation documented in
+# docs/self-host-bootstrap.md once #4842 has landed. The first step fails
+# loudly while STAGE2_ARGS is empty, so an unwired hook can never pass.
+#
+# Wiring also means preparing the controller's inputs, which this skeleton does
+# NOT do: restore the repository's packages into the controller's package cache
+# and materialize the pinned stage-0 Gsharp.NET.Sdk nupkg (the release named in
+# global.json). The controller rejects a missing bootstrap nupkg or cache. See
+# docs/self-host-bootstrap.md and ADR-0198, then add those steps before the
+# controller step.
+#
+# This is not the cs2gs apps nightly (cs2gs-apps-nightly.yml), which runs the
+# cs2gs built from main (written in G#) against C# inputs, chiefly the
+# semi-frozen branch cs2gs/csharp-0.4.
+#
+# After the cut-over, "stage 0" is the pinned SDK in global.json, stage 1 is the
+# repository built by it, and stage 2 is the repository rebuilt by stage 1.
+# Run it on the merged cut-over head immediately (plan Phase 3 step 6).
+
+on:
+  schedule:
+    - cron: '41 9 * * *'
+  workflow_dispatch:
+
+env:
+  NBGV_SetCloudBuildVersionVars: false
+  STAGE2_ARGS: ''
+
+concurrency:
+  group: selfhost-stage2-nightly
+  cancel-in-progress: false
+
+jobs:
+  stage2:
+    # Self-hosted, not ubuntu-latest: the controller trusts one pinned .NET layout
+    # (TRUSTED_DOTNET_SDK_VERSION in build/selfhost-stage2.py) that a hosted runner
+    # does not have (`approved dotnet executable not found`), and the run takes
+    # about eight hours, over the six-hour limit of a hosted job. #4842 documents
+    # both and runs its on-demand workflow selfhost-stage2.yml the same way;
+    # tracked in #4885. Use the same runner label as that workflow.
+    runs-on: self-hosted
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Require a wired controller invocation
+        run: |
+          if [[ -z "$STAGE2_ARGS" ]]; then
+            echo "::error::STAGE2_ARGS is empty: wire the ADR-0198 controller invocation (build/selfhost-stage2.py) and its bootstrap-nupkg and package-cache preparation before enabling this job."
+            exit 1
+          fi
+
+      - name: Check the controller's trusted toolchain
+        run: python3 build/selfhost-stage2.py --probe-toolchain
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Check the sandbox
+        run: |
+          command -v bwrap
+          bwrap --ro-bind / / --unshare-user --unshare-pid --unshare-net true
+
+      - name: Build controller helpers
+        # Same as #4842's selfhost-stage2.yml. These two helper projects stay C#
+        # (build/selfhost/*.gsproj) and must exist before the controller runs.
+        run: |
+          dotnet restore build/selfhost/PackageContentHash.gsproj --locked-mode
+          dotnet restore build/selfhost/TestSupervisorLogger.gsproj --locked-mode
+          dotnet build build/selfhost/PackageContentHash.gsproj --configuration Release --no-restore --nologo
+          dotnet build build/selfhost/TestSupervisorLogger.gsproj --configuration Release --no-restore --nologo
+
+      - name: Certify stage 1 against stage 2
+        run: |
+          # The controller owns its isolated trees; keep them off tmpfs.
+          work="$RUNNER_TEMP/selfhost-stage2"
+          # shellcheck disable=SC2086
+          python3 build/selfhost-stage2.py --work "$work" $STAGE2_ARGS
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: selfhost-stage2-evidence
+          retention-days: 30
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/selfhost-stage2/**/*.json
+            ${{ runner.temp }}/selfhost-stage2/**/*.jsonl
+            ${{ runner.temp }}/selfhost-stage2/**/*.log

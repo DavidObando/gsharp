@@ -33,11 +33,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
-echo "==> Building GSharp.sln ($CONFIG) so the real gsc compiler is available"
-dotnet build GSharp.sln -c "$CONFIG" -graph
+echo "==> Building GSharp.slnx ($CONFIG) so the real gsc compiler is available"
+dotnet build GSharp.slnx -c "$CONFIG" -graph
 
 echo "==> Running the L1 end-to-end migration tests (translate -> round-trip -> gsc -> run -> stdout parity)"
-dotnet test tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj -c "$CONFIG" \
+dotnet test tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.gsproj -c "$CONFIG" \
   --filter "FullyQualifiedName~L1MigrationEndToEndTests"
 
 echo "==> L1 migrated clean: gsc compiled with zero errors and stdout matched baseline.stdout.golden"

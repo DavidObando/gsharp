@@ -1,8 +1,8 @@
 # Gsharp.NET.Sdk.Bootstrap
 
 Issue #792 / ADR-0084. A *build-time-only* mirror of `Gsharp.NET.Sdk` that
-compiles `.gs` sources against the **in-tree** `gsc.dll` (Compiler.csproj
-output) and BuildTask DLL (Gsharp.NET.Sdk.csproj output) **without** the
+compiles `.gs` sources against the **in-tree** `gsc.dll` (Compiler.gsproj
+output) and BuildTask DLL (Gsharp.NET.Sdk.gsproj output) **without** the
 auto-reference to `Gsharp.Extensions.dll` that the consumer-facing SDK
 sets up.
 
@@ -25,8 +25,8 @@ imported directly by in-tree relative path. The intended consumer is a
 
 `dotnet build GSharp.sln` walks the topology:
 
-1. `src/Compiler/Compiler.csproj` — produces `gsc.dll`.
-2. `src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj` — produces the BuildTask
+1. `src/Compiler/Compiler.gsproj` — produces `gsc.dll`.
+2. `src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj` — produces the BuildTask
    DLL (and packs the consumer SDK NuGet, currently still bundling the
    C# `Gsharp.Extensions.dll`).
 3. Any `.gsproj` consuming this bootstrap.

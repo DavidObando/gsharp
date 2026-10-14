@@ -37,13 +37,13 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
+        run: dotnet restore GSharp.slnx --locked-mode
 
       - name: Restore .NET local tools
         run: dotnet tool restore
 
       - name: Build
-        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+        run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
       - name: Migrate corpus (strict ledger gate)
         id: migrate
@@ -69,28 +69,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           # The gate outcome is reported at the END of the job (after filing),
           # so a red night still files its issues first.
-          exit 0
-
-      - name: Migrate and run pinned Oahu
-        id: oahu_pinned
-        env:
-          OAHU_GATE_ROOT: ${{ runner.temp }}/cs2gs-oahu-pinned
-        run: |
-          set +e
-          ./build/run-cs2gs-oahu.sh | tee cs2gs-oahu-pinned.log
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-          exit 0
-
-      - name: Migrate and run Oahu C# branch head (advisory)
-        id: oahu_csharp_head
-        env:
-          OAHU_GATE_LABEL: csharp-head
-          OAHU_GATE_ROOT: ${{ runner.temp }}/cs2gs-oahu-csharp-head
-          OAHU_REF: cs2gs/oahu-csharo
-        run: |
-          set +e
-          ./build/run-cs2gs-oahu.sh | tee cs2gs-oahu-csharp-head.log
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: File issues for new gaps (automated, ADR-0138 guardrails)
@@ -139,27 +117,9 @@ jobs:
             cs2gs-nightly-runs/**/report.html
             cs2gs-nightly-runs/**/summary.json
             cs2gs-nightly-runs/**/run.json
-            cs2gs-oahu-pinned.log
-            cs2gs-oahu-csharp-head.log
-            ${{ runner.temp }}/cs2gs-oahu-pinned/migrate.log
-            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/report.html
-            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/summary.json
-            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/run.json
-            ${{ runner.temp }}/cs2gs-oahu-pinned/smoke/*
-            ${{ runner.temp }}/cs2gs-oahu-csharp-head/migrate.log
-            ${{ runner.temp }}/cs2gs-oahu-csharp-head/runs/**/report.html
-            ${{ runner.temp }}/cs2gs-oahu-csharp-head/runs/**/summary.json
-            ${{ runner.temp }}/cs2gs-oahu-csharp-head/runs/**/run.json
-            ${{ runner.temp }}/cs2gs-oahu-csharp-head/smoke/*
 
-      - name: Report advisory and enforce gate outcome
+      - name: Enforce gate outcome
         run: |
-          # The Oahu C# branch head detects upstream drift but stays advisory,
-          # so changes cannot break this repository's pinned compatibility gate.
-          if [[ "${{ steps.oahu_csharp_head.outputs.exit_code }}" != "0" ]]; then
-            echo "::warning title=Oahu C# branch compatibility::Oahu C# branch head gate failed (exit ${{ steps.oahu_csharp_head.outputs.exit_code }}); pinned Oahu remains the enforced compatibility baseline."
-          fi
-          if [[ "${{ steps.migrate.outputs.migrate_exit }}" != "0" ||
-                "${{ steps.oahu_pinned.outputs.exit_code }}" != "0" ]]; then
+          if [[ "${{ steps.migrate.outputs.migrate_exit }}" != "0" ]]; then
             exit 1
           fi

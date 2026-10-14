@@ -12,7 +12,7 @@ TARGET_FRAMEWORKS=( "net8.0" "net10.0" )
 EXPECTED="Hello, world!"
 
 echo "==> Packing Gsharp.NET.Sdk into out/bin/Release/nupkgs"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Release --nologo -v:q
+dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
 
 NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg | head -1)
 VER="${NUPKG##*Gsharp.NET.Sdk.}"

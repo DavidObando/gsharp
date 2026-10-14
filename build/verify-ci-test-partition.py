@@ -21,7 +21,7 @@ different environment variables (``GSHARP_DIFFERENTIAL_CONFORMANCE`` widens the
 language-conformance corpus from a curated subset to the whole thing). Run this
 with the same environment the shards use, which is to say: do not set it.
 
-Usage: verify-ci-test-partition.py [--solution GSharp.sln] [--configuration Release]
+Usage: verify-ci-test-partition.py [--solution GSharp.slnx] [--configuration Release]
 """
 
 import argparse
@@ -45,7 +45,7 @@ def assembly_for(project: str, configuration: str, repo_root: Path) -> Path:
     """Finds the test assembly a project builds.
 
     The output assembly name does not always match the project file name
-    (``Core.Tests.csproj`` builds ``GSharp.Core.Tests.dll``), so glob the
+    (``Core.Tests.gsproj`` builds ``GSharp.Core.Tests.dll``), so glob the
     project's output directory rather than guessing.
     """
     output = repo_root / "out" / "bin" / configuration / Path(project).stem
@@ -129,7 +129,7 @@ def require(clause: str, prefix: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--solution", default="GSharp.sln")
+    parser.add_argument("--solution", default="GSharp.slnx")
     parser.add_argument("--configuration", default="Release")
     args = parser.parse_args()
 

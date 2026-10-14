@@ -114,12 +114,6 @@
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
       },
-      "GSharp.Gsharp.Extensions": {
-        "type": "Project",
-        "dependencies": {
-          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
-        }
-      },
       "GSharp.LanguageServer": {
         "type": "Project",
         "dependencies": {

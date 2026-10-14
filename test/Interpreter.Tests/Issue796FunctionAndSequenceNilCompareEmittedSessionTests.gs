@@ -1,0 +1,139 @@
+// <copyright file="Issue796FunctionAndSequenceNilCompareEmittedSessionTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Interpreter.Tests
+
+import GSharp.Interpreter
+import System
+import System.IO
+import Xunit
+
+/// Issue #796: Emitted-session coverage for function and sequence nil compare.
+/// Traceability: ADR-0084.
+open class Issue796FunctionAndSequenceNilCompareEmittedSessionTests {
+    @Fact
+    func FunctionParameter_EqualsNil_BindsAndEvaluates() {
+        let source = `func Guard(f () -> int32) string {
+    if f == nil {
+        return "nil"
+    }
+    return "bound"
+}
+
+var nilFn () -> int32 = default(() -> int32)
+Console.WriteLine(Guard(() -> 42))
+Console.WriteLine(Guard(nilFn))`
+        Assert.Equal("bound${Environment.NewLine}nil${Environment.NewLine}", RunSubmission(source))
+    }
+
+    @Fact
+    func FunctionParameter_NotEqualNil_BindsAndEvaluates() {
+        let source = `func IsBound(f () -> int32) bool {
+    return f != nil
+}
+
+var nilFn () -> int32 = default(() -> int32)
+Console.WriteLine(IsBound(() -> 1))
+Console.WriteLine(IsBound(nilFn))`
+        Assert.Equal("True${Environment.NewLine}False${Environment.NewLine}", RunSubmission(source))
+    }
+
+    @Fact
+    func ConcreteArrowFunction_EqualsNil_BindsAndEvaluates() {
+        let source = `func Apply(x int32, f (int32) -> int32) bool {
+    return f == nil
+}
+
+var nilFn (int32) -> int32 = default((int32) -> int32)
+Console.WriteLine(Apply(1, nilFn))
+Console.WriteLine(Apply(1, (n int32) -> n + 1))`
+        Assert.Equal("True${Environment.NewLine}False${Environment.NewLine}", RunSubmission(source))
+    }
+
+    @Fact
+    func SequenceInt32_EqualsNil_BindsAndEvaluates() {
+        let source = `func Sum(xs sequence[int32]) int32 {
+    if xs == nil {
+        return -1
+    }
+    var total = 0
+    for x in xs {
+        total = total + x
+    }
+    return total
+}
+
+var nilSeq sequence[int32] = default(sequence[int32])
+Console.WriteLine(Sum([]int32{1, 2, 3}))
+Console.WriteLine(Sum(nilSeq))`
+        Assert.Equal("6${Environment.NewLine}-1${Environment.NewLine}", RunSubmission(source))
+    }
+
+    @Fact
+    func SequenceInt32_NotEqualNil_BindsAndEvaluates() {
+        let source = `func HasAny(xs sequence[int32]) bool {
+    return xs != nil
+}
+
+var nilSeq sequence[int32] = default(sequence[int32])
+Console.WriteLine(HasAny([]int32{}))
+Console.WriteLine(HasAny(nilSeq))`
+        Assert.Equal("True${Environment.NewLine}False${Environment.NewLine}", RunSubmission(source))
+    }
+
+    @Fact
+    func NamedDelegateType_EqualsNil_BindsAndEvaluates() {
+        // ADR-0059 named delegate. This test focuses on the nil-comparison
+        // shape through a nil-typed local; no named-delegate instance needs to
+        // materialize.
+        let source = `delegate Reducer(a int32, b int32) int32;
+
+func IsBound(f Reducer) string {
+    if f == nil {
+        return "nil"
+    }
+    return "bound"
+}
+
+var nilReducer Reducer = default(Reducer)
+Console.WriteLine(IsBound(nilReducer))`
+        let output = RunSubmission(source)
+        Assert.Contains("nil${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func LegacyFuncForm_EqualsNil_BindsAndEvaluates() {
+        // ADR-0075 deprecates the legacy `func(T) U` type-clause form
+        // (GS0303 warning). The emitted session still binds and runs the
+        // shape; assert the program output is correct and the warning is the
+        // only extra noise.
+        let source = `func Guard(f func(int32) int32) string {
+    if f == nil {
+        return "nil"
+    }
+    return "bound"
+}
+
+var nilFn func(int32) int32 = default(func(int32) int32)
+Console.WriteLine(Guard((x int32) -> x * 2))
+Console.WriteLine(Guard(nilFn))`
+        let output = RunSubmission(source)
+        Assert.Contains("bound${Environment.NewLine}nil${Environment.NewLine}", output)
+    }
+
+    shared {
+        private func RunSubmission(text string) string {
+            using let outWriter = StringWriter()
+            let prevOut = Console.Out
+            Console.SetOut(outWriter)
+            try {
+                let repl = GSharpRepl()
+                repl.EvaluateSubmission(text)
+            } finally {
+                Console.SetOut(prevOut)
+            }
+            return outWriter.ToString().ReplaceLineEndings(Environment.NewLine)
+        }
+    }
+}

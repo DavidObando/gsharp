@@ -349,7 +349,7 @@ before a marker is finally dropped as unplaceable.
 - Consumer side: `ProjectReference` metadata
   `OutputItemType="Analyzer" ReferenceOutputAssembly="false"` →
   `OutputItemType="GsharpCodeAnalyzer" ReferenceOutputAssembly="false"`
-  (the exact rewrite `src/Core/Core.csproj` needs).
+  (the exact rewrite `src/Core/Core.gsproj` needs).
 
 ## Parity verification
 

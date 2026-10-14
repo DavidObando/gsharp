@@ -54,8 +54,8 @@ trap cleanup EXIT
 echo "==> Building gsc, Gsharp.Runtime.Channels and Gsharp.Extensions ($CONFIG)"
 # Gsharp.Extensions -> Gsharp.NET.Sdk packs gsgen via a raw <MSBuild> task, so
 # its restore does not flow transitively; restore the solution like CI does.
-dotnet restore GSharp.sln --nologo -v:q
-dotnet build src/Compiler/Compiler.csproj -c "$CONFIG" --no-restore --nologo -v:q
+dotnet restore GSharp.slnx --nologo -v:q
+dotnet build src/Compiler/Compiler.gsproj -c "$CONFIG" --no-restore --nologo -v:q
 dotnet build src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj -c "$CONFIG" --no-restore --nologo -v:q
 [[ -f "$GSC_DLL" ]] || { echo "ERROR: gsc not found at $GSC_DLL"; exit 1; }
 [[ -f "$EXTENSIONS_DLL" ]] || { echo "ERROR: Gsharp.Extensions not found at $EXTENSIONS_DLL"; exit 1; }

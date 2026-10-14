@@ -1,12 +1,12 @@
 # Self-host bootstrap: stage 0, stage 1, stage 2
 
-Issue [#4631](https://github.com/DavidObando/gsharp/issues/4631). The compiler is moving to G# source.
+Issue [#4631](https://github.com/DavidObando/gsharp/issues/4631). The compiler is written in G# source since the 0.5 cut-over (see [`self-migration-cutover.md`](self-migration-cutover.md)).
 Bootstrapping it takes three compilers:
 
 | Stage | Compiler | Built from | Built by |
 |---|---|---|---|
-| 0 | C#-built `Gsharp.NET.Sdk` (today this repository's nupkg; at the cut-over the final released 0.4.x) | C# source | csc |
-| 1 | stage-1 `Gsharp.NET.Sdk` | the cs2gs-migrated G# tree | stage 0 |
+| 0 | C#-built `Gsharp.NET.Sdk` (the release pinned in `global.json`; at the cut-over, the final released 0.4.x) | C# source | csc |
+| 1 | stage-1 `Gsharp.NET.Sdk` | the repository's G# source | stage 0 |
 | 2 | the migrated tree rebuilt | the same G# tree | stage 1 |
 
 The cut-over requires stage 2 to reproduce stage 1. The certification contract
@@ -118,8 +118,8 @@ Measured on the nightly 36930275716 tree (main `6c4824cbc`):
 
 The compiler recurses deeply: the binder, lowering and emit all walk syntax and bound trees. Windows gives the main thread
 a 1 MB stack (Linux: 8 MB), and the frame sizes of G#-compiled code have never been measured. The workflow
-`.github/workflows/selfhost-windows.yml` (manual dispatch; it also runs on pull requests that change it) does the following:
-- It takes the migrated tree from a `cs2gs-selfmig-nightly` run (default: the latest successful one) and replays that run's polish deltas.
+`.github/workflows/selfhost-windows.yml` (parked at the cut-over: manual dispatch only, not gating; the steps below describe the pre-cut-over procedure and need repair against `cs2gs/csharp-0.4` before reuse) does the following:
+- It takes the migrated tree from a `cs2gs-selfmig-nightly` run (retired at the cut-over; see `cs2gs-apps-nightly`) (default: the latest successful one) and replays that run's polish deltas.
 - Git Bash extracts polish archives using POSIX paths; the resulting tree is passed to native tools and Actions as a Windows path.
 - The C# checkout keeps LF line endings, like the migrated artifact, so raw-string theory arguments have matching xUnit test names.
 - It pins the tree to the commit's own C#-built SDK (`selfhost-pack-stage1.py --prepare-only`).

@@ -1,9 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <RootNamespace>Corpus.Grid10</RootNamespace>
-    <AssemblyName>G10-Async-Console</AssemblyName>
-  </PropertyGroup>
-
-</Project>

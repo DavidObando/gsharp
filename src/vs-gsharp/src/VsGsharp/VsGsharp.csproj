@@ -73,7 +73,7 @@
   </ItemGroup>
 
   <Target Name="PublishGSharpLanguageServer" BeforeTargets="PrepareForBuild">
-    <MSBuild Projects="..\..\..\LanguageServer\LanguageServer.csproj"
+    <MSBuild Projects="..\..\..\LanguageServer\LanguageServer.gsproj"
              Targets="Restore;Publish"
              Properties="Configuration=$(Configuration);PublishDir=$(MSBuildProjectDirectory)\$(LanguageServerPublishDir);SelfContained=false;UseAppHost=false" />
   </Target>

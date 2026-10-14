@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>Cs2Gs.Pipeline</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Cs2Gs.Translator/Cs2Gs.Translator.gsproj" />
+    <ProjectReference Include="../Cs2Gs.ProjectLoading/Cs2Gs.ProjectLoading.gsproj" />
+    <ProjectReference Include="../Cs2Gs.CodeModel/Cs2Gs.CodeModel.gsproj" />
+    <ProjectReference Include="../../../src/Core/Core.gsproj" />
+    <ProjectReference Include="../../../src/Formatting/GSharp.Formatting/GSharp.Formatting.gsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\..\test\Shared\GoldenFile.gs" Link="GoldenFile.cs" />
+    <Compile Include="..\..\..\test\Shared\IlVerifyFilterInFinallyRule.gs" Link="IlVerifyFilterInFinallyRule.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Cs2Gs.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,318 @@
+// <copyright file="Issue2467StaticExtensionConditionalReceiverTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package Cs2Gs.Tests
+
+import Cs2Gs.CodeModel.Ast
+import Cs2Gs.CodeModel.Printing
+import Cs2Gs.CodeModel.RoundTrip
+import Cs2Gs.Translator
+import Cs2Gs.Translator.Loading
+import System
+import System.Diagnostics
+import System.IO
+import System.Text
+import Xunit
+
+open class Issue2467StaticExtensionConditionalReceiverTests {
+    @Fact
+    func QualifiedAndBareStaticCalls_ParenthesizeConditionalAccessReceiver() {
+        let printed = TranslateAndValidate(`#nullable enable
+namespace Demo;
+
+public sealed class Box
+{
+    public string? Value { get; set; }
+}
+
+public static class Ext
+{
+    public static bool Matches(this string? value, string expected) => value == expected;
+
+    public static bool Bare(Box? box, string expected) => Matches(box?.Value, expected);
+}
+
+public sealed class C
+{
+    public bool Qualified(Box? box, string expected) => Ext.Matches(box?.Value, expected);
+}`)
+        Assert.Equal(2, CountOccurrences(printed, "(box?.Value).Matches(expected)"))
+        Assert.DoesNotContain("box?.Value.Matches(expected)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("Ext.Matches", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ComplexFirstArguments_AreGroupedBeforeReceiverCall() {
+        let printed = TranslateAndValidate(`#nullable enable
+using System.Threading.Tasks;
+namespace Demo;
+
+public static class Ext
+{
+    public static int Size(this string? value) => value?.Length ?? -1;
+}
+
+public sealed class C
+{
+    private Task<string?> GetAsync() => Task.FromResult<string?>(null);
+
+    public int Coalesce(string? left, string right) => Ext.Size(left ?? right);
+    public int Conditional(bool pickLeft, string? left, string? right) => Ext.Size(pickLeft ? left : right);
+    public int Cast(object value) => Ext.Size((string?)value);
+    public async Task<int> Awaited() => Ext.Size(await GetAsync());
+}`)
+        Assert.Contains("(left ?? right).Size()", printed, StringComparison.Ordinal)
+        Assert.Contains("(if pickLeft { left } else { right }).Size()", printed, StringComparison.Ordinal)
+        Assert.Contains("(cast[string?](value)).Size()", printed, StringComparison.Ordinal)
+        Assert.Contains("(await GetAsync()).Size()", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("value as string", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func GenericOverloadAndArgumentShapes_KeepResolvedCallIdentity() {
+        let printed = TranslateAndValidate(`#nullable enable
+namespace Demo;
+
+public sealed class Box
+{
+    public string? Value { get; set; }
+}
+
+public static class Ext
+{
+    public static T Pick<T>(this T value, T fallback = default!) => value is null ? fallback : value;
+    public static string Pick(this string? value, string fallback) => value ?? fallback;
+    public static void Flow(this string? value, ref int x, out int y, in int z)
+    {
+        x++;
+        y = z;
+    }
+
+    public static string Join(this string? value, string separator = ":", params string[] rest) =>
+        value + separator + string.Join(separator, rest);
+}
+
+public sealed class C
+{
+    public string Generic(Box? box) => Ext.Pick<string?>(box?.Value, "fallback")!;
+    public string Overload(Box? box) => Ext.Pick(box?.Value, "fallback");
+
+    public void RefKinds(Box? box, ref int x, out int y, in int z) =>
+        Ext.Flow(box?.Value, ref x, out y, in z);
+
+    public string Defaults(Box? box) => Ext.Join(box?.Value);
+    public string Params(Box? box) => Ext.Join(box?.Value, "-", "a", "b");
+}`, "G# currently rejects nil as the default for an unconstrained generic optional parameter.")
+        Assert.Contains("(box?.Value).Pick[string?](\"fallback\")", printed, StringComparison.Ordinal)
+        Assert.Contains("(box?.Value).Pick(\"fallback\")", printed, StringComparison.Ordinal)
+        // Issue #3501: an explicit C# `in` argument keeps its keyword (since
+        // #4400 gsc would also accept it without one, as C# does).
+        Assert.Contains("(box?.Value).Flow(&x, out y, in z)", printed, StringComparison.Ordinal)
+        Assert.Contains("(box?.Value).Join()", printed, StringComparison.Ordinal)
+        Assert.Contains("(box?.Value).Join(\"-\", \"a\", \"b\")", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func SourceReceiverSyntax_RemainsSourceReceiverSyntax() {
+        let printed = TranslateAndValidate(`#nullable enable
+namespace Demo;
+
+public sealed class Box
+{
+    public string? Value { get; set; }
+}
+
+public static class Ext
+{
+    public static bool Matches(this string? value, string expected) => value == expected;
+}
+
+public static class Ordinary
+{
+    public static bool Matches(string? value, string expected) => value == expected;
+}
+
+public sealed class C
+{
+    public bool Direct(string value) => value.Matches("x");
+    public bool? Conditional(Box? box) => box?.Value.Matches("x");
+    public bool NonExtension(Box? box) => Ordinary.Matches(box?.Value, "x");
+}`)
+        Assert.Contains("value.Matches(\"x\")", printed, StringComparison.Ordinal)
+        Assert.Contains("box?.Value.Matches(\"x\")", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("(box?.Value).Matches(\"x\")", printed, StringComparison.Ordinal)
+        Assert.Contains("Ordinary.Matches(box?.Value, \"x\")", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func NullAndNonNullPaths_PreserveCallsResultsAndEvaluationOrderAtRuntime() {
+        let printed = TranslateAndValidate(`#nullable enable
+using System;
+namespace Demo;
+
+public sealed class Box
+{
+    public string? Value { get; set; }
+}
+
+public static class Ext
+{
+    public static string Log = "";
+
+    public static bool Matches(this string? value, string expected)
+    {
+        Log += "M";
+        return value == expected;
+    }
+
+    public static int? LengthOrNull(this string? value)
+    {
+        Log += "N";
+        return value?.Length;
+    }
+
+    public static void Touch(this string? value)
+    {
+        Log += value is null ? "V0" : "V1";
+    }
+
+    public static string Combine(this string? value, string suffix)
+    {
+        Log += "B";
+        return (value ?? "nil") + suffix;
+    }
+
+    public static bool Bare(Box? box, string expected) => Matches(box?.Value, expected);
+}
+
+public static class C
+{
+    private static string? Receiver(Box? box)
+    {
+        Ext.Log += "R";
+        return box?.Value;
+    }
+
+    private static string Argument()
+    {
+        Ext.Log += "A";
+        return "!";
+    }
+
+    public static void Run()
+    {
+        Box? absent = null;
+        var present = new Box { Value = "x" };
+
+        Console.WriteLine(Ext.Matches(absent?.Value, "x"));
+        Console.WriteLine(Ext.Matches(present?.Value, "x"));
+        Console.WriteLine(Ext.Bare(absent, "x"));
+        Console.WriteLine(Ext.LengthOrNull(absent?.Value) is null);
+        Ext.Touch(absent?.Value);
+        Ext.Touch(present?.Value);
+        Console.WriteLine(Ext.Combine(Receiver(absent), Argument()));
+        Console.WriteLine(Ext.Log);
+    }
+}`)
+        Assert.Contains("(absent?.Value).Matches(\"x\")", printed, StringComparison.Ordinal)
+        Assert.Contains("(present?.Value).Matches(\"x\")", printed, StringComparison.Ordinal)
+        Assert.Contains("(absent?.Value).LengthOrNull()", printed, StringComparison.Ordinal)
+        Assert.Contains("(absent?.Value).Touch()", printed, StringComparison.Ordinal)
+        let output = CompileAndRun(printed, "C.Run()")
+        Assert.Equal(
+            "False${Environment.NewLine}True${Environment.NewLine}False${Environment.NewLine}True${Environment.NewLine}nil!${Environment.NewLine}MMMNV0V1RAB${Environment.NewLine}",
+            output.ReplaceLineEndings(Environment.NewLine)
+        )
+    }
+
+    shared {
+        private func CountOccurrences(text string, value string) int32 {
+            var count = 0
+            var start = 0
+            while (start = text.IndexOf(value, start, StringComparison.Ordinal)) >= 0 {
+                count++
+                start += value.Length
+            }
+            return count
+        }
+
+        private func TranslateAndValidate(source string, roundTripOnlyReason string? = nil) string {
+            let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
+            Assert.True(
+                project.BoundWithoutErrors,
+                "Snippet should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
+            )
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let unit = CSharpToGSharpTranslator().TranslateDocument(document, context)
+            Assert.DoesNotContain(
+                context.Diagnostics,
+                (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported
+            )
+            let printed = GSharpPrinter.Print(unit)
+            let result RoundTripResult? = if roundTripOnlyReason == nil {
+                TranslationTestValidation.AssertBinds(printed)
+            } else {
+                TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason)
+            }
+            Assert.True(
+                result!!.Success,
+                "Translated G# must round-trip. Errors:\n" + string.Join("\n", result!!.Errors) + `
+
+Printed:
+` + printed
+            )
+            return printed
+        }
+
+        private func CompileAndRun(printed string, callExpression string) string {
+            let compiler string? = FindCompiler()
+            Assert.True(compiler != nil, "gsc.dll must be built before running this test.")
+            let workDir = Path.Combine(AppContext.BaseDirectory, "issue-2467-e2e", Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(workDir)
+            let gsPath = Path.Combine(workDir, "Snippet.gs")
+            let dllPath = Path.Combine(workDir, "Snippet.dll")
+            File.WriteAllText(gsPath, printed + Environment.NewLine + callExpression + Environment.NewLine)
+            let (compileExit, compileOutput) = RunDotnet("\"$compiler\" /target:exe /out:\"$dllPath\" \"$gsPath\"")
+            Assert.True(
+                compileExit == 0 && !compileOutput.Contains("error", StringComparison.OrdinalIgnoreCase),
+                "gsc must compile the translated snippet. Output:\n" + compileOutput + `
+
+Translated G#:
+` + printed
+            )
+            let (runExit, output) = RunDotnet("\"$dllPath\"")
+            Assert.True(runExit == 0, "Translated snippet must run successfully. Output:\n" + output)
+            return output
+        }
+
+        private func RunDotnet(arguments string)(Exit int32, Output string) {
+            let startInfo = ProcessStartInfo("dotnet", arguments){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            }
+            using let process Process? = Process.Start(startInfo)
+            let output = StringBuilder()
+            output.Append(process!!.StandardOutput.ReadToEnd())
+            output.Append(process!!.StandardError.ReadToEnd())
+            process!!.WaitForExit()
+            return (process!!.ExitCode, output.ToString())
+        }
+
+        private func FindCompiler() string? {
+            var directory DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+            while directory != nil {
+                for configuration in[]string{"Release", "Debug"} {
+                    let candidate = Path.Combine(directory.FullName, "out", "bin", configuration, "Compiler", "gsc.dll")
+                    if File.Exists(candidate) {
+                        return candidate
+                    }
+                }
+                directory = directory.Parent
+            }
+            return nil
+        }
+    }
+}

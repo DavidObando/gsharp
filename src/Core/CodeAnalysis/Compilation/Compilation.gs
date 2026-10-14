@@ -1,0 +1,867 @@
+// <copyright file="Compilation.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Core.CodeAnalysis.Compilation
+
+import System
+import System.Collections.Generic
+import System.Collections.Immutable
+import System.Diagnostics.CodeAnalysis
+import System.IO
+import System.Linq
+import System.Threading
+import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Diagnostics
+import GSharp.Core.CodeAnalysis.Documentation
+import GSharp.Core.CodeAnalysis.Emit
+import GSharp.Core.CodeAnalysis.Lowering.Iterators
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
+import Binder = GSharp.Core.CodeAnalysis.Binding.Binder
+import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Analyzers
+import GSharp.Core.CodeAnalysis.Lowering
+import GSharp.Core.CodeAnalysis.Lowering.Async
+import System.Runtime.CompilerServices
+
+/// Chained compilation facilities.
+open class Compilation {
+    private let semanticModels ConditionalWeakTable[SyntaxTree, SemanticModel] = ConditionalWeakTable[
+        SyntaxTree,
+        SemanticModel
+    ]()
+    private var globalScope BoundGlobalScope?
+    private var boundProgram BoundProgram?
+    private var diagnosticSuppressions DiagnosticSuppressionMap?
+    private var preprocessorSymbols ImmutableHashSet[string] = ImmutableHashSet[string].Empty
+    private var assemblyName string?
+    private var debugInformation DebugInformationOptions = DebugInformationOptions()
+
+    /// Initializes a new instance of the (cref:Compilation) class.
+    /// @param syntaxTrees The syntax trees.
+    convenience init(syntaxTrees ...SyntaxTree) {
+        init(nil, syntaxTrees)
+    }
+
+    /// Initializes a new instance of the (cref:Compilation) class with
+    /// an explicit reference resolver.
+    /// @param references The reference resolver to use for imported CLR type lookups.
+    /// @param syntaxTrees The syntax trees.
+    init(references ReferenceResolver?, syntaxTrees ...SyntaxTree) {
+        SyntaxTrees = syntaxTrees.ToImmutableArray()
+        References = references
+        ImplicitSystemImport = true
+        EmbeddedResources = ImmutableArray[(Name string, Data[]uint8, IsPublic bool)].Empty
+        debugInformation = CloneDebugInformation(nil)
+    }
+
+    /// Gets the syntax trees.
+    prop SyntaxTrees ImmutableArray[SyntaxTree] {
+        get;
+    }
+
+    /// Gets the reference resolver used to look up imported CLR types.
+    prop References ReferenceResolver? {
+        get;
+    }
+
+    /// Gets or sets the managed resources embedded in the runtime assembly.
+    prop EmbeddedResources ImmutableArray[(Name string, Data[]uint8, IsPublic bool)]
+
+    /// Gets or sets a value indicating whether an implicit `import System`
+    /// should be seeded before user imports are processed. Defaults to
+    /// `true`.
+    prop ImplicitSystemImport bool
+
+    /// Gets or sets how this compilation reads nullability-<em>oblivious</em>
+    /// imported reference positions (ADR-0186, `--nullability=<mode>`).
+    /// <b>Defaults to <see cref="NullabilityMode.PlatformTypes" /> since
+    /// ADR-0186 step 3</b> — an oblivious imported reference position is the
+    /// platform type `T!`. (cref:NullabilityMode.Enabled) selects
+    /// ADR-0136's older `T?` reading and stays available.
+    /// @remarks The default is read from `NullabilityOptions.DefaultMode`, which
+    /// the `GSHARP_NULLABILITY` environment variable can set back to
+    /// (cref:NullabilityMode.Enabled). That override exists so the
+    /// full test suite can be run <em>both</em> ways from one tree, which is
+    /// how the flip's before/after was measured. An embedder that sets this
+    /// property always wins over it.
+    ///
+    /// The mode is installed as an ambient scope around binding and emit
+    /// ((cref:NullabilityOptions)) because the metadata reader that
+    /// consults it, `ClrNullability`, is a static leaf with no
+    /// (cref:Compilation) in reach. Note that the interning caches in
+    /// the `Symbols` namespace are process-wide: two compilations that
+    /// disagree about this mode in one process should not share a
+    /// (cref:ReferenceResolver).
+    private var _nullability NullabilityMode = NullabilityOptions.DefaultMode
+
+    prop Nullability NullabilityMode {
+        get {
+            return _nullability
+        }
+        set {
+            _nullability = value
+        }
+    }
+
+    /// Gets or sets a value indicating whether ADR-0186 §4's runtime nil check
+    /// is inserted wherever a platform value `T!` is coerced into a
+    /// non-null reference destination. Defaults to `true`.
+    /// @remarks Only observable under (cref:NullabilityMode.PlatformTypes) —
+    /// nothing constructs a `PlatformTypeSymbol` otherwise, so no such
+    /// coercion exists to check. Turning it off
+    /// (`--platform-nil-checks=off`) is a measurement and escape-hatch
+    /// switch and is <b>strictly weaker than either the old or the new
+    /// model</b>, not a supported mode: today many of the silenced sites are
+    /// compile errors, and with checks off they are neither an error nor a
+    /// check.
+    private var _platformNilChecks bool = true
+
+    prop PlatformNilChecks bool {
+        get {
+            return _platformNilChecks
+        }
+        set {
+            _platformNilChecks = value
+        }
+    }
+
+    /// Gets or sets a value indicating whether this compilation produces a
+    /// library (a `.dll` with no entry point) as opposed to an
+    /// executable. When `true`, top-level statements are an
+    /// error (ADR-0066 deferred decision D4 — mirrors C#'s CS8805), since
+    /// the synthesized `<Main>$` would never run from a library
+    /// assembly. Defaults to `false`.
+    private var _isLibrary bool = false
+
+    prop IsLibrary bool {
+        get {
+            return _isLibrary
+        }
+        set {
+            _isLibrary = value
+        }
+    }
+
+    /// Gets or sets a value indicating whether emitted runtime assemblies
+    /// allow JIT optimization. Defaults to `true`.
+    private var _optimize bool = true
+
+    prop Optimize bool {
+        get {
+            return _optimize
+        }
+        set {
+            _optimize = value
+        }
+    }
+
+    /// Gets or sets the active preprocessor symbol set used by
+    /// `[Conditional("SYMBOL")]` call-site elision (ADR-0047 §6 /
+    /// issue #176). A call to a function marked
+    /// `[Conditional("SYMBOL")]` is elided when *none* of the named
+    /// symbols is in this set; if any named symbol is present, the call is
+    /// emitted normally. Defaults to (cref:ImmutableHashSet{T}.Empty)
+    /// — equivalent to "no preprocessor symbols defined" — so
+    /// conditional methods are elided by default unless the embedder opts
+    /// in. Setting `null` is normalised to the empty set.
+    @AllowNull
+    prop PreprocessorSymbols ImmutableHashSet[string]? {
+        get -> preprocessorSymbols
+        set -> preprocessorSymbols = value ?? ImmutableHashSet[string].Empty
+    }
+
+    /// Gets or sets the PDB-related emit options. Defaults to a fresh
+    /// (cref:DebugInformationOptions) instance with
+    /// (cref:DebugInformationOptions.Format) set to
+    /// (cref:DebugInformationFormat.None), so callers that do not
+    /// opt in produce bit-for-bit identical PE output. Setting
+    /// `null` is normalised to a fresh default instance.
+    @AllowNull
+    prop DebugInformation DebugInformationOptions? {
+        get -> debugInformation
+        set -> debugInformation = value ?? DebugInformationOptions()
+    }
+
+    /// Gets or sets a value indicating whether public source symbols missing
+    /// documentation comments should produce GS0228 diagnostics during emit.
+    /// Defaults to `false`.
+    prop WarnOnMissingDocumentation bool
+
+    /// Gets or sets the optional (cref:ILogger) instance used for
+    /// host-level diagnostic logging. Defaults to (cref:NullLogger)
+    /// so there is zero overhead when the host does not configure one.
+    private var _logger ILogger = NullLogger.Instance
+
+    prop Logger ILogger {
+        get {
+            return _logger
+        }
+        set {
+            _logger = value
+        }
+    }
+
+    /// Gets or sets the optional per-project bound-body cache (ADR-0105
+    /// Phase 1). When set, (cref:BoundProgram) threads it through
+    /// (cref:Binder.BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache))
+    /// so unchanged member bodies can be reused across compilations <em>when
+    /// reuse is provably sound</em> (see (cref:BoundBodyCache)). The
+    /// cache is owned externally (by the language server's per-project
+    /// `ProjectState`) and lives across the immutable, per-edit
+    /// (cref:Compilation) instances; it never changes emitted IL or
+    /// diagnostics relative to the full-rebuild path. Defaults to
+    /// `null`, which is exactly the historical behavior.
+    prop BodyCache BoundBodyCache?
+
+    /// Gets or sets a pre-bound (cref:BoundGlobalScope) to reuse instead
+    /// of re-binding from the syntax trees (ADR-0105 Phase 2). The language
+    /// server sets this when a single-file, body-only edit lets the previous
+    /// compilation's global scope (and therefore every symbol instance) be
+    /// reused — the prerequisite for the (cref:BoundBodyCache)'s
+    /// symbol-identity soundness gate to hit and for the emitter, which keys
+    /// members by reference, to remain correct. When set, (cref:GlobalScope)
+    /// returns it verbatim instead of re-binding from the syntax trees.
+    /// The edited file's symbols are expected to have been re-pointed at the new
+    /// syntax via (cref:IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit)
+    /// before this is set. Defaults to `null` (full rebuild).
+    prop ReusedGlobalScope BoundGlobalScope?
+
+    /// Gets or sets the set of syntax trees whose member bodies must be re-bound
+    /// from source rather than served from the (cref:BoundBodyCache)
+    /// (ADR-0105 Phase 2). For a body-only edit this is the single re-parsed
+    /// file: its unchanged-but-shifted members would otherwise cache-hit and
+    /// return bodies bound at stale spans, so they are forced to rebind (which
+    /// then refreshes their cached entry). Unchanged files are absent and hit
+    /// the cache. Defaults to `null` (no forced re-bind).
+    prop DirtyBodyTrees ImmutableHashSet[SyntaxTree]?
+
+    /// Gets or sets the assembly-identity override (e.g. from MSBuild's
+    /// `AssemblyName` or the SDK). Setting this immediately pushes the
+    /// value onto (cref:References)'s
+    /// (cref:ReferenceResolver.CurrentAssemblyName) so binding-time
+    /// internal-visibility checks ((cref:Symbols.ImportedAssemblySemantics.GrantsInternalAccessTo))
+    /// see the correct consumer name regardless of whether the caller reads
+    /// (cref:Diagnostics)/(cref:GlobalScope) before or after
+    /// calling `Emit`. Previously this was only set inside `Emit`,
+    /// so any earlier access to the lazy (cref:GlobalScope) (which
+    /// caches per-consumer-assembly visibility, see
+    /// `ImportedTypeSymbol.AggregateCache`) would freeze visibility with
+    /// an empty assembly name. Callers that know the target assembly name
+    /// up front (the gsc CLI, the language server) should set this before
+    /// touching (cref:GlobalScope) or (cref:Diagnostics).
+    prop AssemblyName string? {
+        get -> assemblyName
+        set {
+            assemblyName = value
+            PrepareReferencesForBinding(value)
+        }
+    }
+
+    /// Gets or sets the interactive submission options (ADR-0156 Phase 2).
+    /// When set, the compilation binds as one REPL submission: prior
+    /// submissions' functions, globals, and types resolve as metadata-backed
+    /// imports over their emitted assemblies, syntax trees without a
+    /// `package` declaration fall into the submission's own package,
+    /// session imports are replayed, and the trailing expression value is
+    /// captured into the synthesized
+    /// (cref:SubmissionImports.ResultFieldName) global for the cell
+    /// echo. Defaults to `null` (ordinary compilation).
+    prop Submission SubmissionBindingOptions?
+
+    /// Gets the ADR-0175 `@SuppressDiagnostic` scopes declared in this
+    /// compilation's syntax trees, built once. The analyzer driver filters
+    /// analyzer diagnostics through it, and
+    /// (cref:ApplySourceSuppressions) filters the compiler's own.
+    prop DiagnosticSuppressions DiagnosticSuppressionMap {
+        get {
+            if diagnosticSuppressions == nil {
+                Interlocked.CompareExchange(&diagnosticSuppressions, DiagnosticSuppressionMap.Build(SyntaxTrees), nil)
+            }
+            return diagnosticSuppressions!!
+        }
+    }
+
+    /// Gets the global scope.
+    prop GlobalScope BoundGlobalScope {
+        get {
+            if globalScope == nil {
+                // Belt-and-braces: make sure References sees the current
+                // assembly name before the (possibly cached, see
+                // ImportedTypeSymbol.AggregateCache) binding pass runs, even
+                // if the caller only ever set AssemblyName and never called
+                // Emit.
+                PrepareReferencesForBinding(assemblyName)
+                // ADR-0186: metadata import happens under this bind, and the
+                // reader that decides what an oblivious byte means is a static
+                // leaf with no Compilation in reach.
+                using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
+                let globalScope = ReusedGlobalScope ?? Binder.BindGlobalScope(
+                    previous: nil,
+                    SyntaxTrees,
+                    References,
+                    ImplicitSystemImport,
+                    PreprocessorSymbols,
+                    IsLibrary,
+                    Submission
+                )
+                Interlocked.CompareExchange[BoundGlobalScope?](&this.globalScope, globalScope, nil)
+            }
+            return globalScope!!
+        }
+    }
+
+    /// Gets the fully-bound program — all function/method bodies and top-level
+    /// statements, plus any diagnostics surfaced during binding.
+    /// @remarks Like (cref:GlobalScope) this is lazily computed and cached on
+    /// the compilation. (cref:BoundProgram) is a pure function of
+    /// (cref:GlobalScope) and (cref:References); because both
+    /// are immutable on a given (cref:Compilation) instance, the cache
+    /// invalidates naturally whenever a new (cref:Compilation) is
+    /// constructed (e.g. when the language server replaces its cached
+    /// compilation after a file edit). Hot paths such as the language server's
+    /// per-keystroke diagnostics, hover, definition, and semantic-token
+    /// requests should reuse this cached instance rather than re-invoking
+    /// (cref:Binder.BindProgram(BoundGlobalScope, Symbols.ReferenceResolver)), which can take hundreds of
+    /// milliseconds on projects with large reference graphs.
+    prop BoundProgram BoundProgram {
+        get {
+            if boundProgram == nil {
+                // ADR-0186: body binding reads imported member signatures too.
+                using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
+                let bp = Binder.BindProgram(GlobalScope, References, BodyCache, DirtyBodyTrees)
+                Interlocked.CompareExchange[BoundProgram?](&this.boundProgram, bp, nil)
+            }
+            return boundProgram!!
+        }
+    }
+
+    /// ADR-0175 amendment (issue #4422): removes the compiler warnings that a
+    /// source `@SuppressDiagnostic("GS####")` scope covers. Every
+    /// (cref:EmitResult) this compilation produces is already filtered;
+    /// a host that assembles diagnostics from (cref:GlobalScope) and
+    /// (cref:BoundProgram) itself (the language server) calls this so it
+    /// reports exactly what gsc does. Errors are never suppressed.
+    /// @param diagnostics Diagnostics produced for this compilation.
+    /// @returns The diagnostics that remain visible.
+    func ApplySourceSuppressions(diagnostics ImmutableArray[Diagnostic]) ImmutableArray[
+        Diagnostic
+    ] -> DiagnosticSuppressions.FilterCompilerDiagnostics(diagnostics)
+
+    /// Returns a (cref:SemanticModel) answering semantic queries for
+    /// [`syntaxTree`](paramref) (ADR-0169). Models are cached per tree;
+    /// the first query forces (cref:BoundProgram) and builds a lazy
+    /// syntax→bound index, so repeated queries are dictionary lookups.
+    /// @param syntaxTree A tree belonging to this compilation.
+    /// @returns The semantic model for the tree.
+    func GetSemanticModel(syntaxTree SyntaxTree) SemanticModel {
+        if !SyntaxTrees.Contains(syntaxTree) {
+            throw ArgumentException("The syntax tree is not part of this compilation.", "syntaxTree")
+        }
+        return semanticModels.GetValue(syntaxTree, (tree SyntaxTree) -> SemanticModel(this, tree))
+    }
+
+    /// Emits a tree for this program to the specified writer.
+    /// @param writer The writer.
+    func EmitTree(writer TextWriter) {
+        let program = BoundProgram
+        if program.Statement.Statements.Any() {
+            BoundNodePrinter.WriteTo(program.Statement, writer)
+        } else {
+            for functionBody in program.Functions {
+                if !GlobalScope.Functions.Contains(functionBody.Key) {
+                    continue
+                }
+                functionBody.Key.WriteTo(writer)
+                BoundNodePrinter.WriteTo(functionBody.Value, writer)
+            }
+        }
+    }
+
+    /// Compiles the current syntax tree into a compilation result. The
+    /// resulting assembly is written to `{PackageName}.dll` in the
+    /// current working directory.
+    /// @returns An emit result.
+    func Emit() EmitResult {
+        // ADR-0186: see the stream-based overload.
+        using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
+        let parseDiagnostics = SyntaxTrees.SelectMany((st SyntaxTree) -> st.Diagnostics.AsEnumerable())
+        let syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray()
+        var program = BoundProgram
+        let allDiagnostics = syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray()
+        if allDiagnostics.Any((d Diagnostic) -> d.IsError) {
+            return CreateEmitResult(success: false, allDiagnostics)
+        }
+        let documentationDiagnostics = DiagnosticBag()
+        DocumentationValidator.Validate(
+            SyntaxTrees,
+            program.Functions.Keys.ToImmutableArray(),
+            program.Structs,
+            documentationDiagnostics,
+            WarnOnMissingDocumentation
+        )
+        // ADR-0055 / issue #368: lower interpolated strings to the
+        // DefaultInterpolatedStringHandler pattern on the emit path only, before
+        // the async/iterator rewriters and IL emission. The interpreter path is
+        // untouched and renders the interpolation node directly.
+        program = InterpolatedStringHandlerLowerer.Lower(program, References ?? ReferenceResolver.Default())
+        // Issue #3730: the lowering above resolves the handler surface from the
+        // compilation's reference closure. Keep its targeted GS0545 safety gate
+        // for an unusable resolved handler shape; a missing handler now takes
+        // #3769's target-compatible String.Format fallback.
+        // Deliberately scoped to GS0545: GS0519's surfacing is long-established
+        // and tested, and widening this to "any error" would change it.
+        if program.Diagnostics.Any(
+            (d Diagnostic) -> d.Id == DiagnosticDescriptors.InterpolatedStringHandlerUnavailable.Id
+        ) {
+            return CreateEmitResult(success: false, syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray())
+        }
+        // Issue #452: spill side-effecting sub-expressions that sit in
+        // emit-pipeline contexts which historically re-emitted them more
+        // than once (compound index / property assignments, etc.). Run
+        // after interpolated-string lowering and before the async /
+        // iterator state machine rewriters so the spilled temps
+        // participate in hoist-set computation.
+        program = InitializationPlanner.Prepare(program)
+        program = SideEffectSpiller.Lower(program)
+        // Issue #523: hoist captured locals/parameters into per-variable
+        // box classes so function literals see writes to the variable cell
+        // (Go/C# closure semantics). On the emit path, this must run after
+        // side-effect spilling and before the async / iterator state-machine
+        // lowerers so they see boxed captures rather than snapshots.
+        // Issue #2037: thread the MLC cross-reflection-context projector so
+        // box classes hoisting an imported constructed generic over an
+        // enclosing type parameter don't erase it under cs2gs.
+        program = CaptureBoxingRewriter.Lower(
+            program,
+            (References ?? ReferenceResolver.Default()).MapClrTypeToReferences
+        )
+        program = ManagedReferenceLowerer.Lower(program, References ?? ReferenceResolver.Default())
+        // Issue #2130: after capture-boxing has introduced the closure cells
+        // expression trees must reference, rewrite lambda-to-expression-tree
+        // conversions into ordinary bound calls to System.Linq.Expressions
+        // factory methods.
+        program = ExpressionTreeLowerer.Lower(program)
+        let (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(
+            program,
+            References ?? ReferenceResolver.Default()
+        )
+        if lowerDiagnostics.Any((d Diagnostic) -> d.IsError) {
+            return CreateEmitResult(success: false, lowerDiagnostics)
+        }
+        program = loweredProgram
+        let allWarnings = syntaxDiagnostics
+            .Concat(program.Diagnostics)
+            .Concat(documentationDiagnostics)
+            .Concat(lowerDiagnostics)
+            .Where((d Diagnostic) -> !d.IsError)
+            .ToImmutableArray()
+        try {
+            using let stream = File.Create(program.PackageName + ".dll")
+            EmitAssembly(
+                program,
+                stream,
+                References,
+                asyncRewriteResult: lowered.AsyncRewriteResult,
+                iteratorRewriteResult: lowered.IteratorRewriteResult,
+                asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult,
+                debugInformation: DebugInformation,
+                pdbStream: nil,
+                embeddedResources: EmbeddedResources
+            )
+        } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+            if Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != nil {
+                Console.Error.WriteLine(ex.ToString())
+            }
+            let diagnostic = CreateInternalErrorDiagnostic(ex)
+            let combined = allWarnings.Add(diagnostic)
+            return CreateEmitResult(success: false, combined)
+        }
+        return CreateEmitResult(success: true, diagnostics: allWarnings)
+    }
+
+    /// Compiles the current syntax tree and writes the resulting assembly to
+    /// [`peStream`](paramref). Useful for tests that don't want to touch
+    /// the filesystem.
+    /// @param peStream Destination stream for the PE bytes.
+    /// @returns An emit result.
+    func Emit(peStream Stream) EmitResult -> Emit(
+        peStream,
+        pdbStream: nil,
+        refStream: nil,
+        docStream: nil,
+        assemblyName: nil
+    )
+
+    /// Compiles the current syntax tree and writes the resulting assembly to
+    /// [`peStream`](paramref), optionally writing a Portable PDB stream
+    /// to [`pdbStream`](paramref) when (cref:DebugInformation)
+    /// requests a sidecar format. When [`refStream`](paramref) is
+    /// supplied, also writes a metadata-only sibling assembly to it.
+    /// @param peStream Destination stream for the PE bytes. May be `null` when only a reference assembly is
+    /// desired.
+    /// @param pdbStream Destination stream for the Portable PDB sidecar. Only consumed when
+    /// (cref:DebugInformation)'s (cref:DebugInformationOptions.Format) is
+    /// (cref:DebugInformationFormat.Portable). May be `null` in all other cases.
+    /// @param refStream Optional destination stream for the metadata-only reference assembly.
+    /// @param assemblyName Optional override for the assembly identity. When null, the entry-point package
+    /// name is used.
+    /// @param assemblyVersion Optional informational version string stamped as
+    /// `AssemblyInformationalVersionAttribute`.
+    /// @returns An emit result.
+    func Emit(
+        peStream Stream,
+        pdbStream Stream?,
+        refStream Stream?,
+        assemblyName string? = nil,
+        assemblyVersion string? = nil
+    ) EmitResult -> Emit(peStream, pdbStream, refStream, docStream: nil, assemblyName, assemblyVersion)
+
+    /// Compiles the current syntax tree and writes the resulting assembly to
+    /// [`peStream`](paramref), optionally writing a Portable PDB stream
+    /// to [`pdbStream`](paramref), a metadata-only sibling assembly to
+    /// [`refStream`](paramref), and an XML documentation file to
+    /// [`docStream`](paramref).
+    /// @param peStream Destination stream for the PE bytes. May be `null` when only non-PE sidecars are
+    /// desired.
+    /// @param pdbStream Destination stream for the Portable PDB sidecar. Only consumed when
+    /// (cref:DebugInformation)'s (cref:DebugInformationOptions.Format) is
+    /// (cref:DebugInformationFormat.Portable).
+    /// @param refStream Optional destination stream for the metadata-only reference assembly.
+    /// @param docStream Optional destination stream for the XML documentation file.
+    /// @param assemblyName Optional override for the assembly identity. When null, the entry-point package
+    /// name is used.
+    /// @param assemblyVersion Optional informational version string stamped as
+    /// `AssemblyInformationalVersionAttribute`.
+    /// @param targetFrameworkMoniker Optional long target framework moniker stamped as
+    /// `TargetFrameworkAttribute`.
+    /// @returns An emit result.
+    func Emit(
+        peStream Stream?,
+        pdbStream Stream?,
+        refStream Stream?,
+        docStream Stream?,
+        assemblyName string? = nil,
+        assemblyVersion string? = nil,
+        targetFrameworkMoniker string? = nil
+    ) EmitResult {
+        AssemblyName = assemblyName ?? AssemblyName
+        // ADR-0186: emit re-reads declaration nullability through
+        // `NullableFlagsBuilder`, so the mode must still be installed here and
+        // not only around the lazy binding properties above.
+        using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
+        let parseDiagnostics = SyntaxTrees.SelectMany((st SyntaxTree) -> st.Diagnostics.AsEnumerable())
+        let syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray()
+        var program = BoundProgram
+        let allDiagnostics = syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray()
+        if allDiagnostics.Any((d Diagnostic) -> d.IsError) {
+            return CreateEmitResult(success: false, allDiagnostics)
+        }
+        let documentationDiagnostics = DiagnosticBag()
+        DocumentationValidator.Validate(
+            SyntaxTrees,
+            program.Functions.Keys.ToImmutableArray(),
+            program.Structs,
+            documentationDiagnostics,
+            WarnOnMissingDocumentation
+        )
+        // ADR-0055 / issue #368: lower interpolated strings to the
+        // DefaultInterpolatedStringHandler pattern on the emit path only, before
+        // the async/iterator rewriters and IL emission. The interpreter path is
+        // untouched and renders the interpolation node directly.
+        program = InterpolatedStringHandlerLowerer.Lower(program, References ?? ReferenceResolver.Default())
+        // Issue #3730: the lowering above resolves the handler surface from the
+        // compilation's reference closure. Keep its targeted GS0545 safety gate
+        // for an unusable resolved handler shape; a missing handler now takes
+        // #3769's target-compatible String.Format fallback.
+        // Deliberately scoped to GS0545: GS0519's surfacing is long-established
+        // and tested, and widening this to "any error" would change it.
+        if program.Diagnostics.Any(
+            (d Diagnostic) -> d.Id == DiagnosticDescriptors.InterpolatedStringHandlerUnavailable.Id
+        ) {
+            return CreateEmitResult(success: false, syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray())
+        }
+        // Issue #452: spill side-effecting sub-expressions that sit in
+        // emit-pipeline contexts which historically re-emitted them more
+        // than once (compound index / property assignments, etc.). Run
+        // after interpolated-string lowering and before the async /
+        // iterator state machine rewriters so the spilled temps
+        // participate in hoist-set computation.
+        program = InitializationPlanner.Prepare(program)
+        program = SideEffectSpiller.Lower(program)
+        // Issue #523: hoist captured locals/parameters into per-variable
+        // box classes so function literals see writes to the variable cell
+        // (Go/C# closure semantics). Must run after side-effect spilling
+        // and before the async / iterator state-machine lowerers so they
+        // see the boxed captures rather than the snapshot-by-value pattern.
+        // Issue #2037: thread the MLC cross-reflection-context projector so
+        // box classes hoisting an imported constructed generic over an
+        // enclosing type parameter don't erase it under cs2gs.
+        program = CaptureBoxingRewriter.Lower(
+            program,
+            (References ?? ReferenceResolver.Default()).MapClrTypeToReferences
+        )
+        program = ManagedReferenceLowerer.Lower(program, References ?? ReferenceResolver.Default())
+        // Issue #2130: after capture-boxing has introduced the closure cells
+        // expression trees must reference, rewrite lambda-to-expression-tree
+        // conversions into ordinary bound calls to System.Linq.Expressions
+        // factory methods.
+        program = ExpressionTreeLowerer.Lower(program)
+        let (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(
+            program,
+            References ?? ReferenceResolver.Default()
+        )
+        if lowerDiagnostics.Any((d Diagnostic) -> d.IsError) {
+            return CreateEmitResult(success: false, lowerDiagnostics)
+        }
+        program = loweredProgram
+        let allWarnings = syntaxDiagnostics
+            .Concat(program.Diagnostics)
+            .Concat(documentationDiagnostics)
+            .Concat(lowerDiagnostics)
+            .Where((d Diagnostic) -> !d.IsError)
+            .ToImmutableArray()
+        try {
+            if peStream != nil {
+                EmitAssembly(
+                    program,
+                    peStream,
+                    References,
+                    assemblyName,
+                    assemblyVersion,
+                    metadataOnly: false,
+                    asyncRewriteResult: lowered.AsyncRewriteResult,
+                    iteratorRewriteResult: lowered.IteratorRewriteResult,
+                    asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult,
+                    debugInformation: DebugInformation,
+                    pdbStream: pdbStream,
+                    targetFrameworkMoniker: targetFrameworkMoniker,
+                    embeddedResources: EmbeddedResources
+                )
+            }
+            if refStream != nil {
+                // Reference assemblies never carry debug info — pass an explicit
+                // None override so we don't accidentally write a CodeView entry
+                // pointing at a sidecar that doesn't describe this PE.
+                EmitAssembly(
+                    program,
+                    refStream,
+                    References,
+                    assemblyName,
+                    assemblyVersion,
+                    metadataOnly: true,
+                    asyncRewriteResult: lowered.AsyncRewriteResult,
+                    iteratorRewriteResult: lowered.IteratorRewriteResult,
+                    asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult,
+                    debugInformation: nil,
+                    pdbStream: nil,
+                    targetFrameworkMoniker: targetFrameworkMoniker
+                )
+            }
+            if docStream != nil {
+                DocumentationFileEmitter.Emit(docStream, assemblyName ?? program.PackageName, program)
+            }
+        } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+            // 6.2 SilentEmitFailure invariant: widen the catch to all non-fatal
+            // exceptions so that any emit-time failure (regardless of exception
+            // type) produces a structured GS9998 diagnostic anchored at the
+            // offending source construct. Previously this only caught
+            // NotSupportedException and InvalidOperationException (#519).
+            if Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != nil {
+                Console.Error.WriteLine(ex.ToString())
+            }
+            let diagnostic = CreateInternalErrorDiagnostic(ex)
+            let combined = allWarnings.Add(diagnostic)
+            return CreateEmitResult(success: false, combined)
+        }
+        return CreateEmitResult(success: true, diagnostics: allWarnings)
+    }
+
+    /// Compiles the current syntax tree and writes the resulting assembly to
+    /// [`peStream`](paramref). When [`refStream`](paramref) is
+    /// supplied, also writes a metadata-only sibling assembly (a reference
+    /// assembly) to it.
+    /// @param peStream Destination stream for the PE bytes. May be `null` when only a reference assembly is
+    /// desired.
+    /// @param refStream Optional destination stream for the metadata-only reference assembly.
+    /// @returns An emit result.
+    func Emit(peStream Stream, refStream Stream?) EmitResult -> Emit(
+        peStream,
+        pdbStream: nil,
+        refStream,
+        docStream: nil,
+        assemblyName: nil
+    )
+
+    private func EmitAssembly(
+        program BoundProgram,
+        peStream Stream,
+        references ReferenceResolver?,
+        assemblyName string? = nil,
+        assemblyVersion string? = nil,
+        metadataOnly bool = false,
+        asyncRewriteResult AsyncStateMachineRewriteResult? = nil,
+        iteratorRewriteResult IteratorRewriteResult? = nil,
+        asyncIteratorRewriteResult AsyncIteratorRewriteResult? = nil,
+        debugInformation DebugInformationOptions? = nil,
+        pdbStream Stream? = nil,
+        targetFrameworkMoniker string? = nil,
+        embeddedResources IReadOnlyList[(Name string, Data[]uint8, IsPublic bool)]? = nil
+    ) {
+        ReflectionMetadataEmitter.Emit(
+            program,
+            peStream,
+            references,
+            assemblyName,
+            metadataOnly,
+            asyncRewriteResult,
+            iteratorRewriteResult,
+            asyncIteratorRewriteResult,
+            debugInformation,
+            pdbStream,
+            assemblyVersion,
+            targetFrameworkMoniker,
+            embeddedResources,
+            Optimize
+        )
+    }
+
+    private func CreateEmitResult(success bool, diagnostics ImmutableArray[Diagnostic]) EmitResult -> EmitResult(
+        success,
+        ApplySourceSuppressions(diagnostics)
+    )
+
+    private func PrepareReferencesForBinding(assemblyName string?) {
+        if References == nil {
+            return
+        }
+        let references = References!!
+        this.References.CurrentAssemblyName = assemblyName ?? references.CurrentAssemblyName
+    }
+
+    /// Bundle holding the results of the lowering pipeline passes.
+    private class LoweredProgram {
+        init(
+            asyncRewriteResult AsyncStateMachineRewriteResult,
+            iteratorRewriteResult IteratorRewriteResult,
+            asyncIteratorRewriteResult AsyncIteratorRewriteResult
+        ) {
+            AsyncRewriteResult = asyncRewriteResult
+            IteratorRewriteResult = iteratorRewriteResult
+            AsyncIteratorRewriteResult = asyncIteratorRewriteResult
+        }
+
+        prop AsyncRewriteResult AsyncStateMachineRewriteResult {
+            get;
+        }
+
+        prop IteratorRewriteResult IteratorRewriteResult {
+            get;
+        }
+
+        prop AsyncIteratorRewriteResult AsyncIteratorRewriteResult {
+            get;
+        }
+    }
+
+    shared {
+        /// Creates a GS9998 diagnostic for an unexpected compiler exception.
+        /// @param ex The exception that escaped the compiler pipeline.
+        /// @returns A diagnostic anchored at an (cref:EmitDiagnosticException) source
+        /// node when available; otherwise a location-less diagnostic.
+        internal func CreateInternalErrorDiagnostic(ex Exception) Diagnostic {
+            ArgumentNullException.ThrowIfNull(ex, paramName: "ex")
+            var anchoredException EmitDiagnosticException? = nil
+            var rootEx = ex
+            var current Exception? = ex
+            while current != nil {
+                rootEx = current
+                if current is EmitDiagnosticException{Anchor: not nil} emitException {
+                    anchoredException = emitException
+                }
+                current = current.InnerException
+            }
+            let anchor SyntaxNode? = anchoredException?.Anchor
+            let location = if anchor == nil {
+                default(TextLocation)
+            } else {
+                TextLocation(anchor.SyntaxTree.Text, anchor.Span)
+            }
+            // Issue #3755: an emit failure that already knows which diagnostic it
+            // is — today only GS0546, "the referenced target framework does not
+            // declare a member this construct lowers onto" — reports as itself.
+            // Dressing a property of the user's reference closure up as GS9998
+            // ("internal compiler error") would tell the user to file a bug when
+            // the actionable fix is to reference the framework or package that
+            // declares the member. The scan walks the whole inner chain because
+            // the emit pipeline wraps failures as it unwinds.
+            var withId Exception? = ex
+            while withId != nil {
+                if withId is EmitDiagnosticException{DiagnosticId: {} id} identified {
+                    let identifiedLocation = if identified.Anchor == nil {
+                        location
+                    } else {
+                        TextLocation(identified.Anchor.SyntaxTree.Text, identified.Anchor.Span)
+                    }
+                    return Diagnostic(identifiedLocation, id, DiagnosticSeverity.Error, identified.Message)
+                }
+                withId = withId.InnerException
+            }
+            let typeName = rootEx.GetType().Name
+            let message = "$typeName: ${rootEx.Message}"
+            return Diagnostic(location, "GS9998", DiagnosticSeverity.Error, message)
+        }
+
+        /// The canonical async/iterator lowering pipeline. Runs all rewriter
+        /// passes in the correct order and gates unsupported constructs via
+        /// (cref:Lowering.Async.AsyncEmitPrecheck).
+        /// @remarks Ordering: the rewriters run first because
+        /// (cref:Lowering.Async.AsyncEmitPrecheck.Check) inspects
+        /// (cref:FunctionSymbol.StateMachineType) which is populated by
+        /// (cref:Lowering.Async.AsyncStateMachineRewriter.Rewrite). The
+        /// precheck cannot move before the rewriters without losing the ability
+        /// to distinguish successfully-lowered async methods from those that
+        /// failed builder resolution.
+        private func LowerForEmit(program BoundProgram, references ReferenceResolver?)(
+            Lowered LoweredProgram,
+            Program BoundProgram,
+            Diagnostics ImmutableArray[Diagnostic]
+        ) {
+            var program = program
+            // Run the rewriter passes.
+            // Issue #1467: route base.M() calls inside async/iterator bodies through
+            // synthesized non-virtual forwarders BEFORE the state-machine rewriters,
+            // so the hoisted `<>4__this` receiver never reaches a non-virtual base
+            // call (ilverify ThisMismatch).
+            program = BaseCallForwarderRewriter.Rewrite(program)
+            let asyncRewriteResult = AsyncStateMachineRewriter.Rewrite(program, references)
+            let iteratorRewriteResult = IteratorRewriter.Rewrite(program)
+            let asyncIteratorRewriteResult = AsyncIteratorRewriter.Rewrite(program, references)
+            // Gate: fail fast on unsupported async constructs after lowering.
+            // This runs after the rewriters because it inspects StateMachineType
+            // which is set during AsyncStateMachineRewriter.Rewrite.
+            // Binder errors return before lowering; only lowerer-added errors can reach this gate.
+            let diagnostics = program
+                .Diagnostics
+                .Where((d Diagnostic) -> d.IsError)
+                .Concat(AsyncEmitPrecheck.Check(program))
+                .ToImmutableArray()
+            let lowered = LoweredProgram(asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult)
+            return (lowered, program, diagnostics)
+        }
+
+        private func CloneDebugInformation(source DebugInformationOptions?) DebugInformationOptions {
+            if source == nil {
+                return DebugInformationOptions()
+            }
+            return DebugInformationOptions{
+                Format: source.Format,
+                PdbFilePath: source.PdbFilePath,
+                SourceLinkFilePath: source.SourceLinkFilePath,
+                Deterministic: source.Deterministic
+            }
+        }
+    }
+}

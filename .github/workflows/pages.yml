@@ -18,7 +18,7 @@ on:
       - 'src/Compiler/**'
       - 'src/Repl/**'
       - 'test/Compiler.Tests/LanguageConformance/**'
-      - 'test/Shared/GoldenFile.cs'
+      - 'test/Shared/GoldenFile.gs'
       - 'build/generate-quality-dashboard.py'
       - 'global.json'
       - '.github/workflows/pages.yml'
@@ -31,7 +31,7 @@ on:
       - 'src/Compiler/**'
       - 'src/Repl/**'
       - 'test/Compiler.Tests/LanguageConformance/**'
-      - 'test/Shared/GoldenFile.cs'
+      - 'test/Shared/GoldenFile.gs'
       - 'build/generate-quality-dashboard.py'
       - 'global.json'
       - '.github/workflows/pages.yml'
@@ -65,10 +65,10 @@ jobs:
           global-json-file: global.json
       - name: Restore compiler
         if: github.event_name != 'pull_request'
-        run: dotnet restore src/Compiler/Compiler.csproj --locked-mode
+        run: dotnet restore src/Compiler/Compiler.gsproj --locked-mode
       - name: Build compiler
         if: github.event_name != 'pull_request'
-        run: dotnet build src/Compiler/Compiler.csproj --configuration Release --no-restore -graph
+        run: dotnet build src/Compiler/Compiler.gsproj --configuration Release --no-restore -graph
       # ADR-0174 D11. The concurrency rows are measured here rather than
       # downloaded from the nightly, so the dashboard's numbers and its
       # conformance numbers come from the same machine and the same commit.

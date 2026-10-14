@@ -1,0 +1,297 @@
+// <copyright file="Issue479CollectionInitializerEmitTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Compiler.Tests.Emit
+
+import GSharp.Compiler
+import GSharp.Compiler.Tests
+import System
+import System.Diagnostics
+import System.IO
+import Xunit
+import Xunit.Sdk
+
+/// Issue #479: Emit coverage for collection initializer.
+/// Traceability: ADR-0117.
+open class Issue479CollectionInitializerEmitTests {
+    @Fact
+    func ListInitializer_AddsAllElementsInOrder() {
+        // Bare-element list initializer lowers to ctor + Add per element.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let xs = List[int32]{ 1, 2, 3 }
+Console.WriteLine(xs.Count)
+Console.WriteLine(xs[0])
+Console.WriteLine(xs[2])`
+        Assert.Equal("3${Environment.NewLine}1${Environment.NewLine}3${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func SetInitializer_DeduplicatesElements() {
+        // HashSet.Add ignores duplicates, so the runtime Count reflects
+        // the deduplicated membership — proof the Add path actually runs.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let hs = HashSet[int32]{ 1, 2, 2, 3, 3, 3 }
+Console.WriteLine(hs.Count)
+Console.WriteLine(hs.Contains(2))
+Console.WriteLine(hs.Contains(9))`
+        Assert.Equal(
+            "3${Environment.NewLine}True${Environment.NewLine}False${Environment.NewLine}",
+            CompileAndRun(source)
+        )
+    }
+
+    @Fact
+    func SetInitializer_EmptyParensForm_IsEquivalent() {
+        // The explicit empty-parens spelling HashSet[int32](){...} must be
+        // equivalent to the no-parens form.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let hs = HashSet[int32](){ 10, 20, 30 }
+Console.WriteLine(hs.Count)
+Console.WriteLine(hs.Contains(20))`
+        Assert.Equal("3${Environment.NewLine}True${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func DictionaryInitializer_KeyedPairs_AddEntries() {
+        // key: value pairs lower to Add(k, v). Lookups confirm the right
+        // values landed against the right keys.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let d = Dictionary[string, int32]{ "a": 1, "b": 2, "c": 3 }
+Console.WriteLine(d.Count)
+Console.WriteLine(d["a"])
+Console.WriteLine(d["c"])`
+        Assert.Equal("3${Environment.NewLine}1${Environment.NewLine}3${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func DictionaryInitializer_IndexedEntries_SetViaIndexer() {
+        // [key] = value lowers to the indexer-set path (overwrite
+        // semantics), distinct from the keyed-pair Add path.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let d = Dictionary[string, int32]{ ["x"] = 7, ["y"] = 8 }
+Console.WriteLine(d.Count)
+Console.WriteLine(d["x"])
+Console.WriteLine(d["y"])`
+        Assert.Equal("2${Environment.NewLine}7${Environment.NewLine}8${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func DictionaryInitializer_IndexedEntries_LastDuplicateWins() {
+        // Indexer-set overwrite semantics: a repeated key must not throw
+        // (unlike Add) and the last assignment must win.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let d = Dictionary[string, int32]{ ["k"] = 1, ["k"] = 99 }
+Console.WriteLine(d.Count)
+Console.WriteLine(d["k"])`
+        Assert.Equal("1${Environment.NewLine}99${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func NullableReferenceElements_AreTargetTyped() {
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let items = List[string?]{ nil, "value" }
+let added = Dictionary[string, object?]{ "error": nil }
+let indexed = Dictionary[string, object?]{ ["error"] = nil }
+Console.WriteLine(items[0] == nil)
+Console.WriteLine(added["error"] == nil)
+Console.WriteLine(indexed["error"] == nil)`
+        Assert.Equal(
+            "True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
+            CompileAndRun(source)
+        )
+    }
+
+    @Fact
+    func NonNullableReferenceElements_RejectNil() {
+        let source = `package App
+import System.Collections.Generic
+
+let indexed = Dictionary[string, object]{ ["error"] = nil }`
+        let (exit, diagnostics) = CompileExpectingFailure(source)
+        Assert.NotEqual(0, exit)
+        Assert.Contains("GS0155", diagnostics)
+    }
+
+    @Fact
+    func DictionaryInitializer_WithConstructorArgs_UsesComparer() {
+        // The explicit-ctor-args form matching the C# new(StringComparer
+        // .OrdinalIgnoreCase){...} case. The case-insensitive comparer is
+        // observable: a differently-cased lookup must hit the entry.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let d = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase){ "Key": 5 }
+Console.WriteLine(d.Count)
+Console.WriteLine(d["key"])
+Console.WriteLine(d["KEY"])`
+        Assert.Equal("1${Environment.NewLine}5${Environment.NewLine}5${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func ListInitializer_WithTrailingComma_IsLegal() {
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let xs = List[int32]{ 1, 2, 3, }
+Console.WriteLine(xs.Count)`
+        Assert.Equal("3${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func NestedCollectionInitializers_Compose() {
+        // A collection initializer element may itself be a collection
+        // initializer. Confirms recursion through the bind/lower path.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let m = List[List[int32]]{ List[int32]{ 1, 2 }, List[int32]{ 3, 4, 5 } }
+Console.WriteLine(m.Count)
+Console.WriteLine(m[0].Count)
+Console.WriteLine(m[1].Count)
+Console.WriteLine(m[1][2])`
+        Assert.Equal(
+            "2${Environment.NewLine}2${Environment.NewLine}3${Environment.NewLine}5${Environment.NewLine}",
+            CompileAndRun(source)
+        )
+    }
+
+    @Fact
+    func DictionaryInitializer_WithListValues_Compose() {
+        // Dictionary[string, List[int32]] with keyed list-initializer
+        // values — keys/values bind and convert through the same Add.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+let d = Dictionary[string, List[int32]]{ "evens": List[int32]{ 2, 4 }, "odds": List[int32]{ 1, 3, 5 } }
+Console.WriteLine(d.Count)
+Console.WriteLine(d["evens"].Count)
+Console.WriteLine(d["odds"].Count)`
+        Assert.Equal("2${Environment.NewLine}2${Environment.NewLine}3${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func Initializer_AsExpressionValue_IsUsableInline() {
+        // The initializer is an expression: its value (the constructed
+        // collection) must be usable directly as a member-access target.
+        let source = `package App
+import System
+import System.Collections.Generic
+
+Console.WriteLine(List[int32]{ 5, 6, 7, 8 }.Count)`
+        Assert.Equal("4${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func NonCollectionType_ReportsGs0369_NotInternalError() {
+        // A collection initializer on a type with no accessible Add must
+        // report the dedicated GS0369 diagnostic, never the GS9998
+        // internal-exception class of failure that #479 warned about. The
+        // explicit-parens form routes to the collection-initializer binder
+        // (the bare `T{...}` form is a struct literal).
+        let source = `package App
+import System
+import System.Text
+
+let sb = StringBuilder(){ 1, 2, 3 }`
+        let (exit, diagnostics) = CompileExpectingFailure(source)
+        Assert.NotEqual(0, exit)
+        Assert.Contains("GS0369", diagnostics)
+        Assert.DoesNotContain("GS9998", diagnostics)
+    }
+
+    shared {
+        private func CompileAndRun(source string) string {
+            let (exit, output, diagnostics) = Compile(source, run: true)
+            Assert.True(exit == 0, "compile/run failed ($exit): $diagnostics")
+            return output
+        }
+
+        private func CompileExpectingFailure(source string)(Exit int32, Diagnostics string) {
+            let (exit, _, diagnostics) = Compile(source, run: false)
+            return (exit, diagnostics)
+        }
+
+        private func Compile(source string, run bool)(Exit int32, Output string, Diagnostics string) {
+            let tempDir = Directory.CreateTempSubdirectory("gs_issue479_").FullName
+            try {
+                let srcPath = Path.Combine(tempDir, "test.gs")
+                let outPath = Path.Combine(tempDir, "test.dll")
+                File.WriteAllText(srcPath, source)
+                using let compileOut = StringWriter()
+                using let compileErr = StringWriter()
+                let prevOut = Console.Out
+                let prevErr = Console.Error
+                Console.SetOut(compileOut)
+                Console.SetError(compileErr)
+                var compileExit int32
+                try {
+                    compileExit = Program.Main(
+                        []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
+                    )
+                } finally {
+                    Console.SetOut(prevOut)
+                    Console.SetError(prevErr)
+                }
+                let diagnostics = compileOut.ToString() + compileErr.ToString()
+                if compileExit != 0 || !run {
+                    return (compileExit, string.Empty, diagnostics)
+                }
+                IlVerifier.Verify(outPath)
+                let runtimeConfigPath = Path.ChangeExtension(outPath, "runtimeconfig.json")
+                File.WriteAllText(runtimeConfigPath, `{
+  "runtimeOptions": {
+    "tfm": "net10.0",
+    "framework": { "name": "Microsoft.NETCore.App", "version": "10.0.0" }
+  }
+}`)
+                let psi = ProcessStartInfo("dotnet", "exec \"" + outPath + "\""){
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+                using let proc = Process.Start(psi)!!
+                let stdout = proc.StandardOutput.ReadToEnd()
+                let stderr = proc.StandardError.ReadToEnd()
+                proc.WaitForExit()
+                if proc.ExitCode != 0 {
+                    throw XunitException("exited " + proc.ExitCode.ToString() + `
+stdout:
+` + stdout + `
+stderr:
+` + stderr)
+                }
+                return (0, stdout.ReplaceLineEndings(Environment.NewLine), diagnostics)
+            } finally {
+                try {
+                    Directory.Delete(tempDir, recursive: true)
+                } catch { }
+            }
+        }
+    }
+}

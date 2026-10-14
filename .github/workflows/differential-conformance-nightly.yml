@@ -47,20 +47,20 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
+        run: dotnet restore GSharp.slnx --locked-mode
 
       - name: Restore .NET local tools
         run: dotnet tool restore
 
       - name: Build
-        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+        run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
       - name: Differential conformance (full corpus)
         env:
           MSBUILDDISABLENODEREUSE: 1
           GSHARP_DIFFERENTIAL_CONFORMANCE: '1'
         run: |
-          dotnet test test/Compiler.Tests/Compiler.Tests.csproj \
+          dotnet test test/Compiler.Tests/Compiler.Tests.gsproj \
             --configuration Release \
             --no-build \
             --no-restore \

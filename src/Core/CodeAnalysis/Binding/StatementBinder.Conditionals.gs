@@ -1,0 +1,1904 @@
+// <copyright file="StatementBinder.Conditionals.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Core.CodeAnalysis.Binding
+
+import System
+import System.Collections.Generic
+import System.Collections.Immutable
+import System.Linq
+import System.Reflection
+import GSharp.Core.CodeAnalysis.Lowering
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
+import GSharp.Core.CodeAnalysis
+import System.Collections
+import System.Diagnostics.CodeAnalysis
+import System.Threading
+
+internal partial class StatementBinder {
+    private func BindIfStatement(syntax IfStatementSyntax) BoundStatement {
+        if syntax.Initializer == nil {
+            let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+            ApplyHeaderCallableEffects(condition)
+            // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
+            // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
+            // is intentionally deferred for the nil-guard classifier.
+            var thenNarrow Dictionary[AccessPath, TypeSymbol]?
+            var elseNarrow Dictionary[AccessPath, TypeSymbol]?
+            thenNarrow, elseNarrow = TryClassifyNilGuard(condition)
+            if thenNarrow == nil && elseNarrow == nil {
+                thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
+            }
+            // ADR-0069 / issue #700: smart-cast type-test narrowing on
+            // `x is T`, `x !is T`, and `&&` chains thereof. Compose with the
+            // nullable / `[NotNullWhen]` frames computed above so a condition
+            // that combines both styles narrows on both axes.
+            let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition)
+            thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen)
+            elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse)
+            // ADR-0166: pattern variables are in scope in the branch their
+            // match dominates: when-true in the then-branch, when-false in the
+            // else-branch (`if !(x is T t) { ... } else { use(t) }`).
+            let (patternThen, patternElse) = PatternVariables.Classify(condition)
+            let callableEntry = CaptureExternalCallableAliases()
+            let thenStatement = BindWithPatternVariables(
+                patternThen,
+                () -> {
+                    return BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow)
+                }
+            )
+            let callableThenExit = CaptureExternalCallableAliases()
+            RestoreExternalCallableAliases(callableEntry)
+            let elseStatement = if syntax.ElseClause == nil {
+                default(BoundStatement?)
+            } else {
+                BindWithPatternVariables(
+                    patternElse,
+                    () -> {
+                        return BindStatementWithNarrowing(syntax.ElseClause!!.ElseStatement, elseNarrow)
+                    }
+                )
+            }
+            let callableElseExit = if syntax.ElseClause == nil {
+                callableEntry
+            } else {
+                CaptureExternalCallableAliases()
+            }
+            RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
+            let result = BoundIfStatement(syntax, condition, thenStatement, elseStatement)
+            // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
+            // can lift it into the enclosing block when the then-branch ends in
+            // an unconditional exit (`return`/`throw`/`break`/`continue`).
+            if elseNarrow != nil && elseNarrow.Count > 0 {
+                binderCtx.PendingEarlyExitFrames[result] = elseNarrow
+            }
+            // ADR-0166: the same early-exit rule leaks pattern variables into
+            // the statements that follow the `if` — `if !(x is T t) { return }`
+            // makes `t` usable afterwards, and so does an else-branch that
+            // always exits for the when-true variables. BindBlockStatements
+            // declares them into the enclosing block scope.
+            RecordPatternVariableLeak(result, patternThen, patternElse)
+            return result
+        }
+        // `if init; cond { then } else { else }` lowers to a block that
+        // scopes the initializer to both arms:
+        //   {
+        //     <init>
+        //     if cond { then } else { else }
+        //   }
+        $scope = BoundScope($scope)
+        let initializerAliasesAtEntry = externalCallableAliases.ToArray()
+        let initStatement BoundStatement? = BindStatement(syntax.Initializer!!)
+        if initStatement != nil {
+            UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry)
+        }
+        let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+        ApplyHeaderCallableEffects(initCondition)
+        var initThenNarrow Dictionary[AccessPath, TypeSymbol]?
+        var initElseNarrow Dictionary[AccessPath, TypeSymbol]?
+        initThenNarrow, initElseNarrow = TryClassifyNilGuard(initCondition)
+        if initThenNarrow == nil && initElseNarrow == nil {
+            initThenNarrow, initElseNarrow = TryClassifyBoolCallNarrowing(initCondition)
+        }
+        let (initTypeThen, initTypeElse) = TryClassifyTypeTestNarrowing(initCondition)
+        initThenNarrow = MergeNarrowingFrames(initThenNarrow, initTypeThen)
+        initElseNarrow = MergeNarrowingFrames(initElseNarrow, initTypeElse)
+        let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
+        let initCallableEntry = CaptureExternalCallableAliases()
+        let initThen = BindWithPatternVariables(
+            initPatternThen,
+            () -> {
+                return BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow)
+            }
+        )
+        let initCallableThenExit = CaptureExternalCallableAliases()
+        RestoreExternalCallableAliases(initCallableEntry)
+        let initElse = if syntax.ElseClause == nil {
+            default(BoundStatement?)
+        } else {
+            BindWithPatternVariables(
+                initPatternElse,
+                () -> {
+                    return BindStatementWithNarrowing(syntax.ElseClause!!.ElseStatement, initElseNarrow)
+                }
+            )
+        }
+        let initCallableElseExit = if syntax.ElseClause == nil {
+            initCallableEntry
+        } else {
+            CaptureExternalCallableAliases()
+        }
+        RestoreJoinedExternalCallableAliases(initCallableThenExit, initCallableElseExit)
+        $scope = $scope.Pop()
+        let inner = BoundIfStatement(syntax, initCondition, initThen, initElse)
+        if initElseNarrow != nil && initElseNarrow.Count > 0 {
+            binderCtx.PendingEarlyExitFrames[inner] = initElseNarrow
+        }
+        return BoundBlockStatement(
+            syntax,
+            ImmutableArray.Create[BoundStatement](
+                Invariant.Required(
+                    initStatement,
+                    "an if initializer has a bound statement",
+                    expression: "initStatement"
+                ),
+                inner
+            )
+        )
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    //  ADR-0071 / issue #708: `if let` and `guard let` binding statements.
+    //
+    //  Both forms strip one layer of nullability from the right-hand-side
+    //  expression and introduce a fresh local for it. The lowering is
+    //  expressed entirely in terms of existing bound-node kinds so the
+    //  rewriter / walker / printer / spiller / emitter / interpreter
+    //  surface needs no updates.
+    // ──────────────────────────────────────────────────────────────────────
+    /// ADR-0071 / issue #708: bind `if let` as a self-contained block
+    /// containing the synthesized let-declarations and a nested if whose
+    /// condition is the nil-guard. Multi-binding forms with an else-arm use
+    /// a synthesized `bool` flag so the else-block appears in the
+    /// bound tree exactly once.
+    private func BindIfLetStatement(syntax IfLetStatementSyntax) BoundStatement {
+        let bindings = syntax.Bindings.ToImmutableArray()
+        // Push a new scope to contain the synthesized locals. The locals
+        // declared from the bindings only need to be visible inside the
+        // then-branch, so a single block-scoped lifetime is correct.
+        $scope = BoundScope($scope)
+        let localsForFrame = List[(Variable VariableSymbol, Underlying TypeSymbol)](bindings.Length)
+        let declStatements = ImmutableArray.CreateBuilder[BoundStatement](bindings.Length)
+        var anyValid = false
+        for binding in bindings {
+            let (variable, underlying, decl) = BindIfLetBindingClause(binding)
+            declStatements.Add(decl)
+            if variable != nil && underlying != nil {
+                localsForFrame.Add((variable, underlying))
+                anyValid = true
+            }
+        }
+        // Build the nil-test condition: `_b0 != nil && _b1 != nil && …`.
+        // Each variable expression carries its underlying narrowing type so
+        // that read sites inside the then-branch see the non-null type.
+        // Build the narrowing frame so the then-block sees each binding at
+        // its non-null underlying type. The else-block does NOT see the
+        // narrowing — the bindings are not even in scope there.
+        var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
+        if localsForFrame.Count > 0 {
+            thenFrame = Dictionary[AccessPath, TypeSymbol](localsForFrame.Count)
+            for (variable, underlying) in localsForFrame {
+                thenFrame[variable] = underlying
+            }
+        }
+        let thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, thenFrame)
+        // Pop the scope BEFORE binding the else clause so the bindings are
+        // not visible inside it (ADR-0071: bindings are then-only).
+        $scope = $scope.Pop()
+        let elseStatement = if syntax.ElseClause == nil {
+            default(BoundStatement?)
+        } else {
+            BindStatement(syntax.ElseClause.ElseStatement)
+        }
+        // If no binding survived (every initializer was an error), just
+        // return the synthesized block so the user still sees diagnostics
+        // but no synthetic if-shape leaks.
+        if !anyValid {
+            return BoundBlockStatement(syntax, declStatements.ToImmutable())
+        }
+        let nilCheck = Invariant.Required(
+            BuildNilCheckChain(syntax, localsForFrame),
+            "a valid if-let binding always contributes a nil-check operand",
+            expression: "BuildNilCheckChain(syntax, localsForFrame)"
+        )
+        var core BoundStatement
+        if syntax.ElseClause == nil || localsForFrame.Count <= 1 {
+            // No else, or a single binding (which fits the natural shape
+            // without needing a matched-flag): build a simple if/else.
+            core = BoundIfStatement(syntax, nilCheck, thenStatement, elseStatement)
+        } else {
+            // Multi-binding with an else: route through a synthesized
+            // `bool _matched` flag so the else block runs exactly once and
+            // is duplicated zero times in the bound tree.
+            //
+            // var __ifLet_matched_<pos> = false
+            // let a = e0
+            // let b = e1
+            // if a != nil && b != nil { __matched = true; <then> }
+            // if !__matched { <else> }
+            let flagName = "<ifLetMatched${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
+            let flagVar = LocalVariableSymbol(flagName, isReadOnly: false, TypeSymbol.Bool)
+            $scope.TryDeclareVariable(flagVar)
+            let flagDecl = BoundVariableDeclaration(
+                syntax,
+                flagVar,
+                BoundLiteralExpression(syntax, false, TypeSymbol.Bool)
+            )
+            let setFlag = BoundExpressionStatement(
+                syntax,
+                BoundAssignmentExpression(syntax, flagVar, BoundLiteralExpression(syntax, true, TypeSymbol.Bool))
+            )
+            let combinedThen = BoundBlockStatement(
+                syntax,
+                ImmutableArray.Create[BoundStatement](setFlag, thenStatement)
+            )
+            let matchIf = BoundIfStatement(syntax, nilCheck, combinedThen, elseStatement: nil)
+            let notOp = Invariant.Required(
+                BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                "a bool flag supports logical negation",
+                expression: "BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool)"
+            )
+            let notFlag = BoundUnaryExpression(syntax, notOp, BoundVariableExpression(syntax, flagVar))
+            let elseIf = BoundIfStatement(
+                syntax,
+                notFlag,
+                Invariant.Required(
+                    elseStatement,
+                    "the multi-binding shape has an else clause",
+                    expression: "elseStatement"
+                ),
+                elseStatement: nil
+            )
+            let sequenced = ImmutableArray.CreateBuilder[BoundStatement](declStatements.Count + 3)
+            sequenced.Add(flagDecl)
+            sequenced.AddRange(declStatements)
+            sequenced.Add(matchIf)
+            sequenced.Add(elseIf)
+            return BoundBlockStatement(syntax, sequenced.ToImmutable())
+        }
+        let statements = ImmutableArray.CreateBuilder[BoundStatement](declStatements.Count + 1)
+        statements.AddRange(declStatements)
+        statements.Add(core)
+        return BoundBlockStatement(syntax, statements.ToImmutable())
+    }
+
+    /// ADR-0071: bind a single `let name [T] = expr`
+    /// binding clause inside an `if let` or `guard let` header.
+    /// Returns the synthesized variable (or `null` when the clause is
+    /// erroneous), its underlying non-null type, and the resulting decl.
+    /// The variable is declared in the binder's current scope; callers
+    /// control that scope to scope the binding to a then-block or enclosing
+    /// block as appropriate. The nullable-stripping rules
+    /// themselves live in (cref:IfLetBindingSupport), shared with the
+    /// ADR-0151 `if let` expression and ADR-0163 `while let`.
+    private func BindIfLetBindingClause(binding IfLetBindingClauseSyntax)(
+        Variable VariableSymbol?,
+        Underlying TypeSymbol?,
+        Declaration BoundStatement
+    ) {
+        let bound = IfLetBindingSupport.BindBindingClause(
+            binding,
+            Diagnostics,
+            conversions,
+            bindTypeClause,
+            (syntax ExpressionSyntax) -> {
+                return bindExpression(syntax, false)
+            },
+            (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
+                return bindLocalVariable(identifier, isReadOnly, type)
+            }
+        )
+        let declaration = BoundVariableDeclaration(binding, bound.Variable, bound.Initializer)
+        return if bound.IsValid {
+            (bound.Variable, bound.Underlying, declaration)
+        } else {
+            (nil, nil, declaration)
+        }
+    }
+
+    /// ADR-0071 / issue #708: standalone fallback for binding
+    /// `guard let` when it appears outside a block (for example as a
+    /// stray statement at the top of a function body when the outer
+    /// dispatch routes through (cref:BindStatement)). The normal
+    /// path goes through (cref:BindGuardLetStatementInBlock), which
+    /// integrates with the enclosing block's narrowing frame.
+    private func BindGuardLetStatement(syntax GuardLetStatementSyntax) BoundStatement {
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        let pseudoFrame = Dictionary[AccessPath, TypeSymbol]()
+        BindGuardLetStatementInBlock(syntax, statements, pseudoFrame)
+        return BoundBlockStatement(syntax, statements.ToImmutable())
+    }
+
+    /// ADR-0071 / issue #708: bind `guard let` into the enclosing
+    /// statement builder so the synthesized locals and the narrowings
+    /// extend the enclosing block. Each binding becomes a let-decl
+    /// followed by an `if x == nil { else }` whose else-block is the
+    /// user's exit clause; the existing
+    /// (cref:ApplyEarlyExitNarrowings) path lifts each binding's
+    /// non-nil narrowing into [`persistentFrame`](paramref).
+    private func BindGuardLetStatementInBlock(
+        syntax GuardLetStatementSyntax,
+        statements ImmutableArray[BoundStatement].Builder,
+        persistentFrame Dictionary[AccessPath, TypeSymbol]
+    ) {
+        // The else block must be re-bound once per binding arm because the
+        // ControlFlowGraph builder demands that each BoundStatement appear
+        // at most once in the tree (it keys block lookup by statement
+        // identity). Re-binding the same syntax repeatedly would otherwise
+        // report every diagnostic inside the else block once per arm
+        // (issue #1637), so only the first bind's diagnostics are kept;
+        // subsequent re-binds are truncated back to that point.
+        var hasBoundElseOnce = false
+        for binding in syntax.Bindings {
+            let (variable, underlying, decl) = BindIfLetBindingClause(binding)
+            statements.Add(decl)
+            if variable == nil || underlying == nil {
+                continue
+            }
+            // Bind a fresh copy of the else block for this arm so that the
+            // ControlFlowGraph builder sees a unique BoundStatement
+            // instance per arm.
+            let diagMark = Diagnostics.Count
+            let armElse = BindStatement(syntax.ElseStatement)
+            if hasBoundElseOnce {
+                Diagnostics.TruncateTo(diagMark)
+            } else {
+                hasBoundElseOnce = true
+                if !EndsInUnconditionalExit(armElse) {
+                    Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
+                }
+            }
+            // Build `if <var> == nil { else }`.
+            let read = BoundVariableExpression(binding, variable)
+            let nilLiteral = BoundLiteralExpression(binding, nil, TypeSymbol.Null)
+            let eqOp = Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, variable.Type, TypeSymbol.Null),
+                "a guard-let variable supports nil equality",
+                expression: "BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, variable.Type, TypeSymbol.Null)"
+            )
+            let condition = BoundBinaryExpression(binding, read, eqOp, nilLiteral)
+            let ifStmt = BoundIfStatement(
+                binding,
+                condition,
+                Invariant.Required(armElse, "a guard-let else arm has a bound statement", expression: "armElse"),
+                elseStatement: nil
+            )
+            // Manually thread the persistent-frame narrowing for this
+            // binding. We *cannot* round-trip through
+            // ApplyEarlyExitNarrowings because that helper consumes
+            // entries from PendingEarlyExitFrames keyed by the if node;
+            // we have the data inline here, so just promote directly.
+            //
+            // Issue #4285: this is the exact same early-exit-lift hazard
+            // ApplyEarlyExitNarrowings guards against — `guard let p = b.Pet
+            // else { goto Skip }` structurally "exits" via the goto, but a
+            // goto elsewhere in the function could land at `Skip:` (or
+            // anywhere past this guard-let) without that exit ever having
+            // been taken. Since this call site never goes through
+            // ApplyEarlyExitNarrowings, it needs its own copy of the same
+            // whole-function suppression.
+            if !binderCtx.FunctionContainsUserGotoOrLabel {
+                persistentFrame[variable] = underlying
+            }
+            statements.Add(ifStmt)
+        }
+        // If every arm's binding clause failed (all `continue`d above), the
+        // else block was never bound and its diagnostics -- including
+        // GS0297 -- would silently vanish. Bind it once here, purely for
+        // diagnostics; it isn't wired into any statement since there's no
+        // successful binding left to guard.
+        if !hasBoundElseOnce {
+            let armElse = BindStatement(syntax.ElseStatement)
+            if !EndsInUnconditionalExit(armElse) {
+                Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
+            }
+        }
+    }
+
+    /// ADR-0166: binds a statement with the given pattern variables declared in
+    /// a fresh child scope (see (cref:PatternVariables.BindInScope{T})).
+    private func BindWithPatternVariables(
+        variables ImmutableArray[LocalVariableSymbol],
+        bind() -> BoundStatement
+    ) BoundStatement -> PatternVariables.BindInScope(binderCtx, variables, bind)
+
+    /// ADR-0166: parks the pattern variables that [`ifStatement`](paramref)
+    /// leaks into the statements following it: the condition's when-false
+    /// variables when the then-branch always exits, plus its when-true
+    /// variables when the else-branch always exits. Consumed by
+    /// (cref:ApplyEarlyExitPatternVariables) from
+    /// `BindBlockStatements`, so an `else if` (which is not a direct
+    /// block statement) never leaks — the outer condition's other path could
+    /// reach the following statements without the match.
+    private func RecordPatternVariableLeak(
+        ifStatement BoundIfStatement,
+        whenTrue ImmutableArray[LocalVariableSymbol],
+        whenFalse ImmutableArray[LocalVariableSymbol]
+    ) {
+        if whenTrue.IsDefaultOrEmpty && whenFalse.IsDefaultOrEmpty {
+            return
+        }
+        let leaked = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
+        if !whenFalse.IsDefaultOrEmpty && EndsInUnconditionalExit(ifStatement.ThenStatement) {
+            leaked.AddRange(whenFalse)
+        }
+        if !whenTrue.IsDefaultOrEmpty &&
+            ifStatement.ElseStatement != nil &&
+            EndsInUnconditionalExit(ifStatement.ElseStatement) {
+            leaked.AddRange(whenTrue)
+        }
+        if leaked.Count > 0 {
+            binderCtx.PendingPatternVariableLeaks[ifStatement] = leaked.ToImmutable()
+        }
+    }
+
+    /// ADR-0166: declares the pattern variables parked by
+    /// (cref:RecordPatternVariableLeak) into the current (enclosing
+    /// block) scope. A name that is already declared in that scope is reported
+    /// once, at the designation.
+    private func ApplyEarlyExitPatternVariables(statement BoundStatement?) {
+        if statement is not BoundIfStatement ifStatement || !binderCtx.PendingPatternVariableLeaks.TryGetValue(
+            ifStatement,
+            out var leaked
+        ) {
+            return
+        }
+        binderCtx.PendingPatternVariableLeaks.Remove(ifStatement)
+        // Issue #4285: same hazard as ApplyEarlyExitNarrowings — a goto
+        // elsewhere in the function can jump directly to a point after this
+        // if-statement without ever taking the exiting arm, so the "leaked"
+        // pattern variable would be declared-in-scope but never actually
+        // assigned on that path (reading it is worse than a narrowing bug:
+        // an uninitialized/default-valued read, not merely a wrongly-
+        // narrowed nilable one). Suppress the leak under the same
+        // whole-function conservative rule.
+        if binderCtx.FunctionContainsUserGotoOrLabel {
+            return
+        }
+        for variable in leaked {
+            if !$scope.TryDeclareVariable(variable) && variable.DeclaringSyntax is SyntaxNode declaring {
+                Diagnostics.ReportSymbolAlreadyDeclared(declaring.Location, variable.Name)
+            }
+        }
+    }
+
+    /// ADR-0069 / issue #700: classify `is` / `!is` tests (and
+    /// `&&` chains thereof) on a local-variable or parameter
+    /// receiver into per-branch narrowing frames.
+    /// @param condition The bound condition expression.
+    /// @returns A pair of narrowing frames — the first applies to the
+    /// then-branch, the second to the else-branch. Either may be
+    /// `null` if the corresponding branch has no narrowing.
+    private func TryClassifyTypeTestNarrowing(condition BoundExpression)(
+        Then Dictionary[AccessPath, TypeSymbol]?,
+        Else Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        switch condition {
+            case isExpr is BoundIsExpression {
+                {
+                    if isExpr.Pattern is BoundNotPattern notPattern {
+                        return (
+                            nil,
+                            TryClassifyPatternNarrowing(
+                                isExpr.Expression,
+                                notPattern.Pattern,
+                                allowReadOnlyGlobals: false
+                            )
+                        )
+                    }
+                    return (
+                        TryClassifyPatternNarrowing(isExpr.Expression, isExpr.Pattern, allowReadOnlyGlobals: false),
+                        nil
+                    )
+                }
+            }
+            case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+                {
+                    let (inThen, inElse) = TryClassifyTypeTestNarrowing(unary.Operand)
+                    return (inElse, inThen)
+                }
+            }
+            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
+                {
+                    // De Morgan for `&&`: then = thenL ∧ thenR (both true → both narrowings apply).
+                    // The else frame is intentionally dropped — either operand could have been
+                    // the false one, so we cannot single out a per-variable narrowing.
+                    let (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left)
+                    let (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right)
+                    let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
+                    if combinedThen == nil || combinedThen.Count == 0 {
+                        return (nil, nil)
+                    }
+                    return (combinedThen, nil)
+                }
+            }
+            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+                {
+                    // ADR-0069 addendum / issue #712: De Morgan dual of `&&` for `||`.
+                    // For `A || B`:
+                    //   • then = intersection of thenL and thenR — only narrowings present
+                    //     in BOTH operands' then-frames with the same target type survive
+                    //     (canonical example: `x is T || x is T` keeps `{x → T}`).
+                    //   • else = elseL ∧ elseR — when the whole `||` is false, BOTH operands
+                    //     were false, so both negative narrowings apply.
+                    let (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left)
+                    let (rightThen, rightElse) = TryClassifyTypeTestNarrowing(binary.Right)
+                    let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
+                    let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
+                    if (combinedThen == nil || combinedThen.Count == 0) &&
+                        (combinedElse == nil || combinedElse.Count == 0) {
+                        return (nil, nil)
+                    }
+                    return (combinedThen, combinedElse)
+                }
+            }
+        }
+        return (nil, nil)
+    }
+
+    private func TryClassifyNilGuard(condition BoundExpression)(
+        NonNil Dictionary[AccessPath, TypeSymbol]?,
+        Nil Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        // ADR-0069 addendum / issue #712: compose nil-guard classification across
+        // `!`, `&&`, and `||` so guards like `if a == nil || cond { ... } else { use(a) }`
+        // narrow `a` to its non-nullable underlying type in the else-branch.
+        switch condition {
+            case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+                {
+                    let (inThen, inElse) = TryClassifyNilGuard(unary.Operand)
+                    return (inElse, inThen)
+                }
+            }
+            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
+                {
+                    let (leftThen, _) = TryClassifyNilGuard(bin.Left)
+                    let (rightThen, _) = TryClassifyNilGuard(bin.Right)
+                    let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
+                    if combinedThen == nil || combinedThen.Count == 0 {
+                        return (nil, nil)
+                    }
+                    return (combinedThen, nil)
+                }
+            }
+            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+                {
+                    let (leftThen, leftElse) = TryClassifyNilGuard(bin.Left)
+                    let (rightThen, rightElse) = TryClassifyNilGuard(bin.Right)
+                    let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
+                    let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
+                    if (combinedThen == nil || combinedThen.Count == 0) &&
+                        (combinedElse == nil || combinedElse.Count == 0) {
+                        return (nil, nil)
+                    }
+                    return (combinedThen, combinedElse)
+                }
+            }
+        }
+        // Phase 3.C.4: recognise the canonical narrowing patterns via the shared
+        // leaf classifier (SmartCastStability.TryClassifyNilGuardLeaf), kept in
+        // sync with ExpressionBinder.ClassifyTypeTestNarrowing (issue #1545). We
+        // support only single-variable/stable-path guards here at the leaf;
+        // conjunctions, disjunctions and pattern-based narrowing compose via the
+        // cases above.
+        if !SmartCastStability.TryClassifyNilGuardLeaf(
+            condition,
+            restrictBareVariableToLocalsAndParams: false,
+            referenceNullableOnly: false,
+            out var target,
+            out var underlying,
+            out var nonNilWhenTrue
+        ) {
+            return (nil, nil)
+        }
+        var nonNilFrame Dictionary[AccessPath, TypeSymbol]? = nil
+        var nilFrame Dictionary[AccessPath, TypeSymbol]? = nil
+        target = Invariant.Required(target, "a classified nil guard identifies its target", expression: "target")
+        underlying = Invariant.Required(
+            underlying,
+            "a classified nil guard identifies its underlying type",
+            expression: "underlying"
+        )
+        if nonNilWhenTrue {
+            nonNilFrame = Dictionary[AccessPath, TypeSymbol]{[target] = underlying}
+        } else {
+            nilFrame = Dictionary[AccessPath, TypeSymbol]{[target] = underlying}
+        }
+        return (nonNilFrame, nilFrame)
+    }
+
+    private func TryClassifyBoolCallNarrowing(condition BoundExpression)(
+        Then Dictionary[AccessPath, TypeSymbol]?,
+        Else Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        var negate = false
+        var inner = condition
+        if inner is BoundUnaryExpression unary && unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+            negate = true
+            inner = unary.Operand
+        }
+        while inner is BoundBlockExpression block {
+            inner = block.Expression
+        }
+        if inner is BoundImportedCallExpression importedCall && importedCall.Type == TypeSymbol.Bool {
+            var (thenFrame, elseFrame) = ClassifyImportedBoolCallNarrowing(importedCall, negate)
+            MergeClrMemberNotNullWhenNarrowings(importedCall.Function.Method, negate, &thenFrame, &elseFrame)
+            return (thenFrame, elseFrame)
+        }
+        if inner is BoundImportedInstanceCallExpression importedInstanceCall &&
+            importedInstanceCall.Type == TypeSymbol
+            .Bool {
+            var (thenFrame, elseFrame) = ClassifyImportedMethodBoolCallNarrowing(
+                importedInstanceCall.Method.GetParameters(),
+                importedInstanceCall.Arguments,
+                negate
+            )
+            MergeClrMemberNotNullWhenNarrowings(importedInstanceCall.Method, negate, &thenFrame, &elseFrame)
+            return (thenFrame, elseFrame)
+        }
+        if inner is BoundCallExpression userCall && userCall.Type == TypeSymbol.Bool {
+            var (thenFrame, elseFrame) = ClassifyUserBoolCallNarrowing(userCall, negate)
+            MergeUserMemberNotNullWhenNarrowings(userCall.Function.Attributes, negate, &thenFrame, &elseFrame)
+            return (thenFrame, elseFrame)
+        }
+        if inner is BoundUserInstanceCallExpression userInstanceCall && userInstanceCall.Type == TypeSymbol.Bool {
+            // Spelled with the declared `?` rather than `var (a, b) = (default(T),
+            // default(T))`: the translated G# gives that tuple form the
+            // non-null type `T`, which differs from these `ref T?` parameters
+            // (GS0612, issue #4422).
+            var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
+            var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
+            MergeUserMemberNotNullWhenNarrowings(userInstanceCall.Method.Attributes, negate, &thenFrame, &elseFrame)
+            return (thenFrame, elseFrame)
+        }
+        return (nil, nil)
+    }
+
+    // Issue #208: merge [MemberNotNullWhen] field narrowings from a CLR-imported method.
+    private func MergeClrMemberNotNullWhenNarrowings(
+        method MethodInfo,
+        negate bool,
+        ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
+        ref elseFrame Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        if !ClrNullability.TryGetMemberNotNullWhenData(method, out var returnValue, out var members) {
+            return
+        }
+        let narrowThen = returnValue != negate
+        let frame = if narrowThen {
+            (
+                (
+                    if thenFrame == nil {
+                        (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                    } else {
+                        thenFrame
+                    }
+                )!!
+            )
+        } else {
+            (
+                (
+                    if elseFrame == nil {
+                        (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                    } else {
+                        elseFrame
+                    }
+                )!!
+            )
+        }
+        for name in members {
+            NarrowFieldIfNullable(name, frame)
+        }
+    }
+
+    // Issue #208: merge [MemberNotNullWhen] field narrowings from a user-declared method.
+    private func MergeUserMemberNotNullWhenNarrowings(
+        attributes ImmutableArray[BoundAttribute],
+        negate bool,
+        ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
+        ref elseFrame Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        if attributes.IsDefaultOrEmpty {
+            return
+        }
+        for attr in attributes {
+            if !KnownAttributes.TryGetMemberNotNullWhenData(attr, out var returnValue, out var members) {
+                continue
+            }
+            let narrowThen = returnValue != negate
+            let frame = if narrowThen {
+                (
+                    (
+                        if thenFrame == nil {
+                            (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                        } else {
+                            thenFrame
+                        }
+                    )!!
+                )
+            } else {
+                (
+                    (
+                        if elseFrame == nil {
+                            (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                        } else {
+                            elseFrame
+                        }
+                    )!!
+                )
+            }
+            for name in members {
+                NarrowFieldIfNullable(name, frame)
+            }
+        }
+    }
+
+    private func BindStatementWithNarrowing(
+        syntax StatementSyntax,
+        frame Dictionary[AccessPath, TypeSymbol]?
+    ) BoundStatement {
+        let inheritedFallthrough = currentStatementListFallsThrough
+        let inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel
+        try {
+            if frame == nil {
+                return Invariant.Required(
+                    BindStatement(syntax),
+                    "a narrowed statement has a bound statement",
+                    expression: "BindStatement(syntax)"
+                )
+            }
+            binderCtx.BeginNarrowingProof(frame)
+            binderCtx.NarrowedVariables.Add(frame)
+            try {
+                return Invariant.Required(
+                    BindStatement(syntax),
+                    "a narrowed statement has a bound statement",
+                    expression: "BindStatement(syntax)"
+                )
+            } finally {
+                binderCtx.EndNarrowingProof()
+            }
+        } finally {
+            currentStatementListFallsThrough = inheritedFallthrough
+            this.binderCtx.PotentialReachabilityLabel = inheritedPotentialReachabilityLabel
+        }
+    }
+
+    // Issue #991: bind a switch-arm `when` guard as a boolean expression under
+    // the arm's pattern-narrowing frame. A non-bool guard surfaces the standard
+    // conversion diagnostic.
+    private func BindGuardExpressionWithNarrowing(
+        syntax ExpressionSyntax,
+        frame Dictionary[AccessPath, TypeSymbol]?
+    ) BoundExpression {
+        if frame == nil {
+            return bindExpressionWithTargetType(syntax, TypeSymbol.Bool)
+        }
+        binderCtx.BeginNarrowingProof(frame)
+        binderCtx.NarrowedVariables.Add(frame)
+        try {
+            return bindExpressionWithTargetType(syntax, TypeSymbol.Bool)
+        } finally {
+            binderCtx.EndNarrowingProof()
+        }
+    }
+
+    private func BindMultiAssignmentStatement(syntax MultiAssignmentStatementSyntax) BoundStatement {
+        let targets = syntax.Targets.ToImmutableArray()
+        let values = syntax.Values.ToImmutableArray()
+        let isShortDecl = syntax.OperatorToken.Kind == SyntaxKind.ColonEqualsToken
+        if isShortDecl {
+            if targets.Length != values.Length {
+                Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, values.Length)
+                return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+            }
+            let declarations = ImmutableArray.CreateBuilder[BoundStatement]()
+            for var i = 0; i < targets.Length; i++ {
+                if targets[i] is not NameExpressionSyntax nameExpr {
+                    Diagnostics.ReportInvalidMultiAssignmentTarget(targets[i].Location)
+                    let _ = bindExpression(values[i], false)
+                    continue
+                }
+                let initializer = bindExpression(values[i], false)
+                if IsDiscard(nameExpr.IdentifierToken) {
+                    continue
+                }
+                let variable = bindLocalVariable(nameExpr.IdentifierToken, false, initializer.Type)
+                declarations.Add(BoundVariableDeclaration(syntax, variable, initializer))
+            }
+            return BoundBlockStatement(syntax, declarations.ToImmutable())
+        }
+        if values.Length == 1 && targets.Length > 1 {
+            return BindTupleValuedMultiAssignment(syntax, targets, values[0])
+        }
+        if targets.Length != values.Length {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, values.Length)
+            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+        }
+        let captures = ImmutableArray.CreateBuilder[BoundStatement]()
+        let plans = ImmutableArray.CreateBuilder[MultiAssignmentTargetPlan](targets.Length)
+        for var i = 0; i < targets.Length; i++ {
+            plans.Add(
+                if IsDiscardTarget(targets[i]) {
+                    MultiAssignmentTargetPlan(bindExpression(values[i], false), createWrite: nil)
+                } else {
+                    (
+                        if targets[i] is MultiAssignmentDeclarationExpressionSyntax declaration {
+                            MultiAssignmentTargetPlan(bindExpression(values[i], false), createWrite: nil, declaration)
+                        } else {
+                            BindMultiAssignmentTarget(targets[i], values[i], syntax.OperatorToken, captures)
+                        }
+                    )
+                }
+            )
+        }
+        return BuildMultiAssignmentBlock(syntax, captures, plans)
+    }
+
+    private func BindTupleValuedMultiAssignment(
+        syntax MultiAssignmentStatementSyntax,
+        targets ImmutableArray[ExpressionSyntax],
+        valueSyntax ExpressionSyntax
+    ) BoundStatement {
+        var tupleValue BoundExpression
+        if IsChannelReceiveSyntax(valueSyntax, out var receive) {
+            // ADR-0174 D3: `v, ok = <-ch` (and ADR-0168's mixed `let v, ok = <-ch`,
+            // which declares `v` and assigns the existing `ok`) is the two-value
+            // receive — the element (its zero value once closed) and whether the
+            // channel delivered it. It is a `(T, bool)` tuple from here on, so
+            // the ordinary multi-assignment machinery does the rest.
+            if targets.Length != 2 {
+                Diagnostics.ReportChannelBindingTargetCount(
+                    syntax.Location,
+                    "value, ok = <-ch",
+                    "two targets",
+                    targets.Length
+                )
+                return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+            }
+            let received BoundExpression? = BindTwoValueReceive(receive, out _)
+            if received == nil {
+                return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+            }
+            tupleValue = received
+        } else {
+            tupleValue = bindExpression(valueSyntax, false)
+        }
+        if tupleValue.Type == TypeSymbol.Error {
+            return BoundExpressionStatement(syntax, tupleValue)
+        }
+        if tupleValue.Type is not TupleTypeSymbol tupleType {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, 1)
+            return BoundExpressionStatement(syntax, tupleValue)
+        }
+        if targets.Length != tupleType.Arity {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, tupleType.Arity)
+            return BoundExpressionStatement(syntax, tupleValue)
+        }
+        let (tupleTemp, tupleElements) = CreateTupleDeconstructionPlan(valueSyntax, tupleType)
+        let captures = ImmutableArray.CreateBuilder[BoundStatement]()
+        let plans = ImmutableArray.CreateBuilder[MultiAssignmentTargetPlan](targets.Length)
+        for var i = 0; i < targets.Length; i++ {
+            if IsDiscardTarget(targets[i]) {
+                plans.Add(MultiAssignmentTargetPlan(assignedValue: nil, createWrite: nil))
+                continue
+            }
+            if targets[i] is MultiAssignmentDeclarationExpressionSyntax declaration {
+                plans.Add(MultiAssignmentTargetPlan(tupleElements[i], createWrite: nil, declaration))
+                continue
+            }
+            let source = DeclareMultiAssignmentTemp("element$i", tupleType.ElementTypes[i])
+            let sourceToken = SyntaxToken(
+                syntax.SyntaxTree,
+                SyntaxKind.IdentifierToken,
+                valueSyntax.Location.Span.Start,
+                source.Name,
+                source.Name
+            )
+            let sourceSyntax = NameExpressionSyntax(syntax.SyntaxTree, sourceToken)
+            var plan = BindMultiAssignmentTarget(targets[i], sourceSyntax, syntax.OperatorToken, captures)
+            if plan.AssignedValue != nil {
+                plan = plan.WithAssignedValue(
+                    MultiAssignmentTupleElementRewriter(source, tupleElements[i]).Replace(plan.AssignedValue)
+                )
+            }
+            plans.Add(plan)
+        }
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        statements.AddRange(captures)
+        statements.Add(BoundVariableDeclaration(syntax, tupleTemp, tupleValue))
+        AppendMultiAssignmentValuesAndWrites(syntax, plans, statements)
+        return BoundBlockStatement(syntax, statements.ToImmutable())
+    }
+
+    private func BuildMultiAssignmentBlock(
+        syntax MultiAssignmentStatementSyntax,
+        captures ImmutableArray[BoundStatement].Builder,
+        plans ImmutableArray[MultiAssignmentTargetPlan].Builder
+    ) BoundStatement {
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        statements.AddRange(captures)
+        AppendMultiAssignmentValuesAndWrites(syntax, plans, statements)
+        return BoundBlockStatement(syntax, statements.ToImmutable())
+    }
+
+    private func AppendMultiAssignmentValuesAndWrites(
+        syntax MultiAssignmentStatementSyntax,
+        plans ImmutableArray[MultiAssignmentTargetPlan].Builder,
+        statements ImmutableArray[BoundStatement].Builder
+    ) {
+        let valueTemps = [plans.Count]LocalVariableSymbol?
+        for var i = 0; i < plans.Count; i++ {
+            let assignedValue BoundExpression? = plans[i].AssignedValue
+            if assignedValue == nil {
+                continue
+            }
+            if assignedValue.Type == TypeSymbol.Error {
+                statements.Add(BoundExpressionStatement(syntax, assignedValue))
+                continue
+            }
+            let valueTemp = DeclareMultiAssignmentTemp("value$i", assignedValue.Type)
+            valueTemps[i] = valueTemp
+            statements.Add(BoundVariableDeclaration(syntax, valueTemp, assignedValue))
+        }
+        for var i = 0; i < plans.Count; i++ {
+            if valueTemps[i] is not{} valueTemp {
+                continue
+            }
+            let value = BoundVariableExpression(nil, valueTemp)
+            if plans[i].Declaration is {} declaration {
+                let variable = bindLocalVariable(
+                    declaration.Identifier,
+                    declaration.Keyword.Kind == SyntaxKind.LetKeyword,
+                    valueTemp.Type
+                )
+                statements.Add(BoundVariableDeclaration(declaration, variable, value))
+                continue
+            }
+            if plans[i].CreateWrite is {} createWrite {
+                statements.Add(BoundExpressionStatement(syntax, createWrite(value)))
+            }
+        }
+    }
+
+    private func BindMultiAssignmentTarget(
+        target ExpressionSyntax,
+        value ExpressionSyntax,
+        equalsToken SyntaxToken,
+        captures ImmutableArray[BoundStatement].Builder
+    ) MultiAssignmentTargetPlan {
+        if !AssignmentTargetSyntaxFacts.TryCreateAssignment(target, equalsToken, value, out var assignmentSyntax) {
+            Diagnostics.ReportInvalidMultiAssignmentTarget(target.Location)
+            return MultiAssignmentTargetPlan(bindExpression(value, false), createWrite: nil)
+        }
+        let diagnosticCount = Diagnostics.Count
+        let bound = bindExpression(assignmentSyntax, false)
+        if TryCreateMultiAssignmentTargetPlan(bound, target, captures, out var plan) {
+            return plan
+        }
+        if Diagnostics.Count == diagnosticCount {
+            Diagnostics.ReportInvalidMultiAssignmentTarget(target.Location)
+        }
+        return MultiAssignmentTargetPlan(bound, createWrite: nil)
+    }
+
+    private func TryCreateMultiAssignmentTargetPlan(
+        bound BoundExpression,
+        targetSyntax ExpressionSyntax,
+        captures ImmutableArray[BoundStatement].Builder,
+        out plan MultiAssignmentTargetPlan
+    ) bool {
+        var bound = bound
+        while bound is BoundBlockExpression block {
+            captures.AddRange(block.Statements)
+            bound = block.Expression
+        }
+        switch bound {
+            case assignment is BoundAssignmentExpression {
+                plan = MultiAssignmentTargetPlan(
+                    assignment.Expression,
+                    func (value BoundExpression) BoundExpression {
+                        return BoundAssignmentExpression(
+                            assignment.Syntax,
+                            assignment.Variable,
+                            value,
+                            assignment.AssignedValueType
+                        )
+                    }
+                )
+                return true
+            }
+            case field is BoundFieldAssignmentExpression {
+                let fieldReceiver = field.ReceiverExpression ??
+                    (
+                    if field.Receiver == nil {
+                        default(BoundVariableExpression?)
+                    } else {
+                        BoundVariableExpression(nil, field.Receiver)
+                    }
+                )
+                var fieldAccess BoundFieldAccessExpression
+                if field.InterfaceType != nil {
+                    fieldAccess = BoundFieldAccessExpression(targetSyntax, field.Field, field.InterfaceType)
+                } else {
+                    fieldAccess = BoundFieldAccessExpression(
+                        targetSyntax,
+                        fieldReceiver,
+                        field.StructType,
+                        field.Field,
+                        field.ResultType
+                    )
+                }
+                plan = CreateAddressedMultiAssignmentTarget(field.Value, fieldAccess, targetSyntax, captures)
+                return true
+            }
+            case property is BoundPropertyAssignmentExpression {
+                let propertyReceiver = if property.Receiver == nil {
+                    default(BoundExpression?)
+                } else {
+                    CaptureMultiAssignmentReceiver(property.Receiver, targetSyntax, captures)
+                }
+                plan = MultiAssignmentTargetPlan(
+                    property.Value,
+                    func (value BoundExpression) BoundExpression {
+                        return BoundPropertyAssignmentExpression(
+                            property.Syntax,
+                            propertyReceiver,
+                            property.StructType,
+                            property.Property,
+                            value,
+                            property.SubstitutedType,
+                            property.InterfaceType
+                        )
+                    }
+                )
+                return true
+            }
+            case clrProperty is BoundClrPropertyAssignmentExpression {
+                let clrPropertyReceiver = if clrProperty.Receiver == nil {
+                    default(BoundExpression?)
+                } else {
+                    CaptureMultiAssignmentReceiver(clrProperty.Receiver, targetSyntax, captures)
+                }
+                plan = MultiAssignmentTargetPlan(
+                    clrProperty.Value,
+                    func (value BoundExpression) BoundExpression {
+                        return BoundClrPropertyAssignmentExpression(
+                            clrProperty.Syntax,
+                            clrPropertyReceiver,
+                            clrProperty.Member,
+                            value,
+                            clrProperty.Type,
+                            clrProperty.StaticContainerType,
+                            clrProperty.ConstrainedReceiverTypeParameter,
+                            clrProperty.ConstrainedInterfaceType
+                        )
+                    }
+                )
+                return true
+            }
+            case index is BoundIndexAssignmentExpression {
+                let indexTarget = index.TargetExpression ??
+                    BoundVariableExpression(
+                    nil,
+                    Invariant.Required(index.Target, "an index assignment has a target", expression: "index.Target")
+                )
+                if indexTarget.Type is MapTypeSymbol {
+                    let capturedTarget = CaptureMultiAssignmentValue(indexTarget, targetSyntax, captures)
+                    let capturedIndex = CaptureMultiAssignmentValue(index.Index, targetSyntax, captures)
+                    plan = MultiAssignmentTargetPlan(
+                        index.Value,
+                        func (value BoundExpression) BoundExpression {
+                            return BoundIndexAssignmentExpression.WithExpressionTarget(
+                                index.Syntax,
+                                capturedTarget,
+                                capturedIndex,
+                                value,
+                                index.Type
+                            )
+                        }
+                    )
+                    return true
+                }
+                let element = BoundIndexExpression(targetSyntax, indexTarget, index.Indices, index.Type)
+                plan = CreateAddressedMultiAssignmentTarget(index.Value, element, targetSyntax, captures)
+                return true
+            }
+            case clrIndex is BoundClrIndexAssignmentExpression {
+                let clrIndexTarget = clrIndex.TargetExpression ??
+                    BoundVariableExpression(
+                    nil,
+                    Invariant.Required(
+                        clrIndex.Target,
+                        "a CLR index assignment has a target",
+                        expression: "clrIndex.Target"
+                    )
+                )
+                let capturedClrTarget = CaptureMultiAssignmentReceiver(clrIndexTarget, targetSyntax, captures)
+                let capturedArguments = ImmutableArray.CreateBuilder[BoundExpression](clrIndex.Arguments.Length)
+                for argument in clrIndex.Arguments {
+                    capturedArguments.Add(CaptureMultiAssignmentValue(argument, targetSyntax, captures))
+                }
+                plan = MultiAssignmentTargetPlan(
+                    clrIndex.Value,
+                    func (value BoundExpression) BoundExpression {
+                        return BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                            clrIndex.Syntax,
+                            capturedClrTarget,
+                            clrIndex.Indexer,
+                            capturedArguments.ToImmutable(),
+                            value,
+                            clrIndex.Type,
+                            clrIndex.ConstrainedReceiverTypeParameter,
+                            clrIndex.ConstrainedInterfaceType
+                        )
+                    }
+                )
+                return true
+            }
+            case indirect is BoundIndirectAssignmentExpression {
+                let dereference = BoundDereferenceExpression(targetSyntax, indirect.Pointer)
+                plan = CreateAddressedMultiAssignmentTarget(indirect.Value, dereference, targetSyntax, captures)
+                return true
+            }
+            default {
+                plan = MultiAssignmentTargetPlan(bound, createWrite: nil)
+                return false
+            }
+        }
+    }
+
+    private func CreateAddressedMultiAssignmentTarget(
+        assignedValue BoundExpression,
+        storage BoundExpression,
+        targetSyntax ExpressionSyntax,
+        captures ImmutableArray[BoundStatement].Builder
+    ) MultiAssignmentTargetPlan {
+        let address = CaptureMultiAssignmentAddress(storage, targetSyntax, captures)
+        return MultiAssignmentTargetPlan(
+            assignedValue,
+            func (value BoundExpression) BoundExpression {
+                return BoundIndirectAssignmentExpression(targetSyntax, BoundVariableExpression(nil, address), value)
+            }
+        )
+    }
+
+    private func CaptureMultiAssignmentAddress(
+        storage BoundExpression,
+        targetSyntax ExpressionSyntax,
+        captures ImmutableArray[BoundStatement].Builder
+    ) LocalVariableSymbol {
+        var storage = storage
+        while storage is BoundBlockExpression block {
+            captures.AddRange(block.Statements)
+            storage = block.Expression
+        }
+        storage = PrepareMultiAssignmentStorage(storage, targetSyntax, captures)
+        let address = DeclareMultiAssignmentTemp("target", ByRefTypeSymbol.Get(storage.Type))
+        captures.Add(BoundVariableDeclaration(targetSyntax, address, BoundAddressOfExpression(targetSyntax, storage)))
+        return address
+    }
+
+    private func PrepareMultiAssignmentStorage(
+        storage BoundExpression,
+        targetSyntax ExpressionSyntax,
+        captures ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        var storage = storage
+        while storage is BoundBlockExpression block {
+            captures.AddRange(block.Statements)
+            storage = block.Expression
+        }
+        switch storage {
+            case field is BoundFieldAccessExpression when field.Receiver != nil {
+                let receiver = PrepareMultiAssignmentStorageReceiver(field.Receiver!!, targetSyntax, captures)
+                return if field.InterfaceType != nil {
+                    field
+                } else {
+                    BoundFieldAccessExpression(
+                        field.Syntax,
+                        receiver,
+                        field.StructType,
+                        field.Field,
+                        field.SubstitutedType,
+                        field.NarrowedType
+                    )
+                }
+            }
+            case index is BoundIndexExpression {
+                let capturedIndexTarget = CaptureMultiAssignmentValue(index.Target, targetSyntax, captures)
+                let capturedIndices = ImmutableArray.CreateBuilder[BoundExpression](index.Indices.Length)
+                for indexExpression in index.Indices {
+                    capturedIndices.Add(CaptureMultiAssignmentValue(indexExpression, targetSyntax, captures))
+                }
+                return BoundIndexExpression(
+                    index.Syntax,
+                    capturedIndexTarget,
+                    capturedIndices.MoveToImmutable(),
+                    index.Type
+                )
+            }
+            case dereference is BoundDereferenceExpression {
+                return BoundDereferenceExpression(
+                    dereference.Syntax,
+                    CaptureMultiAssignmentValue(dereference.Operand, targetSyntax, captures)
+                )
+            }
+            default {
+                return storage
+            }
+        }
+    }
+
+    private func PrepareMultiAssignmentStorageReceiver(
+        receiver BoundExpression,
+        targetSyntax ExpressionSyntax,
+        captures ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        let receiverType = if receiver.Type is NullableTypeSymbol nullable {
+            nullable.UnderlyingType
+        } else {
+            receiver.Type
+        }
+        if Binder.IsReferenceTypeForConstraint(receiverType) {
+            return CaptureMultiAssignmentValue(receiver, targetSyntax, captures)
+        }
+        return if isLvalue(receiver) {
+            PrepareMultiAssignmentStorage(receiver, targetSyntax, captures)
+        } else {
+            CaptureMultiAssignmentValue(receiver, targetSyntax, captures)
+        }
+    }
+
+    private func CaptureMultiAssignmentReceiver(
+        receiver BoundExpression,
+        targetSyntax ExpressionSyntax,
+        captures ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        var receiver = receiver
+        while receiver is BoundBlockExpression block {
+            captures.AddRange(block.Statements)
+            receiver = block.Expression
+        }
+        // The constructor receiver is stable across the RHS. Keep its identity:
+        // readonly backing-field stores must use this, not a captured alias.
+        if getCurrentFunction() is {Name: ".ctor", ThisParameter: {} thisParameter} &&
+            receiver is BoundVariableExpression variableReceiver &&
+            object.ReferenceEquals(variableReceiver.Variable, thisParameter) {
+            return receiver
+        }
+        let receiverType = if receiver.Type is NullableTypeSymbol nullable {
+            nullable.UnderlyingType
+        } else {
+            receiver.Type
+        }
+        if Binder.IsReferenceTypeForConstraint(receiverType) {
+            return CaptureMultiAssignmentValue(receiver, targetSyntax, captures)
+        }
+        if !isLvalue(receiver) {
+            return CaptureMultiAssignmentValue(receiver, targetSyntax, captures)
+        }
+        let address = CaptureMultiAssignmentAddress(receiver, targetSyntax, captures)
+        return BoundDereferenceExpression(targetSyntax, BoundVariableExpression(nil, address))
+    }
+
+    private func CaptureMultiAssignmentValue(
+        value BoundExpression,
+        targetSyntax ExpressionSyntax,
+        captures ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        let temp = DeclareMultiAssignmentTemp("component", value.Type)
+        captures.Add(BoundVariableDeclaration(targetSyntax, temp, value))
+        return BoundVariableExpression(nil, temp)
+    }
+
+    private func DeclareMultiAssignmentTemp(role string, type TypeSymbol) LocalVariableSymbol {
+        let id = Interlocked.Increment(&binderCtx.SyntheticLocalCounter)
+        let temp = LocalVariableSymbol("<>multi_${role}_$id", isReadOnly: true, type)
+        if !$scope.TryDeclareVariable(temp) {
+            throw InvalidOperationException("Failed to declare synthesized multi-assignment local '${temp.Name}'.")
+        }
+        return temp
+    }
+
+    private class MultiAssignmentTargetPlan {
+        init(
+            assignedValue BoundExpression?,
+            createWrite((BoundExpression) -> BoundExpression)?,
+            declaration MultiAssignmentDeclarationExpressionSyntax? = nil
+        ) {
+            AssignedValue = assignedValue
+            CreateWrite = createWrite
+            Declaration = declaration
+        }
+
+        prop AssignedValue BoundExpression? {
+            get;
+        }
+
+        prop CreateWrite((BoundExpression) -> BoundExpression)? {
+            get;
+        }
+
+        prop Declaration MultiAssignmentDeclarationExpressionSyntax? {
+            get;
+        }
+
+        func WithAssignedValue(assignedValue BoundExpression) MultiAssignmentTargetPlan -> MultiAssignmentTargetPlan(
+            assignedValue,
+            CreateWrite,
+            Declaration
+        )
+    }
+
+    private class MultiAssignmentTupleElementRewriter : BoundTreeRewriter {
+        private let source VariableSymbol
+        private let replacement BoundExpression
+
+        init(source VariableSymbol, replacement BoundExpression) {
+            this.source = source
+            this.replacement = replacement
+        }
+
+        func Replace(expression BoundExpression) BoundExpression -> RewriteExpression(expression)
+
+        protected override func RewriteVariableExpression(
+            node BoundVariableExpression
+        ) BoundExpression -> if object.ReferenceEquals(node.Variable, source) {
+            replacement
+        } else {
+            base.RewriteVariableExpression(node)
+        }
+    }
+
+    shared {
+        /// ADR-0071 / issue #708: build a left-folded `&&` chain of
+        /// `variable != nil` tests for the given bindings. With a single
+        /// binding this is just `variable != nil`.
+        private func BuildNilCheckChain(
+            syntax SyntaxNode,
+            bindings List[(Variable VariableSymbol, Underlying TypeSymbol)]
+        ) BoundExpression? -> IfLetBindingSupport
+            .BuildNilCheckChain(
+            syntax,
+            bindings.Select((b(Variable VariableSymbol, Underlying TypeSymbol)) -> b.Variable)
+        )
+
+        private func MergeNarrowingFrames(
+            a Dictionary[AccessPath, TypeSymbol]?,
+            b Dictionary[AccessPath, TypeSymbol]?
+        ) Dictionary[AccessPath, TypeSymbol]? {
+            if a == nil || a.Count == 0 {
+                return if (b == nil || b.Count == 0) {
+                    default(Dictionary[AccessPath, TypeSymbol]?)
+                } else {
+                    b
+                }
+            }
+            if b == nil || b.Count == 0 {
+                return a
+            }
+            let merged = Dictionary[AccessPath, TypeSymbol](a)
+            for kv in b {
+                // Later (more specific) wins on conflict. The type-test path passes
+                // its frame as `b`, so a type-test narrowing supersedes a coincident
+                // nil-guard narrowing on the same variable.
+                merged[kv.Key] = kv.Value
+            }
+            return merged
+        }
+
+        /// ADR-0069 addendum / issue #712: intersect two narrowing frames. Only
+        /// variables present in both frames AND narrowed to the same type
+        /// survive. Used by the `||` then-frame classifier where a
+        /// narrowing is only sound if both operands prove the same fact.
+        private func IntersectNarrowingFrames(
+            a Dictionary[AccessPath, TypeSymbol]?,
+            b Dictionary[AccessPath, TypeSymbol]?
+        ) Dictionary[AccessPath, TypeSymbol]? {
+            if a == nil || a.Count == 0 || b == nil || b.Count == 0 {
+                return nil
+            }
+            var result Dictionary[AccessPath, TypeSymbol]? = nil
+            for kv in a {
+                if b.TryGetValue(kv.Key, out var other) && other == kv.Value {
+                    result ??= Dictionary[AccessPath, TypeSymbol]()
+                    result!![kv.Key] = kv.Value
+                }
+            }
+            return result
+        }
+
+        private func IsNarrowableVariable(expr BoundExpression, out variable VariableSymbol?) bool {
+            variable = nil
+            if expr is not BoundVariableExpression bve {
+                return false
+            }
+            // ADR-0069 narrows locals and parameters only — never fields,
+            // properties, or implicit-field/property reads. Those receivers
+            // can be mutated by aliasing or another thread between the test
+            // and the use, so narrowing would be unsound.
+            if (bve.Variable is LocalVariableSymbol or ParameterSymbol) {
+                variable = bve.Variable
+                return true
+            }
+            return false
+        }
+
+        /// ADR-0069 addendum / issue #712: stability rule for switch-pattern
+        /// narrowing. We narrow non-mutable receivers — locals, parameters,
+        /// and read-only globals (`let`). Mutable globals are excluded
+        /// because they can be reassigned between the test and the use under
+        /// aliasing or another thread.
+        private func IsStableNarrowableVariable(variable VariableSymbol) bool {
+            return switch variable {
+                case _ is LocalVariableSymbol: true
+                case g is GlobalVariableSymbol: g.IsReadOnly
+                default: false
+            }
+        }
+
+        private func StripNullable(type TypeSymbol) TypeSymbol {
+            return if type is NullableTypeSymbol nullable {
+                nullable.UnderlyingType
+            } else {
+                type
+            }
+        }
+
+        private func IsStrictlyNarrower(declared TypeSymbol, candidate TypeSymbol) bool {
+            // Shared with the short-circuit (`x is T && …`) classifier in
+            // ExpressionBinder so `if`-statement and `&&` narrowing agree. Handles
+            // the subtype lattice (issue #1636) and the type-parameter/interface
+            // operand tested against an interface (issue #2165).
+            return SmartCastStability.IsTypeTestNarrowing(declared, candidate)
+        }
+
+        private func ClassifyImportedBoolCallNarrowing(call BoundImportedCallExpression, negate bool)(
+            Then Dictionary[AccessPath, TypeSymbol]?,
+            Else Dictionary[AccessPath, TypeSymbol]?
+        ) {
+            let parameters = call.Function.Method.GetParameters()
+            var result = ClassifyImportedMethodBoolCallNarrowing(parameters, call.Arguments, negate)
+            // Issue #4216: preserve established unannotated IsNullOrEmpty
+            // extensions while preferring explicit CLR nullability contracts.
+            if MemberLookup.HasExtensionAttribute(call.Function.Method) &&
+                !HasClrNullabilityContract(parameters.FirstOrDefault()) &&
+                IsNullOrEmptyCompatibilityCandidate(call.Function.Name, parameters, call.Arguments) {
+                result = MergeNotNullWhenFalseReceiver(result, call.Arguments[0], negate)
+            }
+            return result
+        }
+
+        private func ClassifyImportedMethodBoolCallNarrowing(
+            parameters[]ParameterInfo,
+            arguments ImmutableArray[BoundExpression],
+            negate bool
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+            var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
+            var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
+            let count = Math.Min(parameters.Length, arguments.Length)
+            for var i = 0; i < count; i++ {
+                let parameter = parameters[i]
+                // [MaybeNullWhen(rv)] on a non-nullable argument widens the caller's
+                // variable to its nullable counterpart on the arm where the call returns
+                // rv. The argument may be a plain variable or an address-of expression
+                // (&var) when the CLR parameter is declared `out T`.
+                if ClrNullability.TryGetMaybeNullWhen(parameter, out var maybeNullWhenReturnValue) {
+                    let rawArg = arguments[i]
+                    let widenArg = if rawArg is BoundAddressOfExpression addrOf {
+                        addrOf.Operand
+                    } else {
+                        rawArg
+                    }
+                    if widenArg is BoundVariableExpression widenVarExpr &&
+                        !(widenVarExpr.Variable.Type is NullableTypeSymbol) &&
+                        widenVarExpr
+                        .Variable
+                        .Type != TypeSymbol
+                        .Null {
+                        let widenThen = maybeNullWhenReturnValue != negate
+                        let widenFrame = if widenThen {
+                            (
+                                (
+                                    if thenFrame == nil {
+                                        (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                                    } else {
+                                        thenFrame
+                                    }
+                                )!!
+                            )
+                        } else {
+                            (
+                                (
+                                    if elseFrame == nil {
+                                        (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                                    } else {
+                                        elseFrame
+                                    }
+                                )!!
+                            )
+                        }
+                        widenFrame[widenVarExpr.Variable] = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
+                    }
+                    continue
+                }
+                if !ClrNullability.TryGetNotNullWhen(parameter, out var returnValue) ||
+                    !TryGetNullableNarrowingTarget(arguments[i], out var target, out var underlying) {
+                    continue
+                }
+                let narrowThen = returnValue != negate
+                let frame = if narrowThen {
+                    (
+                        (
+                            if thenFrame == nil {
+                                (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                            } else {
+                                thenFrame
+                            }
+                        )!!
+                    )
+                } else {
+                    (
+                        (
+                            if elseFrame == nil {
+                                (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                            } else {
+                                elseFrame
+                            }
+                        )!!
+                    )
+                }
+                frame[target!!] = underlying!!
+            }
+            return (thenFrame, elseFrame)
+        }
+
+        private func ClassifyUserBoolCallNarrowing(call BoundCallExpression, negate bool)(
+            Then Dictionary[AccessPath, TypeSymbol]?,
+            Else Dictionary[AccessPath, TypeSymbol]?
+        ) {
+            // Issue #178 / ADR-0047 §6: a user-declared function may carry the
+            // same [NotNullWhen] / [MaybeNullWhen] postconditions C# uses.
+            // Recognition is type-identity based via KnownAttributes so renaming
+            // or shadowing the source name cannot bypass the narrowing rule.
+            let parameters = call.Function.Parameters
+            var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
+            var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
+            let count = Math.Min(parameters.Length, call.Arguments.Length)
+            for var i = 0; i < count; i++ {
+                let parameter = parameters[i]
+                let attributes = parameter.Attributes
+                if attributes.IsDefaultOrEmpty {
+                    continue
+                }
+                var notNullWhenReturnValue = default(bool?)
+                var maybeNullWhenReturnValue = default(bool?)
+                for attribute in attributes {
+                    if KnownAttributes.TryGetNotNullWhenReturnValue(attribute, out var rv) {
+                        notNullWhenReturnValue = rv
+                    } else if KnownAttributes.TryGetMaybeNullWhenReturnValue(attribute, out var mrv) {
+                        maybeNullWhenReturnValue = mrv
+                    }
+                }
+                let argExpr = call.Arguments[i]
+                // [NotNullWhen(rv)]: narrow a nullable argument to its underlying
+                // non-nullable type on the arm where the call returns rv.
+                if (notNullWhenReturnValue != nil) &&
+                    TryGetNullableNarrowingTarget(argExpr, out var target, out var underlying) {
+                    let narrowThen = notNullWhenReturnValue != negate
+                    let frame = if narrowThen {
+                        (
+                            (
+                                if thenFrame == nil {
+                                    (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                                } else {
+                                    thenFrame
+                                }
+                            )!!
+                        )
+                    } else {
+                        (
+                            (
+                                if elseFrame == nil {
+                                    (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                                } else {
+                                    elseFrame
+                                }
+                            )!!
+                        )
+                    }
+                    frame[target!!] = underlying!!
+                }
+                // [MaybeNullWhen(rv)]: widen a non-nullable argument to its nullable
+                // counterpart on the arm where the call returns rv.
+                let widenVarExpr BoundVariableExpression? = argExpr as BoundVariableExpression
+                if (maybeNullWhenReturnValue != nil) &&
+                    widenVarExpr != nil &&
+                    !(widenVarExpr.Variable.Type is NullableTypeSymbol) &&
+                    widenVarExpr
+                    .Variable
+                    .Type != TypeSymbol
+                    .Null {
+                    let widenThen = maybeNullWhenReturnValue != negate
+                    let widenFrame = if widenThen {
+                        (
+                            (
+                                if thenFrame == nil {
+                                    (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                                } else {
+                                    thenFrame
+                                }
+                            )!!
+                        )
+                    } else {
+                        (
+                            (
+                                if elseFrame == nil {
+                                    (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                                } else {
+                                    elseFrame
+                                }
+                            )!!
+                        )
+                    }
+                    widenFrame[widenVarExpr.Variable] = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
+                }
+            }
+            var result = (Then: thenFrame, Else: elseFrame)
+            // Issue #4216: user extensions use the same compatibility rule as
+            // imported extensions; an explicit receiver contract wins.
+            if call
+                .Function
+                .IsExtension &&
+                !HasUserNullabilityContract(parameters.FirstOrDefault()) &&
+                IsNullOrEmptyCompatibilityCandidate(call.Function.Name, parameters, call.Arguments) {
+                result = MergeNotNullWhenFalseReceiver(result, call.Arguments[0], negate)
+            }
+            return result
+        }
+
+        private func IsNullOrEmptyCompatibilityCandidate(
+            name string,
+            parameters ImmutableArray[ParameterSymbol],
+            arguments ImmutableArray[BoundExpression]
+        ) bool -> IsNullOrEmptyCompatibilityShape(name, parameters.Length, arguments.Length) &&
+            parameters[0].Type is NullableTypeSymbol nullable &&
+            IsNullOrEmptyReceiverType(nullable.UnderlyingType)
+
+        private func IsNullOrEmptyCompatibilityCandidate(
+            name string,
+            parameters[]ParameterInfo,
+            arguments ImmutableArray[BoundExpression]
+        ) bool -> IsNullOrEmptyCompatibilityShape(name, parameters.Length, arguments.Length) &&
+            ClrNullability.GetParameterTypeSymbol(parameters[0]) is NullableTypeSymbol &&
+            IsNullOrEmptyReceiverType(parameters[0].ParameterType)
+
+        private func IsNullOrEmptyCompatibilityShape(
+            name string,
+            parameterCount int32,
+            argumentCount int32
+        ) bool -> string.Equals(name, "IsNullOrEmpty", StringComparison.Ordinal) &&
+            parameterCount == 1 &&
+            argumentCount == 1
+
+        // The DECLARED receiver must be a NULLABLE string or sequence. Judging
+        // eligibility from the call-site argument would let an unconstrained
+        // generic receiver (`func (value T?) IsNullOrEmpty[T]() bool`) inherit the
+        // contract at any sequence-typed call site.
+        private func IsNullOrEmptyReceiverType(receiverType TypeSymbol) bool -> receiverType == TypeSymbol.String ||
+            receiverType is SequenceTypeSymbol ||
+            (receiverType.ClrType != nil && IsNullOrEmptyReceiverType(receiverType.ClrType))
+
+        private func IsNullOrEmptyReceiverType(receiverType Type) bool -> !receiverType.IsGenericParameter &&
+            (
+            ClrTypeUtilities.AreSame(receiverType, typeof(string)) || ClrLoadContext.Satisfies(
+                receiverType,
+                typeof(IEnumerable)
+            )
+        )
+
+        private func HasClrNullabilityContract(parameter ParameterInfo?) bool -> parameter != nil &&
+            (ClrNullability.TryGetNotNullWhen(parameter, out _) || ClrNullability.TryGetMaybeNullWhen(parameter, out _))
+
+        private func HasUserNullabilityContract(parameter ParameterSymbol?) bool {
+            if parameter == nil || parameter.Attributes.IsDefaultOrEmpty {
+                return false
+            }
+            for attribute in parameter.Attributes {
+                if KnownAttributes.TryGetNotNullWhenReturnValue(attribute, out _) ||
+                    KnownAttributes.TryGetMaybeNullWhenReturnValue(attribute, out _) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func MergeNotNullWhenFalseReceiver(
+            frames(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?),
+            receiver BoundExpression,
+            negate bool
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+            if !TryGetNullableNarrowingTarget(receiver, out var target, out var underlying) {
+                return frames
+            }
+            var thenFrame Dictionary[AccessPath, TypeSymbol]? = frames.Then
+            var elseFrame Dictionary[AccessPath, TypeSymbol]? = frames.Else
+            let narrowThen = negate
+            let frame = if narrowThen {
+                (
+                    (
+                        if thenFrame == nil {
+                            (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                        } else {
+                            thenFrame
+                        }
+                    )!!
+                )
+            } else {
+                (
+                    (
+                        if elseFrame == nil {
+                            (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                        } else {
+                            elseFrame
+                        }
+                    )!!
+                )
+            }
+            frame[target] = underlying
+            return (thenFrame, elseFrame)
+        }
+
+        private func TryGetNullableNarrowingTarget(
+            expression BoundExpression,
+            @System.Diagnostics.CodeAnalysis.NotNullWhen(true) out target AccessPath?,
+            @System.Diagnostics.CodeAnalysis.NotNullWhen(true) out underlying TypeSymbol?
+        ) bool {
+            var expression = expression
+            while expression is BoundConversionExpression conversion && IsFlowTransparentConversion(conversion) {
+                expression = conversion.Expression
+            }
+            if expression is BoundAddressOfExpression address {
+                expression = address.Operand
+            }
+            if expression.Type is not NullableTypeSymbol nullable {
+                target = nil
+                underlying = nil
+                return false
+            }
+            target = if expression is BoundVariableExpression bve {
+                AccessPath.ForVariable(bve.Variable)
+            } else {
+                SmartCastStability.TryGetStablePath(expression)
+            }
+            if target == nil {
+                underlying = nil
+                return false
+            }
+            underlying = nullable.UnderlyingType
+            return true
+        }
+
+        internal func IsFlowTransparentConversion(conversion BoundConversionExpression) bool {
+            if object.ReferenceEquals(conversion.Type, conversion.Expression.Type) {
+                return true
+            }
+            if conversion.Type is NullableTypeSymbol widened && widened.UnderlyingType == conversion.Expression.Type {
+                return true
+            }
+            return conversion
+                .Type
+                ?.ClrType != nil &&
+                conversion
+                .Expression
+                .Type
+                ?.ClrType != nil &&
+                ClrTypeUtilities.AreSame(conversion.Type.ClrType, conversion.Expression.Type.ClrType)
+        }
+
+        internal func IsNilLiteral(expr BoundExpression) bool {
+            var expr = expr
+            while expr is BoundConversionExpression conversion {
+                expr = conversion.Expression
+            }
+            return expr is BoundLiteralExpression lit && lit.Type == TypeSymbol.Null
+        }
+
+        internal func TryClassifyPatternNarrowing(
+            discriminant BoundExpression,
+            pattern BoundPattern?,
+            allowReadOnlyGlobals bool = true
+        ) Dictionary[AccessPath, TypeSymbol]? {
+            if pattern == nil {
+                return nil
+            }
+            // ADR-0069 addendum / issue #712: only narrow non-mutable receivers
+            // (locals, parameters, and read-only globals). ADR-0069 addendum /
+            // issue #1180 extends this to stable immutable member paths
+            // (`switch x.shape { case c is Circle: ... }`). Mutable receivers could
+            // be reassigned or mutated between the test and the use.
+            var discriminantPath AccessPath
+            if discriminant is BoundVariableExpression variableExpression &&
+                (
+                if allowReadOnlyGlobals {
+                    IsStableNarrowableVariable(variableExpression.Variable)
+                } else {
+                    (variableExpression.Variable is LocalVariableSymbol or ParameterSymbol)
+                }
+            ) {
+                discriminantPath = variableExpression.Variable
+            } else {
+                var memberPath AccessPath?
+                if !SmartCastStability.TryGetStableMemberPath(discriminant, out memberPath, out _) {
+                    return nil
+                }
+                discriminantPath = Invariant.Required(
+                    memberPath,
+                    "a successful stable-member lookup identifies its path",
+                    expression: "memberPath"
+                )
+            }
+            let discriminantType = discriminant.Type
+            var narrowedType TypeSymbol? = nil
+            switch pattern {
+                case typePattern is BoundTypePattern {
+                    let targetType = StripNullable(typePattern.TargetType)
+                    if SmartCastStability.IsTypeTestNarrowing(discriminantType, targetType) {
+                        narrowedType = targetType
+                    }
+                }
+                case constantPattern is BoundConstantPattern when discriminantType is NullableTypeSymbol nullable &&
+                    !IsNilLiteral(constantPattern.Value) {
+                    narrowedType = nullable.UnderlyingType
+                }
+                case BoundDiscardPattern { }
+                case binaryPattern is BoundBinaryPattern when binaryPattern.IsConjunction {
+                    // Issue #992: `and` — both sub-patterns hold, so the union of
+                    // their narrowings is sound.
+                    {
+                        let left = TryClassifyPatternNarrowing(discriminant, binaryPattern.Left, allowReadOnlyGlobals)
+                        let right = TryClassifyPatternNarrowing(discriminant, binaryPattern.Right, allowReadOnlyGlobals)
+                        return MergeNarrowingFrames(left, right)
+                    }
+                }
+                case binaryPattern is BoundBinaryPattern {
+                    // Issue #992: `or` — only narrowings proven by BOTH branches
+                    // (same variable, same type) survive. This keeps the smart-cast
+                    // sound: `x is Cat or x is Dog` narrows nothing.
+                    {
+                        let left = TryClassifyPatternNarrowing(discriminant, binaryPattern.Left, allowReadOnlyGlobals)
+                        let right = TryClassifyPatternNarrowing(discriminant, binaryPattern.Right, allowReadOnlyGlobals)
+                        return IntersectNarrowingFrames(left, right)
+                    }
+                }
+                case BoundNotPattern { }
+                case BoundRelationalPattern, BoundPropertyPattern, BoundListPattern { }
+            }
+            return if narrowedType == nil {
+                default(Dictionary[AccessPath, TypeSymbol]?)
+            } else {
+                Dictionary[AccessPath, TypeSymbol]{[discriminantPath] = narrowedType}
+            }
+        }
+
+        private func IsDiscardTarget(target ExpressionSyntax) bool -> switch target {
+            case name is NameExpressionSyntax: IsDiscard(name.IdentifierToken)
+            case declaration is MultiAssignmentDeclarationExpressionSyntax: IsDiscard(declaration.Identifier)
+            default: false
+        }
+    }
+}

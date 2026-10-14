@@ -1,0 +1,302 @@
+// <copyright file="Issue1254GenericBaseEmitTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Compiler.Tests.Emit
+
+import GSharp.Compiler
+import GSharp.Compiler.Tests
+import System
+import System.Collections.Generic
+import System.Diagnostics
+import System.IO
+import Xunit
+import Xunit.Sdk
+
+/// Issue #1254: calling a member that is INHERITED from a generic base class
+/// through a derived receiver must emit a metadata token whose containing type
+/// is the CONSTRUCTED base instantiation (e.g. `Base`1<int32>`), not the
+/// open generic definition (`Base`1`). Emitting against the open definition
+/// produces IL that statically verifies but throws at runtime:
+/// `InvalidOperationException: ... not fully instantiated`.
+///
+/// Every test both statically verifies the emitted assembly via
+/// (cref:IlVerifier.Verify) AND executes it, asserting the printed
+/// result, so a token bound to the open definition is caught either way.
+open class Issue1254GenericBaseEmitTests {
+    @Fact
+    func InheritedMethod_IgnoringTypeParam_ViaDerivedReceiver_EmitsAndRuns() {
+        // The minimal repro from #1254: the inherited method's signature does
+        // not mention T, so the only unresolved thing is the containing-type
+        // instantiation.
+        let source = `package P
+import System
+
+open class Base[T] {
+    func Hello() int32 { return 42 }
+}
+
+class Derived : Base[int32] {
+}
+
+let d = Derived()
+Console.WriteLine(d.Hello())`
+        Assert.Equal("42${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func InheritedMethod_UsingTypeParam_ViaDerivedReceiver_EmitsAndRuns() {
+        // The inherited method's parameter and return both use T, which is
+        // substituted to int32 by the constructed base.
+        let source = `package P
+import System
+
+open class Base[T] {
+    func Echo(x T) T { return x }
+}
+
+class Derived : Base[int32] {
+}
+
+let d = Derived()
+Console.WriteLine(d.Echo(7))`
+        Assert.Equal("7${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func InheritedField_ViaDerivedReceiver_EmitsAndRuns() {
+        let source = `package P
+import System
+
+open class Base[T] {
+    let Value int32 = 99
+}
+
+class Derived : Base[int32] {
+}
+
+let d = Derived()
+Console.WriteLine(d.Value)`
+        Assert.Equal("99${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func InheritedAutoProperty_GetAndSet_ViaDerivedReceiver_EmitsAndRuns() {
+        let source = `package P
+import System
+
+open class Base[T] {
+    prop Item T
+}
+
+class Derived : Base[int32] {
+}
+
+let d = Derived()
+d.Item = 8
+Console.WriteLine(d.Item)`
+        Assert.Equal("8${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func InheritedProperty_Get_ViaDerivedReceiver_EmitsAndRuns() {
+        let source = `package P
+import System
+
+open class Base[T] {
+    var backing T
+    prop Item T {
+        get { return this.backing }
+    }
+}
+
+class Derived : Base[int32] {
+}
+
+let d = Derived()
+Console.WriteLine(d.Item)`
+        Assert.Equal("0${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func InheritedMethod_MultiLevelGenericBaseChain_EmitsAndRuns() {
+        // Derived : Mid[int32] : Base[T] — the type argument must be threaded
+        // through each hop of the base chain.
+        let source = `package P
+import System
+
+open class Base[T] {
+    func Hello() int32 { return 42 }
+}
+
+open class Mid[T] : Base[T] {
+}
+
+class Derived : Mid[int32] {
+}
+
+let d = Derived()
+Console.WriteLine(d.Hello())`
+        Assert.Equal("42${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func InheritedMethod_UsingTypeParam_MultiLevelChain_EmitsAndRuns() {
+        let source = `package P
+import System
+
+open class Base[T] {
+    func Pick(a T, b T) T { return a }
+}
+
+open class Mid[T] : Base[T] {
+}
+
+class Derived : Mid[int32] {
+}
+
+let d = Derived()
+Console.WriteLine(d.Pick(9, 4))`
+        Assert.Equal("9${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func BaseDotMethod_IntoGenericBase_FromNonGenericDerived_EmitsAndRuns() {
+        let source = `package P
+import System
+
+open class Base[T] {
+    open func Hello() int32 { return 42 }
+}
+
+class Derived : Base[int32] {
+    func Call() int32 { return base.Hello() }
+}
+
+let d = Derived()
+Console.WriteLine(d.Call())`
+        Assert.Equal("42${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func BaseDotProperty_IntoGenericBase_FromNonGenericDerived_EmitsAndRuns() {
+        let source = `package P
+import System
+
+open class Base[T] {
+    open prop Tag int32 {
+        get { return 13 }
+    }
+}
+
+class Derived : Base[int32] {
+    func Read() int32 { return base.Tag }
+}
+
+let d = Derived()
+Console.WriteLine(d.Read())`
+        Assert.Equal("13${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func BaseConstructorChaining_IntoGenericBasePrimaryCtor_EmitsAndRuns() {
+        let source = `package P
+import System
+
+open class Base[T](stored T) {
+}
+
+class Derived : Base[int32] {
+    init() : base(66) {
+    }
+}
+
+let d = Derived()
+Console.WriteLine(d.stored)`
+        Assert.Equal("66${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func InheritedMethod_GenericDerived_EmitsAndRuns() {
+        // Derived[U] : Base[U] — the derived type is itself generic and forwards
+        // its own type parameter to the base.
+        let source = `package P
+import System
+
+open class Base[T] {
+    func Hello() int32 { return 42 }
+}
+
+class Derived[U] : Base[U] {
+}
+
+let d = Derived[int32]()
+Console.WriteLine(d.Hello())`
+        Assert.Equal("42${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    shared {
+        private func CompileAndRun(source string) string {
+            let tempDir = Directory.CreateTempSubdirectory("gs_issue1254_emit_").FullName
+            try {
+                let srcPath = Path.Combine(tempDir, "test.gs")
+                let outPath = Path.Combine(tempDir, "test.dll")
+                File.WriteAllText(srcPath, source)
+                let args = List[string]{
+                    "/out:" + outPath,
+                    "/target:exe",
+                    "/targetframework:net10.0",
+                    "/nowarn:GS9100",
+                    srcPath
+                }
+                using let compileOut = StringWriter()
+                using let compileErr = StringWriter()
+                let prevOut = Console.Out
+                let prevErr = Console.Error
+                Console.SetOut(compileOut)
+                Console.SetError(compileErr)
+                var compileExit int32
+                try {
+                    compileExit = Program.Main(args.ToArray())
+                } finally {
+                    Console.SetOut(prevOut)
+                    Console.SetError(prevErr)
+                }
+                Assert.True(compileExit == 0, "compile failed ($compileExit): $compileOut$compileErr")
+                // (a) Static verification: the emitted IL must be valid.
+                IlVerifier.Verify(outPath)
+                // (b) Dynamic verification: the emitted code must execute. This is
+                // what catches a token bound to the open generic definition, which
+                // verifies statically but throws "not fully instantiated" at run.
+                let runtimeConfigPath = Path.ChangeExtension(outPath, "runtimeconfig.json")
+                File.WriteAllText(runtimeConfigPath, `{
+  "runtimeOptions": {
+    "tfm": "net10.0",
+    "framework": { "name": "Microsoft.NETCore.App", "version": "10.0.0" }
+  }
+}`)
+                let psi = ProcessStartInfo("dotnet", "exec \"" + outPath + "\""){
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+                using let proc = Process.Start(psi)!!
+                let stdout = proc.StandardOutput.ReadToEnd()
+                let stderr = proc.StandardError.ReadToEnd()
+                proc.WaitForExit()
+                if proc.ExitCode != 0 {
+                    throw XunitException("exited " + proc.ExitCode.ToString() + `
+stdout:
+` + stdout + `
+stderr:
+` + stderr)
+                }
+                return stdout.ReplaceLineEndings(Environment.NewLine)
+            } finally {
+                try {
+                    Directory.Delete(tempDir, recursive: true)
+                } catch { }
+            }
+        }
+    }
+}

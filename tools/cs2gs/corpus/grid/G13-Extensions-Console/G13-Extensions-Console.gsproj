@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Corpus.Grid13</RootNamespace>
+    <AssemblyName>G13-Extensions-Console</AssemblyName>
+  </PropertyGroup>
+
+</Project>

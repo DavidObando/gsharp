@@ -46,6 +46,47 @@ Record all of this in the PR body and in the squash commit:
 `dry-run.json` in the work root records the resolved versions and every stage
 outcome. Commit it into the PR description, not the tree.
 
+### Recorded values for the cut-over (tag `v0.4.1270`)
+
+| What | Value |
+|---|---|
+| Final C# commit and tag | `eac5b487b16c7c63bce2a95151968dc2b581a57e` / `v0.4.1270` (branch `cs2gs/csharp-0.4` points at the same commit) |
+| `Gsharp.Cs2Gs` version | `0.4.1270` (published, installed from nuget.org only) |
+| `Gsharp.NET.Sdk` pin | `0.4.1270` (`global.json` `msbuild-sdks`; no versioned per-project pin survives) |
+| `Gsharp.Gsfmt` version | `0.4.1270` |
+| Output of `cutover.py dry-run` | the final rehearsal at the tag, 2026-10-13, work root `~/.cache/cutover-dryrun/work`; stage outcomes in "Final rehearsal at the matched tag" below |
+| Translated tree this commit contains | the `migrate` output of that rehearsal, assembled and hand-fixed as in "Assembly" and "The hand-fix list" |
+| Stage-2 certification of the same C# commit | PENDING: result, run id and evidence location are filled in when the certification run finishes |
+| PR CI on the exact head | PENDING |
+
+The cut-over commit is the dry run's `migrate` output assembled and hand-fixed by the same code,
+with these deliberate differences, all found while preparing the commit:
+
+- The mirror overwrites files that were already G# or that stay C#. These are not taken from it:
+  `samples/**/*.gsproj` and `samples/HotReload/global.json` (per-project SDK pins the samples
+  keep on purpose), `src/vs-gsharp/VsGsharp.sln` and the `src/vs-gsharp/test/*Fixtures` `.gsproj`
+  files (pinned to `0.3.159` by an allow-list entry), and the build scripts that the phase-2
+  branch had already changed (the mirror holds the text of the C# commit).
+- Stray mirror outputs are not committed: the `.slnx` files written next to the kept `.sln` files
+  (`src/vs-gsharp`, the `gsharp-xunit` template) and the `Gsharp.Extensions.xml` build artefact.
+- `build/selfhost/PeBodyMutations.cs` stays C#. It is a file-based `dotnet run` helper that
+  `build/test-selfhost-stage2.py` runs by file name, so its `.gs` translation cannot run. (The
+  `assemble` stage would delete it because a `.gs` twin exists; this is a gap in the rule "a tracked
+  `.cs` with a twin is deleted".)
+- `GSA0001`-`GSA0003` are retired by hand (`docs/internal-analyzers.md`).
+- `build/selfhost-stage2.py` names the two stage helpers `PackageContentHash.gs` and
+  `TestSupervisorLogger.gs`; `build/test-selfhost-stage2.py` skips the C# corpus derivation test
+  on a G# tree; `build/check-release-version-refs.py` allow-lists the bootstrap pin `0.4.1270`
+  in `global.json` and `InternalAnalyzers.Tests.gsproj`.
+- `build.yml` checks the final C# tag out beside the workspace and exports `CS2GS_TEST_SOURCE_ROOT`
+  for the `Cs2Gs.Tests` shard only (see "Source-inspection tests need the final C# tree").
+- `build/cutover.py` itself is left as it was: the `hand-fix` stage rewrites its own `.csproj`
+  literals, which would break `dry-run` against a C# commit.
+
+Counts of the commit (`git diff --cached --name-status --no-renames`): 4,201 C# files deleted
+(4,202 in the dry run, minus `PeBodyMutations.cs`), 4,209 files added (the mirror's 4,218 minus the
+stray outputs, the retired GSA files and `PeBodyMutations.gs`, plus the files `apply.sh` adds).
+
 ## Translation command
 
 Run from a **fresh clone** of the tag with only nuget.org as the NuGet source:
@@ -329,3 +370,37 @@ Three of the five translate failures are attributable to listed fixes (`Compiler
 **not triaged**: `Cs2Gs.Tests` (GS0154/GS0155/GS0159, not individually verified) and the
 `Interpreter.Tests` per-test-name parity mismatch. They stay open items for the matched-tag
 rehearsal, which also has to confirm that nothing on the list above is a defect.
+
+### Final rehearsal at the matched tag
+
+Run on 2026-10-13 from a fresh clone of `v0.4.1270` (`eac5b487b`), published
+`Gsharp.Cs2Gs`/`Gsharp.Gsfmt`/`Gsharp.NET.Sdk` **0.4.1270** (tool == SDK == tag == translated commit, so
+skew items 4 and 5 above no longer apply; `--sdk-version`/`--sdk-pin` are supported), private NuGet cache,
+nuget.org only. Work root `~/.cache/cutover-dryrun/work`.
+
+| Stage | Result | Notes |
+|---|---|---|
+| clone | passed | `eac5b487b` |
+| tools | passed | `cs2gs`, `gsfmt` and SDK 0.4.1270 |
+| prepare | passed | restored, prerequisite builds, published SDK staged |
+| translate | failed (cs2gs exit 1), 58/58 apps green | no app failed or was unverified; `summary.json` reports `isGreen: false` with no gap listed. Under triage by the rehearsal owner; not a per-app failure |
+| assemble | passed | 4,202 C# files deleted, 4,218 files added; no untranslated C# retained |
+| hand-fix | passed | 51 fix groups, lock files regenerated |
+| gsfmt | passed after `--write` | not clean before: 402 of 4,372 `.gs` files (#4858) |
+| core-smoke | passed | `src/Core` compiles with the pinned SDK |
+| build | passed | `GSharp.slnx` in Release |
+| e2e | 15 passed, 1 skipped | `debugger-e2e` skipped (netcoredbg not installed); the stage is reported failed because of the skip |
+| vsix | passed (VS Code); VS: Windows only | `.vsix` packaged; the VSSDK build runs in the Windows job |
+
+The cut-over PR repeats the assemble, hand-fix and gsfmt stages on top of the phase-2 branch and
+reproduces the same stage counts (4,202 deleted before the `PeBodyMutations.cs` exception; 51 hand-fix groups;
+402 files reformatted); the commit's own counts are in the paragraph above.
+
+The tree used is the dry run's own `migrate` output. The preserved tree the stage-2 certification
+migrated from the same commit (`~/.cache/stage2-final/migrated-eac5b487b/tree`) differs only in the SDK pin
+(it pins the in-tree build `0.4.1270-geac5b487b1`) and one corpus test file
+(`tools/cs2gs/corpus/L3-Library.Tests/AdvancedTests.gs`, a lambda spelled as `() ->` versus a `func () object?` literal).
+
+Stage-2 certification of `eac5b487b`: PENDING (to be filled in: certified yes/no, Core.Tests and
+Compiler.Tests passed counts under stage 2, `GSharp.Core.dll` and `gsc.dll` byte comparison, exclusions,
+evidence location).
