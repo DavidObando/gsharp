@@ -3,7 +3,7 @@
 This page lists every place a G# release version lives, which of them must
 follow the latest published release, and what to edit when a release ships.
 [`build/check-release-version-refs.py`](../../build/check-release-version-refs.py)
-enforces it. The check runs on every pull request in the `nullable-hygiene` job of
+enforces it. The check runs on every pull request in the `release-version-refs` job of
 [`build.yml`](../../.github/workflows/build.yml). It reads the checkout only and
 never builds, packs or publishes anything.
 

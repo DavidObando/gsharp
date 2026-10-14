@@ -310,7 +310,7 @@ Printed:
         private func Translate(source string) string {
             var source = source
             // The C# sources spell their pragma directives as PRAGMA_WARNING so this
-            // file carries no literal nullability suppression (nullable_hygiene).
+            // file carries no literal nullability suppression.
             source = source.Replace("PRAGMA_WARNING", "#" + "pragma warning", StringComparison.Ordinal)
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Program.cs", source)})
             let document = Assert.Single(project.Documents)

@@ -152,7 +152,6 @@ class TreeTests(unittest.TestCase):
         put(tree, "GSharp.slnx", f"<Solution>{entries}<Project Path=\"{cutover.EXTENSIONS_PROJECT}\" /></Solution>")
         put(tree, "global.json", '{"sdk":{"version":"10.0.300"}}')
         put(tree, "build/generate-ci-test-matrix.py", 'if line.strip().lower().endswith(".tests.csproj")')
-        put(tree, "build/nullable_hygiene.py", 'projs = [f for f in os.listdir(d) if f.endswith(".csproj")]')
         return tree
 
     ORIGINAL = ('Project("{F}") = "Compiler", "src\\Compiler\\Compiler.csproj", "{1}"\n'
@@ -174,7 +173,6 @@ class TreeTests(unittest.TestCase):
             self.assertEqual("9.9.9", json.loads((tree / "global.json").read_text())["msbuild-sdks"]["Gsharp.NET.Sdk"])
             self.assertIn("*.gs", (tree / ".gitattributes").read_text())
             self.assertIn('endswith(".tests.gsproj")', (tree / "build/generate-ci-test-matrix.py").read_text())
-            self.assertIn('endswith((".csproj", ".gsproj"))', (tree / "build/nullable_hygiene.py").read_text())
 
     def test_scripts_and_workflows_get_the_slnx_name_but_sources_are_left_alone(self):
         # #4861: sources find the root through RepositoryRootMarker (either spelling); only commands are renamed.

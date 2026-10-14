@@ -22,7 +22,7 @@ commit.
 | `build.yml` runs on `push` of tags matching `v*`. The same file runs for pushes to `main` and PRs into `main`. | `.github/workflows/build.yml:3-11` |
 | The tag only gets a clean version (no `-g<sha>` suffix) if it matches `^refs/tags/v\d+(?:\.\d+)*$`. A tag such as `v0.4.NNNN-rc1` still triggers `publish` (`startsWith(github.ref, 'refs/tags/v')`), but it publishes packages with a prerelease `-g<sha>` version. | `version.json:9-12`, `build.yml:717` |
 | The version comes from the tagged commit's git height, not from the tag name. Nothing compares the two (#4639). Builds on `main` are also public, so the `main` push run of the freeze commit already prints the version the tag will publish. | `version.json:7-12`, `build.yml:48-62` |
-| `publish` waits for `build, tests, test-partition, e2e, ilverify, cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix, visual-studio-extension`. `nullable-hygiene` and the hot-core guard are not in the list; the hot-core guard only runs on PRs. | `build.yml:716`, `build.yml:567` |
+| `publish` waits for `build, tests, test-partition, e2e, ilverify, cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix, visual-studio-extension`. `release-version-refs` and the hot-core guard are not in the list; the hot-core guard only runs on PRs. | `build.yml:716`, `build.yml:567` |
 | No job declares an `environment:`, so publishing has no approval gate: pushing the tag is the approval. Repository environments are only `copilot` and `github-pages` (`gh api repos/DavidObando/gsharp/environments`, read 2026-10-02). | `build.yml` (no `environment:` key) |
 
 ### Stage-2 publication gate

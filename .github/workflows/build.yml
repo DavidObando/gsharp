@@ -345,11 +345,12 @@ jobs:
       - name: Run ILVerify gate
         run: ./build/run-ilverify.sh
 
-  nullable-hygiene:
-    # ADR-0155 (issue #1364): enforce the post-flip nullable defaults, no
-    # #nullable disable escapes in enabled production code, no CS8xxx
-    # suppression via pragma/NoWarn/.editorconfig, no `= null!`, and a
-    # justifying comment beside every added `!`. No build required, ~20s.
+  release-version-refs:
+    # Every reference to the latest published release must agree with
+    # website/src/data/release.json; the checklist is
+    # docs/release/version-bump-checklist.md. Cheap (seconds, no build); it only
+    # reads the checkout and never builds, packs or publishes anything.
+    # (This used to share the `nullable-hygiene` job, retired in #4906.)
     runs-on: ubuntu-latest
 
     steps:
@@ -357,23 +358,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run nullable hygiene gate (remaining C# only)
-        # After the cut-over the only production C# is src/vs-gsharp (plus test
-        # fixtures and cs2gs inputs), which still enables nullable analysis.
-        # Every check that scans tracked C# keeps running; `coverage` is
-        # skipped because it asserts the shape of src/Core's C# files.
-        run: |
-          python3 build/nullable_hygiene.py \
-            --base "origin/${{ github.base_ref || 'main' }}" \
-            --check classify --check no-escapes --check suppressions \
-            --check null-bang --check arg-null-bang --check forgiving \
-            --check guard-added
-
-      # Shares this job because it is equally cheap (seconds, no build) and the
-      # job is already a required check. Every reference to the latest
-      # published release must agree with website/src/data/release.json; the
-      # checklist is docs/release/version-bump-checklist.md. This only reads
-      # the checkout: it never builds, packs or publishes anything.
       - name: Test the release version reference check
         run: python3 build/test-check-release-version-refs.py
 

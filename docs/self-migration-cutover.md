@@ -20,9 +20,9 @@ It builds only under the Windows VSSDK toolchain, and it keeps its
 "Mapping rules"). The consequences for the documents that are rewritten after the
 cut-over (CLAUDE.md, CONTRIBUTING.md, CI):
 
-- `nullable-hygiene` does **not** become a no-op. It must keep covering the C#
-  that remains (`src/vs-gsharp`, C# fixtures, benchmark apparatus). Only the
-  Core/compiler rules lose their subject.
+- `nullable-hygiene` is retired (#4906): it existed to keep C# translatable to G#,
+  and the C# that remains is never translated. The compiler's own nullable
+  analysis (`TreatWarningsAsErrors`) still covers the VS extension.
 - The "no `#if`" rule applies to the translated tree. The VS extension is
   exempt. cs2gs refuses `#if`, which is one reason the extension is not
   migrated.
@@ -223,7 +223,7 @@ Items found by the dry run that the plan did not list:
 | Added | Why | Script |
 |---|---|---|
 | Rewrite `<name>.csproj` to `.gsproj` in `e2etests/*.sh`, `.github/workflows/*.yml`, `build/*.sh|py`, `src/vscode-gsharp`, `website/scripts` | About 130 files name translated projects. Without it the e2e scripts and workflows break. Only names with a `.gsproj` twin and no `.csproj` twin are rewritten, so fixtures such as `App.csproj` are not touched. | 2b |
-| Teach the extension-based CI scripts `.gsproj` | `build/generate-ci-test-matrix.py` accepts only `*.tests.csproj` (it exits "Missing sharded test projects" on the migrated tree) and `build/nullable_hygiene.py` looks for the owning `.csproj` of retained C#. Name rewriting cannot reach either; `EXTENSION_FIXES` patches them and the stage runs the matrix generator as a check. Other scripts that list `*.csproj` (`run-cs2gs-selfmig-pr-guard.sh`) are retired in Phase 4. | 2c |
+| Teach the extension-based CI scripts `.gsproj` | `build/generate-ci-test-matrix.py` accepts only `*.tests.csproj` (it exits "Missing sharded test projects" on the migrated tree). Name rewriting cannot reach it; `EXTENSION_FIXES` patches it and the stage runs the matrix generator as a check. Other scripts that list `*.csproj` (`run-cs2gs-selfmig-pr-guard.sh`) are retired in Phase 4. | 2c |
 | Reformat with `gsfmt --write` | The plan expected `gsfmt --check` clean. After polish it is not: 394 of 4,350 `.gs` files re-wrap (#4858). The script writes them and requires a clean re-check; commit the result as its own commit. | gsfmt stage |
 | Keep the pin to the published artefacts | A source build of the C# solution (which `capture-test-oracle` triggers) packs `Gsharp.NET.Sdk.<v>-g<sha>` and `GSharp.CodeAnalysis.Analyzers.Testing.<v>-g<sha>`; a tool without `--sdk-version` then pins the whole tree to them (#4849). The script deletes every source-built copy before translating. | translate |
 | Regenerate `packages.lock.json` | Established from the mirror: the 35 translated product projects (src, test, tools) DO carry a `packages.lock.json`, copied from their C# projects, while samples and templates never had one. The copies are stale for the `.gsproj` projects: the locked-mode restore CI uses fails with NU1004 on the first test project. | 8 |
