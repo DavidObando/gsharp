@@ -20,6 +20,7 @@ on:
       - 'test/Compiler.Tests/LanguageConformance/**'
       - 'test/Shared/GoldenFile.gs'
       - 'build/generate-quality-dashboard.py'
+      - 'build/test-generate-quality-dashboard.py'
       - 'global.json'
       - '.github/workflows/pages.yml'
   pull_request:
@@ -33,6 +34,7 @@ on:
       - 'test/Compiler.Tests/LanguageConformance/**'
       - 'test/Shared/GoldenFile.gs'
       - 'build/generate-quality-dashboard.py'
+      - 'build/test-generate-quality-dashboard.py'
       - 'global.json'
       - '.github/workflows/pages.yml'
   schedule:
@@ -59,6 +61,10 @@ jobs:
       - name: Validate quality dashboard generator CLI
         if: github.event_name == 'pull_request'
         run: python3 build/generate-quality-dashboard.py --help
+      # Pull requests skip the generator itself, so a source it reads being
+      # renamed (#4904) would otherwise only fail after merge.
+      - name: Test quality dashboard generator source readers
+        run: python3 build/test-generate-quality-dashboard.py
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:

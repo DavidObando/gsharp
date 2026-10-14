@@ -188,14 +188,25 @@ def count_ilverify_suppressions() -> int:
     )
 
 
-def randomized_case_count() -> int:
-    source = (
-        ROOT
-        / "test/Compiler.Tests/LanguageConformance/RandomizedDriverConformanceTests.cs"
-    ).read_text()
-    match = re.search(r"\bCaseCount\s*=\s*(\d+)", source)
+RANDOMIZED_CONFORMANCE_SOURCE = (
+    "test/Compiler.Tests/LanguageConformance/RandomizedDriverConformanceTests.gs"
+)
+
+# G# declares the constant as `const CaseCount int32 = 32` (name, then type).
+CASE_COUNT_PATTERN = re.compile(r"\bconst\s+CaseCount\s+[\w.]+\s*=\s*(\d+)")
+
+
+def randomized_case_count(root: Path | None = None) -> int:
+    path = (root or ROOT) / RANDOMIZED_CONFORMANCE_SOURCE
+    if not path.is_file():
+        raise RuntimeError(
+            f"Could not find {RANDOMIZED_CONFORMANCE_SOURCE} (looked at {path})."
+        )
+    match = CASE_COUNT_PATTERN.search(path.read_text())
     if not match:
-        raise RuntimeError("Could not find RandomizedDriverConformanceTests.CaseCount.")
+        raise RuntimeError(
+            f"Could not find the `const CaseCount <type> = <n>` declaration in {path}."
+        )
     return int(match.group(1))
 
 
