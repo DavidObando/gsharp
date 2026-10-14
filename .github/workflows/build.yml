@@ -88,6 +88,14 @@ jobs:
           dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
           dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
 
+      - name: Test the netstandard host-reference check
+        run: python3 build/test-check-netstandard-host-refs.py
+
+      - name: Check packed netstandard2.0 SDK assemblies do not reference the host runtime
+        # Issue #4921: tools/task/Gsharp.NET.Sdk.dll must load on .NET Framework
+        # MSBuild, which has no System.Private.CoreLib.
+        run: python3 build/check-netstandard-host-refs.py out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg
+
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v5
         with:

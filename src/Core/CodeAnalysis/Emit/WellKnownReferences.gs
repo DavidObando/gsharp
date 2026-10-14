@@ -1700,15 +1700,30 @@ internal class WellKnownReferences {
     /// containing both an embedded copy and the real contract assembly resolves
     /// to the contract assembly. When nothing public declares it — a genuinely
     /// old TFM — the attribute is omitted, the lossy-but-sound outcome the
-    /// accessors already documented. Synthesizing our own embedded copy, the way
-    /// csc does, is the full-fidelity follow-up.
+    /// accessors already documented. A declaration found only through the host
+    /// fallback (issue #4921) counts as "nothing public declares it". Synthesizing
+    /// our own embedded copy, the way csc does, is the full-fidelity follow-up.
     /// @param fullName The attribute's fully-qualified metadata name.
     /// @param attributeType The resolved, externally visible attribute type.
     /// @returns `true` when an externally visible declaration was found; otherwise `false`.
-    private func TryResolveEmbeddableAttribute(fullName string, @NotNullWhen(true) out attributeType Type?) bool -> this
-        .emitCtx
-        .References
-        .TryResolveType(fullName, requireExternalVisibility: true, out attributeType)
+    private func TryResolveEmbeddableAttribute(fullName string, @NotNullWhen(true) out attributeType Type?) bool {
+        let references = this.emitCtx.References
+        if !references.TryResolveType(fullName, requireExternalVisibility: true, out attributeType) {
+            return false
+        }
+        // Issue #4921: the resolver appends the host runtime assemblies as a
+        // transitive-dependency fallback. A netstandard2.0 / .NET Framework
+        // target set publishes no public copy of the attribute, so the lookup
+        // lands on the host's System.Private.CoreLib. A TypeRef scoped there
+        // cannot load on any other runtime (.NET Framework has no such
+        // assembly), so a host-fallback hit is "the target does not publish
+        // it", never a usable declaration (same rule as SignatureEncoder).
+        if references.IsHostFallback(attributeType!!) {
+            attributeType = nil
+            return false
+        }
+        return true
+    }
 
     private func BuildObjectDefaultCtorReference() MemberReferenceHandle {
         let sigBlob = BlobBuilder()
