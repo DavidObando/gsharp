@@ -4,16 +4,16 @@
 
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
 import System.Threading
 import System.Threading.Tasks
-import GSharp.Core.CodeAnalysis.Binding
-import GSharp.Core.CodeAnalysis.Symbols
-import GSharp.Core.CodeAnalysis.Syntax
-import GSharp.Core.CodeAnalysis.Text
 import Xunit
 
 /// Issue #4909: `DeclarationBinder.conformanceMatchingDepth` scopes the ADR-0186
