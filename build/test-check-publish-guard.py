@@ -54,6 +54,16 @@ class PublishGuardTests(unittest.TestCase):
     def test_final_csharp_line_is_allowed(self) -> None:
         self.assertEqual(run("--root", str(make_root()))[0], 0)
 
+    def test_malformed_versions_are_refused_but_real_forms_pass(self) -> None:
+        for bad in ("0.4garbage", "0.4.1garbage", "0.4.", "0.4.1.2.3", "x0.4", "", "0.4 ", "0.4.1/x"):
+            with self.subTest(bad=bad):
+                self.assertTrue(guard.refuses(bad))
+        for good in ("0.4", "0.4.1270", "0.4.1270-g1a2b3c", "0.4.1270.1", "0.4.1270+abc", "0.3.9"):
+            with self.subTest(good=good):
+                self.assertFalse(guard.refuses(good))
+        for bad_base in ("0.4garbage", "0.4.1garbage"):
+            self.assertEqual(run("--root", str(make_root(base=bad_base)))[0], 1)
+
     def test_older_line_is_allowed(self) -> None:
         self.assertEqual(guard.check_root(make_root(base="0.3", pin="0.4.1")), [])
 

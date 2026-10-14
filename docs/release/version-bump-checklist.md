@@ -165,7 +165,8 @@ now fails it (`newest snapshot '0.5' != release docsVersion '0.4'`) and would
 point `/docs` at an unpublished release. After the first 0.5 package is on
 nuget.org, in one post-publish PR:
 
-1. Edit `release.json` (`version`, `tag`, `docsVersion` = `0.5`) and every
+1. Edit `release.json`: `version` is the full published `0.5.N`, `tag` is
+   `v0.5.N` and only `docsVersion` is `0.5`. Then update every
    "must equal" row above (patch step 2.2, the `website/docs` pages), so
    `website/docs` names the 0.5 release.
 2. `cd website && npm ci && npm run docusaurus docs:version 0.5`. A dry run

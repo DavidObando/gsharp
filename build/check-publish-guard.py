@@ -18,9 +18,10 @@ It refuses when any of these holds:
   3. with --artifacts DIR, a downloaded .nupkg/.snupkg or .vsix names a 0.5+
      version (file name, nuspec, vsixmanifest or package.json).
 
-Removal: delete this script, its test (build/test-check-publish-guard.py), the
-two "Refuse ..." steps in build.yml and the test step in the nullable-hygiene
-job, in the same change that wires the certified publication.
+Removal: delete this script, its test (build/test-check-publish-guard.py), every
+"Refuse to publish a 0.5 or stage-2-built artifact" step in build.yml (two in
+`publish`, one in `publish-visual-studio-extension`) and the test step in the
+nullable-hygiene job, in the same change that wires the certified publication.
 
 Usage: check-publish-guard.py [--root DIR] [--artifacts DIR]...
 Exit status 0 when nothing is refused, 1 with one line per reason otherwise.
@@ -42,8 +43,13 @@ VERSION_FIELD = re.compile(r'"version"\s*:\s*"([^"]*)"')
 NUPKG_VERSION = re.compile(r"\.(\d+)\.(\d+)\.\d+(?:[-+.][0-9A-Za-z.+-]*)?\.s?nupkg$")
 
 
+# The whole string must be a version: 0.4, 0.4.N, the four-part VSIX form 0.4.N.R and an optional
+# NuGet prerelease or build suffix. A prefix match would accept `0.4garbage`.
+VERSION_SHAPE = re.compile(r"^(\d+)\.(\d+)(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+
+
 def line_of(version: str) -> tuple[int, int] | None:
-    match = re.match(r"^(\d+)\.(\d+)", version)
+    match = VERSION_SHAPE.match(version)
     return (int(match.group(1)), int(match.group(2))) if match else None
 
 
