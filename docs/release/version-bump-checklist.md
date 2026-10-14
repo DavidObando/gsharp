@@ -131,9 +131,9 @@ Order matters: publish first, then point the website at the published package.
 
 ## Bootstrap pin move (`global.json` `msbuild-sdks`)
 
-The repository is built by the pinned `Gsharp.NET.Sdk` (currently `0.4.1270`),
-whose emitter drops annotations on `shared` fields (fixed in #4911, issue
-#4903). When the pin moves to a release that contains #4911, revert the
+The repository is built by the pinned `Gsharp.NET.Sdk` (currently `0.5.7`),
+whose emitter dropped annotations on `shared` fields before the fix in #4911 (issue
+#4903). `0.5.7` contains #4911, so the remaining step is to revert the
 `ThreadLocal<T>` workarounds to `@ThreadStatic` fields (issue #4909):
 
 - `src/Core/CodeAnalysis/Binding/DeclarationBinder.Functions.gs`
