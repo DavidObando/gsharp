@@ -56,8 +56,8 @@ outcome. Commit it into the PR description, not the tree.
 | `Gsharp.Gsfmt` version | `0.4.1270` |
 | Output of `cutover.py dry-run` | the final rehearsal at the tag, 2026-10-13, work root `~/.cache/cutover-dryrun/work`; stage outcomes in "Final rehearsal at the matched tag" below |
 | Translated tree this commit contains | the `migrate` output of that rehearsal, assembled and hand-fixed as in "Assembly" and "The hand-fix list" |
-| Stage-2 certification of the same C# commit | PENDING: result, run id and evidence location are filled in when the certification run finishes |
-| PR CI on the exact head | PENDING |
+| Stage-2 certification of the same C# commit | certified: true on the dry-run tree (run `8d1e76c726801a48e1db4689b37db1da`, 2026-10-13/14, published bootstrap SDK 0.4.1270) and, earlier, on the tree of `eac5b487b` (second attempt); details in "Stage-2 certification" below |
+| PR CI | green (37 checks pass, 3 skipped) on `e6a0c9f54`, run 38493756916. The head of the commit that records this line only changes documentation and is checked by its own run (see the PR) |
 
 The cut-over commit is the dry run's `migrate` output assembled and hand-fixed by the same code,
 with these deliberate differences, all found while preparing the commit:
@@ -390,24 +390,50 @@ nuget.org only. Work root `~/.cache/cutover-dryrun/work`.
 | clone | passed | `eac5b487b` |
 | tools | passed | `cs2gs`, `gsfmt` and SDK 0.4.1270 |
 | prepare | passed | restored, prerequisite builds, published SDK staged |
-| translate | failed (cs2gs exit 1), 58/58 apps green | no app failed or was unverified; `summary.json` reports `isGreen: false` with no gap listed. Under triage by the rehearsal owner; not a per-app failure |
-| assemble | passed | 4,202 C# files deleted, 4,218 files added; no untranslated C# retained |
-| hand-fix | passed | 51 fix groups, lock files regenerated |
-| gsfmt | passed after `--write` | not clean before: 402 of 4,372 `.gs` files (#4858) |
-| core-smoke | passed | `src/Core` compiles with the pinned SDK |
-| build | passed | `GSharp.slnx` in Release |
-| e2e | 15 passed, 1 skipped | `debugger-e2e` skipped (netcoredbg not installed); the stage is reported failed because of the skip |
-| vsix | passed (VS Code); VS: Windows only | `.vsix` packaged; the VSSDK build runs in the Windows job |
+| translate | failed (cs2gs exit 1), 58/58 apps green | no app failed or was unverified. The exit 1 comes from the mirror's end-of-run unexpected-file check, which found `build/__pycache__/check-selfmig-stage-floor.cpython-314.pyc`, written by a Python 3.14 run. The file is gitignored and not in the PR. 27,533 s |
+| assemble | passed | 4,202 C# files deleted, 4,218 files added; no untranslated C# retained. 2 s |
+| hand-fix | passed | 51 fix groups, lock files regenerated. 5 s |
+| gsfmt | passed after `--write` | not clean before: 402 of 4,372 `.gs` files rewritten, then clean (#4858). 109 s |
+| core-smoke | passed | `src/Core` compiles with the pinned SDK. 263 s |
+| build | passed | `GSharp.slnx` in Release. 998 s |
+| e2e | reported failed in the main run; passed after re-run | `debugger-e2e` was skipped because netcoredbg was not installed (15 passed, 1 skipped). After installing netcoredbg, `--only e2e --e2e debugger` passed (21 s). `multitarget-e2e` skipped its net8.0 leg (runtime not installed). 569 s |
+| vsix | passed (VS Code); VS: Windows only | `.vsix` packaged; the VSSDK build runs in the Windows job. 21 s |
+
+Clone, tools and prepare took 7 s, 5 s and 78 s. The dry run ran 2026-10-13T10:23:03Z to 18:36:14Z (8 h 13 min) and exited 1 (translate and the skipped debugger e2e). Evidence: `~/.cache/cutover-dryrun/evidence/` (`dry-run.json`, `dry-run-after-debugger-rerun.json`, `NOTES.md`).
 
 The cut-over PR repeats the assemble, hand-fix and gsfmt stages on top of the phase-2 branch and
 reproduces the same stage counts (4,202 deleted before the `PeBodyMutations.cs` exception; 51 hand-fix groups;
 402 files reformatted); the commit's own counts are in the paragraph above.
 
-The tree used is the dry run's own `migrate` output. The preserved tree the stage-2 certification
-migrated from the same commit (`~/.cache/stage2-final/migrated-eac5b487b/tree`) differs only in the SDK pin
-(it pins the in-tree build `0.4.1270-geac5b487b1`) and one corpus test file
+The tree used is the dry run's own `migrate` output. The preserved tree that the first stage-2 certification
+migrated from the same commit (`~/.cache/stage2-final/migrated-eac5b487b/tree`) differs from it in two ways only: the SDK pin
+(it pins the in-tree build `0.4.1270-geac5b487b1`, the PR tree pins the published `0.4.1270`) and one corpus test file
 (`tools/cs2gs/corpus/L3-Library.Tests/AdvancedTests.gs`, a lambda spelled as `() ->` versus a `func () object?` literal).
 
-Stage-2 certification of `eac5b487b`: PENDING (to be filled in: certified yes/no, Core.Tests and
-Compiler.Tests passed counts under stage 2, `GSharp.Core.dll` and `gsc.dll` byte comparison, exclusions,
-evidence location).
+### Stage-2 certification (ADR-0198)
+
+All figures are read from the controller's `stage2-report.json` and `verify-stage2-report.py` output.
+
+| | Dry-run tree at `v0.4.1270` | Tree of `eac5b487b`, rerun 1 |
+|---|---|---|
+| Result | `certified: true`; `verify-stage2-report`: "a genuine certification" | `certified: true`; `verify-stage2-report` passed |
+| Run id | `8d1e76c726801a48e1db4689b37db1da` | `ff3c93923472cdfd49aa3a91e61a5c82` |
+| Bootstrap SDK | published `Gsharp.NET.Sdk.0.4.1270.nupkg` | in-tree `0.4.1270-geac5b487b1` |
+| Projects, configuration | `src/Core/Core.gsproj`, `src/Compiler/Compiler.gsproj`, Release | same |
+| Core.Tests under stage 2 | 11,245 executed, 0 failed | 11,245 executed, 0 failed |
+| Compiler.Tests under stage 2 | 7,035 executed, 0 failed | 7,035 executed, 0 failed |
+| `GSharp.Core.dll`, `gsc.dll` | stage 1 and stage 2 byte-identical, raw and normalized (`rawEqual` and `normalizedEqual` true for both) | same |
+| Exclusions | 10 Core.Tests and 64 Compiler.Tests, by name | same |
+| Test environment | `GSHARP_SKIP_ILVERIFY=1` (report `testEnvironment`) | same |
+| Wall time | 8 h 24 min (2026-10-13T18:36:29Z to 2026-10-14T03:00:21Z), exit 0 | 11,226 s, exit 0 (controller leg only, reusing the migrated tree) |
+
+- Exclusions by name: the 9 Core.Tests and 64 Compiler.Tests of the committed `build/selfhost/stage2-env-bound-tests.json` (tests that need the
+  repository layout; they fail identically under stage 1; #4873), plus one Core.Tests entry that is **not committed**:
+  `GSharp.Core.Tests.PublicApi.CorePublicApiAllowanceTests.ShippedAllowance_ListsExactlyTheTenAdr0199RecordTypes` (#4889). It was added to the
+  tree under test only (`uncommitted-exclusion.diff`); the owner deferred its resolution to after the cut-over, so the committed list still lacks it.
+- `GSHARP_SKIP_ILVERIFY`: unset in the invoking shell; the controller sets `GSHARP_SKIP_ILVERIFY=1` for its test runs only, and the report records it. IL verification of the stage outputs is therefore not covered by these test runs (#4873).
+- History on `eac5b487b`: the first attempt (`~/.cache/stage2-final/migrated-eac5b487b`, 26,749 s including migration) was **not** certified: one Core.Tests failure (the manifest calls it a repository-layout-bound test added on main, not a stage-1/stage-2 difference);
+  the rerun notes name `ShippedAllowance_ListsExactlyTheTenAdr0199RecordTypes` (#4889) as the test they excluded. Rerun 1 added the exclusion above and certified.
+- What the dry-run certification covers: the dry run's assembled tree (5,546 files). The PR tree differs from it by the `PeBodyMutations.cs` exception, the retired GSA files, the
+  phase-2 merge and the documentation and workflow edits (see "Recorded values"); stage 2 has not been run on the PR tree itself.
+- Evidence: `~/.cache/cutover-dryrun/evidence/` (`stage2-reports/stage2-report.json`, `verify-stage2-report.out`, `uncommitted-exclusion.diff`, `NOTES.md`) and `~/.cache/stage2-final/rerun-1/` (`RERUN-NOTES.md`, `evidence/`).
