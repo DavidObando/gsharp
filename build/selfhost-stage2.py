@@ -1688,8 +1688,8 @@ class Controller:
         helper_source = inputs / "selfhost"
         helper_source.mkdir()
         helper_files = (
-            "PackageContentHash.cs", "PackageContentHash.csproj",
-            "TestSupervisorLogger.cs", "TestSupervisorLogger.csproj",
+            "PackageContentHash.gs", "PackageContentHash.gsproj",
+            "TestSupervisorLogger.gs", "TestSupervisorLogger.gsproj",
         )
         for name in helper_files:
             atomic_bytes(helper_source / name, (HERE / "selfhost" / name).read_bytes())
@@ -2278,7 +2278,7 @@ class Controller:
             return assembly
         source = self.toolchains / "controller-inputs" / "selfhost"
         project = source / project_name
-        source_file = source / project_name.replace(".csproj", ".cs")
+        source_file = source / project_name.replace(".gsproj", ".gs")
         if not project.is_file() or not source_file.is_file():
             raise CertificationError(f"trusted {label} source changed")
         obj = self.writable(stage, f"{label}-obj")
@@ -2327,7 +2327,7 @@ class Controller:
 
     def package_content_hash(self, stage: str, package: Path) -> str:
         assembly = self.build_trusted_helper(
-            stage, "PackageContentHash.csproj",
+            stage, "PackageContentHash.gsproj",
             "Adr0198.PackageContentHash.dll", "package-content-hash")
         env, writable = self.environment(stage)
         result = self.command_stdout(
@@ -3422,7 +3422,7 @@ class Controller:
 
     def ensure_test_supervisor(self) -> Path:
         return self.build_trusted_helper(
-            "stage-2", "TestSupervisorLogger.csproj",
+            "stage-2", "TestSupervisorLogger.gsproj",
             "Adr0198.TestLogger.dll", "test-supervisor")
 
     def run_tests(

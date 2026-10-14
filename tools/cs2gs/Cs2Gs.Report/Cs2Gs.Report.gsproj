@@ -1,0 +1,12 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>Cs2Gs.Report</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Cs2Gs.Pipeline/Cs2Gs.Pipeline.gsproj" />
+  </ItemGroup>
+
+</Project>

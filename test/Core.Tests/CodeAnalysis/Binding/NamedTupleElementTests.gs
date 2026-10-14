@@ -1,0 +1,291 @@
+// <copyright file="NamedTupleElementTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Core.Tests.CodeAnalysis.Binding
+
+import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
+import GSharp.Tests
+import System.Collections.Generic
+import System.IO
+import System.Linq
+import Xunit
+
+/// ADR-0172 Phase A: named tuple elements. Types spell names Go-style —
+/// `(line int32, column int32)` — literals label with a colon —
+/// `(line: 1, column: 2)` — and access resolves the name positionally
+/// while `ItemN`/`.N` stay valid. Names are metadata: same-shape
+/// tuples differing only in names are identity-convertible. GS0541 warns only
+/// when an explicit literal label is renamed/ignored by the target (issue
+/// #3643, the CS8123 analog); value-to-value conversions between
+/// differently-named shapes are silent. Witness of discrimination: before ADR-0172
+/// every named spelling below was a parse error (GS0113/GS0005 cascade) and
+/// every name access was GS0158.
+open class NamedTupleElementTests {
+    @Fact
+    func NamedTypeClause_AccessByName_ItemN_AndNumericSelector() {
+        let result = EmittedOracle.Evaluate(`
+let pos (line int32, column int32) = (3, 5)
+pos.line + pos.Item2 + pos.column
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(13, result.Value)
+    }
+
+    @Fact
+    func LabeledLiteral_InfersNamedType_AccessByName() {
+        let result = EmittedOracle.Evaluate(`
+let t = (line: 7, column: 9)
+t.line * 10 + t.column
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(79, result.Value)
+    }
+
+    @Fact
+    func PartialNaming_NamedAndUnnamedElementsCoexist() {
+        let result = EmittedOracle.Evaluate(`
+let t (count int32, string) = (4, "x")
+t.count
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(4, result.Value)
+    }
+
+    @Fact
+    func NamedAndUnnamed_SameShape_AssignBothDirections() {
+        let result = EmittedOracle.Evaluate(`
+let named (line int32, column int32) = (3, 5)
+let unnamed (int32, int32) = named
+let back (line int32, column int32) = unnamed
+back.line + unnamed.Item2
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(8, result.Value)
+    }
+
+    @Fact
+    func RenamedLiteralLabels_WarnGS0541_StillCompiles() {
+        // Issue #3643 (CS8123 analog): explicit literal labels the target
+        // renames are the ONLY GS0541 trigger.
+        let result = EmittedOracle.Evaluate(`
+let renamed (row int32, col int32) = (line: 3, column: 5)
+renamed.row
+`)
+        Assert.Equal(2, result.Diagnostics.Count((d Diagnostic) -> d.Id == "GS0541"))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal(3, result.Value)
+    }
+
+    @Fact
+    func RenamedValueConversion_Assignment_NoGS0541() {
+        // Issue #3643: converting a named-tuple-typed VALUE to a
+        // differently-named same-shape target is silent, as in C# —
+        // element names are metadata, not part of the value.
+        let result = EmittedOracle.Evaluate(`
+let pos (line int32, column int32) = (3, 5)
+let renamed (row int32, col int32) = pos
+renamed.row
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(3, result.Value)
+    }
+
+    @Fact
+    func RenamedValueConversion_FunctionReturnIntoLocal_NoGS0541() {
+        // Issue #3643 repro shape: a function's named return converts to a
+        // differently-named declared local without warning.
+        let result = EmittedOracle.Evaluate(`
+func divmod(a int32, b int32) (quotient int32, remainder int32) {
+    return a / b, a % b
+}
+let r (q int32, rem int32) = divmod(10, 3)
+r.q * 10 + r.rem
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(31, result.Value)
+    }
+
+    @Fact
+    func RenamedValueConversion_ArgumentPassing_NoGS0541() {
+        let result = EmittedOracle.Evaluate(`
+func firstOf(pair (a int32, b int32)) int32 {
+    return pair.a
+}
+let pos (line int32, column int32) = (7, 9)
+firstOf(pos)
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(7, result.Value)
+    }
+
+    @Fact
+    func UnnamedValueConversion_ToNamedTarget_NoGS0541() {
+        let result = EmittedOracle.Evaluate(`
+let plain (int32, int32) = (3, 5)
+let named (row int32, col int32) = plain
+named.row + named.col
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(8, result.Value)
+    }
+
+    @Fact
+    func FunctionReturnType_NamedElements_AccessAtCallSite() {
+        let result = EmittedOracle.Evaluate(`
+func divmod(a int32, b int32) (quotient int32, remainder int32) {
+    return a / b, a % b
+}
+let r = divmod(10, 3)
+r.quotient * 10 + r.remainder
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(31, result.Value)
+    }
+
+    @Fact
+    func NestedNamedTuple_ElementNamesResolveAtEachLevel() {
+        let result = EmittedOracle.Evaluate(`
+let t (inner (a int32, b int32), tag string) = ((a: 1, b: 2), "x")
+t.inner.b
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(2, result.Value)
+    }
+
+    @Fact
+    func NamedVsUnnamed_TupleEquality_ComparesByShape() {
+        // ADR-0171 coupling constraint: the equality desugar keys on shape,
+        // never symbol identity — a named and an unnamed same-shape tuple
+        // compare element-wise.
+        let result = EmittedOracle.Evaluate(`
+let named (line int32, column int32) = (3, 5)
+named == (3, 5)
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(true, result.Value)
+    }
+
+    @Fact
+    func GenericSubstitution_PreservesElementNames() {
+        let result = EmittedOracle.Evaluate(`
+func first[T](pair (val T, ok bool)) T {
+    return pair.val
+}
+first((val: 42, ok: true))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(42, result.Value)
+    }
+
+    @Fact
+    func CorrectPositionItemN_IsAllowed() {
+        let result = EmittedOracle.Evaluate(`
+let t (Item1 int32, Item2 int32) = (1, 2)
+t.Item1 + t.Item2
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(3, result.Value)
+    }
+
+    @Fact
+    func DeconstructionOfNamedTuple_StillPositional() {
+        let result = EmittedOracle.Evaluate(`
+let pos (line int32, column int32) = (3, 5)
+let (a, b) = pos
+a * 10 + b
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(35, result.Value)
+    }
+
+    @Fact
+    func DuplicateName_ReportsGS0540() {
+        let diagnostic = Assert.Single(Errors(`
+let t (line int32, line int32) = (1, 2)
+`), (d Diagnostic) -> d.Id == "GS0540")
+        Assert.Equal("line", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func DuplicateLabel_InLiteral_ReportsGS0540() {
+        Assert.Contains(Errors(`
+let t = (line: 1, line: 2)
+`), (d Diagnostic) -> d.Id == "GS0540")
+    }
+
+    @Fact
+    func WrongPositionItemN_ReportsGS0542() {
+        Assert.Contains(Errors(`
+let t (Item2 int32, x int32) = (1, 2)
+`), (d Diagnostic) -> d.Id == "GS0542")
+    }
+
+    @Fact
+    func RestName_ReportsGS0542() {
+        Assert.Contains(Errors(`
+let t = (Rest: 1, x: 2)
+`), (d Diagnostic) -> d.Id == "GS0542")
+    }
+
+    @Fact
+    func SingleLabeledElement_ReportsGS0543_RecoversAsGrouping() {
+        let diagnostics = Errors(`
+let x = (line: 1)
+let y = x + 1
+`)
+        let diagnostic = Assert.Single(diagnostics, (d Diagnostic) -> d.Id == "GS0543")
+        Assert.Equal("line", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        // Recovery: `(line: 1)` binds as parenthesized `1`, so `x + 1` is valid
+        // and GS0543 is the only error.
+        Assert.Single(diagnostics)
+    }
+
+    @Fact
+    func SingleNamedTypeElement_ReportsGS0543_RecoversAsGrouping() {
+        let diagnostics = Errors(`
+let x (line int32) = 1
+let y = x + 1
+`)
+        Assert.Single(diagnostics, (d Diagnostic) -> d.Id == "GS0543")
+        Assert.Single(diagnostics)
+    }
+
+    @Fact
+    func NamedTupleType_DisplayName_IsNameFirst() {
+        let source = `
+let pos (line int32, column int32) = (1, 2)
+let mismatch string = pos
+`
+        let diagnostic = Assert.Single(Errors(source))
+        Assert.Contains("(line int32, column int32)", diagnostic.Message)
+    }
+
+    @Fact
+    func UnnamedTupleGrammar_Unchanged() {
+        let result = EmittedOracle.Evaluate(`
+import System.Collections.Generic
+let t (int32, List[int32], []string, (int32) -> int32) = (1, List[int32](), []string{"a"}, (x int32) -> x)
+t.Item1
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(1, result.Value)
+    }
+
+    shared {
+        private func Errors(source string) IReadOnlyList[Diagnostic] {
+            let tree = SyntaxTree.Parse(SourceText.From(source))
+            let compilation = Compilation(tree)
+            using let peStream = MemoryStream()
+            return compilation
+                .Emit(peStream)
+                .Diagnostics
+                .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+                .ToList()
+        }
+    }
+}

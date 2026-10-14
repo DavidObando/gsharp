@@ -226,10 +226,10 @@ public sealed class ProjectDebugAcceptanceTests
             root,
             "src",
             "Compiler",
-            "Program.cs"));
-        Assert.Contains("var fullPath = Path.GetFullPath(path);", compiler);
+            "Program.gs"));
+        Assert.Contains("let fullPath = Path.GetFullPath(path)", compiler);
         Assert.Contains("SyntaxTree.Load(fullPath)", compiler);
-        Assert.Contains("pdbOutputPath = Path.GetFullPath(pdbOutputPath);", compiler);
+        Assert.Contains("pdbOutputPath = Path.GetFullPath(pdbOutputPath)", compiler);
     }
 
     [Fact]

@@ -34,15 +34,15 @@ mkdir -p "$TMPDIR"
 source "$repo_root/build/selfmig-common.sh"
 
 cd "$repo_root"
-dotnet restore GSharp.sln --locked-mode
+dotnet restore GSharp.slnx --locked-mode
 selfmig_build_prerequisites
-dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj -c Release
+dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj -c Release
 
 # The compile stage builds the migrated tree through the PACKED Gsharp.NET.Sdk
 # nupkg, which cs2gs picks by recency. Repack the Release SDK last, strictly
 # before migrate (the same ordering run-cs2gs-selfmig-pr-guard.sh depends on),
 # so the stage-0 compiler is this checkout's, never a stale package.
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Release -graph
+dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release -graph
 
 # Migration stops after ILVerify (compile carries the `!!` polish): test parity
 # is not run here because the controller runs the tests under stage 2 itself.

@@ -19,7 +19,7 @@ def load(name):
 
 matrix = load("generate-ci-test-matrix")
 partition = load("verify-ci-test-partition")
-PROJECT = "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj"
+PROJECT = "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.gsproj"
 
 
 class CiTestMatrixTests(unittest.TestCase):

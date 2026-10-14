@@ -1,0 +1,50 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.Core.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FsCheck.Xunit" Version="3.0.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageReference Include="NETStandard.Library" Version="2.0.3" ExcludeAssets="all" GeneratePathProperty="true" PrivateAssets="all" />
+    <!-- Issue #2345 follow-up: real third-party "Microsoft.*"-named NuGet
+         package, referenced test-only, to regression-test
+         ReferenceResolver.IsBclOrRuntimeAssemblyPath against an actual
+         non-BCL assembly rather than a synthetic stand-in. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>NetStandard20ReferenceDirectory</_Parameter1>
+      <_Parameter2>$(PkgNETStandard_Library)/build/netstandard2.0/ref</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="@(GsharpCore-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
+    <ProjectReference Include="../../src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" />
+    <!-- ADR-0174: EmittedOracle-driven channel tests need the runtime beside the host. -->
+    <ProjectReference Include="../../src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" />
+    <!-- Emitted native-slice tests need the runtime beside the host. -->
+    <ProjectReference Include="../../src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="TestData/NativeMetadataContracts.cs.txt" LogicalName="GSharp.Core.Tests.NativeMetadataContracts.cs.txt" WithCulture="false" />
+    <Compile Include="..\Shared\EmittedFixture.gs" Link="EmittedFixture.cs" />
+    <Compile Include="..\Shared\EmittedOracle.gs" Link="EmittedOracle.cs" />
+    <Compile Include="..\Shared\EmittedOracleOptions.gs" Link="EmittedOracleOptions.cs" />
+    <Compile Include="..\Shared\EmittedOracleResult.gs" Link="EmittedOracleResult.cs" />
+    <Compile Include="..\Shared\GoldenFile.gs" Link="GoldenFile.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\RepositoryRootMarker.gs" Link="RepositoryRootMarker.cs" />
+  </ItemGroup>
+
+</Project>

@@ -6,6 +6,42 @@ hygiene. This file adds operational knowledge that has repeatedly cost time
 when it was missing. When a rule here conflicts with a maintainer's explicit
 instruction, follow the maintainer.
 
+## The compiler is written in G#
+
+Since 0.5 the compiler, the language server, the formatter and the tools in
+this repository are G# source (`.gs`, `.gsproj`). They were translated from C#
+by cs2gs at the final C#-built release (`v0.4.1270`); see
+[`docs/self-migration-cutover.md`](docs/self-migration-cutover.md) for the
+translation command and the path mapping. Three rules follow from that.
+
+- **Fixes happen in G#, on `main`.** Do not edit the C# branch
+  `cs2gs/csharp-0.4` to fix a bug. That branch is **semi-frozen**: it holds the
+  final C# source of the compiler and is a living C# corpus for cs2gs. It gets
+  no bug fixes and no features. It does get (a) code back-ported from G# to C#
+  when that code merits exercising cs2gs (new C# shapes for the nightly to
+  translate), and (b) a security fix that must be released as `0.4.1270+k`.
+  The cs2gs nightly pins a SHA of the branch, so a back-port is a branch commit
+  plus a pin bump in a `main` PR. A fix found while working on cs2gs is a fix in
+  G#, or in cs2gs (which is also G#).
+- **The N-1 rule: the repository builds with the previous released compiler.**
+  The pin is `msbuild-sdks` in [`global.json`](global.json). The compiler's own
+  source may use only language features that the pinned release supports. A PR
+  that adds a language feature must not use that feature in repository source
+  (including tests, samples and `src/`) until a release containing it becomes the
+  pin. Bumping the pin is its own PR: bump `global.json`, rebuild from a clean
+  clone, and confirm the stage-2 check still passes.
+- **`src/vs-gsharp` (the Visual Studio extension) stays C#.** It is not a
+  migration target and keeps its `#if NETFRAMEWORK` directives. It builds on
+  Windows only and references the G# language server; don't translate it, and
+  don't treat a C# file there as a missed migration.
+- **`build/selfhost/*.csproj` stays C#.** The stage-2 controller builds those
+  exact helper projects; never translate or rename them.
+- **Do not hand-edit pinned state to get green.** Never change the pin to a
+  locally built or unreleased SDK in a PR, and never exclude a file to dodge a
+  gsc defect. A gsc defect found while building the repository is a bug to fix
+  (see "Bootstrap hazards" below), not a reason to rewrite the source around it
+  unless the maintainer agrees.
+
 ## Pull requests and review
 
 - **Copilot reviews every push automatically.** Never request it, and never
@@ -51,60 +87,106 @@ instruction, follow the maintainer.
 
 ## CI gates and known behaviour
 
-- **nullable-hygiene** runs `python3 build/nullable_hygiene.py --base
-  origin/main`. Run it locally before pushing.
-  - Every null-forgiving `!` needs an adjacent comment justifying it.
-  - `= null!` initializers are rejected (ADR-0155).
-  - Where a value really can be null, prefer restructuring over commenting
-    the `!` away.
-- **hot-core translation guard** (`build/run-cs2gs-selfmig-pr-guard.sh`)
-  usually takes 30-60 minutes. It migrates a small set of net10 apps built
-  against a fully annotated BCL. So it **cannot** catch regressions that only
-  show up with unannotated or netstandard2.0 dependencies; issue #4361 is an
-  example of one that slipped through.
-- **Nightly self-migration** (`.github/workflows/cs2gs-selfmig-nightly.yml`)
-  is the full-corpus gate, with a floor of all apps green. To verify a fix
-  that affects migration, trigger it manually on `main` after merging:
-  `gh workflow run cs2gs-selfmig-nightly.yml --ref main`.
-- **cs2gs-oahu** migrates Oahu at the commit pinned in
-  `tools/cs2gs/external/oahu.json`.
-  `JobSchedulerTests.Bounded_Concurrency_Limit_Is_Enforced` is a known flaky
-  test (DavidObando/Oahu#71). Show that a failure isn't yours before
-  rerunning.
+The self-migration gates (the nightly self-migration and the hot-core
+translation guard) are retired: there is no C# compiler source left on `main`
+to translate. What gates a PR now:
+
+- **`build`** builds the whole solution with the pinned SDK. This is also the
+  smoke test that the pinned compiler can still compile `src/Core`.
+- **`tests`** shards, one per test project (the big ones split by test-name
+  band). `test-partition` proves every test runs exactly once. Rebalancing is a
+  change to `build/generate-ci-test-matrix.py`; the verifier says whether the
+  result is still a partition.
+- **gsfmt check** (`gsfmt --check .`) fails on any `.gs` file that is not in
+  canonical form. Fix it with
+  `dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --write .`.
+- **`ilverify`, `e2e`, the two VSIX jobs** are unchanged in purpose.
+- **Stage-2 certification** (ADR-0198, `build/selfhost-stage2.py`) proves that
+  the compiler built by the pinned compiler (stage 1) and the same source
+  rebuilt by that stage-1 compiler (stage 2) emit identical `GSharp.Core.dll`
+  and `gsc.dll` (except the validated `Module.Mvid` slot), and that the Core
+  and Compiler test suites pass under stage 2. A stage-2 failure is a compiler
+  defect only visible when gsc compiles itself: treat it as P0, stop and
+  diagnose; do not re-run until green. It runs nightly (`selfhost-stage2-nightly`),
+  not on pull requests: a PR only runs the controller's contract tests in
+  `test-partition`, which are not certification. A release tag additionally
+  requires a successful stage-2 run on the tagged commit.
+- **`cs2gs-corpus`** still guards cs2gs as a product on every PR: it runs the
+  C# corpus under `tools/cs2gs/corpus` against the gap ledger.
+- **cs2gs apps nightly** (`cs2gs-apps-nightly`) runs cs2gs as built from `main`
+  (G#, pinned toolchain) over every real-world C# app we cover, in one run: the C# version of G# (branch `cs2gs/csharp-0.4` at a
+  pinned SHA), Oahu and Code Exploder (pinned in `tools/cs2gs/external/`). Oahu
+  and Code Exploder no longer run on PRs and `publish` does not wait for them.
+  It is a regression monitor for cs2gs, not a gate on G# changes. When an app
+  goes red the `gate` job files, or updates, one GitHub issue per
+  gate/app/failure with the gate report, labeled `cs2gs-nightly`. The priority
+  follows the triage rule below: P0 only when an app that was previously green
+  on `main` (listed in `tools/cs2gs/apps-nightly-banked.json`) goes red,
+  otherwise P1. Fix cs2gs; don't edit the issue's priority down to make the
+  dashboard greener.
+- **`nullable-hygiene`** now scopes `build/nullable_hygiene.py` to the C# that
+  remains (`src/vs-gsharp`, test fixtures, cs2gs inputs): the justified-`!`,
+  suppression and `null!` rules still apply there, and the Core coverage check
+  is skipped. The job also runs the release-version-reference check
+  (`build/check-release-version-refs.py`). In G# source, C#'s `!` is `!!`; see
+  "Nullability architecture".
+- **`Issue3347RemainingSpillInventoryTests`** counts retired synthesized names
+  (`__spill`, `__cast`, `__decon`, `__using`) in the committed `.gs` tree.
+  If it fails, a new `.gs` file contains one: write the code without it. Don't
+  weaken the test.
+- **`selfhost-windows`** (migrated Core.Tests on Windows) is parked and
+  unavailable until repaired: it is dispatch-only, not gating, and still expects
+  artifacts that no longer exist. Don't dispatch it expecting a result.
+- **Windows and differential-conformance nightlies** may be red. Shipping with a
+  red nightly is a maintainer judgment call; don't assume a red Windows
+  nightly is yours, and don't assume it isn't. Show the evidence.
 - **Build docs** (`pages.yml`): the WebKit dark-theme accessibility check on
   `project/quality-dashboard` fails intermittently. When a PR doesn't touch
   that page, rerun it with `gh run rerun <run-id> --failed`.
-- **`Issue3347RemainingSpillInventoryTests`** translates code through cs2gs
-  and fails if the output contains retired synthesized names. It has two
-  scopes:
-  - `src/Core` is checked for all four families: `__spill`, `__cast`,
-    `__decon` and `__using`.
-  - The cs2gs translator project is checked for `__spill` only.
-
-  If it fails, change the new C# code (or cs2gs) so the translation doesn't
-  produce the name. Don't weaken the test. Its translator scope doesn't cover
-  the other three families, so don't treat it as a gate for them.
+- **The Oahu leg** of the apps nightly migrates Oahu at the commit pinned in
+  `tools/cs2gs/external/oahu.json`.
+  `JobSchedulerTests.Bounded_Concurrency_Limit_Is_Enforced` is a known flaky
+  test (DavidObando/Oahu#71). Show that a failure isn't yours before
+  rerunning, and before closing an auto-filed issue as a flake.
 - **Flaky or not, check the logs first.** Pull the job log
   (`gh api repos/DavidObando/gsharp/actions/jobs/<id>/logs`) and show that
   the failure is unrelated, e.g. the same failure on `main` or on an
   unrelated PR, before rerunning.
 
+## Bootstrap hazards
+
+The compiler builds itself, so a gsc defect can break the build of gsc.
+
+- **A change to the compiler is compiled by the pinned (older) compiler.**
+  Your change is exercised by the pin first and by itself only in stage 2.
+  A bug that miscompiles gsc's own source shows up as a stage-2 mismatch or as
+  a crash in a test that is green under stage 1. Run the stage-2 check locally
+  for changes to binding, lowering, emit or the runtime libraries
+  (`build/selfhost-stage2.py`; see `docs/self-host-bootstrap.md`).
+- **Determinism matters.** Emit must be byte-for-byte reproducible. Do not
+  iterate a hash-ordered collection to assign numbers, names or table order.
+  (#4663 was exactly this.)
+- **Do not break the pin.** If a fix to gsc is needed to build the repository
+  at all, land the gsc fix in a PR that builds with the current pin first (it
+  must not use the fix), then use it in a later PR after the pin moves.
+
 ## Local environment
 
 - **Test scope:** run targeted `--filter` test runs locally. Full suites run
-  on PR CI.
-- **`/tmp` is a shared tmpfs of about 31 GB.** Self-migration and hot-core
-  runs fill it quickly, and when it fills every Bash command fails silently
-  for everyone on the machine. Put their work roots
-  (`SELFMIG_PR_GUARD_ROOT`, `--out`, `--artifacts`, `TMPDIR`) under
-  `~/.cache/<tag>/`, and delete them when you're done.
+  on PR CI. Build with `dotnet build GSharp.slnx --configuration Release -graph`;
+  test projects are `*.gsproj`.
+- **`/tmp` is a shared tmpfs of about 31 GB.** Stage-2 and cs2gs apps runs
+  fill it quickly, and when it fills every Bash command fails silently for
+  everyone on the machine. Put their work roots (`--work`, `--out`,
+  `--artifacts`, `TMPDIR`) under `~/.cache/<tag>/`, and delete them when
+  you're done.
 - **Keep durable state off tmpfs.** `/tmp` is RAM-backed and is wiped on
   reboot, and the session scratchpad (`/tmp/claude-*`) goes with it. Anything
   you'd need after a crash or reboot lives on disk, e.g. `~/.cache/<tag>/`:
   coordinator state and continuity logs, hand-off notes, drafted PR replies.
-- **After a crash or reboot,** background processes, monitors and local guard
-  runs are gone. Check each worktree's `git status` and clean interrupted
-  work roots before resuming.
+- **After a crash or reboot,** background processes, monitors and local runs
+  are gone. Check each worktree's `git status` and clean interrupted work
+  roots before resuming.
 - **Never kill test processes by pattern.** `pkill -f "dotnet test"` (or
   `testhost`) matches your own shell and kills it. Kill by PID.
 - **Long commands:** start them once in the background and wait for the
@@ -119,7 +201,8 @@ instruction, follow the maintainer.
 ## Nullability architecture
 
 Nullability is where most recurring defects in this codebase have come from.
-Before touching it, read:
+The compiler is now G# source, and the type and member names below are the same
+names in `.gs` files. Before touching it, read:
 
 - **ADR-0186** (platform types, `T!`): oblivious CLR positions are
   `PlatformTypeSymbol`, which is distinct from `NullableTypeSymbol` (`T?`).
@@ -133,38 +216,47 @@ Before touching it, read:
     receiver-aware `MemberLookup.GetClr*TypeSymbol` family) instead of calling
     `TypeSymbol.FromClrType` or `MapOpenClrTypeToSymbolic` on a signature
     position directly.
-  - **Phase 1:** adds `NullabilityImportRule`, the single place that decides
-    how an imported position's nullability maps to a G# type, plus the first
-    `TypeSymbol` query members. From then on, route new decisions through it.
-  - **Phases 2–3:** add the rest of the query API, and the analyzers that
-    enforce the funnel (GSA0007/GSA0008, plus GSA0009 for cs2gs in Phase 5).
-    After they land, consumers use the query API instead of writing their own
-    `is NullableTypeSymbol` tests.
+  - **Landed:** `NullabilityImportRule` (the single place that decides how an
+    imported position's nullability maps to a G# type), the first `TypeSymbol`
+    query members, and the GSA0007 analyzer that enforces the producer funnel.
+    Route new decisions through them.
+  - **Still ahead:** the rest of the query API, GSA0008 and the consumer
+    migration (after which consumers use the query API instead of writing their
+    own `is NullableTypeSymbol` tests), and GSA0009 for cs2gs (Phase 5). Until
+    then, review for the consumer pattern by hand.
 - **Settled decisions** (don't reopen them without the maintainer):
   - `[Nullable(2)]` on an open type-parameter slot: a reference-type argument
     gives `T?`; a value-type argument is left unchanged, with no wrapping
     (`Min<int>()` returns `int`).
   - An in-scope unconstrained type parameter is left unchanged. Revisiting it
     as `T!` is tracked in #4385, after ADR-0193 Phase 3.
-- **Stated-nullable member chains need `!!` or `?.`.** gsc no longer has a
-  carve-out for these (#4356), and cs2gs emits `!!` itself. `?.` changes the
-  result type (`T` → `T?`), so it isn't a drop-in replacement for a C#
-  dereference; `!!` is.
+- **`!!` is a runtime check, not an annotation.** In G# source, `x!!` throws at
+  the site when `x` is null. Use it where the value really cannot be null and
+  failing fast is the right behaviour. Where a value can be null, restructure
+  (`?.`, a guard, a nullable-aware signature) instead of asserting. A `!!` the
+  compiler can prove redundant is reported as GS0536; remove it. Most `!!` in
+  the translated source came from C#'s `!`; trimming them is ongoing cleanup,
+  so don't treat a nearby `!!` as a pattern to copy.
+- **Stated-nullable member chains need `!!` or `?.`.** gsc has no carve-out for
+  these (#4356). `?.` changes the result type (`T` to `T?`), so it isn't a
+  drop-in replacement for an unconditional dereference; `!!` is.
 
 ## Issue triage
 
 Every open issue carries exactly one of `P0`, `P1` or `P2`:
 
 - **P0:** actively breaking something. Examples: a red gate on `main`, a
-  merge-blocking regression, a process crash or silent miscompile reachable
-  in default mode, a security issue. Keep these rare.
+  merge-blocking regression, a stage-2 mismatch, a process crash or silent
+  miscompile reachable in default mode, a security issue. Keep these rare.
 - **P1:** a confirmed bug with concrete impact and a repro. This includes
   invalid IL or ILVerify failures, internal compiler errors (GS9998) on valid
   code, and cs2gs dropping semantics without a diagnostic.
 - **P2:** minor, cosmetic, deferred by design, speculative, or pure
   architecture debt.
 
-Label newly filed issues when you file them.
+Label newly filed issues when you file them. Readability gaps in cs2gs output
+or in the translated source go under the single post-cut-over cleanup issue
+instead of one issue per synthesized name.
 
 ## Coordinating multiple agents
 
@@ -175,8 +267,8 @@ For sessions that delegate work to subagents:
 - **Keep the coordinator's state log on disk,** not in `/tmp` or the
   scratchpad (see "Keep durable state off tmpfs" above).
 - **Briefs are self-contained:** include the issue, the relevant ADR
-  decisions, the landing criteria and the process rules above. Agents don't
-  inherit them automatically.
+  decisions, the landing criteria and the process rules above, including the
+  N-1 rule. Agents don't inherit them automatically.
 - **The coordinator merges.** Before merging, verify the agent's claims
   directly: CI status, unresolved threads, and whether the latest review
   covers the head commit.

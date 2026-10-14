@@ -18,7 +18,7 @@ const injectionPath = path.resolve(
 );
 const syntaxFactsPath = path.resolve(
   repoRoot,
-  'src/Core/CodeAnalysis/Syntax/SyntaxFacts.cs',
+  'src/Core/CodeAnalysis/Syntax/SyntaxFacts.gs',
 );
 
 const grammar = JSON.parse(fs.readFileSync(grammarPath, 'utf8'));
@@ -26,8 +26,8 @@ const grammar = JSON.parse(fs.readFileSync(grammarPath, 'utf8'));
 function reservedKeywordsFromCompiler(): string[] {
   const source = fs.readFileSync(syntaxFactsPath, 'utf8');
   // Inside SyntaxFacts.GetKeywordKind every reserved keyword appears as a
-  // `case "word":` label; it is the only switch in the file keyed by string.
-  const matches = source.matchAll(/case\s+"([a-zA-Z]+)":/g);
+  // `case "word" {` label; it is the only switch in the file keyed by string.
+  const matches = source.matchAll(/case\s+"([a-zA-Z]+)"\s*\{/g);
   return Array.from(matches, (m) => m[1]).sort();
 }
 

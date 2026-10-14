@@ -1,0 +1,47 @@
+// <copyright file="Issue2553RepeatedDiscardParserTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Core.Tests.CodeAnalysis.Syntax
+
+import GSharp.Core.CodeAnalysis.Syntax
+import System.Linq
+import Xunit
+
+open class Issue2553RepeatedDiscardParserTests {
+    @Fact
+    func RepeatedDiscards_ParseInTupleLetAssignmentAndLoop() {
+        const source = `package p
+func F() {
+    var value = 0
+    let (kept, _, _) = (1, 2, 3)
+    var (mutable, _) = (4, 5)
+    value, _, _ = 4, 5, 6
+    value, let fresh = (8, 9)
+    for (item, _, _) in [1](int32, int32, int32){(7, 8, 9)} {
+    }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let body BlockStatementSyntax? = tree.Root.Members.OfType[FunctionDeclarationSyntax]().Single().Body
+        let tupleLet = Assert.IsType[TupleDeconstructionStatementSyntax](body!!.Statements[1])
+        Assert.Equal([]string{"kept", "_", "_"}, tupleLet.Identifiers.Select((token SyntaxToken) -> token.Text))
+        let tupleVar = Assert.IsType[TupleDeconstructionStatementSyntax](body!!.Statements[2])
+        Assert.Equal(SyntaxKind.VarKeyword, tupleVar.Keyword.Kind)
+        Assert.Equal([]string{"mutable", "_"}, tupleVar.Identifiers.Select((token SyntaxToken) -> token.Text))
+        let assignment = Assert.IsType[MultiAssignmentStatementSyntax](body!!.Statements[3])
+        Assert.Equal(
+            []string{"value", "_", "_"},
+            assignment
+                .Targets
+                .Cast[NameExpressionSyntax]()
+                .Select((target NameExpressionSyntax) -> target.IdentifierToken.Text)
+        )
+        let mixed = Assert.IsType[MultiAssignmentStatementSyntax](body!!.Statements[4])
+        let fresh = Assert.IsType[MultiAssignmentDeclarationExpressionSyntax](mixed.Targets[1])
+        Assert.Equal(SyntaxKind.LetKeyword, fresh.Keyword.Kind)
+        Assert.Equal("fresh", fresh.Identifier.Text)
+        let loop = Assert.IsType[ForTupleRangeStatementSyntax](body!!.Statements[5])
+        Assert.Equal([]string{"item", "_", "_"}, loop.Identifiers.Select((token SyntaxToken) -> token.Text))
+    }
+}

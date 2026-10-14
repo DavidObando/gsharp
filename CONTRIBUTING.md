@@ -4,36 +4,83 @@ G# accepts focused bug fixes, tests, documentation, and agreed language or
 tooling changes. Open or claim an issue before substantial work so semantics
 and scope are settled before code is written.
 
+## The repository is built with G#
+
+The compiler, language server, formatter and tools are G# source (`.gs`,
+`.gsproj`). Three parts of the repository are deliberately still C#:
+
+- `src/vs-gsharp` (the Visual Studio extension). It targets .NET Framework and
+  keeps its `#if NETFRAMEWORK` directives. It builds on Windows only and
+  references the G# language server.
+- `build/selfhost/*.csproj` (the ADR-0198 stage-2 controller's helper projects,
+  `PackageContentHash` and `TestSupervisorLogger`). The controller builds those
+  exact paths; do not translate or rename them.
+- Test fixtures and cs2gs inputs that are C# on purpose (for example
+  `tools/cs2gs/corpus` and `*.cs.txt` source data). They are the C# the
+  translator is tested against.
+
+The final C#-built release is `v0.4.1270`; its C# source of the compiler lives
+on branch `cs2gs/csharp-0.4`, which is **semi-frozen**: a living corpus for
+cs2gs. **Fixes happen in G#, on `main`.** Do not open bug-fix or feature PRs
+against the C# branch. It receives only code back-ported from G# to C# when that
+code merits exercising cs2gs, and a security fix released as `0.4.1270+k`. Both
+are made by the maintainer, and the cs2gs nightly pins a SHA of the branch.
+After the cut-over the cs2gs nightly runs cs2gs as built from `main` (written in
+G#) over the C# source on that branch, plus Oahu and Code Exploder.
+
 ## Prerequisites
 
 - .NET SDK selected by [`global.json`](global.json)
 - Git
-- Node.js 24 only when changing [`website/`](website/)
+- Node.js 24 only when changing [`website/`](website/) or the VS Code extension
+- Windows with Visual Studio only when changing `src/vs-gsharp`
 
-Restore uses checked-in NuGet lock files:
+### The N-1 rule
+
+The repository builds with the previous released compiler. The pin is the
+`Gsharp.NET.Sdk` entry under `msbuild-sdks` in [`global.json`](global.json), and
+it names a published release restored from nuget.org. Repository source may use
+only language features that the pinned release supports.
+
+If your PR adds a language feature, do not use it in repository source (`src/`,
+`test/`, `tools/`, samples) in the same PR. Use it only after a release
+containing it becomes the pin. Moving the pin is a separate PR: update
+`global.json`, build from a clean clone, run the stage-2 check, and note the
+new version in the release notes.
+
+See [`docs/self-host-bootstrap.md`](docs/self-host-bootstrap.md) for how stage 0
+(the pin), stage 1 and stage 2 relate.
+
+## Restore and build
 
 ```sh
-dotnet restore GSharp.sln --locked-mode
+dotnet restore GSharp.slnx --locked-mode
 dotnet tool restore
+dotnet build GSharp.slnx --configuration Release --no-restore -graph
 ```
 
-Do not update lock files unless dependency changes are part of the PR.
-
-## Build
-
-```sh
-dotnet build GSharp.sln --configuration Release --no-restore -graph
-```
+Restore uses the checked-in NuGet lock files (`packages.lock.json`). The
+cut-over regenerates them for the `.gsproj` projects (the rehearsal found the
+copies carried over from the C# projects stale). Do not update lock files unless
+dependency changes are part of the PR.
 
 `-graph` matters: it prevents duplicate project builds from racing over shared
 compiler outputs. Warnings are errors.
+
+Format `.gs` files with gsfmt. CI runs the check twice; run the write mode
+locally until it is clean:
+
+```sh
+dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --write .
+dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
+```
 
 ## Test
 
 Run the smallest project and filter that covers the change:
 
 ```sh
-dotnet test test/Compiler.Tests/Compiler.Tests.csproj \
+dotnet test test/Compiler.Tests/Compiler.Tests.gsproj \
   --configuration Release --no-build --no-restore \
   --filter 'FullyQualifiedName~LanguageConformance'
 ```
@@ -42,6 +89,10 @@ The complete suite is memory-heavy and can exceed 45 minutes. CI shards it;
 local full-suite runs are not expected for focused changes. Run relevant e2e
 scripts under [`e2etests/`](e2etests/) when changing the SDK, templates,
 debugging, packaging, or generated projects.
+
+For a change to binding, lowering, emit or the runtime libraries, also run the
+stage-2 check (`build/selfhost-stage2.py`, ADR-0198). The compiler compiles
+itself, and a defect can be invisible until gsc builds gsc.
 
 `Cs2Gs.Tests` launches nested SDK builds. Its stability depends on both
 invariants pinned by `TestHostProcessSetupTests`: MSBuild node reuse is disabled
@@ -123,4 +174,5 @@ replace maintainer responsibility for the merge. A self-review may record
 `MERGEABLE`, `BLOCKER`, `SHOULD-FIX`, or `NIT`; resolve blockers and file
 intentional residual work instead of dropping it. [`CLAUDE.md`](CLAUDE.md)
 collects the operational details for agents: the review loop, CI gate
-behaviour, local-environment hazards, and nullability-architecture rules.
+behaviour, bootstrap hazards, local-environment hazards, and
+nullability-architecture rules.

@@ -132,12 +132,75 @@ The published **0.4.591** release is the version used by the website's installat
 
 ### Reader's overview
 
+**The G# compiler is now written in G#.** Starting with 0.5, the compiler,
+language server, formatter and tools in this repository are G# source.
+cs2gs, the project's own C#-to-G# translator, converted them from the C#
+source of the final C#-built release, `0.4.1270`. Nothing changes in how you
+install or use G#: the package ids, the `Gsharp.NET.Sdk` project SDK, the
+`dotnet new` templates, and the VS Code and Visual Studio extensions are the
+same.
+
+How 0.5 is built (owner decision recorded in #4631; the assessment's D3
+had suggested shipping stage 1 first):
+
+- **Stage 1 (bootstrap, not shipped):** the G# source is compiled by the
+  published `Gsharp.NET.Sdk` **0.4.1270**, the final C#-built SDK, pinned once
+  in the repository's `global.json` `msbuild-sdks`.
+- **Stage 2 (what 0.5.x ships):** the G# source compiled again by the
+  stage-1 compiler, so the shipped compiler is built by a G#-built compiler.
+  Under [ADR-0198](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0198-isolated-stage-2-self-host-certification.md),
+  the cut-over is accepted only when stage 1 and stage 2 produce identical PE
+  bytes for `GSharp.Core.dll` and `gsc.dll`, except only the structurally
+  validated 16-byte `Module.Mvid` GUID slot, and `RefactoringBaselineTests`,
+  Core.Tests and Compiler.Tests pass under stage 2 (#4631).
+- After 0.5.x is published, the pin moves from 0.4.1270 to a 0.5 release.
+  From then on, each release is built by an earlier G# release.
+
+Where the C# source went (owner decision D2):
+
+- The C# source of 0.4.1270 stays on branch `cs2gs/csharp-0.4`. The branch is
+  **semi-frozen**: it gets no bug fixes and no features. It is a living C#
+  corpus for cs2gs, so code is occasionally back-ported from G# to C# when it
+  merits exercising cs2gs, and a security fix, if one is ever required, is
+  released as `0.4.1270+k`.
+- All development, including fixes, happens in G# on `main`, never on the C#
+  branch.
+- cs2gs's nightly run uses the cs2gs built from `main` (written in G#) to
+  migrate a pinned commit of the branch, together with Oahu and Code Exploder.
+- The Visual Studio extension (`src/vs-gsharp`) is still C#; it is not part of
+  the translation.
+
+A rule for compiler contributors (owner decision D4): the "N-1 rule". The
+compiler's own source may use only language features that the **pinned**
+released compiler supports. A PR that adds a language feature must not use
+that feature in compiler source until a release containing it becomes the pin.
+
+Before moving an application to 0.5, pin the intended SDK, select its
+documentation, run the project's tests, and review the affected diagnostics.
+
 For changes after the published snapshot, pay particular attention to stricter generic-constraint and nullable-argument diagnostics. Code previously accepted with an invalid CLR contract may now be rejected at compile time; the detailed entries below identify the diagnostic and remedy.
 
 Before moving an application to a different compiler version, pin the intended SDK, select its documentation, run the project's tests, and review the affected diagnostics. Do not treat the development branch's implementation notes as a stable compatibility promise.
 
 ### Breaking changes
 
+- **Assembly version 0.5.0.0.** The minor-version bump changes the
+  `AssemblyVersion` of `GSharp.Core` and the other compiler assemblies to
+  `0.5.0.0`. A G# analyzer built against 0.4's `GSharp.Core` still loads, but
+  reports `GS9303` (an analyzer was built against a different `GSharp.Core`
+  version than the host). **Remedy:** rebuild the analyzer against 0.5.
+- **Fail-fast `!!`.** The compiler is G# translated from C#, so places where
+  C# trusted a value to be non-null (`!`) are now `!!`: a runtime check that
+  throws `NullReferenceException` at the site instead of carrying null onward
+  (issue #4612). Valid input should behave the same as 0.4.1270. If a 0.5
+  compiler, language server or tool reports an internal error (`GS9998`) with a
+  null-reference trace on input that 0.4.1270 accepted, please file it with the
+  input.
+- **`data class` / `data struct` print and compare like a C# `record`**
+  (ADR-0199). `ToString` renders the C# record format and equality follows the
+  record ABI, which the self-migrated compiler needs for exact public ABI parity.
+  See the "Breaking: `data class` / `data struct` print and compare like a C# `record`"
+  entry above for the exact format.
 - **Inherited data equality compares the most-derived fields through base-typed calls and interfaces** (issues #4777 and #4675). Compiler-owned typed-base overrides preserve structural dispatch without changing the nonvirtual base-field comparison or permitting user-authored `Equals`. Direct imported record bases share that decision: self equality compares their fields nonvirtually, while native base/interface calls dispatch through the matching override with the actual symbolic generic owner. The existing imported data/record semantics detector gates this path; an ordinary CLR base's virtual domain-specific `Equals(Self)` remains inherited, without a synthesized component call or forwarding override. Optional native parameter-name metadata uses the standard positional fallback when absent, without changing signatures or nullability. cs2gs retains native records' `IEquatable<Self>` interfaces; class operators share the correct dispatch. Typed parameter nullability and generic/nested owner mappings agree in implementation and reference assemblies. Source calls and method groups retain both typed equality and the nullable object override. Ordinary and class-constrained calls to equality inherited from a constructed source generic base resolve the actual declaring owner, like method groups, without an internal compiler error. The emitted-PE sample hashes accept only the reviewed equality-slot metadata and class-operator changes; the byte-identical gate remains intact. Unrelated record ABI differences remain outside this repair.
 - **A compound member assignment through a receiver declared `T?` now reports `GS0158`** (issue [#4354](https://github.com/DavidObando/gsharp/issues/4354)). `xs.Capacity += 1` on a `List[int32]?` and `e.InnerException.Source += "x"` bound with no diagnostic and failed at run time with an unattributed `NullReferenceException`, while the plain write `xs.Capacity = 1` and the read were already reported. The compound form now follows them.
   - **Remedy:** narrow the receiver (`if let l = xs { l.Capacity += 1 }` or a nil guard) or assert it (`xs!!.Capacity += 1`). A receiver that was never nilable is unaffected.
@@ -551,6 +614,38 @@ Before moving an application to a different compiler version, pin the intended S
 - **A generic local function calling a sibling local function that captures outer state no longer crashes `gsc`** (issue #4221 follow-up to #4252, which removed the blanket `GS0463` rejection so a generic local function could capture ordinary outer state at all). `let Second[U] = func(x U) int32 { return outer }` / `let First[T] = func(x T) int32 { return Second(0) }` — where `First` never reads `outer` itself, only calls `Second` — crashed emission with `GS9998: InvalidOperationException: Variable 'outer' has no local slot or parameter index in the current method.`, regardless of whether `Second` was declared before `First` (ordinary forward visibility) or after (forward reference), or the two called each other (a cycle) — and the same crash reached one level deeper, through a plain local function declared inside `First`'s own body that called `Second` on `First`'s behalf, since that nested literal's own captured-variable set was fixed at its bind time and the reconciliation pass originally only re-walked the group's top-level members. Root cause: a generic local function is called directly through its `FunctionSymbol`, not through a delegate value, so `LambdaBinder`'s existing transitive-capture folding — which already walks a PHYSICALLY NESTED function literal's `CapturedVariables` into its enclosing literal's own set — had no equivalent for a `BoundCallExpression` referencing a SIBLING local function's `FunctionSymbol`; nothing propagated `Second`'s capture of `outer` into `First`'s own environment, so `MethodBodyEmitter.EmitGenericLocalClosureInstance` had no field to read `outer` from when rebuilding `Second`'s closure instance at the `Second(0)` call site inside `First`'s body. `CapturedVariableCollector` now consults a per-binder map of every local function's already-known captures (keyed by `FunctionSymbol`) and folds a callee's captures into its caller exactly like the nested-literal case; `LambdaBinder.ReconcileGenericLocalFunctionGroupCaptures` re-converges a whole consecutive-declaration group to a fixed point afterward, covering both the forward-reference and the call-cycle shapes the in-order pass alone cannot see, and now also recomputes every function literal nested inside a group member's body (not just the member's own top-level literal), so a plain local function declared inside a member that calls a sibling on the member's behalf gets the same fixed-point treatment instead of keeping the stale captured-variable set it had at its own bind time. Multiple generic instantiations of either function continue to share one captured cell; `this`, a captured parameter, a mutable reference-type field, and a plain local function nested inside a generic local function's own body (reading the outer state directly) all compose correctly with this and were previously untested.
 - **A call to a native ref-returning function/method, or a read of a native ref-returning property/indexer, is now usable as storage — an alias source, a `return ref` operand, and (when the getter is writable) an assignment target** (issue #4224). `var ref alias = At(values, 0)` (`func At(values []int32, i int32) ref int32`) and `var ref alias = holder.Value` (`prop Value ref int32 { get { return ref slot } }`) used to report `GS0256` unconditionally — `ExpressionBinder.IsLvalue` and `StatementBinder.IsLvalueForRefReturn` accepted only a variable, field, array element, or `*p` dereference, never a call/property result, even a ref-returning one. Both classifiers (and `return ref At(...)`'s equivalent, previously `GS0253`) now also accept a call to a same-compilation `FunctionSymbol`/instance method or a read of a same-compilation property/indexer whose `ReturnRefKind != None`, via a shared `RefCapabilities.IsNativeRefReturningCall` classifier so the two do not drift. An imported/CLR ref-returning member (e.g. `Span[T]`'s indexer) needed no change — `ConversionClassifier.AutoDereferenceRefReturn` already wraps those in a `BoundDereferenceExpression`, which was already an lvalue. Forwarding is escape-checked, not merely permitted: `RefCapabilities.TryGetRefReturnEscapeSources` decomposes a ref-returning call into its instance receiver and its non-`scoped` `ref`/`in`/`out` argument storage, and `HasFunctionLocalRefScope` propagates through them — `return ref Fwd(ref x)` from inside the SAME function that declared `x` still reports `GS0254`, while `return ref Fwd(ref value)` over a caller-supplied `ref` parameter, and `return ref At(values, 0)` over a by-value slice parameter, both compile, matching C#'s ref-safe-scope rules for a ref-returning call. A writable (`ref`, not `ref readonly`) getter with no setter now supports assignment without inventing one — `holder.Value = 42` and `GetHolder().Value = Next()` (receiver/RHS each evaluated exactly once) store through the getter's managed pointer, reusing the existing imported-indexer write-through shape (`BoundIndirectAssignmentExpression` over `BoundAddressOfExpression`); a native indexer's writable getter (`prop this[i int32] ref int32 { get {...} }`) gets the same treatment for both `box[i] = v` and an alias. A struct receiver that would need a defensive copy to call the getter (a `let`-bound or otherwise non-addressable struct value) is rejected for both the alias and the assignment form — a `let ref readonly` view remains allowed, since a read-only view of a copy is still sound. cs2gs's `ref expr` translator, which previously refused any call operand outright (issue #1900's own follow-up), now translates it like any other lvalue and lets gsc's binder validate it.
 - **`out`/`ref` of a `T?` pointee, where `T` is an OPEN, unconstrained type parameter, no longer emits an invalid reference-slot store/load for a real value-type instantiation** (issue #4236, found self-hosting `Compiler.Tests`'s channel matrix). `Gsharp.Concurrency.Chan[T].ReceiveOrPark`'s `out value T?` parameter — `T` carrying no `struct`/`class` constraint — compiled and ILVerified cleanly, then threw `InvalidProgramException` the moment `T` was JIT-instantiated as a genuine non-primitive struct; a CoreLib primitive element (`int32`, etc.) never exercised the faulty path, which is why the native, non-self-hosted test suite never caught it. Root cause: `MethodBodyEmitter.EmitStoreIndirect`/`EmitLoadIndirect` pick `stobj`/`ldobj` only for a pointee that is PROVABLY a value type (`NullableLifting.IsAnyValueTypeNullable`) or a bare bound `TypeParameterSymbol` — a `NullableTypeSymbol` wrapping an OPEN, unconstrained type parameter satisfies neither check, so it fell through to the reference-slot `stind.ref`/`ldind.ref` arm, which is invalid IL once the CLR resolves `T` to a real struct (a gap ILVerify's abstract-over-open-`T` checking does not catch, but the runtime type loader does). `ImportedMemberRefFactory.GetElementTypeToken` already resolved this exact shape correctly (issue #814 / ADR-0084 §L5 — `Nullable[T]` when `T` is struct-constrained, bare `T` otherwise); `EmitStoreIndirect`/`EmitLoadIndirect` simply never routed into it for this case. Both now recognize `NullableTypeSymbol` over an open `TypeParameterSymbol` and route to `stobj`/`ldobj` with that already-correct token. A minimal, non-self-hosted regression (`Issue4236OpenNullableTypeParameterIndirectTests`) reproduces the crash directly against native `gsc` — a generic class method with an `out value T?` and a `ref value T?` parameter, instantiated over a user struct — confirmed red before the fix and green after; `ilverify` reports no new finding on the fixed self-hosted `Gsharp.Runtime.Channels.dll` (the pre-existing, tracked `ReturnPtrToStack` false positive on `SelectRandom.Shuffle` is the only remaining entry).
+
+### Known limitations
+
+Translating the compiler from C# to G# lost some things, by decision
+(owner decision D7). Most items below change only the source form, not what the
+compiler does. The exception is `!!` (see "`!!` density" and the fail-fast
+breaking change above): it is a runtime check, so a violated non-null
+assumption now throws where C#'s compile-time-only `!` carried null onward:
+
+- **Regions.** `#region` blocks are not in the G# source. License headers are
+  preserved.
+- **Warning pragmas.** Only G# analyzer (`GSA*`) and nullable (`CS86xx`)
+  suppressions were carried over, as `@SuppressDiagnostic`. Other
+  `#pragma warning` lines were dropped.
+- **Layout.** Some blank lines inside bodies are gone.
+  - Static members of a type are grouped in a trailing `shared { }` block, so
+    they appear in a different order than in the C# file.
+  - `public`/`sealed` modifiers that G# does not spell are omitted.
+- **Git history.** History for compiler source restarts at the cut-over
+  commit; `git blame` does not follow a `.cs` file to its `.gs` successor. The
+  cut-over commit message names the final C# commit and the tag `v0.4.1270`.
+- **`!!` density.** The translated source has many `!!` assertions where the G#
+  compiler could not prove that a value is non-null. Reducing them is ongoing
+  cleanup.
+- **Conditional compilation.** G# has no `#if`. cs2gs reports `#if`/`#elif` as
+  an error instead of silently choosing a branch, and the compiler source was
+  free of them before translation (three test-only `#if DEBUG` sites were
+  rewritten as runtime checks).
+- Performance of the G#-built compiler compared with 0.4.1270
+  (compile time, memory), against the agreed budget (owner decision D11:
+  aim for parity, 1.5x acceptable). Measured on the cut-over candidate: about
+  1.04x time and 1.02x peak memory; to be re-measured on the released bits.
 
 ## 0.4
 

@@ -1,0 +1,21 @@
+// G05-Collections-Console: differential C#->G# conformance fixtures for
+// collection-shaped constructs (arrays, initializers, collection expressions,
+// index/range, stackalloc, tuples). One construct per file under Constructs/;
+// Run() methods are invoked in file-name (ordinal) order. Deterministic stdout
+// is the parity oracle.
+
+package Corpus.Grid05
+
+AnonymousObjectCreationExpressionFixture.Run()
+ArrayCreationExpressionFixture.Run()
+ArrayCreationExpressionMultiDimFixture.Run()
+ArrayInitializerExpressionFixture.Run()
+CollectionExpressionFixture.Run()
+CollectionInitializerExpressionFixture.Run()
+ImplicitArrayCreationExpressionFixture.Run()
+IndexExpressionFixture.Run()
+ObjectCreationExpressionFixture.Run()
+OmittedArraySizeExpressionFixture.Run()
+RangeExpressionFixture.Run()
+StackAllocArrayCreationExpressionFixture.Run()
+TupleExpressionFixture.Run()

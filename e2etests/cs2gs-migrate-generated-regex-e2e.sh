@@ -26,7 +26,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 echo "==> Packing Gsharp.NET.Sdk into .nugs/"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Release --nologo -v:q
+dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
 mkdir -p .nugs
 cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
 
@@ -38,8 +38,8 @@ VER="${VER%.nupkg}"
 rm -rf "${HOME:-$PWD}/.nuget/packages/gsharp.net.sdk/$VER" || true
 
 echo "==> Building cs2gs and gsc (Release)"
-dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj -c Release --nologo -v:q
-dotnet build src/Compiler/Compiler.csproj -c Release --nologo -v:q
+dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj -c Release --nologo -v:q
+dotnet build src/Compiler/Compiler.gsproj -c Release --nologo -v:q
 
 WORK_DIR="${E2E_WORK_ROOT:-$(mktemp -d)}"
 mkdir -p "$WORK_DIR"

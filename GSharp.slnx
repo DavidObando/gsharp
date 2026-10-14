@@ -1,0 +1,79 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/Analyzers/">
+    <Project Path="src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/Build/">
+    <File Path="build/.stylecop.json" />
+    <File Path="build/gsharp.build.props" />
+    <File Path="build/gsharp.build.ruleset" />
+    <File Path="build/gsharp.build.targets" />
+    <File Path="build/gsharp.props" />
+    <File Path="build/notest.targets" />
+    <File Path="global.json" />
+  </Folder>
+  <Folder Name="/cs2gs/">
+    <Project Path="tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj" Type="C#" />
+    <Project Path="tools/cs2gs/Cs2Gs.CodeModel/Cs2Gs.CodeModel.gsproj" Type="C#" />
+    <Project Path="tools/cs2gs/Cs2Gs.Pipeline/Cs2Gs.Pipeline.gsproj" Type="C#" />
+    <Project Path="tools/cs2gs/Cs2Gs.Report/Cs2Gs.Report.gsproj" Type="C#" />
+    <Project Path="tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.gsproj" Type="C#" />
+    <Project Path="tools/cs2gs/Cs2Gs.Translator/Cs2Gs.Translator.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/Samples/">
+    <File Path="samples/HelloWorld.gs" />
+    <File Path="samples/Loop.gs" />
+  </Folder>
+  <Folder Name="/Source/">
+    <Project Path="src/Compiler/Compiler.gsproj" Type="C#" />
+    <Project Path="src/Core/Core.gsproj" Type="C#" />
+    <Project Path="src/LanguageServer/LanguageServer.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/Source/Formatting/">
+    <Project Path="src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj" Type="C#" />
+    <Project Path="src/Formatting/GSharp.Formatting/GSharp.Formatting.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Repl/Repl.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/src/Analyzers/">
+    <Project Path="src/Analyzers/InternalAnalyzers/InternalAnalyzers.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/src/Sdk/">
+    <Project Path="src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj" />
+    <Project Path="src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj" Type="C#" />
+    <Project Path="src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj" Type="C#" />
+    <Project Path="src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" Type="C#" />
+    <Project Path="src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" Type="C#" />
+    <Project Path="src/Sdk/Gsharp.Templates/Gsharp.Templates.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/test-assets/">
+    <Project Path="test-assets/Issue3119.CrossConstants/Issue3119.CrossConstants.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/Compiler.Tests/Compiler.Tests.gsproj" Type="C#" />
+    <Project Path="test/Extensions.Tests/Extensions.Tests.gsproj" Type="C#" />
+    <Project Path="test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj" Type="C#" />
+    <Project Path="test/Interpreter.Tests/Interpreter.Tests.gsproj" Type="C#" />
+    <Project Path="test/LanguageServer.Tests/LanguageServer.Tests.gsproj" Type="C#" />
+    <Project Path="test/Runtime.Channels.Tests/Runtime.Channels.Tests.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="test/Core.Tests/Core.Tests.gsproj" Type="C#" />
+    <Project Path="test/Formatting.Tests/Formatting.Tests.gsproj" Type="C#" />
+    <Project Path="test/Sdk.Tests/Sdk.Tests.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/tools/" />
+  <Folder Name="/tools/cs2gs/">
+    <Project Path="tools/cs2gs/Cs2Gs.ProjectLoading/Cs2Gs.ProjectLoading.gsproj" Type="C#" />
+  </Folder>
+  <Folder Name="/tools/gsgen/">
+    <Project Path="tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj" Type="C#" />
+    <Project Path="tools/gsgen/GSharp.GeneratorHost.Tests/GSharp.GeneratorHost.Tests.gsproj" Type="C#" />
+    <Project Path="tools/gsgen/GSharp.GeneratorHost/GSharp.GeneratorHost.gsproj" Type="C#" />
+  </Folder>
+</Solution>

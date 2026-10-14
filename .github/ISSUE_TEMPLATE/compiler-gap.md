@@ -30,6 +30,6 @@ labels: ["Oats", "bug"]
 
 ## Definition of done
 
-- [ ] Fix + `Issue<N>*.cs` regression test
+- [ ] Fix + `Issue<N>*.gs` regression test
 - [ ] `tools/cs2gs/triage/gaps.json` entry flipped to `resolved` (`cs2gs triage sync --write`)
 - [ ] Corpus re-run confirms the fingerprint no longer reproduces

@@ -1,0 +1,657 @@
+// <copyright file="Parser.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Core.CodeAnalysis.Syntax
+
+import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Text
+import System
+import System.Collections.Generic
+import System.Collections.Immutable
+import System.Linq
+import System.Runtime.CompilerServices
+
+/// The GSharp language parser.
+open partial class Parser {
+    private let syntaxTree SyntaxTree
+
+    // ADR-0078 / issue #725: when a single source-level declaration desugars
+    // into multiple synthesized top-level members (notably discriminated-union
+    // enums, which expand into a sealed base + one class per case), the
+    // expander stages the additional siblings here. `ParseMembers` drains the
+    // queue after each `ParseMember` call so they appear in declaration order.
+    private let pendingSyntheticMembers Queue[MemberSyntax] = Queue[MemberSyntax]()
+
+    private var tokens ImmutableArray[SyntaxToken]
+    private var position int32
+
+    // Issue #3587: declaration return/property types can contain a slice-wrapped
+    // tuple immediately before an expression-body arrow. This position marks
+    // the one ambiguous tuple that must be parsed as a tuple, not a function type.
+    private var tupleTypeBeforeArrowBodyPosition int32?
+
+    // Issue #522: depth counter that suppresses trailing object-initializer
+    // wrapping (`Call(args) { Prop = value }`). The default of zero allows
+    // wrapping in regular expression contexts (variable declarations, return
+    // statements, etc.). Body-header parsers (`if Cond { … }`, `for x := range
+    // Coll { … }`, `switch Expr { … }`, etc.) push the counter via
+    // <see cref="WithSuppressedObjectInitializer"/> so the following `{` is
+    // recognised as the body, not as an initializer.
+    //
+    // Nested expression contexts (parens, brackets, argument lists) call
+    // <see cref="WithAllowedObjectInitializer"/> to save+clear the counter so
+    // an inner `T() { … }` still works inside `if Foo(T() { X = 1 }) { … }`.
+    private var suppressTrailingObjectInitializer int32
+
+    // Separate counter that suppresses `Ident {` struct-literal parsing.
+    // Only incremented by ParseIfExpression to prevent the condition from
+    // consuming the then-block's opening brace as a struct literal.
+    // For-range and other body-header contexts must NOT suppress struct
+    // literals — e.g. `for v in Numbers{} { body }` is valid.
+    private var suppressStructLiteral int32
+
+    // Within a body-header controlling expression, an EMPTY `Ident{}` that is
+    // immediately followed by a body `{` is genuinely ambiguous. In a for-in
+    // collection it is a struct-literal collection (`for v in Numbers{} { .. }`);
+    // in a boolean if/while condition a struct literal is never valid, so the
+    // identifier is the condition and `{}` is the empty body
+    // (`if disposing {} { .. }`). This flag is set only while parsing a for-in
+    // collection so the empty-then-body form is treated as a struct literal
+    // there and only there (#1575 follow-up).
+    private var allowEmptyStructLiteralInHeader bool
+
+    // ADR-0122 §4 / issue #1034: tracks the unsafe-context nesting depth while
+    // parsing. Inside an unsafe context (`unsafe func`/`unsafe {}`/unsafe
+    // type), a single-identifier `p->member` is parsed as pointer member
+    // access `(*p).member` rather than a single-identifier arrow lambda
+    // `p -> body`; outside unsafe, the lambda interpretation is unchanged. A
+    // parenthesised lambda `(x) -> body` remains available in unsafe contexts.
+    private var unsafeDepth int32
+
+    // ADR-0195 / issue #4674: set for the duration of a `shared class` head's body parse
+    // (ParseStructDeclaration reads and clears it, so a nested type's body does not
+    // inherit it): members of a shared class are shared, and `init { }` in its body is
+    // the static initializer (ADR-0140) rather than an instance constructor.
+    private var sharedClassBody bool
+
+    // Issue #1038: depth counter that suppresses the standalone range operator
+    // (`lo..hi`) while parsing the bound of an index expression. Inside `[...]`
+    // the `..` token is owned by the index-argument parser
+    // (<see cref="ParseIndexArgument"/>), so the general-expression range layer
+    // (<see cref="ParseRangeExpression"/>) must stand down there to keep the
+    // #1016/#1022 index-range/from-end behaviour byte-for-byte unchanged.
+    // Nested grouping contexts (parentheses, argument lists) save+clear the
+    // counter so a parenthesised or argument-position range (`a[(1..3)]`,
+    // `a[f(1..3)]`) is still recognised as a standalone `System.Range` value.
+    private var suppressRangeOperator int32
+
+    // Issue #1602: current recursion depth of the guarded parse families. See
+    // MaxRecursionDepth above.
+    private var recursionDepth int32
+
+    /// Initializes a new instance of the (cref:Parser) class.
+    /// @param syntaxTree The source syntax tree object.
+    convenience init(syntaxTree SyntaxTree) {
+        init(syntaxTree, 0, syntaxTree.Text.Length)
+    }
+
+    /// Initializes a new instance of the (cref:Parser) class that parses only the
+    /// [`start`](paramref)-[`end`](paramref) window of [`syntaxTree`](paramref)'s
+    /// text. Used to re-parse an interpolated-string hole's expression directly out of the
+    /// outer source so resulting nodes carry true absolute positions without copying/padding
+    /// the file prefix (issue #1605).
+    /// @param syntaxTree The source syntax tree object.
+    /// @param start The absolute position to start parsing from.
+    /// @param end The absolute position, exclusive, at which parsing stops.
+    init(syntaxTree SyntaxTree, start int32, end int32) {
+        Diagnostics = DiagnosticBag()
+        let tokens = List[SyntaxToken]()
+        let docTokens = ImmutableArray.CreateBuilder[SyntaxToken]()
+        let lexer = Lexer(syntaxTree, start, end)
+        var token SyntaxToken
+        do {
+            token = lexer.Lex()
+            if token.Kind == SyntaxKind.DocumentationCommentToken {
+                docTokens.Add(token)
+            } else if token.Kind != SyntaxKind.WhitespaceToken &&
+                token.Kind != SyntaxKind.CommentToken &&
+                token.Kind != SyntaxKind.BadToken {
+                tokens.Add(token)
+            }
+        } while token.Kind != SyntaxKind.EndOfFileToken
+        this.syntaxTree = syntaxTree
+        this.tokens = tokens.ToImmutableArray()
+        DocumentationTokens = docTokens.ToImmutable()
+        Diagnostics.AddRange(lexer.Diagnostics)
+    }
+
+    /// Gets tiagnostic bag associated to this parser.
+    prop Diagnostics DiagnosticBag {
+        get;
+    }
+
+    /// Gets the documentation comment tokens collected during lexing (ADR-0057 §7).
+    /// These are retained in a side-channel so the parser ignores them during
+    /// parsing but can provide them for the post-parse attachment pass.
+    internal prop DocumentationTokens ImmutableArray[SyntaxToken] {
+        get;
+    }
+
+    private prop Current SyntaxToken -> Peek(0)
+
+    /// Creates a compilation unit by parsing the members as read in the source text.
+    /// Issue #1602: mirrors Roslyn's ParseWithStackGuard — when the recursion
+    /// guard (see (cref:EnsureNestedParseAllowed)) detects input nested
+    /// beyond (cref:MaxRecursionDepth) (or the thread's remaining
+    /// execution stack), the parse is abandoned wholesale, GS0417 is reported,
+    /// and a minimal (empty) compilation unit is returned, so the parse always
+    /// terminates normally with diagnostics instead of killing the process
+    /// with an uncatchable (cref:StackOverflowException).
+    /// @returns A compilation unit.
+    func ParseCompilationUnit() CompilationUnitSyntax {
+        try {
+            return ParseCompilationUnitCore()
+        } catch (InsufficientExecutionStackException) {
+            // The position was left at the token where the guard tripped, so
+            // the diagnostic points at the offending nesting depth.
+            Diagnostics.ReportNestingTooDeep(TextLocation(syntaxTree.Text, Current.Span))
+            let endOfFileToken = tokens[tokens.Length - 1]
+            return CompilationUnitSyntax(syntaxTree, ImmutableArray[MemberSyntax].Empty, endOfFileToken)
+        }
+    }
+
+    private func ParseCompilationUnitCore() CompilationUnitSyntax {
+        let package_ PackageSyntax? = ParsePackage()
+        let imports = ParseImports()
+        let fileAttributes = ParseFileLevelAttributes()
+        let members = ParseMembers()
+        let endOfFileToken = MatchToken(SyntaxKind.EndOfFileToken)
+        let junction = ImmutableArray.CreateBuilder[MemberSyntax]()
+        if package_ != nil {
+            junction.Add(package_)
+        }
+        if imports.Any() {
+            junction.AddRange(imports)
+        }
+        junction.AddRange(members)
+        return CompilationUnitSyntax(syntaxTree, fileAttributes, junction.ToImmutable(), endOfFileToken)
+    }
+
+    /// Parses a leading run of file-level `@assembly:Name(...)` and
+    /// `@module:Name(...)`
+    /// annotations, sitting after `import`s and before the first member.
+    /// This is the producer-side opt-in surface for assembly-scoped custom
+    /// attributes (chiefly `@assembly:InternalsVisibleTo("Foo.Tests")` —
+    /// see ADR-0047 §2/§7 and issue #1929/#1953). Only annotations that
+    /// explicitly carry an `assembly:` or `module:` use-site target are consumed
+    /// here; anything else is left for (cref:ParseMembers) to attach
+    /// to the next declaration as usual.
+    private func ParseFileLevelAttributes() ImmutableArray[AnnotationSyntax] {
+        if Current.Kind != SyntaxKind.AtToken {
+            return ImmutableArray[AnnotationSyntax].Empty
+        }
+        let builder = ImmutableArray.CreateBuilder[AnnotationSyntax]()
+        while Current.Kind == SyntaxKind.AtToken && Peek(1).Kind == SyntaxKind.IdentifierToken &&
+            (Peek(1).Text is "assembly" or "module") &&
+            Peek(2).Kind == SyntaxKind.ColonToken {
+            builder.Add(ParseAnnotation())
+        }
+        return builder.ToImmutable()
+    }
+
+    private func ParsePackage() PackageSyntax? {
+        if Current.Kind == SyntaxKind.PackageKeyword {
+            let packageKeyword = MatchToken(SyntaxKind.PackageKeyword)
+            let identifiers = ImmutableArray.CreateBuilder[SyntaxToken]()
+            identifiers.Add(MatchToken(SyntaxKind.IdentifierToken))
+            while Current.Kind == SyntaxKind.DotToken {
+                identifiers.Add(MatchToken(SyntaxKind.DotToken))
+                identifiers.Add(MatchToken(SyntaxKind.IdentifierToken))
+            }
+            return PackageSyntax(syntaxTree, packageKeyword, identifiers.ToImmutableArray())
+        }
+        return nil
+    }
+
+    private func ParseImports() ImmutableArray[MemberSyntax] {
+        let importsBuilder = ImmutableArray.CreateBuilder[MemberSyntax]()
+        while Current.Kind == SyntaxKind.ImportKeyword {
+            let importKeyword = MatchToken(SyntaxKind.ImportKeyword)
+            // Detect the alias form: `import <ident> = <ident>(.<ident>)*`.
+            // Lookahead: if the next two tokens are IDENT '=', consume them as alias + equals.
+            var aliasIdentifier SyntaxToken? = nil
+            var equalsToken SyntaxToken? = nil
+            if Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.EqualsToken {
+                aliasIdentifier = MatchToken(SyntaxKind.IdentifierToken)
+                equalsToken = MatchToken(SyntaxKind.EqualsToken)
+            }
+            let identifiers = ImmutableArray.CreateBuilder[SyntaxToken]()
+            identifiers.Add(MatchToken(SyntaxKind.IdentifierToken))
+            while Current.Kind == SyntaxKind.DotToken {
+                identifiers.Add(MatchToken(SyntaxKind.DotToken))
+                identifiers.Add(MatchToken(SyntaxKind.IdentifierToken))
+            }
+            importsBuilder.Add(
+                ImportSyntax(syntaxTree, importKeyword, aliasIdentifier, equalsToken, identifiers.ToImmutableArray())
+            )
+        }
+        return importsBuilder.ToImmutable()
+    }
+
+    private func ParseMembers() ImmutableArray[MemberSyntax] {
+        let members = ImmutableArray.CreateBuilder[MemberSyntax]()
+        // ADR-0066 deferred decision D5 (GS0286): top-level statements within a
+        // single .gs file must form a single contiguous block — they may all
+        // sit at the top of the file, all at the bottom (the Go-style idiom
+        // most G# samples and tests follow), or be the only members — but
+        // they must not be interleaved with type / function declarations.
+        //
+        // Track two booleans rather than the strict C# "TLS must precede any
+        // declaration" rule because G#'s established idiom is decls-first /
+        // trailing-TLS (~488 sources across samples/ and test fixtures use
+        // this layout). The contiguous-block rule still catches the truly
+        // confusing case (TLS, decl, TLS) without forcing a coordinated
+        // rewrite of the existing corpus.
+        var seenTopLevelStatement = false
+        var seenDeclarationAfterTopLevel = false
+        while Current.Kind != SyntaxKind.EndOfFileToken {
+            let startToken = Current
+            let member = ParseMember()
+            if member is GlobalStatementSyntax globalStatement {
+                if seenDeclarationAfterTopLevel {
+                    Diagnostics.ReportTopLevelStatementsMustBeContiguous(globalStatement.Statement.Location)
+                }
+                seenTopLevelStatement = true
+            } else if seenTopLevelStatement {
+                seenDeclarationAfterTopLevel = true
+            }
+            members.Add(member)
+            // ADR-0078 / issue #725: drain any synthetic members produced by
+            // the desugaring (e.g. discriminated-union enums expand into a
+            // sealed base + one class per case).
+            while pendingSyntheticMembers.Count > 0 {
+                members.Add(pendingSyntheticMembers.Dequeue())
+            }
+            if Current == startToken {
+                NextToken()
+            }
+        }
+        return members.ToImmutable()
+    }
+
+    private func ParseMember() MemberSyntax {
+        // ADR-0047 / issue #141: Kotlin-style annotation lead-ins precede any
+        // other modifier on a declaration. We collect them once and then
+        // attach the list to whichever member node ParseMember produces.
+        var annotations = ParseAnnotations()
+        var accessibilityModifier SyntaxToken? = nil
+        if Current.Kind == SyntaxKind.PublicKeyword ||
+            Current.Kind == SyntaxKind.InternalKeyword ||
+            Current.Kind == SyntaxKind.PrivateKeyword ||
+            Current.Kind == SyntaxKind.ProtectedKeyword {
+            accessibilityModifier = NextToken()
+        }
+        // ADR-0192 / issue #4301 + ADR-0122 / issue #1014 + ADR-0023 /
+        // ADR-0174 D4: consume the whole `partial`/`unsafe`/colour modifier run
+        // in ONE order-independent pass. `partial` is never valid on a
+        // TOP-LEVEL `func` — a partial method is a member of a `partial class`
+        // or `partial struct` — but the recovery promise is a SINGLE GS0607, so
+        // the rest of the run must be consumed too or the `func` after it fails
+        // to parse and one intended error becomes a cascade.
+        var unsafeModifier SyntaxToken? = nil
+        var asyncModifier SyntaxToken? = nil
+        var topLevelPartialModifier SyntaxToken? = nil
+        if TryConsumeFunctionModifierRun(&topLevelPartialModifier, &unsafeModifier, &asyncModifier) {
+            if topLevelPartialModifier != nil {
+                Diagnostics.ReportPartialModifierNotValidHere(topLevelPartialModifier.Location)
+            }
+        } else {
+            // The run does not end in `func`. Fall back to the exact
+            // pre-ADR-0192 probes. `unsafe` introduces an unsafe context in
+            // which unmanaged raw pointers (`*T`) are legal; the `unsafe`
+            // class/struct modifier (issue #1202) is handled inside
+            // ParseAggregateDeclaration so it composes with `open`/`sealed`.
+            if Current.Kind == SyntaxKind.IdentifierToken &&
+                Current.Text == "unsafe" &&
+                (Peek(1).Kind == SyntaxKind.FuncKeyword || IsFunctionColorModifier(Peek(1).Kind)) {
+                unsafeModifier = NextToken()
+            }
+            if IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword {
+                asyncModifier = NextToken()
+            }
+        }
+        var member MemberSyntax
+        if Current.Kind == SyntaxKind.FuncKeyword {
+            if unsafeModifier != nil {
+                this.unsafeDepth++
+            }
+            try {
+                member = ParseFunctionDeclaration(
+                    accessibilityModifier,
+                    openModifier: nil,
+                    overrideModifier: nil,
+                    asyncModifier,
+                    allowExplicitExtension: true
+                )
+            } finally {
+                if unsafeModifier != nil {
+                    this.unsafeDepth--
+                }
+            }
+            if unsafeModifier != nil && member is FunctionDeclarationSyntax unsafeFunc {
+                unsafeFunc.UnsafeModifier = unsafeModifier
+            }
+        } else if TryDetectAggregateDeclarationHead() {
+            // ADR-0078 / issue #718: the canonical declaration head is
+            //   [visibility]? [unsafe]? [open|sealed]? [data]? [inline]? (class|struct|enum|interface) Name ...
+            // The aggregate-kind keyword IS the declaration keyword — no leading
+            // `type`. Drop into the new aggregate parser path. A leading
+            // `unsafe` modifier (issue #1202) is consumed inside
+            // ParseAggregateDeclaration so it composes with the other modifiers.
+            member = ParseAggregateDeclaration(accessibilityModifier)
+        } else if Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "type" && Peek(1).Kind == SyntaxKind
+            .IdentifierToken {
+            // Issue #3510: `type` is contextual now — it heads a declaration
+            // only when followed by an identifier at member position (the
+            // erased-alias form `type Name [TParams]? = Target`, plus the
+            // ADR-0078 legacy-aggregate and retired-delegate recoveries).
+            member = ParseTypeAliasDeclaration(accessibilityModifier)
+        } else if Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "delegate" && Peek(
+            1
+        ).Kind == SyntaxKind.IdentifierToken &&
+            (Peek(2).Kind == SyntaxKind.OpenParenthesisToken || Peek(2).Kind == SyntaxKind.OpenSquareBracketToken) {
+            // Issue #3510: named delegate declaration —
+            // `delegate Name[TParams]?(params) ReturnType? ;`. The required
+            // trailing semicolon terminates the optional return-type clause
+            // (matching extern natives and interface bodiless members), so a
+            // void delegate can no longer consume the next declaration.
+            member = ParseDelegateDeclaration(accessibilityModifier)
+        } else if Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record" && Peek(1).Kind == SyntaxKind
+            .IdentifierToken {
+            // ADR-0078 / issue #718: the standalone `record` keyword has been
+            // removed. Detect `record Name ...` at member-position, emit
+            // GS0307 with a migration suggestion, and recover by parsing the
+            // declaration as if the user had written `data struct Name ...`.
+            member = ReportAndRecoverLegacyRecordHead(accessibilityModifier)
+        } else if accessibilityModifier != nil &&
+            (
+            Current.Kind == SyntaxKind.VarKeyword ||
+                Current.Kind == SyntaxKind.LetKeyword ||
+                Current.Kind == SyntaxKind.ConstKeyword
+        ) {
+            let declaration = ParseVariableDeclaration(accessibilityModifier)
+            // Issue #187: annotations on a top-level `var`/`let`/`const`
+            // belong to the variable declaration itself (default target
+            // `field` per ADR-0047 §2), not to the wrapping GlobalStatement.
+            // Forward the parsed annotations onto the declaration and clear
+            // the local so the trailing `member.WithAnnotations(annotations)`
+            // does not double-attach.
+            if declaration is VariableDeclarationSyntax variableDeclaration {
+                variableDeclaration.WithAnnotations(annotations)
+                annotations = ImmutableArray[AnnotationSyntax].Empty
+            }
+            member = GlobalStatementSyntax(syntaxTree, declaration)
+        } else {
+            if accessibilityModifier != nil {
+                Diagnostics.ReportAccessibilityModifierNotAllowedHere(
+                    accessibilityModifier.Location,
+                    accessibilityModifier.Text
+                )
+            }
+            if asyncModifier != nil {
+                // `async` not followed by `func` — surface as an unexpected token.
+                Diagnostics.ReportUnexpectedToken(
+                    asyncModifier.Location,
+                    SyntaxKind.AsyncKeyword,
+                    SyntaxKind.FuncKeyword
+                )
+            }
+            member = ParseGlobalStatement()
+            // Issue #187: a top-level `var`/`let`/`const` without an
+            // accessibility modifier is parsed through ParseGlobalStatement →
+            // ParseStatement, which has no awareness of member-level
+            // annotations. Forward them onto the inner variable declaration
+            // so the binder picks them up via VariableDeclarationSyntax.
+            if !annotations.IsDefaultOrEmpty &&
+                member is GlobalStatementSyntax wrappingGlobal &&
+                wrappingGlobal.Statement is VariableDeclarationSyntax forwardingDeclaration {
+                forwardingDeclaration.WithAnnotations(annotations)
+                annotations = ImmutableArray[AnnotationSyntax].Empty
+            }
+        }
+        return member.WithAnnotations(annotations)
+    }
+
+    /// Parses zero or more Kotlin-style annotations (ADR-0047) at the current
+    /// position. Stops at the first token that is not `@`. The returned
+    /// list is empty when no annotation lead-in is present.
+    private func ParseAnnotations() ImmutableArray[AnnotationSyntax] {
+        if Current.Kind != SyntaxKind.AtToken {
+            return ImmutableArray[AnnotationSyntax].Empty
+        }
+        let builder = ImmutableArray.CreateBuilder[AnnotationSyntax]()
+        while Current.Kind == SyntaxKind.AtToken {
+            builder.Add(ParseAnnotation())
+        }
+        return builder.ToImmutable()
+    }
+
+    /// Parses a single annotation: `@` [target-kind `:`] dotted-name
+    /// [`(` arguments `)`]. Pre: `Current.Kind == AtToken`.
+    private func ParseAnnotation() AnnotationSyntax {
+        let atToken = MatchToken(SyntaxKind.AtToken)
+        // Optional use-site target: `kind:` where kind is one of the canonical
+        // contextual identifiers in ADR-0047 §2. The colon is what makes the
+        // token mean "target" — without the colon the token is the first
+        // segment of the annotation name. We accept any token kind whose text
+        // matches a canonical kind, so reserved keywords like `type` and
+        // `return` work even though the lexer never demotes them to
+        // identifiers — they are contextual only here.
+        var target AnnotationTargetSyntax? = nil
+        if Peek(1).Kind == SyntaxKind.ColonToken &&
+            (Current.Kind == SyntaxKind.IdentifierToken || IsValidAnnotationTargetKind(Current.Text)) {
+            let kindToken = NextToken()
+            let colonToken = NextToken()
+            // Normalize the kind to an IdentifierToken so downstream consumers
+            // can rely on a uniform shape regardless of whether the source
+            // spelled `type:` (keyword) or `field:` (plain identifier).
+            let kindIdentifier = SyntaxToken(
+                syntaxTree,
+                SyntaxKind.IdentifierToken,
+                kindToken.Position,
+                kindToken.Text,
+                nil
+            )
+            target = AnnotationTargetSyntax(syntaxTree, kindIdentifier, colonToken)
+            if !IsValidAnnotationTargetKind(kindToken.Text) {
+                Diagnostics.ReportAnnotationTargetInvalid(kindToken.Location, kindToken.Text)
+            }
+        }
+        // Dotted attribute name. At least one segment must be present.
+        let nameSegments = ImmutableArray.CreateBuilder[SyntaxToken]()
+        let dotTokens = ImmutableArray.CreateBuilder[SyntaxToken]()
+        if Current.Kind != SyntaxKind.IdentifierToken {
+            Diagnostics.ReportAnnotationExpected(atToken.Location)
+            // Synthesize a single bad identifier so downstream consumers
+            // still see a structurally valid annotation node.
+            let bad = MatchToken(SyntaxKind.IdentifierToken)
+            nameSegments.Add(bad)
+        } else {
+            nameSegments.Add(NextToken())
+            while Current.Kind == SyntaxKind.DotToken && Peek(1).Kind == SyntaxKind.IdentifierToken {
+                dotTokens.Add(NextToken())
+                nameSegments.Add(NextToken())
+            }
+        }
+        // Issue #1913: a C# 11 generic attribute (`[Tag<int>]`) translates to
+        // `@Tag[int32]` — G# spells every generic type-argument list in
+        // SQUARE brackets, the same as an ordinary generic type reference
+        // (`List[int32]`), never angle brackets. Reuse the exact same
+        // bracket-list parser an ordinary type clause's last segment uses
+        // (`ParseOptionalSegmentTypeArguments`) rather than hand-rolling a
+        // second implementation.
+        ParseOptionalSegmentTypeArguments(out var typeArgumentOpen, out var typeArguments, out var typeArgumentClose)
+        // Optional argument list. The opening `(` must appear with no
+        // intervening tokens (we use it to disambiguate "annotation with no
+        // args" from "annotation followed by something that opens a `(`").
+        var openParen SyntaxToken? = nil
+        var arguments = SeparatedSyntaxList[ExpressionSyntax](ImmutableArray[SyntaxNode].Empty)
+        var closeParen SyntaxToken? = nil
+        if Current.Kind == SyntaxKind.OpenParenthesisToken {
+            openParen = MatchToken(SyntaxKind.OpenParenthesisToken)
+            arguments = ParseArguments(attributeArguments: true)
+            closeParen = MatchToken(SyntaxKind.CloseParenthesisToken)
+        }
+        return AnnotationSyntax(
+            syntaxTree,
+            atToken,
+            target,
+            nameSegments.ToImmutable(),
+            dotTokens.ToImmutable(),
+            openParen,
+            arguments,
+            closeParen,
+            typeArgumentOpen,
+            typeArguments,
+            typeArgumentClose
+        )
+    }
+
+    // Issue #1602: guards entry into a self-nesting parse family. When the
+    // recursion-depth limit (or the runtime's remaining execution stack) is
+    // exhausted, the whole parse is abandoned with an
+    // <see cref="InsufficientExecutionStackException"/> that is caught in
+    // <see cref="ParseCompilationUnit"/>, which reports GS0417 and returns a
+    // minimal compilation unit — the same strategy as Roslyn's
+    // ParseWithStackGuard. Bailing out wholesale (rather than recovering with
+    // a placeholder node) matters: the parser's iterative error-recovery loops
+    // would otherwise keep folding the remaining nested input into an
+    // unboundedly DEEP syntax tree, which the recursive binder could not
+    // survive either. Speculative lookahead (TryScanTypeClause) does not
+    // throw; it fails silently instead.
+    private func EnsureNestedParseAllowed() {
+        if recursionDepth >= MaxRecursionDepth {
+            throw InsufficientExecutionStackException()
+        }
+        if recursionDepth >= UncheckedRecursionDepth {
+            // Adaptive belt-and-suspenders: even below the deterministic
+            // limit, bail out early when the actual thread stack is running
+            // low (small-stack threads, deep surrounding call chains).
+            RuntimeHelpers.EnsureSufficientExecutionStack()
+        }
+    }
+
+    private func Peek(offset int32) SyntaxToken {
+        let index = position + offset
+        if index >= tokens.Length {
+            return tokens[tokens.Length - 1]
+        }
+        return tokens[index]
+    }
+
+    private func NextToken() SyntaxToken {
+        let current = Current
+        position++
+        return current
+    }
+
+    /// Issue #1351: replaces the current fused `?[`
+    /// ((cref:SyntaxKind.QuestionOpenBracketToken)) with two distinct
+    /// tokens — a `?` ((cref:SyntaxKind.QuestionToken)) followed by
+    /// a `[` ((cref:SyntaxKind.OpenSquareBracketToken)) — at the
+    /// current parse position. The lexer fuses these for null-conditional
+    /// indexing (`a?[i]`); in a nullable-array type clause whose element is
+    /// itself an array (`[]?[]T`) they must be parsed separately.
+    private func SplitQuestionOpenBracketToken() {
+        let fused = tokens[position]
+        let question = SyntaxToken(syntaxTree, SyntaxKind.QuestionToken, fused.Position, "?", nil)
+        let open_ = SyntaxToken(syntaxTree, SyntaxKind.OpenSquareBracketToken, fused.Position + 1, "[", nil)
+        tokens = tokens.SetItem(position, question).Insert(position + 1, open_)
+    }
+
+    /// ADR-0122 / issue #1014: returns whether (cref:Current) begins on a
+    /// later source line than the end of [`node`](paramref). Used to treat a
+    /// leading-`*` token as a pointer-dereference statement boundary rather
+    /// than a multiplication continuation.
+    /// @param node The expression parsed so far on the current line.
+    /// @returns `true` when the current token is on a new line.
+    private func IsCurrentOnNewLineAfter(node SyntaxNode) bool -> IsTokenOnNewLineAfter(Current, node)
+
+    private func IsTokenOnNewLineAfter(token SyntaxToken, node SyntaxNode?) bool {
+        if node == nil {
+            return false
+        }
+        let text = syntaxTree.Text
+        let previousLine = text.GetLineIndex(Math.Max(0, node.Span.End - 1))
+        let currentLine = text.GetLineIndex(token.Position)
+        return currentLine > previousLine
+    }
+
+    private func MatchToken(kind SyntaxKind) SyntaxToken {
+        if Current.Kind == kind {
+            return NextToken()
+        }
+        Diagnostics.ReportUnexpectedToken(TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind)
+        return SyntaxToken.Missing(syntaxTree, kind, Current.Position)
+    }
+
+    shared {
+        // Issue #1602: hard limit on the recursion depth of the recursive-descent
+        // parser. Without a guard, a few kilobytes of deeply nested input
+        // (`a[a[a[…`, `((((…`, `!!!!…`) drive the parser into an uncatchable
+        // StackOverflowException that kills the whole process (compiler, REPL, or
+        // language server). Every self-nesting parse family (expressions, type
+        // clauses, statements, patterns, nested type declarations, and the
+        // speculative TryScan* lookahead helpers) ticks this counter on entry via
+        // <see cref="EnsureNestedParseAllowed"/>; past the limit the parse is
+        // abandoned, GS0417 is reported once, and a minimal compilation unit is
+        // returned (see <see cref="ParseCompilationUnit"/>), mirroring Roslyn's
+        // CS8078 ("an expression is too long or complex to compile").
+        private const MaxRecursionDepth int32 = 500
+
+        // Issue #1602: recursion depth below which the (cheap, but not free)
+        // adaptive <see cref="RuntimeHelpers.EnsureSufficientExecutionStack"/>
+        // probe is skipped. Shallow parses never pay for the stack check; deep
+        // parses get a belt-and-suspenders guarantee even on threads with small
+        // stacks, where MaxRecursionDepth ticks alone might not be conservative
+        // enough.
+        private const UncheckedRecursionDepth int32 = 64
+
+        // Issue #1607: shared bound for speculative "does this look like X"
+        // token-lookahead scans (matching-bracket / matching-brace searches).
+        // A well-formed construct always resolves within a few dozen tokens;
+        // this cap only fires on malformed/unbalanced input, turning an O(n)
+        // scan-to-EOF (which is O(n^2) in aggregate since these run per
+        // position) into an O(1) bailout. Mirrors the existing maxScan used by
+        // LooksLikeLambdaStart / LooksLikeArrowFunctionTypeClauseStart.
+        private const LookaheadMaxScan int32 = 4096
+
+        private func IsValidAnnotationTargetKind(text string) bool {
+            // The closed kind set from ADR-0047 §2.
+            switch text {
+                case "field",
+                "param",
+                "return",
+                "type",
+                "method",
+                "property",
+                "event",
+                "module",
+                "assembly",
+                "genericparam" {
+                    return true
+                }
+                default {
+                    return false
+                }
+            }
+        }
+
+        /// ADR-0174 D4: `async` and `suspend` share the function-color modifier slot before `func`.
+        /// @param kind A token kind.
+        /// @returns `true` for either modifier keyword.
+        private func IsFunctionColorModifier(kind SyntaxKind) bool -> kind == SyntaxKind.AsyncKeyword ||
+            kind == SyntaxKind.SuspendKeyword
+    }
+}

@@ -1,0 +1,24 @@
+// G09-Functions-Console: differential C#->G# conformance fixtures for
+// function-shaped constructs (lambdas, anonymous methods, delegates, local
+// functions, method groups, out/ref declarations, named/optional/params
+// parameters). One construct per file under Constructs/; Run() methods are
+// invoked in file-name (ordinal) order. Deterministic stdout is the parity
+// oracle.
+
+package Corpus.Grid09
+
+AnonymousMethodExpressionFixture.Run()
+ConditionalAccessExpressionFixture.Run()
+DeclarationExpressionFixture.Run()
+DelegateDeclarationFixture.Run()
+LocalFunctionStatementGenericFixture.Run()
+MethodGroupConversionFixture.Run()
+NameColonFixture.Run()
+OptionalAndParamsArrayFixture.Run()
+ParamsCollectionsProbeFixture.Run()
+ParenthesizedLambdaExpressionFixture.Run()
+ParenthesizedLambdaExpressionAsyncFixture.Run()
+ParenthesizedLambdaExpressionAttributedFixture.Run()
+ParenthesizedLambdaExpressionDefaultsFixture.Run()
+RefExpressionLocalFunctionFixture.Run()
+SimpleLambdaExpressionFixture.Run()

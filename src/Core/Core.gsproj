@@ -1,0 +1,36 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Used by ReferenceResolver to load target-framework reference assemblies
+         in an isolated context so emitted type references carry the target's
+         assembly identities rather than the gsc host's runtime versions. -->
+    <PackageReference Include="System.Reflection.MetadataLoadContext" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Core.Tests" />
+    <InternalsVisibleTo Include="GSharp.Compiler.Tests" />
+    <InternalsVisibleTo Include="GSharp.Interpreter.Tests" />
+    <InternalsVisibleTo Include="GSharp.LanguageServer" />
+    <InternalsVisibleTo Include="gsc" />
+    <InternalsVisibleTo Include="gsi" />
+    <!-- ADR-0193 Phase 1: cs2gs calls NullabilityImportRule directly (ADR-0186
+         step 6, ADR-0193 Phase 5). The assembly name, not the project name:
+         build/gsharp.build.props prefixes every assembly with `GSharp.`. -->
+    <InternalsVisibleTo Include="GSharp.Cs2Gs.Translator" />
+    <!-- ADR-0192 follow-on 2: gsgen compares a generated implementing part's
+         header with its declaring part's through PartialMethodMerger's own
+         token normalization, so the two comparisons cannot drift. -->
+    <InternalsVisibleTo Include="GSharp.GSharp.GeneratorHost" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Analyzers/InternalAnalyzers/InternalAnalyzers.gsproj" OutputItemType="GsharpCodeAnalyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

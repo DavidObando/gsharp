@@ -53,7 +53,7 @@ visibility, overload rules and exclusions.
 ## Build
 
 ```sh
-dotnet build GSharp.sln -c Release -graph --no-restore
+dotnet build GSharp.slnx -c Release -graph --no-restore
 ```
 
 This builds the compiler (`gsc`) and all `cs2gs` projects. Produced assemblies:
@@ -186,7 +186,7 @@ skipped (see below).
 Two invariants make this safe, and both are load-bearing:
 
 * **Translation stays ONE whole-repository pass.** Linked sources (e.g.
-  `test/Shared/EmittedOracle.cs`) are compiled into several projects, and
+  `test/Shared/EmittedOracle.gs`) are compiled into several projects, and
   `TranslateStage` cross-checks that such a file translates identically in all
   of them. That guard only exists when every project translates in the same
   run, so `validate` never runs the translate stage — it is absent from the
@@ -199,9 +199,9 @@ Two invariants make this safe, and both are load-bearing:
 Each shard writes a partial `run.json`; `build/merge-selfmig-runs.py` merges
 them with the translate pass's results back into a single whole-run shape.
 See `build/run-cs2gs-selfmig-{migrate,validate,gate}.sh` and
-`.github/workflows/cs2gs-selfmig-nightly.yml`; `build/run-cs2gs-selfmig.sh`
+`.github/workflows/cs2gs-apps-nightly.yml`; `build/run-cs2gs-selfmig.sh`
 remains the equivalent single-job reference path for local proofs.
-Both migration entrypoints and the PR guard select `--sdk-pin global-json`
+Both migration entrypoints select `--sdk-pin global-json`
 to create a shared G# SDK pin in the migrated repository. The checked-in root
 `global.json` selects only the .NET SDK; migration preserves that selection and
 updates buildable nested G# SDK scopes to the resolved local package version.
@@ -218,44 +218,12 @@ The original source-declared Fact count and budget policy are unchanged.
 Old manifests without generated evidence still fail on absent intermediates;
 they must be produced again, not repaired by guessing historical contents.
 
-### The PR-time translation guard (issue #3836)
+### The PR-time translation guard (retired, issue #3836)
 
-CI **compiles** the repository's C# sources. The gate **translates** them and
-then compiles the result. Those are different questions, so a fully CI-green
-PR can take the gate down purely by existing — and the damage lands hours
-later, attributed to whatever else merged nearby. It happened three times in
-five days: #3831 (a `Cs2Gs.Translator` file, 7 banked apps), #3896 (three
-errors in new `src/Core` files, 16 apps), #3905 (a gsc stack overflow on
-`Gsharp.Runtime.Channels`, 11 apps blinded).
-
-`build/run-cs2gs-selfmig-pr-guard.sh` (workflow
-`.github/workflows/build.yml`) migrates and compiles just the **hot
-core** — the projects whose migration failures cascade widest:
-
-```
-src/Analyzers/InternalAnalyzers  src/Core
-src/Formatting/GSharp.Formatting src/Sdk/Gsharp.Runtime.Channels
-tools/cs2gs/Cs2Gs.CodeModel      tools/cs2gs/Cs2Gs.Translator
-tools/cs2gs/Cs2Gs.ProjectLoading tools/cs2gs/Cs2Gs.Pipeline
-```
-
-That includes `Cs2Gs.Translator`'s reference closure plus Channels,
-Formatting, Pipeline, and ProjectLoading, covering #3831, #3896, #3905, and
-#3978. The workflow reports on every PR so it can remain required. An in-job
-changed-path check skips the expensive migration when a PR cannot affect these
-projects or the compiler/SDK/translation machinery.
-
-Everything else is `--exclude`d. That is safe here — and only here — because
-the set is **closed under `ProjectReference`**, so no kept app references an
-excluded one; the script verifies that closure before it builds anything and
-refuses to run otherwise. Widening the set means adding whole reference
-closures, never a single project. `SELFMIG_PR_GUARD_APPS` overrides the list
-(e.g. to add `tools/cs2gs/Cs2Gs.Tests` once #3836's known failures clear).
-
-**It is not the gate.** Eight apps, no readability ceilings, no corpus-wide
-test parity. The script prints that disclaimer on every run, pass or fail,
-because a partial check mistaken for a full one is how #3831/#3896/#3905
-reached `main` in the first place.
+The PR-time translation guard was retired at the
+cut-over: `main` is G# source and CI compiles it directly, so there is no C# to translate
+per PR. The nightly `cs2gs-apps-nightly` workflow translates the C# line
+(`cs2gs/csharp-0.4`), Oahu and Code Exploder instead. The history is in git (v0.4.1270).
 
 ### `report` — regenerate a report from an existing run
 

@@ -1,0 +1,69 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>Cs2Gs.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="@(CoverletCollectorPackageReference)" />
+    <PackageReference Include="@(MicrosoftNetTestSdkPackageReference)" />
+    <PackageReference Include="@(XunitPackageReference)" />
+    <PackageReference Include="@(XunitRunnerVisualStudioPackageReference)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Cs2Gs.CodeModel/Cs2Gs.CodeModel.gsproj" />
+    <ProjectReference Include="../Cs2Gs.Translator/Cs2Gs.Translator.gsproj" />
+    <ProjectReference Include="../Cs2Gs.ProjectLoading/Cs2Gs.ProjectLoading.gsproj" />
+    <ProjectReference Include="../Cs2Gs.Pipeline/Cs2Gs.Pipeline.gsproj" />
+    <ProjectReference Include="../Cs2Gs.Report/Cs2Gs.Report.gsproj" />
+    <ProjectReference Include="../Cs2Gs.Cli/Cs2Gs.Cli.gsproj" />
+    <!-- ADR-0169: the analyzer-parity tests run the real Roslyn GSA analyzers
+         as a library (not as a build-time analyzer) to diff their diagnostics
+         against the cs2gs-translated G# analyzers'. -->
+    <ProjectReference Include="../../../src/Analyzers/InternalAnalyzers/InternalAnalyzers.gsproj" />
+
+    <!-- ADR-0169 M5 (#3686): the harness-rewrite test binds its translated G#
+         against the real verifier assembly, so a delegation to a signature
+         that does not exist fails the test rather than the migration. -->
+    <ProjectReference Include="../../../src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" />
+
+    <!-- Issue #1912 review follow-up: the e2e tests shell out to the built
+         gsc.dll (see Issue1912ExplicitEnumValueTranslationTests.FindCompiler)
+         rather than referencing it as an assembly. Without this reference,
+         `dotnet test` run in isolation on this project can silently compile
+         and run against a stale gsc.dll left over from a previous build.
+         ReferenceOutputAssembly=false: only needed for build ordering, this
+         project never calls into Compiler's API directly. -->
+    <ProjectReference Include="../../../src/Compiler/Compiler.gsproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../gsgen/Gsgen.Cli/Gsgen.Cli.gsproj" ReferenceOutputAssembly="false" />
+
+    <!-- ADR-0174: the suspend-func translation tests compile C# against the
+         real channel runtime (Chan<T>, [Suspending]) and bind the translated
+         G# against the same assembly sitting beside the test host. -->
+    <ProjectReference Include="../../../src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" />
+    <ProjectReference Include="../../../src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\..\test\Shared\EmittedFixture.gs" Link="EmittedFixture.cs" />
+    <Compile Include="..\..\..\test\Core.Tests\CSharpFixture.gs" Link="CSharpFixture.cs" />
+    <!-- ADR-0156 Phase 3c (#3176): the shared emitted oracle replaces the
+         retired Compilation.Evaluate for semantic round-trip checks. -->
+    <Compile Include="..\..\..\test\Shared\EmittedOracle.gs" Link="EmittedOracle.cs" />
+    <Compile Include="..\..\..\test\Shared\EmittedOracleOptions.gs" Link="EmittedOracleOptions.cs" />
+    <Compile Include="..\..\..\test\Shared\EmittedOracleResult.gs" Link="EmittedOracleResult.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Fixture .cs files are translation-test DATA, not test code. -->
+    <Compile Remove="Fixtures\**\*.gs" />
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Native C# source data: .cs.txt must not infer the Czech "cs" culture. -->
+    <EmbeddedResource Include="..\..\..\test\Compiler.Tests\TestData\RuntimeValuesSource\*.cs.txt" LogicalName="Cs2Gs.Tests.RuntimeValues.%(Filename)" WithCulture="false" />
+  </ItemGroup>
+
+</Project>

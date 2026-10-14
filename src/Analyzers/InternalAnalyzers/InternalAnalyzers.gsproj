@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>GSharp.InternalAnalyzers</RootNamespace>
+    <IsPackable>false</IsPackable>
+    
+    <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn)</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    
+  </ItemGroup>
+
+<ItemGroup><Reference Include="GSharp.Core"><HintPath>$([System.IO.Path]::GetDirectoryName('$(GsharpCompilerFullPath)'))/GSharp.Core.dll</HintPath><Private>false</Private></Reference></ItemGroup></Project>

@@ -2,5 +2,8 @@
   "sdk": {
     "version": "10.0.300",
     "rollForward": "latestFeature"
+  },
+  "msbuild-sdks": {
+    "Gsharp.NET.Sdk": "0.4.1270"
   }
 }

@@ -46,6 +46,53 @@ Record all of this in the PR body and in the squash commit:
 `dry-run.json` in the work root records the resolved versions and every stage
 outcome. Commit it into the PR description, not the tree.
 
+### Recorded values for the cut-over (tag `v0.4.1270`)
+
+| What | Value |
+|---|---|
+| Final C# commit and tag | `eac5b487b16c7c63bce2a95151968dc2b581a57e` / `v0.4.1270` (branch `cs2gs/csharp-0.4` points at the same commit) |
+| `Gsharp.Cs2Gs` version | `0.4.1270` (published, installed from nuget.org only) |
+| `Gsharp.NET.Sdk` pin | `0.4.1270` (`global.json` `msbuild-sdks`; no versioned per-project pin survives) |
+| `Gsharp.Gsfmt` version | `0.4.1270` |
+| Output of `cutover.py dry-run` | the final rehearsal at the tag, 2026-10-13, work root `~/.cache/cutover-dryrun/work`; stage outcomes in "Final rehearsal at the matched tag" below |
+| Translated tree this commit contains | the `migrate` output of that rehearsal, assembled and hand-fixed as in "Assembly" and "The hand-fix list" |
+| Stage-2 certification of the same C# commit | certified: true on the dry-run tree (run `8d1e76c726801a48e1db4689b37db1da`, 2026-10-13/14, published bootstrap SDK 0.4.1270) and, earlier, on the tree of `eac5b487b` (second attempt); details in "Stage-2 certification" below |
+| PR CI | green (37 checks pass, 3 skipped) on `e6a0c9f54`, run 38493756916. The head of the commit that records this line only changes documentation and is checked by its own run (see the PR) |
+
+The cut-over commit is the dry run's `migrate` output assembled and hand-fixed by the same code,
+with these deliberate differences, all found while preparing the commit:
+
+- The mirror overwrites files that were already G# or that stay C#. These are not taken from it:
+  `samples/**/*.gsproj` and `samples/HotReload/global.json` (per-project SDK pins the samples
+  keep on purpose), `src/vs-gsharp/VsGsharp.sln` and the `src/vs-gsharp/test/*Fixtures` `.gsproj`
+  files (pinned to `0.3.159` by an allow-list entry), and the build scripts that the phase-2
+  branch had already changed (the mirror holds the text of the C# commit).
+- Stray mirror outputs are not committed: the `.slnx` files written next to the kept `.sln` files
+  (`src/vs-gsharp`, the `gsharp-xunit` template) and the `Gsharp.Extensions.xml` build artefact.
+- `build/selfhost/PeBodyMutations.cs` stays C#. It is a file-based `dotnet run` helper that
+  `build/test-selfhost-stage2.py` runs by file name, so its `.gs` translation cannot run. (The
+  `assemble` stage would delete it because a `.gs` twin exists; this is a gap in the rule "a tracked
+  `.cs` with a twin is deleted".)
+- `GSA0001`-`GSA0003` are retired by hand (`docs/internal-analyzers.md`).
+- `build/selfhost-stage2.py` names the two stage helpers `PackageContentHash.gs` and
+  `TestSupervisorLogger.gs`; `build/test-selfhost-stage2.py` skips the C# corpus derivation test
+  on a G# tree; `build/check-release-version-refs.py` allow-lists the bootstrap pin `0.4.1270`
+  in `global.json` and `InternalAnalyzers.Tests.gsproj`.
+- `build.yml` checks the final C# tag out beside the workspace, **builds it**, and exports
+  `CS2GS_TEST_SOURCE_ROOT` for the `Cs2Gs.Tests` shards only (see "Source-inspection tests need the
+  final C# tree"). Found by the first PR CI run: the variable names one directory that must hold both
+  the original sources and the built toolchain (`out/bin/<Config>/nupkgs`), so an unbuilt checkout is
+  not enough. The `tests` job timeout is 90 minutes instead of 30 until the shards are rebalanced from
+  the first G# timings.
+- The VS Code grammar test and `VsGsharp.UnitTests` read the compiler's keyword table and the language
+  server sources as `.gs`.
+- `build/cutover.py` itself is left as it was: the `hand-fix` stage rewrites its own `.csproj`
+  literals, which would break `dry-run` against a C# commit.
+
+Counts of the commit (`git diff --cached --name-status --no-renames`): 4,201 C# files deleted
+(4,202 in the dry run, minus `PeBodyMutations.cs`), 4,209 files added (the mirror's 4,218 minus the
+stray outputs, the retired GSA files and `PeBodyMutations.gs`, plus the files `apply.sh` adds).
+
 ## Translation command
 
 Run from a **fresh clone** of the tag with only nuget.org as the NuGet source:
@@ -208,7 +255,8 @@ name parity against the tag's last C# nightly TRX files, the stage-2 job.
 those `.cs` files are gone from the tree, so the PR CI must check out the final C# commit (the
 `v0.4.NNNN` tag, or `cs2gs/csharp-0.4`) into a second directory and export that variable, or the
 tests must be rewritten or retired first (gate criterion 9). Do not rely on the migrated tree
-providing them.
+providing them. The checkout alone is not enough: the variable also locates the built toolchain, so the
+cut-over `build.yml` builds the checked-out C# solution before the `Cs2Gs.Tests` shards run.
 
 ## Rollback
 
@@ -329,3 +377,63 @@ Three of the five translate failures are attributable to listed fixes (`Compiler
 **not triaged**: `Cs2Gs.Tests` (GS0154/GS0155/GS0159, not individually verified) and the
 `Interpreter.Tests` per-test-name parity mismatch. They stay open items for the matched-tag
 rehearsal, which also has to confirm that nothing on the list above is a defect.
+
+### Final rehearsal at the matched tag
+
+Run on 2026-10-13 from a fresh clone of `v0.4.1270` (`eac5b487b`), published
+`Gsharp.Cs2Gs`/`Gsharp.Gsfmt`/`Gsharp.NET.Sdk` **0.4.1270** (tool == SDK == tag == translated commit, so
+skew items 4 and 5 above no longer apply; `--sdk-version`/`--sdk-pin` are supported), private NuGet cache,
+nuget.org only. Work root `~/.cache/cutover-dryrun/work`.
+
+| Stage | Result | Notes |
+|---|---|---|
+| clone | passed | `eac5b487b` |
+| tools | passed | `cs2gs`, `gsfmt` and SDK 0.4.1270 |
+| prepare | passed | restored, prerequisite builds, published SDK staged |
+| translate | failed (cs2gs exit 1), 58/58 apps green | no app failed or was unverified. The exit 1 comes from the mirror's end-of-run unexpected-file check, which found `build/__pycache__/check-selfmig-stage-floor.cpython-314.pyc`, written by a Python 3.14 run. The file is gitignored and not in the PR. 27,533 s |
+| assemble | passed | 4,202 C# files deleted, 4,218 files added; no untranslated C# retained. 2 s |
+| hand-fix | passed | 51 fix groups, lock files regenerated. 5 s |
+| gsfmt | passed after `--write` | not clean before: 402 of 4,372 `.gs` files rewritten, then clean (#4858). 109 s |
+| core-smoke | passed | `src/Core` compiles with the pinned SDK. 263 s |
+| build | passed | `GSharp.slnx` in Release. 998 s |
+| e2e | reported failed in the main run; passed after re-run | `debugger-e2e` was skipped because netcoredbg was not installed (15 passed, 1 skipped). After installing netcoredbg, `--only e2e --e2e debugger` passed (21 s). `multitarget-e2e` skipped its net8.0 leg (runtime not installed). 569 s |
+| vsix | passed (VS Code); VS: Windows only | `.vsix` packaged; the VSSDK build runs in the Windows job. 21 s |
+
+Clone, tools and prepare took 7 s, 5 s and 78 s. The dry run ran 2026-10-13T10:23:03Z to 18:36:14Z (8 h 13 min) and exited 1 (translate and the skipped debugger e2e). Evidence: `~/.cache/cutover-dryrun/evidence/` (`dry-run.json`, `dry-run-after-debugger-rerun.json`, `NOTES.md`).
+
+The cut-over PR repeats the assemble, hand-fix and gsfmt stages on top of the phase-2 branch and
+reproduces the same stage counts (4,202 deleted before the `PeBodyMutations.cs` exception; 51 hand-fix groups;
+402 files reformatted); the commit's own counts are in the paragraph above.
+
+The tree used is the dry run's own `migrate` output. The preserved tree that the first stage-2 certification
+migrated from the same commit (`~/.cache/stage2-final/migrated-eac5b487b/tree`) differs from it in two ways only: the SDK pin
+(it pins the in-tree build `0.4.1270-geac5b487b1`, the PR tree pins the published `0.4.1270`) and one corpus test file
+(`tools/cs2gs/corpus/L3-Library.Tests/AdvancedTests.gs`, a lambda spelled as `() ->` versus a `func () object?` literal).
+
+### Stage-2 certification (ADR-0198)
+
+All figures are read from the controller's `stage2-report.json` and `verify-stage2-report.py` output.
+
+| | Dry-run tree at `v0.4.1270` | Tree of `eac5b487b`, rerun 1 |
+|---|---|---|
+| Result | `certified: true`; `verify-stage2-report`: "a genuine certification" | `certified: true`; `verify-stage2-report` passed |
+| Run id | `8d1e76c726801a48e1db4689b37db1da` | `ff3c93923472cdfd49aa3a91e61a5c82` |
+| Bootstrap SDK | published `Gsharp.NET.Sdk.0.4.1270.nupkg` | in-tree `0.4.1270-geac5b487b1` |
+| Projects, configuration | `src/Core/Core.gsproj`, `src/Compiler/Compiler.gsproj`, Release | same |
+| Core.Tests under stage 2 | 11,245 executed, 0 failed | 11,245 executed, 0 failed |
+| Compiler.Tests under stage 2 | 7,035 executed, 0 failed | 7,035 executed, 0 failed |
+| `GSharp.Core.dll`, `gsc.dll` | stage 1 and stage 2 byte-identical, raw and normalized (`rawEqual` and `normalizedEqual` true for both) | same |
+| Exclusions | 10 Core.Tests and 64 Compiler.Tests, by name | same |
+| Test environment | `GSHARP_SKIP_ILVERIFY=1` (report `testEnvironment`) | same |
+| Wall time | 8 h 24 min (2026-10-13T18:36:29Z to 2026-10-14T03:00:21Z), exit 0 | 11,226 s, exit 0 (controller leg only, reusing the migrated tree) |
+
+- Exclusions by name: the 9 Core.Tests and 64 Compiler.Tests of the committed `build/selfhost/stage2-env-bound-tests.json` (tests that need the
+  repository layout; they fail identically under stage 1; #4873), plus one Core.Tests entry that is **not committed**:
+  `GSharp.Core.Tests.PublicApi.CorePublicApiAllowanceTests.ShippedAllowance_ListsExactlyTheTenAdr0199RecordTypes` (#4889). It was added to the
+  tree under test only (`uncommitted-exclusion.diff`); the owner deferred its resolution to after the cut-over, so the committed list still lacks it.
+- `GSHARP_SKIP_ILVERIFY`: unset in the invoking shell; the controller sets `GSHARP_SKIP_ILVERIFY=1` for its test runs only, and the report records it. IL verification of the stage outputs is therefore not covered by these test runs (#4873).
+- History on `eac5b487b`: the first attempt (`~/.cache/stage2-final/migrated-eac5b487b`, 26,749 s including migration) was **not** certified: one Core.Tests failure (the manifest calls it a repository-layout-bound test added on main, not a stage-1/stage-2 difference);
+  the rerun notes name `ShippedAllowance_ListsExactlyTheTenAdr0199RecordTypes` (#4889) as the test they excluded. Rerun 1 added the exclusion above and certified.
+- What the dry-run certification covers: the dry run's assembled tree (5,546 files). The PR tree differs from it by the `PeBodyMutations.cs` exception, the retired GSA files, the
+  phase-2 merge and the documentation and workflow edits (see "Recorded values"); stage 2 has not been run on the PR tree itself.
+- Evidence: `~/.cache/cutover-dryrun/evidence/` (`stage2-reports/stage2-report.json`, `verify-stage2-report.out`, `uncommitted-exclusion.diff`, `NOTES.md`) and `~/.cache/stage2-final/rerun-1/` (`RERUN-NOTES.md`, `evidence/`).

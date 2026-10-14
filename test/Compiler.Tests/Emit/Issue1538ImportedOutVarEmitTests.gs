@@ -1,0 +1,222 @@
+// <copyright file="Issue1538ImportedOutVarEmitTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Compiler.Tests.Emit
+
+import GSharp.Compiler
+import GSharp.Compiler.Tests
+import System
+import System.Diagnostics
+import System.IO
+import Xunit
+
+/// Issue #1538 — an inline `out var`/`out let`/`out _` argument
+/// passed to an IMPORTED/overloaded method (BCL or referenced assembly), e.g.
+/// `int32.TryParse(s, out var n)`, failed to resolve with
+/// `GS0159: Cannot find function TryParse` and then POISONED the enclosing
+/// method body (subsequent statements cascaded into spurious GS0159/GS0125).
+/// Inline `out var` already worked for user-declared methods and for
+/// imported methods when the out arg was pre-declared.
+///
+/// The fix feeds the `InlineOutVarArgumentType` sentinel through the
+/// imported static-overload resolver (ImportedClassSymbol.TryLookupFunction) so
+/// a type-open `out var` matches any by-ref parameter, then re-binds the
+/// placeholder to the chosen overload's (substituted) out-parameter pointee type
+/// via RebindInlineOutVarArguments so the synthesized local leaks into the
+/// enclosing block scope with the correct type. This mirrors the imported
+/// instance path.
+///
+/// Each test uses a UNIQUE package/type name because the in-process
+/// `FunctionTypeSymbol` cache is name-keyed.
+open class Issue1538ImportedOutVarEmitTests {
+    @Fact
+    func EndToEnd_ImportedStaticOverload_InlineOutVar_Runs() {
+        // int32.TryParse is an overloaded imported STATIC method; the out arg is
+        // an inline `out var`. `n` must be in scope AND correctly typed for the
+        // rest of the body (no cascade on the following WriteLine statements).
+        const source = `package i1538staticoverload
+import System
+
+func Main() {
+    let ok = int32.TryParse("42", out var n)
+    Console.WriteLine(ok)
+    Console.WriteLine(n)
+    Console.WriteLine(n + 1)
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal("True${Environment.NewLine}42${Environment.NewLine}43${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func EndToEnd_ImportedInstance_DictionaryTryGetValue_PresentKey_Runs() {
+        // Dictionary[string,int32].TryGetValue is an imported INSTANCE method
+        // whose out-parameter type is the receiver's value type argument.
+        const source = `package i1538dictpresent
+import System
+import System.Collections.Generic
+
+func Main() {
+    var d = Dictionary[string, int32]()
+    d["a"] = 7
+    let has = d.TryGetValue("a", out var v)
+    Console.WriteLine(has)
+    Console.WriteLine(v)
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal("True${Environment.NewLine}7${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func EndToEnd_ImportedInstance_DictionaryTryGetValue_AbsentKey_Runs() {
+        const source = `package i1538dictabsent
+import System
+import System.Collections.Generic
+
+func Main() {
+    var d = Dictionary[string, int32]()
+    d["a"] = 7
+    let miss = d.TryGetValue("z", out var w)
+    Console.WriteLine(miss)
+    Console.WriteLine(w)
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal("False${Environment.NewLine}0${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func EndToEnd_GenericMethod_OutTypeIsTypeParameter_Runs() {
+        // Inside a generic method, `Dictionary[K,V].TryGetValue(k, out var found)`
+        // must bind `found : V` (the receiver's value type parameter), not the
+        // erased `object`, so `return found` (typed V) type-checks and emits
+        // verifiable IL.
+        const source = `package i1538generictp
+import System
+import System.Collections.Generic
+
+class Helper {
+    shared {
+        func Lookup[K, V](d Dictionary[K, V], key K) V {
+            if d.TryGetValue(key, out var found) {
+                return found
+            }
+            return default
+        }
+    }
+}
+
+func Main() {
+    var d = Dictionary[string, int32]()
+    d["x"] = 99
+    Console.WriteLine(Helper.Lookup[string, int32](d, "x"))
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal("99${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func EndToEnd_Control_ImportedStatic_PreDeclaredOut_Runs() {
+        // Control: imported overloaded static method with a PRE-DECLARED out arg
+        // still works (unchanged by the fix).
+        const source = `package i1538predeclared
+import System
+
+func Main() {
+    var n int32 = 0
+    let ok = int32.TryParse("13", out n)
+    Console.WriteLine(ok)
+    Console.WriteLine(n)
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal("True${Environment.NewLine}13${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func EndToEnd_Control_UserMethod_InlineOutVar_Runs() {
+        // Control: a USER single-overload method with an inline `out var` still
+        // works (the pre-existing user-method path is not regressed).
+        const source = `package i1538usermethod
+import System
+
+class Ext {
+    shared {
+        func Try(s string, out n int32) bool {
+            n = 42
+            return true
+        }
+    }
+}
+
+func Main() {
+    let ok = Ext.Try("x", out var n)
+    Console.WriteLine(ok)
+    Console.WriteLine(n)
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal("True${Environment.NewLine}42${Environment.NewLine}", output)
+    }
+
+    shared {
+        private func CompileAndRun(source string) string {
+            let tempDir = Directory.CreateTempSubdirectory("gs_1538_exe_").FullName
+            try {
+                let srcPath = Path.Combine(tempDir, "test.gs")
+                let dllPath = Path.Combine(tempDir, "test.dll")
+                File.WriteAllText(srcPath, source)
+                let args = []string{"/out:" + dllPath, "/target:exe", "/targetframework:net10.0", srcPath}
+                using let stdoutWriter = StringWriter()
+                using let stderrWriter = StringWriter()
+                let prevOut = Console.Out
+                let prevErr = Console.Error
+                Console.SetOut(stdoutWriter)
+                Console.SetError(stderrWriter)
+                var compileExit int32
+                try {
+                    compileExit = Program.Main(args)
+                } finally {
+                    Console.SetOut(prevOut)
+                    Console.SetError(prevErr)
+                }
+                Assert.True(compileExit == 0, (`gsc failed:
+stdout:
+` + "$stdoutWriter" + `
+stderr:
+` + "$stderrWriter"))
+                IlVerifier.Verify(dllPath)
+                let rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json")
+                if !File.Exists(rtConfig) {
+                    File.WriteAllText(rtConfig, `{
+  "runtimeOptions": {
+    "tfm": "net10.0",
+    "framework": { "name": "Microsoft.NETCore.App", "version": "10.0.0" }
+  }
+}`)
+                }
+                let psi = ProcessStartInfo("dotnet"){
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    WorkingDirectory = tempDir
+                }
+                psi.ArgumentList.Add("exec")
+                psi.ArgumentList.Add("--runtimeconfig")
+                psi.ArgumentList.Add(rtConfig)
+                psi.ArgumentList.Add(dllPath)
+                using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
+                let stdout = proc.StandardOutput.ReadToEnd()
+                let stderr = proc.StandardError.ReadToEnd()
+                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                Assert.True(proc.ExitCode == 0, (`exited ` + "${proc.ExitCode}" + `
+stdout:
+` + "$stdout" + `
+stderr:
+` + "$stderr"))
+                return stdout.ReplaceLineEndings(Environment.NewLine)
+            } finally {
+                try {
+                    Directory.Delete(tempDir, recursive: true)
+                } catch { }
+            }
+        }
+    }
+}

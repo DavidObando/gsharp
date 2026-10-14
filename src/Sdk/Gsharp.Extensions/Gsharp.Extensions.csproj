@@ -1,4 +1,4 @@
-<Project>
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
 
   <!--
     ADR-0084 §L5 / issue #806. The Gsharp.Extensions assembly is now
@@ -105,20 +105,11 @@
        ReferenceOutputAssembly="false" keeps these references build-only
        (the Compiler and BuildTask are toolchain, not runtime deps). -->
   <ItemGroup>
-    <ProjectReference Include="..\..\Compiler\Compiler.csproj"
-                      Private="false"
-                      ReferenceOutputAssembly="false"
-                      SkipGetTargetFrameworkProperties="true" />
-    <ProjectReference Include="..\Gsharp.NET.Sdk\Gsharp.NET.Sdk.csproj"
-                      Private="false"
-                      ReferenceOutputAssembly="false"
-                      SkipGetTargetFrameworkProperties="true" />
+    
+    
     <!-- ADR-0174 D1: build-only ordering arrow so the channel runtime exists
          before the bootstrap CoreCompile forwards it to gsc as /r:. -->
-    <ProjectReference Include="..\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj"
-                      Private="false"
-                      ReferenceOutputAssembly="false"
-                      SkipGetTargetFrameworkProperties="true" />
+    
   </ItemGroup>
 
   <!-- Reset @(Compile) to only `.gs` files. Microsoft.NET.Sdk adds
@@ -132,14 +123,13 @@
   <Target Name="_GsharpExtensionsResetCompileItems" BeforeTargets="CoreCompile">
     <ItemGroup>
       <Compile Remove="@(Compile)" />
-      <Compile Include="$(MSBuildProjectDirectory)\**\*.gs"
-               Exclude="$(MSBuildProjectDirectory)\bin\**\*.gs;$(MSBuildProjectDirectory)\obj\**\*.gs" />
+      <Compile Include="$(MSBuildProjectDirectory)\**\*.gs" Exclude="$(MSBuildProjectDirectory)\bin\**\*.gs;$(MSBuildProjectDirectory)\obj\**\*.gs" />
     </ItemGroup>
   </Target>
 
-  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.props" />
-  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.targets" />
-  <Import Project="..\Gsharp.NET.Sdk.Bootstrap\build\Gsharp.NET.Sdk.Bootstrap.targets" />
+  
+  
+  
 
   <!-- Override AssemblyName / TargetName / TargetFileName AFTER all SDK
        imports. build/gsharp.build.props (auto-imported via the root

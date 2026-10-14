@@ -77,7 +77,7 @@ def benchmark(work_directory: Path) -> dict:
     if not COMPILER.exists():
         raise SystemExit(
             f"Missing {COMPILER}. Build first with "
-            "`dotnet build src/Compiler/Compiler.csproj -c Release -graph`."
+            "`dotnet build src/Compiler/Compiler.gsproj -c Release -graph`."
         )
 
     if work_directory.exists():

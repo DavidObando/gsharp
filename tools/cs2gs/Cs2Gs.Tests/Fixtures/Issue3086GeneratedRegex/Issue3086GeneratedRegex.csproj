@@ -1,9 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <OutputType>Exe</OutputType>
-    <Nullable>annotations</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
-  </PropertyGroup>
-</Project>

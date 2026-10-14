@@ -1,0 +1,279 @@
+// <copyright file="Issue3880VariadicPassThroughOverloadEmitTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Compiler.Tests.Emit
+
+import GSharp.Compiler
+import GSharp.Compiler.Tests
+import System
+import System.Diagnostics
+import System.IO
+import Xunit
+
+/// Issue #3880: a single argument that already IS the variadic carrier binds
+/// the candidate in NORMAL form (C# §12.6.4.2), so it ranks against the
+/// carrier type, not the element type. Overload ranking used to classify that
+/// argument as an expanded-form tail slot against the element type, which both
+/// mis-rated the conversion and left the slot's parameter type unset, so the
+/// "better conversion target" tie-break could not run: the migrated
+/// `Cs2Gs.Tests` pair
+/// `AssertBindsAgainstGsCore(printedSources ...string)` /
+/// `AssertBindsAgainstGsCore(refs IReadOnlyList[string]?, printedSources ...string)`
+/// called with one `[]string` tied and reported a spurious GS0266 where
+/// C# picks the first. Pinned end to end, not merely bound, so the selected
+/// overload is witnessed at runtime.
+open class Issue3880VariadicPassThroughOverloadEmitTests {
+    @Fact
+    func CarrierPassThrough_PrefersTheNormalFormOverload() {
+        let output = CompileAndRun((`package P
+import System
+import System.Collections.Generic
+
+class Asserts {
+    shared {
+        func Bind(printedSources ...string) int32 { return printedSources.Length }
+        func Bind(refs IReadOnlyList[string]?, printedSources ...string) int32 { return 100 + printedSources.Length }
+    }
+}
+
+func run() {
+    let printed = []string{"a", "b"}
+
+    // Normal form: ` + "`" + `printed` + "`" + ` IS the carrier, so the one-parameter
+    // overload wins on an identity conversion.
+    Console.WriteLine(Asserts.Bind(printed))
+
+    // Expanded form still packs into the same overload.
+    Console.WriteLine(Asserts.Bind("a", "b", "c"))
+
+    // The two-parameter overload is still reachable.
+    Console.WriteLine(Asserts.Bind(nil, "a"))
+}
+
+run()`))
+        Assert.Equal("2${Environment.NewLine}3${Environment.NewLine}101${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func CarrierPassThrough_BeatsAWideningSiblingOnTheSameArity() {
+        // The sibling is NOT variadic at the pass-through slot, so the fix must
+        // rank the carrier candidate's identity conversion above the sibling's
+        // implicit reference conversion rather than penalising it as expanded.
+        let output = CompileAndRun(`package P
+import System
+import System.Collections.Generic
+
+class Pick {
+    shared {
+        func Take(values ...string) string { return "carrier" }
+        func Take(values IEnumerable[string]) string { return "sequence" }
+    }
+}
+
+func run() {
+    let arr = []string{"a"}
+    Console.WriteLine(Pick.Take(arr))
+    Console.WriteLine(Pick.Take("a", "b"))
+}
+
+run()`)
+        Assert.Equal("carrier${Environment.NewLine}carrier${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func GenericCarrierPassThrough_ClosesTheCarrierBeforeRanking() {
+        // Review finding on PR #3964, confirmed against csc: a GENERIC variadic
+        // candidate declares its carrier open (`[]T`). Ranking `[]string`
+        // against `[]T` classifies an identity as a reference conversion, and
+        // the call is handed to a fixed sibling. C# picks the generic carrier
+        // in both shapes below (verified with csc on net10.0); gsc picked
+        // "sequence" and "two-param" — a SILENT wrong-overload selection that
+        // bound clean, verified clean and returned the wrong answer at
+        // runtime, which is why this test executes rather than asserting a
+        // successful bind. The carrier is now closed through the candidate's
+        // inferred substitution, exactly as the non-tail slots already were.
+        let output = CompileAndRun(`package P
+import System
+import System.Collections.Generic
+
+class Pick {
+    shared {
+        func Take[T](values ...T) string { return "generic-carrier" }
+        func Take(values IEnumerable[string]) string { return "sequence" }
+
+        func Two[T](values ...T) string { return "generic-carrier" }
+        func Two(refs IReadOnlyList[string], values ...string) string { return "two-param" }
+    }
+}
+
+func run() {
+    let arr = []string{"a"}
+    Console.WriteLine(Pick.Take(arr))
+    Console.WriteLine(Pick.Two(arr))
+}
+
+run()`)
+        Assert.Equal("generic-carrier${Environment.NewLine}generic-carrier${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func GenericExpandedForm_ClosesTheElementTypeBeforeRanking() {
+        // The carrier's twin (#3964 closed the carrier; this closes the element).
+        // `Elem[T](values ...T)` vs `Elem(values ...object)`
+        // called as `Elem("a", "b")` binds in EXPANDED form, so ranking uses the
+        // element type — which was left OPEN. `string` against `T` and `string`
+        // against `object` landed on the same conversion kind, the candidates
+        // tied per-argument, and the later non-generic-over-generic tie-break
+        // handed the call to the `object` overload. csc on net10.0 infers
+        // T = string, sees an identity, and prints "generic-elem".
+        //
+        // This one does NOT need the ParamTypes tie-break to go wrong, which is
+        // why the earlier reasoning that the expanded path was harmless (its
+        // ParamTypes stays null) did not hold: CompareUserConversions compares
+        // conversion KINDS first and returns before ParamTypes is read.
+        let output = CompileAndRun(`package P
+import System
+
+class Pick {
+    shared {
+        func Elem[T](values ...T) string { return "generic-elem" }
+        func Elem(values ...object) string { return "object-elem" }
+    }
+}
+
+func run() {
+    Console.WriteLine(Pick.Elem("a", "b"))
+}
+
+run()`)
+        Assert.Equal("generic-elem${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func ExpandedNumericTails_RankByBetterConversionTargetInsteadOfCrashing() {
+        // Review finding on this PR, and it was right: closing the element type
+        // makes two tails classify identically where they previously did not,
+        // and CompareUserConversions' NumericWidening arm dereferences BOTH
+        // parameter types — which expanded tail slots never recorded. The
+        // generic case below COMPILED on main (picking the wrong overload) and
+        // CRASHED with GS9998 once the element type was closed.
+        //
+        // The non-generic case underneath is the same hole reached without any
+        // generic candidate at all: it crashes on plain `main`, where this
+        // change is a no-op because candSubstitution is null. So the null
+        // ParamTypes defect predates this PR; closing the element type only
+        // widened what reaches it.
+        //
+        // csc on net10.0 prints "generic" and "i64": for an int32 tail, int64
+        // is a better conversion target than float64.
+        let output = CompileAndRun(`package P
+import System
+
+class C {
+    shared {
+        func F[T](anchor T, values ...T) string { return "generic" }
+        func F(anchor int64, values ...float64) string { return "float" }
+
+        func G(anchor int64, values ...int64) string { return "i64" }
+        func G(anchor int64, values ...float64) string { return "f64" }
+    }
+}
+
+func run() {
+    let a int64 = 1
+    let b int32 = 2
+    Console.WriteLine(C.F(a, b))
+    Console.WriteLine(C.G(a, b))
+}
+
+run()`)
+        Assert.Equal("generic${Environment.NewLine}i64${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func ExpandedReferenceTails_RankByBetterConversionTarget() {
+        // The reference half of the same slot. Both tails classify as
+        // Reference, so CompareUserConversions reaches CompareReferenceTargets
+        // — which is guarded on both parameter types being non-null and so
+        // silently tied for expanded slots. main reports a spurious GS0266;
+        // csc picks the more derived element type.
+        let output = CompileAndRun(`package P
+import System
+
+open class Animal { }
+class Dog : Animal { }
+
+class C {
+    shared {
+        func H(values ...Animal) string { return "animal" }
+        func H(values ...object) string { return "object" }
+    }
+}
+
+func run() {
+    Console.WriteLine(C.H(Dog(), Dog()))
+}
+
+run()`)
+        Assert.Equal("animal${Environment.NewLine}", output)
+    }
+
+    shared {
+        private func CompileAndRun(source string) string {
+            let tempDir = Directory.CreateTempSubdirectory("gs_3880_overload_").FullName
+            try {
+                let srcPath = Path.Combine(tempDir, "test.gs")
+                let outPath = Path.Combine(tempDir, "test.dll")
+                File.WriteAllText(srcPath, source)
+                RunGsc([]string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath})
+                IlVerifier.Verify(outPath)
+                let psi = ProcessStartInfo("dotnet"){
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    WorkingDirectory = tempDir
+                }
+                psi.ArgumentList.Add("exec")
+                psi.ArgumentList.Add("--runtimeconfig")
+                psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
+                psi.ArgumentList.Add(outPath)
+                using let proc = Process.Start(psi)!!
+                let stdout = proc.StandardOutput.ReadToEnd()
+                let stderr = proc.StandardError.ReadToEnd()
+                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                Assert.True(proc.ExitCode == 0, (`exited ` + "${proc.ExitCode}" + `
+stdout:
+` + "$stdout" + `
+stderr:
+` + "$stderr"))
+                return stdout.ReplaceLineEndings(Environment.NewLine)
+            } finally {
+                try {
+                    Directory.Delete(tempDir, recursive: true)
+                } catch { }
+            }
+        }
+
+        private func RunGsc(args[]string) {
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var compileExit int32
+            try {
+                compileExit = Program.Main(args)
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            Assert.True(compileExit == 0, (`gsc failed:
+stdout:
+` + "$compileOut" + `
+stderr:
+` + "$compileErr"))
+        }
+    }
+}

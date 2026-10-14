@@ -1,9 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <RootNamespace>Corpus.Grid05</RootNamespace>
-    <AssemblyName>G05-Collections-Console</AssemblyName>
-  </PropertyGroup>
-
-</Project>

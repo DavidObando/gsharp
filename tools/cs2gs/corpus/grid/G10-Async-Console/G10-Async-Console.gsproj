@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Corpus.Grid10</RootNamespace>
+    <AssemblyName>G10-Async-Console</AssemblyName>
+  </PropertyGroup>
+
+</Project>

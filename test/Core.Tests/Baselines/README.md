@@ -2,7 +2,7 @@
 
 This directory holds `refactoring-baseline.json`, the committed SHA-256 digest
 for every fixture compiled by
-`test/Core.Tests/CodeAnalysis/Emit/RefactoringBaselineTests.cs`.
+`test/Core.Tests/CodeAnalysis/Emit/RefactoringBaselineTests.gs`.
 
 The gate exists for the Binder/Emitter decomposition work (see the PR-0
 plan): every extraction PR is supposed to be behavior-preserving, so the

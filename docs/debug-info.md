@@ -12,7 +12,7 @@ GSharp registers a single, stable language GUID:
 | --- | --- |
 | Language | GSharp |
 | Language GUID | `4F4D7B6A-0E33-4C2E-A3D7-2E5F8B7F9C00` |
-| Defined in | `src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs` (`GSharpLanguageGuid`) |
+| Defined in | `src/Core/CodeAnalysis/Emit/PortablePdbEmitter.gs` (`GSharpLanguageGuid`) |
 
 Every `Document` row written by the compiler carries this GUID in the `Language` column. External tools (debuggers, symbol servers, source indexers) that recognise GSharp source files **must** key off this value. Like the C# (`3F5162F8-07C6-11D3-9053-00C04FA302A1`) and F# (`AB4F38C9-B6E6-43BA-BE3B-58080B2CCCE3`) GUIDs, this value will never be reissued — even if the on-disk layout of GSharp source changes — so existing tooling never has to re-key.
 
@@ -201,7 +201,7 @@ same surface every modern .NET SDK consumes, so existing CI snippets that set
 
 The end-to-end debug-info contract is verified at two levels:
 
-* **`test/Compiler.Tests/Acceptance/StackTraceTests.cs`** — compiles a
+* **`test/Compiler.Tests/Acceptance/StackTraceTests.gs`** — compiles a
   small `.gs` source through `gsc` with `/debug:portable /pdb:...`, loads
   the PE + sidecar PDB into an `AssemblyLoadContext` via
   `LoadFromStream(peStream, pdbStream)`, invokes a method that throws, and
@@ -212,7 +212,7 @@ The end-to-end debug-info contract is verified at two levels:
   boundary, and a throw after `await` in an `async` function (validating
   that Phase 5's async state-machine PDB rows resume on the correct line).
 * **`e2etests/debugger-e2e.sh`** — a smoke test that packs the SDK, builds a
-  GSharp library, builds a C# console host that calls the library via
+  GSharp library, builds a C# console host (C# on purpose: it proves cross-language debugging) that calls the library via
   reflection, then drives [`netcoredbg`](https://github.com/Samsung/netcoredbg)
   in MI mode. It sets a breakpoint by `<.gs-file>:<line>`, runs to the
   break, lists locals, continues, and asserts the program exits with the

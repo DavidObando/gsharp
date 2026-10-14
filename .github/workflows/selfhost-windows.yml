@@ -1,5 +1,10 @@
 name: selfhost-windows
 
+# PARKED at the cut-over (owner decision 2026-10-09): dispatch-only, not gating.
+# It still expects a cs2gs-selfmig-nightly migrated tree and a C# Core.Tests
+# baseline, neither of which exists on main; repair it against branch
+# cs2gs/csharp-0.4 before relying on it.
+
 # Issue #4631 (C7): run the cs2gs-migrated (G#-source) Core.Tests on Windows.
 #
 # The compiler is moving to G# source. Its recursion depth matters (binder,
@@ -23,11 +28,6 @@ on:
         description: 'cs2gs-selfmig-nightly run id to take the migrated tree from (default: latest successful)'
         required: false
         default: ''
-  pull_request:
-    paths:
-      - '.github/workflows/selfhost-windows.yml'
-      - 'build/selfhost-compare-trx.py'
-      - 'build/test-selfhost-compare-trx.py'
 
 permissions:
   contents: read
@@ -66,13 +66,13 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln
+        run: dotnet restore GSharp.slnx
 
       - name: Restore .NET local tools
         run: dotnet tool restore
 
       - name: Build (stage 0 and the C# Core.Tests)
-        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+        run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
       - name: Download the migrated tree
         env:
@@ -106,7 +106,7 @@ jobs:
       - name: Test C# Core.Tests
         run: |
           set +e
-          dotnet test test/Core.Tests/Core.Tests.csproj --configuration Release --no-build --no-restore \
+          dotnet test test/Core.Tests/Core.Tests.gsproj --configuration Release --no-build --no-restore \
             --logger "trx;LogFileName=csharp-core.trx" --results-directory "$RUNNER_TEMP/trx" | tee csharp-core.log
           echo "C# Core.Tests exit ${PIPESTATUS[0]}" | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0

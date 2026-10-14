@@ -68,7 +68,7 @@ echo "==> Using netcoredbg: $NETCOREDBG"
 
 # 1. Pack the GSharp SDK so we can build a real .gsproj end-to-end.
 echo "==> Packing Gsharp.NET.Sdk into .nugs/"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Release --nologo -v:q
+dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
 mkdir -p .nugs
 cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
 

@@ -1,0 +1,1020 @@
+// <copyright file="BoundBinaryOperator.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Core.CodeAnalysis.Binding
+
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import System
+import System.Collections.Generic
+
+/// Bound binary operator.
+data class BoundBinaryOperator : IEquatable[BoundBinaryOperator] {
+    private convenience init(syntaxKind SyntaxKind, kind BoundBinaryOperatorKind, type TypeSymbol) {
+        init(syntaxKind, kind, type, type, type, false, false)
+    }
+
+    private convenience init(
+        syntaxKind SyntaxKind,
+        kind BoundBinaryOperatorKind,
+        operandType TypeSymbol,
+        resultType TypeSymbol
+    ) {
+        init(syntaxKind, kind, operandType, operandType, resultType, false, false)
+    }
+
+    private init(
+        syntaxKind SyntaxKind,
+        kind BoundBinaryOperatorKind,
+        leftType TypeSymbol,
+        rightType TypeSymbol,
+        resultType TypeSymbol,
+        isReferenceEquality bool = false,
+        isDelegateCombination bool = false
+    ) {
+        SyntaxKind = syntaxKind
+        Kind = kind
+        LeftType = leftType
+        RightType = rightType
+        Type = resultType
+        IsReferenceEquality = isReferenceEquality
+        IsDelegateCombination = isDelegateCombination
+    }
+
+    /// Gets the syntax kind.
+    prop SyntaxKind SyntaxKind {
+        get;
+    }
+
+    /// Gets the bound binary operator kind.
+    prop Kind BoundBinaryOperatorKind {
+        get;
+    }
+
+    /// Gets the left type symbol.
+    prop LeftType TypeSymbol {
+        get;
+    }
+
+    /// Gets the right type symbol.
+    prop RightType TypeSymbol {
+        get;
+    }
+
+    /// Gets the bound binary operator type symbol.
+    prop Type TypeSymbol {
+        get;
+    }
+
+    /// Gets a value indicating whether equality compares reference identity.
+    internal prop IsReferenceEquality bool {
+        get;
+    }
+
+    /// Gets a value indicating whether this operator combines or removes delegates.
+    internal prop IsDelegateCombination bool {
+        get;
+    }
+
+    shared {
+        private let SignedIntegralTypes[]TypeSymbol = []TypeSymbol{
+            TypeSymbol.Int8,
+            TypeSymbol.Int16,
+            TypeSymbol.Int32,
+            TypeSymbol.Int64,
+            TypeSymbol.NInt
+        }
+        private let UnsignedIntegralTypes[]TypeSymbol = []TypeSymbol{
+            TypeSymbol.UInt8,
+            TypeSymbol.UInt16,
+            TypeSymbol.UInt32,
+            TypeSymbol.UInt64,
+            TypeSymbol.NUInt
+        }
+        private let FloatingPointTypes[]TypeSymbol = []TypeSymbol{TypeSymbol.Float32, TypeSymbol.Float64}
+        private var supportedOperators[]BoundBinaryOperator = BuildSupportedOperators()
+
+        /// Binds a syntax kind and a type symbol to the corresponding bound binary operator, or
+        /// null if the syntax kind isn't a binary operator, or is not a supported binary operator.
+        /// @param syntaxKind The syntax kind.
+        /// @param leftType The left type symbol.
+        /// @param rightType The right type symbol.
+        /// @returns A bound unary operator.
+        func Bind(syntaxKind SyntaxKind, leftType TypeSymbol, rightType TypeSymbol) BoundBinaryOperator? {
+            for op in supportedOperators {
+                if op.SyntaxKind == syntaxKind && op.LeftType == leftType && op.RightType == rightType {
+                    return op
+                }
+            }
+            // Issue #1927: string concatenation (`+`) must accept `string?` mixed
+            // with `string` on either or both sides — matching C#'s well-known
+            // `string.Concat` behaviour where a null operand is treated as an
+            // empty string and the result is always non-nullable `string`. The
+            // table above only registers the homogeneous `string + string ->
+            // string` arm, so a nullable operand (e.g. from `T.ToString()` under
+            // a `class` constraint, which yields `string?`) previously fell
+            // through to GS0129 "operator not defined for 'string' and
+            // 'string?'". Any combination of string/string? is accepted here;
+            // the result type is always the non-nullable `string`.
+            if syntaxKind == SyntaxKind.PlusToken &&
+                IsStringOrNullableString(leftType) &&
+                IsStringOrNullableString(rightType) &&
+                (
+                leftType is NullableTypeSymbol ||
+                    leftType is PlatformTypeSymbol ||
+                    (rightType is NullableTypeSymbol || rightType is PlatformTypeSymbol)
+            ) {
+                // ADR-0186 §6 / issue #4324: `string!` joins `string?` on this
+                // arm. The guard is "at least one operand is wrapped", because
+                // the homogeneous `string + string` case belongs to the
+                // `supportedOperators` table above, whose lookup is an exact
+                // `op.LeftType == leftType` match and therefore cannot see
+                // through a wrapper of any kind. The result stays the non-null
+                // `string` and NO §4 check is inserted, deliberately: this
+                // operator's contract is that a nil operand concatenates as the
+                // empty string, so the value never reaches a non-null
+                // destination — exactly as for `string?` today.
+                return BoundBinaryOperator(
+                    syntaxKind,
+                    BoundBinaryOperatorKind.Sum,
+                    leftType,
+                    rightType,
+                    TypeSymbol.String
+                )
+            }
+            // ADR-0186 §6: reference EQUALITY with a platform operand, which is
+            // not a use of the value as non-null and therefore takes no §4 check.
+            //
+            // §4 lists the sites where a check is inserted — a store, an
+            // argument, a return, a `throw`/`lock`/`for … in` subject, a
+            // receiver — and comparing two references is none of them: `==`
+            // never dereferences either side. §6 already says `x == nil` on a
+            // `T!` is free; comparing against a non-nil `string` is the same
+            // operation with a different right-hand side.
+            //
+            // Without this arm the `supportedOperators` lookup missed (it is an
+            // exact `op.LeftType == leftType` match and cannot see through a
+            // wrapper), resolution fell through to the CLR `op_Equality`, and
+            // the platform operand became an ARGUMENT to a non-null parameter —
+            // so §4 inserted a check on a comparison. Measured on
+            // `b.Conversion.AccountId == id` with an oblivious `AccountId`
+            // (`Issue2661ExpressionTreeNullablePipelineTests`), where the
+            // spurious check then made the enclosing expression-tree lambda
+            // unrepresentable and reported GS0473.
+            //
+            // Guarded on "at least one operand is wrapped" for the same reason
+            // as the concatenation arm above: the homogeneous `string == string`
+            // case belongs to the table.
+            if (syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
+                IsStringOrNullableString(leftType) &&
+                IsStringOrNullableString(rightType) &&
+                (leftType is PlatformTypeSymbol || rightType is PlatformTypeSymbol) {
+                let stringEqualityKind = if syntaxKind == SyntaxKind.EqualsEqualsToken {
+                    BoundBinaryOperatorKind.Equals
+                } else {
+                    BoundBinaryOperatorKind.NotEquals
+                }
+                return BoundBinaryOperator(syntaxKind, stringEqualityKind, leftType, rightType, TypeSymbol.Bool)
+            }
+            // Phase 4.2 / ADR-0020: `==` / `!=` on a `comparable`-constrained type parameter.
+            // Allowed only when both operands are the SAME type-parameter symbol whose
+            // constraint is `Comparable`. (`any` falls through to "operator undefined".)
+            //
+            // Issue #614 audit: intentionally a single arm — only 2 operators (== / !=)
+            // gated by a narrow type-parameter predicate. No combinatorial growth risk;
+            // a table would add indirection without reducing duplication.
+            if (syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
+                leftType is TypeParameterSymbol ltp &&
+                ltp == rightType &&
+                ltp.Constraint == TypeParameterConstraint
+                .Comparable {
+                let cmpKind = if syntaxKind == SyntaxKind.EqualsEqualsToken {
+                    BoundBinaryOperatorKind.Equals
+                } else {
+                    BoundBinaryOperatorKind.NotEquals
+                }
+                return BoundBinaryOperator(syntaxKind, cmpKind, ltp, ltp, TypeSymbol.Bool)
+            }
+            // Issues #534, #574, and 6.6 unification: all C# §11.10 enum
+            // operators (==, !=, <, <=, >, >=, |, &, ^, + underlying,
+            // - underlying, - enum) drive through the single EnumOperatorTable.
+            // Adding a new enum-supported operator group is a one-row change in
+            // that table — no new arm here.
+            if EnumOperatorTable.TryBindBinary(
+                syntaxKind,
+                leftType,
+                rightType,
+                out var enumKind,
+                out var enumResultType
+            ) {
+                return BoundBinaryOperator(syntaxKind, enumKind, leftType, rightType, enumResultType)
+            }
+            // Issue #1298: lifted equality / inequality over a nullable user-defined
+            // enum (`E? == E`, `E? != E`, `E? == E?`, …). A user-declared
+            // EnumSymbol has no static CLR type, so the generic value-type lifted
+            // arms further below (gated on `UnderlyingType.ClrType.IsValueType`)
+            // skip it, and BCL nullable enums never reach here because their
+            // underlying carries a real ClrType. Bind the comparison directly to
+            // `bool` whenever both operands denote the SAME user enum and at least
+            // one side is its nullable form; the emitter lowers it via
+            // `box Nullable<E>` + `Object.Equals` (C# `Nullable<T>` lifted
+            // equality semantics). Operands are left unlifted so each side boxes
+            // with its own type token. Non-nullable `E == E` is already handled by
+            // the EnumOperatorTable arm above; `E? == nil` by the IsNullCompare arm
+            // below.
+            if syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken {
+                let leftEnum EnumSymbol? = if leftType is NullableTypeSymbol leftNullableEnum {
+                    leftNullableEnum.UnderlyingType as EnumSymbol
+                } else {
+                    leftType as EnumSymbol
+                }
+                let rightEnum EnumSymbol? = if rightType is NullableTypeSymbol rightNullableEnum {
+                    rightNullableEnum.UnderlyingType as EnumSymbol
+                } else {
+                    rightType as EnumSymbol
+                }
+                let eitherNullable = leftType is NullableTypeSymbol || rightType is NullableTypeSymbol
+                if leftEnum != nil && rightEnum != nil && leftEnum == rightEnum && eitherNullable {
+                    let enumCmpKind = if syntaxKind == SyntaxKind.EqualsEqualsToken {
+                        BoundBinaryOperatorKind.Equals
+                    } else {
+                        BoundBinaryOperatorKind.NotEquals
+                    }
+                    return BoundBinaryOperator(syntaxKind, enumCmpKind, leftType, rightType, TypeSymbol.Bool)
+                }
+            }
+            // Phase 3.B.2 / ADR-0029 + ADR-0033: structural == / != on data and inline struct values.
+            //
+            // Issue #614 audit: intentionally a single arm — only 2 operators (== / !=)
+            // restricted to user-declared struct types with IsData or IsInline. The type
+            // test (`is StructSymbol`) is structural, not table-friendly.
+            if leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && (ls.IsData || ls.IsInline) {
+                if syntaxKind == SyntaxKind.EqualsEqualsToken {
+                    return BoundBinaryOperator(
+                        SyntaxKind.EqualsEqualsToken,
+                        BoundBinaryOperatorKind.Equals,
+                        ls,
+                        ls,
+                        TypeSymbol.Bool
+                    )
+                }
+                if syntaxKind == SyntaxKind.BangEqualsToken {
+                    return BoundBinaryOperator(
+                        SyntaxKind.BangEqualsToken,
+                        BoundBinaryOperatorKind.NotEquals,
+                        ls,
+                        ls,
+                        TypeSymbol.Bool
+                    )
+                }
+            }
+            // Issue #3518: same-compilation data/inline structs have no ClrType
+            // while binding, so their Nullable<T> equality cannot use the generic
+            // CLR-backed lift below. Bind the homogeneous symbolic wrapper here;
+            // emit boxes each nullable and delegates to Object.Equals.
+            if (syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
+                leftType is NullableTypeSymbol leftStructural &&
+                rightType is NullableTypeSymbol rightStructural &&
+                leftStructural.UnderlyingType is StructSymbol structural &&
+                !structural.IsClass &&
+                (structural.IsData || structural.IsInline) &&
+                structural == rightStructural
+                .UnderlyingType {
+                let kind = if syntaxKind == SyntaxKind.EqualsEqualsToken {
+                    BoundBinaryOperatorKind.Equals
+                } else {
+                    BoundBinaryOperatorKind.NotEquals
+                }
+                return BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool)
+            }
+            // Phase 3.C.2 / ADR-0001: == and != against nil for any nullable type.
+            //
+            // Issue #614 audit: intentionally a single arm — only 2 operators (== / !=)
+            // with a symmetric null-sentinel predicate. No growth dimension; the nil
+            // comparison semantic is fixed.
+            if (syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
+                (IsNullCompare(leftType, rightType) || IsNullCompare(rightType, leftType)) {
+                let kind = if syntaxKind == SyntaxKind.EqualsEqualsToken {
+                    BoundBinaryOperatorKind.Equals
+                } else {
+                    BoundBinaryOperatorKind.NotEquals
+                }
+                return BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool)
+            }
+            // Issue #941 / ADR-0001: null-coalescing `??` returns the left if
+            // non-nil, otherwise the right. Type is the underlying of the left
+            // side (when the right is the same underlying or is itself nullable
+            // with that underlying).
+            //
+            // Issue #614 audit: intentionally a single arm — there is only ONE
+            // null-coalescing operator token; no combinatorial dimension to tabulate.
+            if syntaxKind == SyntaxKind.QuestionQuestionToken {
+                // ADR-0186 §6: `??` accepts a `T!` left operand, and the RESULT of
+                // a coalesce is non-null — that is the whole point of supplying a
+                // fallback. Stripping only `T?` here left `T! ?? T` typed `T!`,
+                // which is wrong twice over: it claims the compiler still does not
+                // know whether the value can be nil when the expression has just
+                // guaranteed it cannot, and it drags a spurious `T! -> T` check
+                // (and §3's overload tie-break) into everything downstream.
+                let leftUnderlying TypeSymbol? = switch leftType {
+                    case leftNullable is NullableTypeSymbol: leftNullable.UnderlyingType
+                    case leftPlatform is PlatformTypeSymbol: leftPlatform.UnderlyingType
+                    default: leftType
+                }
+                let rightUnderlying TypeSymbol? = switch rightType {
+                    case rightNullable is NullableTypeSymbol: rightNullable.UnderlyingType
+                    case rightPlatform is PlatformTypeSymbol: rightPlatform.UnderlyingType
+                    default: rightType
+                }
+                // Issue #1018: `x ?? throw e`. The RHS is a throw-expression whose
+                // bottom (`never`) type is convertible to anything, so the result is
+                // the left operand stripped of its nullability (the non-null value).
+                if rightType == TypeSymbol.Never {
+                    return BoundBinaryOperator(
+                        syntaxKind,
+                        BoundBinaryOperatorKind.NullCoalesce,
+                        leftType,
+                        rightType,
+                        leftUnderlying!!
+                    )
+                }
+                if leftType == TypeSymbol.Null {
+                    return BoundBinaryOperator(
+                        syntaxKind,
+                        BoundBinaryOperatorKind.NullCoalesce,
+                        leftType,
+                        rightType,
+                        rightType
+                    )
+                }
+                if leftUnderlying == rightUnderlying {
+                    let result = if rightType is NullableTypeSymbol {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(leftUnderlying!!))
+                    } else {
+                        leftUnderlying!!
+                    }
+                    return BoundBinaryOperator(
+                        syntaxKind,
+                        BoundBinaryOperatorKind.NullCoalesce,
+                        leftType,
+                        rightType,
+                        result
+                    )
+                }
+                // Issue #1239 / C# §12.15: best common type. When the underlyings
+                // differ but a valid implicit conversion exists between them, `??`
+                // computes the best common type instead of requiring an exact match:
+                //   * if the right operand implicitly converts to the left's non-null
+                //     type A0 (reference downcast target, numeric widening source),
+                //     the result is A0 (e.g. `int32? ?? uint16` → `int32`);
+                //   * otherwise, if A0 implicitly converts to the right operand's
+                //     type, the result is the right type (reference upcast / interface
+                //     implementation, e.g. `Foo? ?? IFoo` → `IFoo`, or numeric
+                //     widening, e.g. `int32? ?? int64` → `int64`).
+                // When the right operand is nullable, classify its underlying type
+                // by the same rules and lift the common result. This keeps imported
+                // generic implementations and ordinary subtype/interface pairs on
+                // the same conversion path instead of requiring exact nullable
+                // wrapper identity.
+                if leftUnderlying != nil &&
+                    rightUnderlying != nil &&
+                    leftType != TypeSymbol.Error &&
+                    rightType != TypeSymbol
+                    .Error {
+                    var common TypeSymbol? = nil
+                    let rightToLeft = Conversion.Classify(rightUnderlying, leftUnderlying)
+                    if rightToLeft.Exists && rightToLeft.IsImplicit {
+                        common = leftUnderlying
+                    } else {
+                        let leftToRight = Conversion.Classify(leftUnderlying, rightUnderlying)
+                        if leftToRight.Exists && leftToRight.IsImplicit {
+                            common = rightUnderlying
+                        }
+                    }
+                    if common != nil {
+                        if rightType is NullableTypeSymbol {
+                            common = NullableTypeSymbol.Get(common)
+                        }
+                        return BoundBinaryOperator(
+                            syntaxKind,
+                            BoundBinaryOperatorKind.NullCoalesce,
+                            leftType,
+                            rightType,
+                            common!!
+                        )
+                    }
+                }
+            }
+            // PR N-4 / §6.1 / C# §7.3.7: lifted binary operators over a
+            // value-type Nullable<T>. Triggered when both operands are
+            // NullableTypeSymbol wrapping the SAME value-type underlying.
+            // (Mixed `T? op T` is handled in BindBinaryExpression by lifting
+            // the non-nullable side to T? via an implicit conversion before
+            // re-binding.) Arithmetic / bitwise lift to T?; equality and
+            // ordering lift to bool. Shift operands are normalized to nullable
+            // int32 counts by the binder before reaching this generic lift.
+            //
+            // Issue #614 audit: intentionally a single arm — this is a generic
+            // lifting meta-algorithm that already handles ALL liftable operator
+            // kinds uniformly via IsLiftableKind(). It delegates to the main Bind
+            // for the underlying form, so it has no per-operator duplication to
+            // tabulate.
+            if leftType is NullableTypeSymbol lN &&
+                rightType is NullableTypeSymbol rN &&
+                lN == rN &&
+                lN
+                .UnderlyingType
+                ?.ClrType is {IsValueType: true} {
+                // Look up the underlying-form operator. If it does not exist
+                // (e.g. the user wrote `+` on `bool?`, which has no underlying
+                // form), there is no lifted form either.
+                let underlyingOp BoundBinaryOperator? = Bind(syntaxKind, lN.UnderlyingType, rN.UnderlyingType)
+                if underlyingOp != nil && IsLiftableKind(underlyingOp.Kind) {
+                    let liftedResult = if IsLiftedToBoolKind(underlyingOp.Kind) {
+                        cast[TypeSymbol](TypeSymbol.Bool)
+                    } else {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(underlyingOp.Type))
+                    }
+                    return BoundBinaryOperator(syntaxKind, underlyingOp.Kind, leftType, rightType, liftedResult)
+                }
+            }
+            // 6.6 / §6.1: lifted binary for heterogeneous nullable operands
+            // (enum? + underlying?, underlying? + enum?, enum? - enum?→underlying?).
+            // The same-type arm above handles enum? == enum? and enum? | enum?;
+            // this arm handles the §11.10 arithmetic rules where both sides
+            // are nullable but wrap DIFFERENT underlying types.
+            //
+            // Issue #614 audit: same rationale as the homogeneous nullable arm
+            // above — a generic lifting meta-algorithm, not per-operator duplication.
+            if leftType is NullableTypeSymbol lHet &&
+                rightType is NullableTypeSymbol rHet &&
+                lHet != rHet &&
+                lHet
+                .UnderlyingType
+                ?.ClrType is {IsValueType: true} &&
+                rHet
+                .UnderlyingType
+                ?.ClrType is {IsValueType: true} {
+                let underlyingOp BoundBinaryOperator? = Bind(syntaxKind, lHet.UnderlyingType, rHet.UnderlyingType)
+                if underlyingOp != nil && IsLiftableKind(underlyingOp.Kind) {
+                    let liftedResult = if IsLiftedToBoolKind(underlyingOp.Kind) {
+                        cast[TypeSymbol](TypeSymbol.Bool)
+                    } else {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(underlyingOp.Type))
+                    }
+                    return BoundBinaryOperator(syntaxKind, underlyingOp.Kind, leftType, rightType, liftedResult)
+                }
+            }
+            return nil
+        }
+
+        /// Issue #1480: builds a target-typed null-coalescing operator whose result
+        /// is the supplied [`resultType`](paramref) (the contextual target type)
+        /// for the case where the operand underlyings share no natural common type
+        /// but both implicitly convert to the target (e.g. sibling classes
+        /// `A`/`B` coalesced at a common interface `IShape`). Used by
+        /// the binder's target-typed coalesce path; the operand conversions to the
+        /// result type are inserted by the caller.
+        /// @param leftType The left operand type.
+        /// @param rightType The right operand type.
+        /// @param resultType The contextual target (result) type.
+        /// @returns A null-coalescing operator with (cref:Type) = [`resultType`](paramref).
+        internal func MakeNullCoalesce(
+            leftType TypeSymbol,
+            rightType TypeSymbol,
+            resultType TypeSymbol
+        ) BoundBinaryOperator -> BoundBinaryOperator(
+            SyntaxKind.QuestionQuestionToken,
+            BoundBinaryOperatorKind.NullCoalesce,
+            leftType,
+            rightType,
+            resultType
+        )
+
+        /// Issue #2188: builds a reference-equality (`==` / `!=`) operator
+        /// over two reference-type operands (nullable or not) — e.g. `object?`
+        /// versus a reference-constrained `T?`. Both operands compare by
+        /// reference identity, yielding `bool`. This is bound only as a final
+        /// fallback (after built-in, user-defined, and CLR operator resolution) so a
+        /// user-declared `operator ==` on a reference type always wins.
+        /// @param syntaxKind The `==` or `!=` token.
+        /// @param leftType The left operand type.
+        /// @param rightType The right operand type.
+        /// @returns The reference-equality operator.
+        internal func MakeReferenceEquality(
+            syntaxKind SyntaxKind,
+            leftType TypeSymbol,
+            rightType TypeSymbol
+        ) BoundBinaryOperator {
+            let kind = if syntaxKind == SyntaxKind.EqualsEqualsToken {
+                BoundBinaryOperatorKind.Equals
+            } else {
+                BoundBinaryOperatorKind.NotEquals
+            }
+            return BoundBinaryOperator(
+                syntaxKind,
+                kind,
+                leftType,
+                rightType,
+                TypeSymbol.Bool,
+                isReferenceEquality: true
+            )
+        }
+
+        /// Creates the built-in delegate `+` or `-` operator.
+        /// @param syntaxKind The `+` or `-` token.
+        /// @param leftType The left operand type.
+        /// @param rightType The right operand type.
+        /// @param resultType The concrete, optionally nullable delegate result type.
+        /// @returns The delegate-combination operator.
+        internal func MakeDelegateCombination(
+            syntaxKind SyntaxKind,
+            leftType TypeSymbol,
+            rightType TypeSymbol,
+            resultType TypeSymbol
+        ) BoundBinaryOperator {
+            let kind = if syntaxKind == SyntaxKind.PlusToken {
+                BoundBinaryOperatorKind.Sum
+            } else {
+                BoundBinaryOperatorKind.Difference
+            }
+            return BoundBinaryOperator(syntaxKind, kind, leftType, rightType, resultType, isDelegateCombination: true)
+        }
+
+        /// Issue #2188: true when [`type`](paramref) participates in reference
+        /// equality — a reference type (in nullable or non-nullable form) or a
+        /// reference-constrained type parameter. A nullable wrapper is unwrapped
+        /// first; the underlying is reference-comparable when it is an interface, a
+        /// delegate / function / sequence reference, a user class, a
+        /// reference-constrained type parameter (`[T class …]` or a class-base
+        /// constraint), or any CLR-backed non-value, non-pointer type (e.g.
+        /// `object`, `string`, imported classes/interfaces). Value types,
+        /// unconstrained and `struct`-constrained type parameters (whose
+        /// `T?` erases to `Nullable<T>`) are excluded.
+        /// @param type The operand type to classify.
+        /// @returns `true` when the type participates in reference equality.
+        internal func IsReferenceEqualityOperand(type TypeSymbol) bool {
+            let underlying TypeSymbol? = if type is NullableTypeSymbol nullable {
+                nullable.UnderlyingType
+            } else {
+                type
+            }
+            if underlying == nil {
+                return false
+            }
+            if underlying is TypeParameterSymbol tp {
+                return tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil
+            }
+            if underlying is InterfaceSymbol ||
+                underlying is DelegateTypeSymbol ||
+                underlying is FunctionTypeSymbol ||
+                underlying is SequenceTypeSymbol ||
+                underlying is AsyncSequenceTypeSymbol {
+                return true
+            }
+            if underlying is StructSymbol structSymbol {
+                return structSymbol.IsClass
+            }
+            return underlying.ClrType is {} clr && !clr.IsValueType && !clr.IsPointer && !clr.IsByRef
+        }
+
+        /// PR N-4: returns true for operator kinds that have a lifted
+        /// counterpart per C# §7.3.7 — arithmetic, bitwise, equality, and
+        /// ordering and shifts. Logical short-circuit (&&, ||) requires the
+        /// user-defined `true`/`false` operator surface, and null-coalesce is itself
+        /// the way to consume a nullable.
+        private func IsLiftableKind(kind BoundBinaryOperatorKind) bool {
+            switch kind {
+                case BoundBinaryOperatorKind.Sum,
+                BoundBinaryOperatorKind.Difference,
+                BoundBinaryOperatorKind.Product,
+                BoundBinaryOperatorKind.Quotient,
+                BoundBinaryOperatorKind.Remainder,
+                BoundBinaryOperatorKind.BitwiseAnd,
+                BoundBinaryOperatorKind.BitwiseOr,
+                BoundBinaryOperatorKind.BitwiseXor,
+                BoundBinaryOperatorKind.BitClear,
+                BoundBinaryOperatorKind.ShiftLeft,
+                BoundBinaryOperatorKind.ShiftRight,
+                BoundBinaryOperatorKind.UnsignedShiftRight,
+                BoundBinaryOperatorKind.Equals,
+                BoundBinaryOperatorKind.NotEquals,
+                BoundBinaryOperatorKind.Less,
+                BoundBinaryOperatorKind.LessOrEquals,
+                BoundBinaryOperatorKind.Greater,
+                BoundBinaryOperatorKind.GreaterOrEquals {
+                    return true
+                }
+                default {
+                    return false
+                }
+            }
+        }
+
+        /// PR N-4: returns true for operator kinds whose lifted form has
+        /// result type `bool` rather than `Nullable<R>`
+        /// (equality and ordering, per C# §7.3.7).
+        private func IsLiftedToBoolKind(kind BoundBinaryOperatorKind) bool {
+            switch kind {
+                case BoundBinaryOperatorKind.Equals,
+                BoundBinaryOperatorKind.NotEquals,
+                BoundBinaryOperatorKind.Less,
+                BoundBinaryOperatorKind.LessOrEquals,
+                BoundBinaryOperatorKind.Greater,
+                BoundBinaryOperatorKind.GreaterOrEquals {
+                    return true
+                }
+                default {
+                    return false
+                }
+            }
+        }
+
+        /// Issue #1927: true when [`type`](paramref) is `string`,
+        /// `string?` or — ADR-0186 §6, issue #4324 — `string!`.
+        ///
+        /// The platform arm is not a new rule but the absence of a carve-out: §6
+        /// says `T!` participates in every existing construct, and the
+        /// concatenation arm's whole justification ("a null operand is treated as
+        /// an empty string by `String.Concat`") is a statement about the
+        /// runtime value, which a `string!` shares with a `string?` by
+        /// construction. Answering `false` here made
+        /// `string! + "x"` report GS0129 in both operand orders, which is an
+        /// oblivious value being treated as <em>less</em> capable than either
+        /// `string` or `string?` — the one thing §6 rules out.
+        /// @param type The operand type.
+        /// @returns Whether the operand is a string in any of the three states.
+        private func IsStringOrNullableString(type TypeSymbol) bool {
+            return type == TypeSymbol.String ||
+                (type is NullableTypeSymbol nullable && nullable.UnderlyingType == TypeSymbol.String) ||
+                (type is PlatformTypeSymbol platform && platform.UnderlyingType == TypeSymbol.String)
+        }
+
+        private func IsNullCompare(nullableOrUnderlying TypeSymbol, nullCandidate TypeSymbol) bool {
+            var nullableOrUnderlying = nullableOrUnderlying
+            if nullCandidate != TypeSymbol.Null {
+                return false
+            }
+            while nullableOrUnderlying is NullabilityAnnotatedTypeSymbol annotated {
+                nullableOrUnderlying = annotated.BaseType
+            }
+            // ADR-0186 §6: `x == nil` / `x != nil` is legal on a `T!`, and GS0129
+            // does not fire. Being able to SAY the value might be nil is the whole
+            // difference between `T!` and `T` — erasing the platform type to its
+            // underlying instead would re-create ADR-0136's original hole verbatim
+            // (alternative 3, rejected). This arm also covers ADR-0159's magic
+            // collections without a second rule: a platform-typed `map[K, V]!` or
+            // `[]T!` can genuinely be nil, so GS0523's "a bare collection can never
+            // be nil" premise simply does not apply, and the comparison is
+            // accepted here rather than reaching the reference-backed-builtin arms
+            // below that GS0523 polices.
+            if nullableOrUnderlying == TypeSymbol.Null ||
+                nullableOrUnderlying is NullableTypeSymbol ||
+                nullableOrUnderlying is PlatformTypeSymbol {
+                return true
+            }
+            // Issue #796: extend `== nil` / `!= nil` to reference-shaped types
+            // whose CLR representation is a managed reference. The binder
+            // already accepts `T? == nil` for any nullable wrapper; the
+            // language has no `T?` spelling for these structural shapes,
+            // so allow the comparison directly. Emit falls through to the
+            // generic `ldnull; ceq` path (verifier-clean for any reference).
+            //
+            // Covered shapes (all reference-typed at the CLR level):
+            //   * `(T) -> R` / `func(T) U` — FunctionTypeSymbol, lowered to a
+            //     System.MulticastDelegate-derived closure.
+            //   * Named delegate types declared with `delegate` — DelegateTypeSymbol.
+            //   * `sequence[T]` / `asyncSequence[T]` — IEnumerable<T> / IAsyncEnumerable<T>.
+            // Issue #3089: `object` is also a managed reference, but unlike
+            // imported classes it is represented by the built-in TypeSymbol.
+            if nullableOrUnderlying == TypeSymbol.Object ||
+                nullableOrUnderlying is FunctionTypeSymbol ||
+                nullableOrUnderlying is DelegateTypeSymbol ||
+                nullableOrUnderlying is SequenceTypeSymbol ||
+                nullableOrUnderlying is AsyncSequenceTypeSymbol {
+                return true
+            }
+            // Issue #3303: a `map[K, V]` is unconditionally a CLR reference type
+            // (`System.Collections.Generic.Dictionary<K, V>`), regardless of
+            // whether its `ClrType` is materialized (it is null when K or V
+            // structurally references an in-scope type parameter or a
+            // same-compilation struct). A bare map slot can genuinely hold a CLR
+            // null — a declared-but-unassigned `var items map[K, V]` field is nil
+            // until `init()` runs — so `m == nil` / `m != nil` must bind exactly
+            // like the reference-shaped structural types above (#796). This is
+            // comparison-only, mirroring function types: bare-slot nil ASSIGNMENT
+            // still requires the explicit `map[K, V]?` spelling (ADR-0104), which
+            // binds through the NullableTypeSymbol arm at the top. The emitter's
+            // generic `ldnull; ceq` tail is verifier-clean for the reference-typed
+            // operand, including the open `Dictionary<!0, !1>` shape.
+            //
+            // Issue #3310 / ADR-0159: slices (`[]T` → `T[]`), fixed arrays
+            // (`[N]T` → `T[]`), and channels (`chan T` → `Channel<T>`) are the
+            // remaining reference-backed magic types; they join the same family
+            // so the rule can finally be stated once — nil comparison is defined
+            // for EVERY reference-backed builtin type. This flips #3309's
+            // deliberate slice/channel rejection pins. Same comparison-only
+            // semantics: with ADR-0159's sound empty-instance zero values a bare
+            // slot is only ever nil across an interop boundary (or a chan/struct
+            // default-instance hole), which is exactly what the comparison is for.
+            if nullableOrUnderlying is MapTypeSymbol ||
+                nullableOrUnderlying is SliceTypeSymbol ||
+                nullableOrUnderlying is ArrayTypeSymbol ||
+                nullableOrUnderlying is RectangularArrayTypeSymbol ||
+                nullableOrUnderlying is ChannelTypeSymbol {
+                return true
+            }
+            // Issue #2300: interface-typed operands are always CLR reference
+            // types (a G#-declared InterfaceSymbol or an imported interface),
+            // so `iface == nil` / `iface != nil` must bind exactly like the
+            // reference-shaped structural types above — no `?` spelling is
+            // needed (or even expressible in a way that changes the CLR
+            // storage: an interface reference is nullable at the CLR layer
+            // regardless of the G# static-nullability annotation).
+            if nullableOrUnderlying is InterfaceSymbol ||
+                (
+                nullableOrUnderlying is ImportedTypeSymbol importedInterface &&
+                    importedInterface.ClrType is {IsInterface: true}
+            ) {
+                return true
+            }
+            // Issue #2354 follow-up: a non-nullable G# `class` (as opposed to a
+            // value-kind `struct`) is likewise always a CLR reference type at
+            // the IL layer — the exact same rationale as the interface arm
+            // immediately above. Without this arm, `box == nil` / `box != nil`
+            // reported GS0129 for a bare class-typed operand even though the
+            // binder now admits `return nil` / `let x Box = nil` for the same
+            // type (Conversion.Classify's reference-like `nil ->` rule), an
+            // inconsistent pair of restrictions on the very same reference
+            // value. `Conversion.IsReferenceLikeTarget`'s `StructSymbol {
+            // IsClass: true }` arm is the shared predicate for this exact
+            // check; reuse it here directly.
+            if nullableOrUnderlying is StructSymbol && nullableOrUnderlying.IsClass == true {
+                return true
+            }
+            // Imported reference classes named directly in G# source retain the
+            // language's historical nil-comparison behavior. Explicit non-null
+            // metadata on imported member results is rejected contextually by the
+            // expression binder, where the producing member is still available.
+            if nullableOrUnderlying is ImportedTypeSymbol importedClass && importedClass.ClrType is {IsClass: true} {
+                return true
+            }
+            // Issue #2300: an open type parameter (`T`) whose constraint does
+            // not guarantee a non-nullable value type — i.e. unconstrained,
+            // class-constrained, or interface-constrained — may be
+            // substituted with a reference type at any instantiation site, so
+            // `T == nil` / `T != nil` must be legal (mirroring C#'s allowance
+            // of `t == null` for an unconstrained `T`, lowered through a
+            // boxing comparison). Only a `struct`-constrained (or otherwise
+            // known-value-type) type parameter is excluded, because such a
+            // `T` can never be `nil` and its `T?` spelling erases to
+            // `Nullable<T>` instead of a bare reference slot.
+            if nullableOrUnderlying is TypeParameterSymbol typeParameter {
+                return !typeParameter.HasValueTypeConstraint
+            }
+            return false
+        }
+
+        private func BuildSupportedOperators()[]BoundBinaryOperator {
+            let list = List[BoundBinaryOperator]()
+            // ADR-0044: every integral primitive supports the full arithmetic,
+            // comparison, bitwise, and shift operator set, closed under its own
+            // type (sbyte + sbyte → sbyte, long + long → long, …). Cross-type
+            // promotion happens through explicit casts.
+            for t in SignedIntegralTypes {
+                AddIntegralOperators(list, t)
+            }
+            for t in UnsignedIntegralTypes {
+                AddIntegralOperators(list, t)
+            }
+            // Floating-point primitives support arithmetic + comparison, but
+            // not bitwise or shifts.
+            for t in FloatingPointTypes {
+                AddArithmeticAndComparisonOperators(list, t)
+            }
+            // Decimal mirrors the floating-point shape but is emitted through
+            // System.Decimal's operator methods (handled by the emitter).
+            AddArithmeticAndComparisonOperators(list, TypeSymbol.Decimal)
+            // char is comparison-only at its own type: char + char would have to
+            // widen to int in C#'s rules, and the binder does not yet promote
+            // across types here. Users can write `int(c1) + int(c2)` explicitly.
+            AddComparisonOperators(list, TypeSymbol.Char)
+            // Issue #2227: unlike the other integral primitives above (which are
+            // closed under their own type per ADR-0044, e.g. `uint8 & uint8 ->
+            // uint8`), `char` has no arithmetic support at all — so a `char &
+            // char -> char` result would be a novel shape rather than an
+            // extension of an existing one. Instead follow C# §12.4.7 binary
+            // numeric promotion exactly: `char`-typed operands of the bitwise
+            // and shift operators promote to `int32`, and the result is
+            // `int32`. The shift count (right operand of `<<`/`>>`/`>>>`) is
+            // always `int32`, matching every other shift operator in this file.
+            AddCharBitwiseAndShiftOperators(list)
+            // Bool operators (unchanged behaviour, kept here for one source of truth).
+            list.Add(
+                BoundBinaryOperator(SyntaxKind.AmpersandToken, BoundBinaryOperatorKind.BitwiseAnd, TypeSymbol.Bool)
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.AmpersandAmpersandToken,
+                    BoundBinaryOperatorKind.LogicalAnd,
+                    TypeSymbol.Bool
+                )
+            )
+            list.Add(BoundBinaryOperator(SyntaxKind.PipeToken, BoundBinaryOperatorKind.BitwiseOr, TypeSymbol.Bool))
+            list.Add(BoundBinaryOperator(SyntaxKind.PipePipeToken, BoundBinaryOperatorKind.LogicalOr, TypeSymbol.Bool))
+            list.Add(BoundBinaryOperator(SyntaxKind.HatToken, BoundBinaryOperatorKind.BitwiseXor, TypeSymbol.Bool))
+            list.Add(BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, TypeSymbol.Bool))
+            list.Add(
+                BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, TypeSymbol.Bool)
+            )
+            // String operators (concatenation + equality through BCL helpers).
+            list.Add(BoundBinaryOperator(SyntaxKind.PlusToken, BoundBinaryOperatorKind.Sum, TypeSymbol.String))
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.EqualsEqualsToken,
+                    BoundBinaryOperatorKind.Equals,
+                    TypeSymbol.String,
+                    TypeSymbol.Bool
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.BangEqualsToken,
+                    BoundBinaryOperatorKind.NotEquals,
+                    TypeSymbol.String,
+                    TypeSymbol.Bool
+                )
+            )
+            // ADR-0045: `object` reference equality.
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.EqualsEqualsToken,
+                    BoundBinaryOperatorKind.Equals,
+                    TypeSymbol.Object,
+                    TypeSymbol.Object,
+                    TypeSymbol.Bool,
+                    isReferenceEquality: true
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.BangEqualsToken,
+                    BoundBinaryOperatorKind.NotEquals,
+                    TypeSymbol.Object,
+                    TypeSymbol.Object,
+                    TypeSymbol.Bool,
+                    isReferenceEquality: true
+                )
+            )
+            return list.ToArray()
+        }
+
+        private func AddArithmeticAndComparisonOperators(list List[BoundBinaryOperator], t TypeSymbol) {
+            list.Add(BoundBinaryOperator(SyntaxKind.PlusToken, BoundBinaryOperatorKind.Sum, t))
+            list.Add(BoundBinaryOperator(SyntaxKind.MinusToken, BoundBinaryOperatorKind.Difference, t))
+            list.Add(BoundBinaryOperator(SyntaxKind.StarToken, BoundBinaryOperatorKind.Product, t))
+            list.Add(BoundBinaryOperator(SyntaxKind.SlashToken, BoundBinaryOperatorKind.Quotient, t))
+            list.Add(BoundBinaryOperator(SyntaxKind.PercentToken, BoundBinaryOperatorKind.Remainder, t))
+            AddComparisonOperators(list, t)
+        }
+
+        private func AddIntegralOperators(list List[BoundBinaryOperator], t TypeSymbol) {
+            AddArithmeticAndComparisonOperators(list, t)
+            list.Add(BoundBinaryOperator(SyntaxKind.AmpersandToken, BoundBinaryOperatorKind.BitwiseAnd, t))
+            list.Add(BoundBinaryOperator(SyntaxKind.PipeToken, BoundBinaryOperatorKind.BitwiseOr, t))
+            list.Add(BoundBinaryOperator(SyntaxKind.HatToken, BoundBinaryOperatorKind.BitwiseXor, t))
+            list.Add(BoundBinaryOperator(SyntaxKind.AmpersandHatToken, BoundBinaryOperatorKind.BitClear, t))
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.ShiftLeftToken,
+                    BoundBinaryOperatorKind.ShiftLeft,
+                    t,
+                    TypeSymbol.Int32,
+                    t
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.ShiftRightToken,
+                    BoundBinaryOperatorKind.ShiftRight,
+                    t,
+                    TypeSymbol.Int32,
+                    t
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.UnsignedShiftRightToken,
+                    BoundBinaryOperatorKind.UnsignedShiftRight,
+                    t,
+                    TypeSymbol.Int32,
+                    t
+                )
+            )
+        }
+
+        /// Issue #2227: `char & char`, `char | char`, `char ^ char`,
+        /// `char &^ char`, `char << int32`, `char >> int32`,
+        /// and `char >>> int32` all promote to `int32` per C# §12.4.7
+        /// binary numeric promotion.
+        private func AddCharBitwiseAndShiftOperators(list List[BoundBinaryOperator]) {
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.AmpersandToken,
+                    BoundBinaryOperatorKind.BitwiseAnd,
+                    TypeSymbol.Char,
+                    TypeSymbol.Int32
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.PipeToken,
+                    BoundBinaryOperatorKind.BitwiseOr,
+                    TypeSymbol.Char,
+                    TypeSymbol.Int32
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.HatToken,
+                    BoundBinaryOperatorKind.BitwiseXor,
+                    TypeSymbol.Char,
+                    TypeSymbol.Int32
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.AmpersandHatToken,
+                    BoundBinaryOperatorKind.BitClear,
+                    TypeSymbol.Char,
+                    TypeSymbol.Int32
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.ShiftLeftToken,
+                    BoundBinaryOperatorKind.ShiftLeft,
+                    TypeSymbol.Char,
+                    TypeSymbol.Int32,
+                    TypeSymbol.Int32
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.ShiftRightToken,
+                    BoundBinaryOperatorKind.ShiftRight,
+                    TypeSymbol.Char,
+                    TypeSymbol.Int32,
+                    TypeSymbol.Int32
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.UnsignedShiftRightToken,
+                    BoundBinaryOperatorKind.UnsignedShiftRight,
+                    TypeSymbol.Char,
+                    TypeSymbol.Int32,
+                    TypeSymbol.Int32
+                )
+            )
+        }
+
+        private func AddComparisonOperators(list List[BoundBinaryOperator], t TypeSymbol) {
+            list.Add(
+                BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, t, t, TypeSymbol.Bool)
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.BangEqualsToken,
+                    BoundBinaryOperatorKind.NotEquals,
+                    t,
+                    t,
+                    TypeSymbol.Bool
+                )
+            )
+            list.Add(BoundBinaryOperator(SyntaxKind.LessToken, BoundBinaryOperatorKind.Less, t, t, TypeSymbol.Bool))
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.LessOrEqualsToken,
+                    BoundBinaryOperatorKind.LessOrEquals,
+                    t,
+                    t,
+                    TypeSymbol.Bool
+                )
+            )
+            list.Add(
+                BoundBinaryOperator(SyntaxKind.GreaterToken, BoundBinaryOperatorKind.Greater, t, t, TypeSymbol.Bool)
+            )
+            list.Add(
+                BoundBinaryOperator(
+                    SyntaxKind.GreaterOrEqualsToken,
+                    BoundBinaryOperatorKind.GreaterOrEquals,
+                    t,
+                    t,
+                    TypeSymbol.Bool
+                )
+            )
+        }
+    }
+}

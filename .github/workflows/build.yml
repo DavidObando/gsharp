@@ -9,6 +9,9 @@ on:
   pull_request:
     branches:
       - main
+      # Cut-over stack: the Phase 3 PR is based on the Phase 2 branch, so the
+      # workflow must also run for it. Remove once the cut-over has merged.
+      - cutover/phase2-prereqs
 
 # Cancel superseded PR runs: every push to a PR starts a new run, and without
 # this the older runs of the same PR keep consuming runners (and starve other
@@ -51,7 +54,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
+        run: dotnet restore GSharp.slnx --locked-mode
 
       - name: Restore .NET local tools
         # Brings in `dotnet-ilverify`, which Compiler.Tests invokes via
@@ -81,7 +84,7 @@ jobs:
         # built exactly once. A bare `dotnet build` schedules projects in
         # parallel against a shared OutputPath and can race on
         # GenerateRuntimeConfigurationFiles writing `gsc.runtimeconfig.json`.
-        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+        run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
       - name: Check canonical G# formatting
         run: |
@@ -119,7 +122,10 @@ jobs:
   tests:
     name: tests (${{ matrix.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Raised from 30: the G#-built suites compile and run slower than the C# ones did,
+    # and the Cs2Gs.Tests shards also build the final C# tree. Rebalance the shards
+    # (build/generate-ci-test-matrix.py) from this run's timings, then lower it.
+    timeout-minutes: 90
     needs: discover-tests
     strategy:
       fail-fast: false
@@ -136,13 +142,35 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
+        run: dotnet restore GSharp.slnx --locked-mode
 
       - name: Restore .NET local tools
         run: dotnet tool restore
 
+      # The cs2gs tests were written against a C# tree: the stage-4 contract
+      # (CS2GS_TEST_SOURCE_ROOT) names ONE directory that holds the original
+      # sources and also the built toolchain (out/bin/<Config>/nupkgs, gsc.dll).
+      # The C# originals of the compiler no longer exist in this tree
+      # (docs/self-migration-cutover.md, "Source-inspection tests need the
+      # final C# tree"), so the Cs2Gs.Tests shards check out the final C# commit
+      # beside the workspace and build it, and only they get the variable: the
+      # Core.Tests guards must keep scanning this G# tree.
+      - name: Check out the final C# tree for the cs2gs tests
+        if: contains(matrix.project, 'Cs2Gs.Tests')
+        uses: actions/checkout@v5
+        with:
+          ref: v0.4.1270
+          path: csharp-source
+          fetch-depth: 0
+
+      - name: Build the final C# tree for the cs2gs tests
+        if: contains(matrix.project, 'Cs2Gs.Tests')
+        run: |
+          dotnet restore csharp-source/GSharp.sln --locked-mode
+          dotnet build csharp-source/GSharp.sln --configuration Release --no-restore -graph
+
       - name: Build
-        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+        run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
       - name: Test
         env:
@@ -170,6 +198,10 @@ jobs:
           # unquoted so it splits into one project per iteration.
           # shellcheck disable=SC2086
           for project in $TEST_PROJECTS; do
+            case "$project" in
+              *Cs2Gs.Tests*) export CS2GS_TEST_SOURCE_ROOT="$GITHUB_WORKSPACE/csharp-source" ;;
+              *) unset CS2GS_TEST_SOURCE_ROOT ;;
+            esac
             dotnet test "$project" "${args[@]}"
           done
 
@@ -224,14 +256,14 @@ jobs:
 
       - name: Verify isolated stage-2 certification contract
         run: |
-          dotnet restore build/selfhost/PackageContentHash.csproj --locked-mode
-          dotnet restore build/selfhost/TestSupervisorLogger.csproj --locked-mode
-          dotnet build build/selfhost/PackageContentHash.csproj --configuration Release --no-restore --nologo
-          dotnet build build/selfhost/TestSupervisorLogger.csproj --configuration Release --no-restore --nologo
+          dotnet restore build/selfhost/PackageContentHash.gsproj --locked-mode
+          dotnet restore build/selfhost/TestSupervisorLogger.gsproj --locked-mode
+          dotnet build build/selfhost/PackageContentHash.gsproj --configuration Release --no-restore --nologo
+          dotnet build build/selfhost/TestSupervisorLogger.gsproj --configuration Release --no-restore --nologo
           python3 build/test-selfhost-stage2.py
 
       - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
+        run: dotnet restore GSharp.slnx --locked-mode
 
       - name: Restore .NET local tools
         run: dotnet tool restore
@@ -240,7 +272,7 @@ jobs:
         run: python3 build/test-selfhost-compare-trx.py
 
       - name: Build
-        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+        run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
       - name: Verify every test is run exactly once
         run: python3 build/verify-ci-test-partition.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -250,6 +282,9 @@ jobs:
       # red nightly nobody is watching.
       - name: Verify the concurrency benchmark harness
         run: python3 build/verify-concurrency-bench.py --smoke
+
+      - name: Verify the cs2gs apps gate issue logic
+        run: python3 build/test-cs2gs-apps-gate-issues.py
 
       - name: Verify the self-host compiler benchmark gate
         run: |
@@ -276,7 +311,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
+        run: dotnet restore GSharp.slnx --locked-mode
 
       - name: Install netcoredbg
         env:
@@ -322,10 +357,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run nullable hygiene gate
+      - name: Run nullable hygiene gate (remaining C# only)
+        # After the cut-over the only production C# is src/vs-gsharp (plus test
+        # fixtures and cs2gs inputs), which still enables nullable analysis.
+        # Every check that scans tracked C# keeps running; `coverage` is
+        # skipped because it asserts the shape of src/Core's C# files.
         run: |
           python3 build/nullable_hygiene.py \
-            --base "origin/${{ github.base_ref || 'main' }}"
+            --base "origin/${{ github.base_ref || 'main' }}" \
+            --check classify --check no-escapes --check suppressions \
+            --check null-bang --check arg-null-bang --check forgiving \
+            --check guard-added
 
       # Shares this job because it is equally cheap (seconds, no build) and the
       # job is already a required check. Every reference to the latest
@@ -357,14 +399,14 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
+        run: dotnet restore GSharp.slnx --locked-mode
 
       - name: Restore .NET local tools
         # dotnet-ilverify for the pipeline's stage 3.
         run: dotnet tool restore
 
       - name: Build
-        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj --configuration Release --no-restore -graph
+        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
 
       - name: Migrate corpus (ledger-gated)
         run: |
@@ -394,83 +436,6 @@ jobs:
             cs2gs-ci-runs/**/report.html
             cs2gs-ci-runs/**/summary.json
             cs2gs-ci-runs/**/run.json
-
-  cs2gs-oahu:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Setup .NET SDK (main)
-        uses: actions/setup-dotnet@v5
-        with:
-          global-json-file: global.json
-
-      - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
-
-      - name: Restore .NET local tools
-        run: dotnet tool restore
-
-      - name: Build
-        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj --configuration Release --no-restore -graph
-
-      - name: Migrate and run pinned Oahu
-        env:
-          OAHU_GATE_ROOT: ${{ runner.temp }}/cs2gs-oahu-pinned
-        run: ./build/run-cs2gs-oahu.sh
-
-      - name: Upload migration report
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: cs2gs-oahu-report
-          path: |
-            ${{ runner.temp }}/cs2gs-oahu-pinned/migrate.log
-            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/report.html
-            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/summary.json
-            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/run.json
-            ${{ runner.temp }}/cs2gs-oahu-pinned/smoke/*
-
-  cs2gs-code-exploder:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Setup .NET SDK (main)
-        uses: actions/setup-dotnet@v5
-        with:
-          global-json-file: global.json
-
-      - name: Restore
-        run: dotnet restore GSharp.sln --locked-mode
-
-      - name: Restore .NET local tools
-        run: dotnet tool restore
-
-      - name: Build
-        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj --configuration Release --no-restore -graph
-
-      - name: Migrate and run pinned code-exploder
-        env:
-          CODE_EXPLODER_GATE_ROOT: ${{ runner.temp }}/cs2gs-code-exploder-pinned
-        run: ./build/run-cs2gs-code-exploder.sh
-
-      - name: Upload migration report
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: cs2gs-code-exploder-report
-          path: |
-            ${{ runner.temp }}/cs2gs-code-exploder-pinned/migrate.log
-            ${{ runner.temp }}/cs2gs-code-exploder-pinned/runs/**/report.html
-            ${{ runner.temp }}/cs2gs-code-exploder-pinned/runs/**/summary.json
-            ${{ runner.temp }}/cs2gs-code-exploder-pinned/runs/**/run.json
 
   vscode-extension:
     name: vscode-extension (${{ matrix.os }})
@@ -596,202 +561,27 @@ jobs:
           name: visual-studio-gsharp-vsix
           path: src/vs-gsharp/src/VsGsharp/bin/Release/net472/GSharp.VisualStudio.vsix
 
-  # The hot-core translation guard ensures that changes to core projects
-  # (src/Core, src/Analyzers, src/Formatting, src/Sdk/Gsharp.Runtime.Channels,
-  # tools/cs2gs) that would break the self-migration pipeline are caught early.
-  # By making it depend on the fast test suite (build, tests, test-partition, etc.),
-  # we avoid wasting ~45 min of compute on a diff that fails unit tests.
-  #
-  # This is the new authoritative PR-time gate (replaces standalone cs2gs-pr-guard.yml
-  # for required checks). It only runs on PRs, not on main or tags.
-  hot-core-translation-guard:
-    name: hot-core translation guard
-    runs-on: ubuntu-latest
-    # NOTE: this group must NOT collide with cs2gs-pr-guard.yml's own
-    # `cs2gs-pr-guard-<PR>` concurrency group. That workflow is kept
-    # triggering on `pull_request` for backwards compatibility (see its
-    # header) and starts immediately, while this job only starts once
-    # `needs` completes (~20+ min in); a shared group name lets this job's
-    # later start cancel the legacy one mid-run via cancel-in-progress,
-    # which reports as a CANCELLED "hot-core translation guard" check —
-    # the exact required-status-check context — even though this job (the
-    # authoritative one) goes on to succeed. Keep the group scoped to this
-    # workflow so the two never race.
-    concurrency:
-      group: hot-core-translation-guard-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
-    needs: [build, tests, test-partition, e2e, ilverify, nullable-hygiene, cs2gs-corpus]
-    if: github.event_name == 'pull_request'
-    timeout-minutes: 90
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Test PR guard control and failure propagation
-        run: ./build/test-cs2gs-selfmig-pr-guard.sh
-
-      - name: Detect changes that can affect the guard
-        id: scope
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          run_guard=true
-          changed_paths="$RUNNER_TEMP/cs2gs-pr-guard-paths"
-          if git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"; then
-            if ./build/cs2gs-pr-guard-control.sh relevant-paths < "$changed_paths"; then
-              :
-            else
-              helper_status=$?
-              if (( helper_status == 1 )); then
-                run_guard=false
-              else
-                echo "::warning title=Path classification failed::Classifier exited $helper_status; running guard."
-              fi
-            fi
-          else
-            diff_status=$?
-            echo "::warning title=PR diff failed::git diff exited $diff_status; running guard."
-          fi
-          echo "run=$run_guard" >> "$GITHUB_OUTPUT"
-
-      - name: Report unaffected change
-        if: steps.scope.outputs.run != 'true'
-        run: |
-          {
-            echo "### cs2gs PR translation guard"
-            echo
-            echo "Skipped: this PR changes no input that can affect the hot-core translation guard."
-            echo
-            echo "The required check still reports; no translation, compile, ILVerify, or parity gate was needed."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Setup .NET SDK
-        if: steps.scope.outputs.run == 'true'
-        uses: actions/setup-dotnet@v5
-        with:
-          global-json-file: global.json
-
-      - name: Restore
-        if: steps.scope.outputs.run == 'true'
-        run: dotnet restore GSharp.sln --locked-mode
-
-      - name: Restore .NET local tools
-        if: steps.scope.outputs.run == 'true'
-        run: dotnet tool restore
-
-      - name: Migrate and compile the hot core
-        if: steps.scope.outputs.run == 'true'
-        env:
-          SELFMIG_PR_GUARD_ROOT: /tmp/gsharp-cs2gs-pr-guard
-        run: ./build/run-cs2gs-selfmig-pr-guard.sh
-
-      - name: Upload guard artifacts
-        if: always() && steps.scope.outputs.run == 'true'
-        uses: actions/upload-artifact@v5
-        with:
-          name: hot-core-guard-artifacts
-          retention-days: 7
-          if-no-files-found: ignore
-          path: |
-            /tmp/gsharp-cs2gs-pr-guard/guard.log
-            /tmp/gsharp-cs2gs-pr-guard/runs/**/*.json
-            /tmp/gsharp-cs2gs-pr-guard/runs/**/report.html
-            /tmp/gsharp-cs2gs-pr-guard/runs/**/sdk.build.log
-            /tmp/gsharp-cs2gs-pr-guard/migrated/**/*.gs
-
-  classify-hot-core-cancellation:
-    name: hot-core cancellation cause
-    needs: hot-core-translation-guard
-    if: always() && needs.hot-core-translation-guard.result == 'cancelled'
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions:
-      actions: read
-      checks: read
-      contents: read
-      pull-requests: read
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Report cancellation cause
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          RUN_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          job_id=$(
-            gh api \
-              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-              --jq '.jobs[] | select(.name == "hot-core translation guard") | .id' |
-              head -1
-          )
-          if [[ -z "$job_id" ]]; then
-            echo "::error title=Hot-core cancellation unknown::Could not find the cancelled guard job."
-            exit 1
-          fi
-
-          cause=unknown
-          for attempt in {1..5}; do
-            annotations=$(gh api \
-              "repos/$GITHUB_REPOSITORY/check-runs/$job_id/annotations?per_page=100")
-            cause=$(./build/cs2gs-pr-guard-control.sh cancellation <<< "$annotations")
-            [[ "$cause" != unknown ]] && break
-            sleep 2
-          done
-          messages=$(jq -r '.[].message // empty' <<< "$annotations")
-
-          # The workflow-level `build-<PR>` concurrency group also cancels this
-          # run when a newer push arrives, and the job annotation for that
-          # path is not guaranteed to carry the job-level concurrency text.
-          # If the annotations were not recognized but the PR head has moved
-          # past this run's commit, the cancellation is supersession.
-          if [[ "$cause" == unknown ]]; then
-            current_head=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha || true)
-            if [[ -n "$current_head" && "$current_head" != "$RUN_HEAD_SHA" ]]; then
-              cause=superseded
-            fi
-          fi
-
-          case "$cause" in
-            superseded)
-              summary="**Superseded by a newer push.** This was not a timeout."
-              echo "::notice title=Hot-core guard superseded::Cancelled because a newer push replaced this run; this was not a timeout."
-              ;;
-            timeout)
-              summary="**Timed out.** GitHub stopped the guard after its 90-minute job limit."
-              echo "::error title=Hot-core guard timed out::GitHub stopped the guard after its 90-minute job limit."
-              ;;
-            *)
-              summary="**Unknown cancellation.** GitHub did not return a recognized timeout or concurrency annotation."
-              echo "::error title=Hot-core cancellation unknown::GitHub did not return a recognized timeout or concurrency annotation."
-              ;;
-          esac
-
-          {
-            echo "### Hot-core guard cancellation"
-            echo
-            echo "$summary"
-            echo
-            echo '```text'
-            printf '%s\n' "$messages"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          [[ "$cause" == superseded ]]
-
   publish:
     runs-on: ubuntu-latest
-    needs: [build, tests, test-partition, e2e, ilverify, cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix, visual-studio-extension]
+    needs: [build, tests, test-partition, e2e, ilverify, cs2gs-corpus, vsix, visual-studio-extension]
     if: startsWith(github.ref, 'refs/tags/v')
 
     permissions:
       contents: write
+      actions: read
 
     steps:
+      - name: Require stage-2 certification of the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ok=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow selfhost-stage2-nightly.yml \
+            --commit "$GITHUB_SHA" --status success --json databaseId --jq 'length')
+          if [[ "$ok" == "0" ]]; then
+            echo "::error::No successful selfhost-stage2-nightly run for $GITHUB_SHA. Dispatch it on the tagged commit first (ADR-0198)."
+            exit 1
+          fi
+
       - name: Download NuGet packages
         uses: actions/download-artifact@v5
         with:

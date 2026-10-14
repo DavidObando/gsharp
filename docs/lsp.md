@@ -49,7 +49,7 @@ The GSharp Language Server provides rich IDE features for `.gs` files via the [L
 ## Architecture
 
 ```
-VS Code ↔ LSP-client (TypeScript extension) ↔ stdin/stdout ↔ GSharp.LanguageServer (C#)
+VS Code ↔ LSP-client (TypeScript extension) ↔ stdin/stdout ↔ GSharp.LanguageServer (G#)
                                                                       ↓
                                                                GSharp.Core
                                                          (Parser → Binder → Compilation)

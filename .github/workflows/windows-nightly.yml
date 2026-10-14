@@ -7,7 +7,7 @@ name: windows-nightly
 # The full test matrix is 45+ minutes on Linux and too expensive to mirror per
 # PR, so this nightly runs the highest-signal Windows surface instead:
 #
-#   - full Release build of GSharp.sln on windows-latest
+#   - full Release build of GSharp.slnx on windows-latest
 #   - test/Core.Tests (fast, broad compiler front-end coverage)
 #   - test/Sdk.Tests (the Gsharp.NET.Sdk path/tool-resolution logic this
 #     issue calls out as Windows-sensitive: backslash tool paths,
@@ -57,7 +57,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln
+        run: dotnet restore GSharp.slnx
 
       - name: Restore .NET local tools
         # dotnet-ilverify: the LanguageConformance suite invokes it via
@@ -67,7 +67,7 @@ jobs:
       - name: Build
         # Same invocation as build.yml: the static project graph builds each
         # project exactly once and avoids OutputPath races.
-        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+        run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
       - name: Test Core.Tests
         id: core
@@ -76,7 +76,7 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1
         run: |
           set +e
-          dotnet test test/Core.Tests/Core.Tests.csproj \
+          dotnet test test/Core.Tests/Core.Tests.gsproj \
             --configuration Release --no-build --no-restore \
             --logger "trx" --results-directory TestResults \
             | tee core-tests.log
@@ -100,7 +100,7 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1
         run: |
           set +e
-          dotnet test test/Compiler.Tests/Compiler.Tests.csproj \
+          dotnet test test/Compiler.Tests/Compiler.Tests.gsproj \
             --configuration Release --no-build --no-restore \
             --filter "FullyQualifiedName~GSharp.Compiler.Tests.LanguageConformance" \
             --logger "trx" --results-directory TestResults \
@@ -123,7 +123,7 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1
         run: |
           set +e
-          dotnet test test/Sdk.Tests/Sdk.Tests.csproj \
+          dotnet test test/Sdk.Tests/Sdk.Tests.gsproj \
             --configuration Release --no-build --no-restore \
             --logger "trx" --results-directory TestResults \
             | tee sdk-tests.log

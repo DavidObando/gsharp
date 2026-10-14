@@ -1,0 +1,54 @@
+// <copyright file="SignatureHelpHandlerTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.LanguageServer.Tests
+
+import GSharp.LanguageServer
+import GSharp.LanguageServer.Protocol
+import System
+import System.Linq
+import Xunit
+
+open class SignatureHelpHandlerTests {
+    @Fact
+    func ComputeSignatureHelp_AtOpenParen_ShowsFirstParameter() {
+        const source = `func add(a int32, b int32) int32 { return a + b }
+let r = add(
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        // Position just after the opening paren
+        var position = LanguageServerTestHelpers.PositionOf(source, "add(")
+        position = Position(position.Line, position.Character + 4)
+        let help SignatureHelp? = SignatureHelpComputer.ComputeSignatureHelp(content, position)
+        Assert.NotNull(help)
+        Assert.Single(help!!.Signatures)
+        Assert.Equal(0, help!!.ActiveParameter)
+        Assert.Contains("add", help!!.Signatures.First().Label, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ComputeSignatureHelp_AfterComma_ShowsSecondParameter() {
+        const source = `func add(a int32, b int32) int32 { return a + b }
+let r = add(1,
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        // Position just after the comma
+        var position = LanguageServerTestHelpers.PositionOf(source, "1,")
+        position = Position(position.Line, position.Character + 2)
+        let help SignatureHelp? = SignatureHelpComputer.ComputeSignatureHelp(content, position)
+        Assert.NotNull(help)
+        Assert.Equal(1, help!!.ActiveParameter)
+    }
+
+    @Fact
+    func ComputeSignatureHelp_OutsideCall_ReturnsNull() {
+        const source = "let x = 42\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let help SignatureHelp? = SignatureHelpComputer.ComputeSignatureHelp(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "42")
+        )
+        Assert.Null(help)
+    }
+}
