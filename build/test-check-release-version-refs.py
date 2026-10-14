@@ -13,6 +13,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -210,8 +211,13 @@ class ReleaseVersionRefsTests(unittest.TestCase):
         self.assertReported(problems, refs.VERSIONS_JSON, RELEASE["docsVersion"])
 
     def test_version_json_base_must_not_be_older_than_release(self) -> None:
+        # version.json's base is newer than docsVersion after a minor bump (0.5 base, 0.4 release),
+        # so read the committed base instead of assuming it equals docsVersion.
+        match = re.search(r'"version"\s*:\s*"([^"]*)"', BASE.read(refs.VERSION_JSON) or "")
+        self.assertIsNotNone(match, "version.json has no version field")
+        assert match is not None  # narrows the type; assertIsNotNone above reports the failure
         problems = self.problems_with(self.replaced(
-            refs.VERSION_JSON, f'"version": "{RELEASE["docsVersion"]}"', '"version": "0.0"'))
+            refs.VERSION_JSON, match.group(0), '"version": "0.0"'))
         self.assertReported(problems, refs.VERSION_JSON, "older")
 
     def test_bumping_only_release_json_reports_every_tracked_reference(self) -> None:

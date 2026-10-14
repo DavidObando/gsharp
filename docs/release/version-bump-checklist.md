@@ -156,6 +156,31 @@ Everything in the patch procedure, plus:
    number. Check
    it against the merged commit's printed version before tagging.
 
+### The first 0.5 release (docs snapshot)
+
+The `0.5` docs snapshot is deliberately not committed with the `version.json`
+bump. `release.json` still names the published 0.4 release, and the check
+requires `versions.json` to lead with `docsVersion`; a `0.5` snapshot committed
+now fails it (`newest snapshot '0.5' != release docsVersion '0.4'`) and would
+point `/docs` at an unpublished release. After the first 0.5 package is on
+nuget.org, in one post-publish PR:
+
+1. Edit `release.json` (`version`, `tag`, `docsVersion` = `0.5`) and every
+   "must equal" row above (patch step 2.2, the `website/docs` pages), so
+   `website/docs` names the 0.5 release.
+2. `cd website && npm ci && npm run docusaurus docs:version 0.5`. A dry run
+   generated `versioned_docs/version-0.5` (52 files, about 1.4 MB),
+   `versioned_sidebars/version-0.5-sidebars.json` and `versions.json`
+   `["0.5","0.4","0.3"]`.
+3. Restore the snapshot's release-notes preamble, update the "refreshed
+   against" sentences, regenerate downloads and evidence (patch steps 2.3 to
+   2.6), and run `python3 build/check-release-version-refs.py`.
+
+The docusaurus config needs no change: it takes versions from `versions.json`.
+`tests/content.test.mjs` and `tests/browser/site.spec.ts` name `0.4` on purpose
+(they read the 0.4 snapshot and its version dropdown entry); check them after
+the cut.
+
 ## Refreshing a docs snapshot
 
 Placeholders in this section: `DOCS_VERSION` is the docs snapshot name

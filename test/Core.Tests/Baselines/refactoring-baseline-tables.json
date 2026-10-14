@@ -218,7 +218,7 @@
   "samples/AsyncGoScopeJoin.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
@@ -243,7 +243,7 @@
   "samples/AsyncLet.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash="
     ],
@@ -293,7 +293,7 @@
   "samples/AsyncTask.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
@@ -318,7 +318,7 @@
   "samples/AsyncValueReturns.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
@@ -367,7 +367,7 @@
   "samples/ChannelOwnership.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
@@ -393,7 +393,7 @@
   "samples/Channels.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
@@ -637,7 +637,7 @@
   "samples/Defer.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
@@ -903,7 +903,7 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
@@ -1294,7 +1294,7 @@
   "samples/GoScope.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
@@ -1948,7 +1948,7 @@
   "samples/NativeSlices.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Values, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Values, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
@@ -2364,7 +2364,7 @@
   "samples/Pipeline.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
@@ -2390,7 +2390,7 @@
   "samples/PortScan.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Threading.Thread, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
@@ -2611,7 +2611,7 @@
   "samples/ScopeAll.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
@@ -2661,7 +2661,7 @@
   "samples/Select.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Threading.Thread, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
@@ -3195,7 +3195,7 @@
   "samples/WebsiteConcurrency.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
@@ -3391,7 +3391,7 @@
   "samples/WorkerPool.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.4.0.0, , flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
