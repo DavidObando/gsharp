@@ -464,7 +464,7 @@ class ReferenceResolver : IDisposable {
     /// `System.Private.CoreLib`, and they publish neither embeddable nullability
     /// attribute.
     /// @returns `true` when `System.Object` is declared by `netstandard` or `mscorlib`.
-    func TargetsDownlevelFramework() bool {
+    internal func TargetsDownlevelFramework() bool {
         if !TryResolveType("System.Object", out var objectType) {
             return false
         }
@@ -490,7 +490,7 @@ class ReferenceResolver : IDisposable {
     /// @param fullName The attribute's fully-qualified metadata name.
     /// @param type The resolved declaration, if the target publishes one.
     /// @returns `true` when the target publishes the attribute.
-    func TryResolvePublishedEmbeddableAttribute(fullName string, @NotNullWhen(true) out type Type?) bool {
+    internal func TryResolvePublishedEmbeddableAttribute(fullName string, @NotNullWhen(true) out type Type?) bool {
         if !TryResolveType(fullName, requireExternalVisibility: true, out type) {
             return false
         }
