@@ -157,7 +157,7 @@ had suggested shipping stage 1 first):
   bytes for `GSharp.Core.dll` and `gsc.dll`, except only the structurally
   validated 16-byte `Module.Mvid` GUID slot, and `RefactoringBaselineTests`,
   Core.Tests and Compiler.Tests pass under stage 2 (#4631).
-- After 0.5.x is published, the pin moves from 0.4.1270 to a 0.5 release.
+- The pin moved from 0.4.1270 to 0.5.7, a 0.5 release.
   From then on, each release is built by an earlier G# release.
 
 Where the C# source went (owner decision D2):
