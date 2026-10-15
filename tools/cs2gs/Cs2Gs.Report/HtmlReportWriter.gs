@@ -574,7 +574,9 @@ shared class HtmlReportWriter {
         if location == nil {
             return nil
         }
-        let file = (location.CsFile ?? location.GsFile)!!
+        // Issue #4918: an artifact can carry neither file (a compile error in a
+        // dependency project that did not map to an emitted .gs); render no location.
+        let file = location.CsFile ?? location.GsFile
         if string.IsNullOrEmpty(file) {
             return nil
         }
