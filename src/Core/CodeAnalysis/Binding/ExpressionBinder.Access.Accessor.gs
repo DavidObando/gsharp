@@ -1218,14 +1218,19 @@ internal partial class ExpressionBinder {
         // (resolved by TryLookupTypeAlias) have a null ClrType and are excluded.
         // `void` has a CLR type but is meaningless as a static-access receiver, so
         // exclude it and let the normal "cannot find type" diagnostic apply.
-        if typeSymbol == nil || typeSymbol.ClrType == nil || object.ReferenceEquals(typeSymbol, TypeSymbol.Void) {
+        if typeSymbol == nil || typeSymbol.ClrType is not Type predefinedClrType || object.ReferenceEquals(
+            typeSymbol,
+            TypeSymbol.Void
+        ) {
             return false
         }
         // Primitive symbols hold host-runtime CLR types. Project the receiver
         // into the active reference context so its overload parameter types
-        // share identity with imported argument types under SDK compilation.
-        let receiverType = $scope.References!!.MapClrTypeToReferences(typeSymbol.ClrType)
-        classSymbol = ImportedClassSymbol(receiverType!!, declaration, references: $scope.References)
+        // share identity with imported argument types under SDK compilation,
+        // and so only the target framework's members are candidates (#4924;
+        // the same decision as the instance-receiver lookups).
+        let receiverType = $scope.References!!.GetMemberLookupType(predefinedClrType)
+        classSymbol = ImportedClassSymbol(receiverType, declaration, references: $scope.References)
         return true
     }
 

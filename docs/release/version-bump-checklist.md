@@ -149,7 +149,12 @@ to the `gsc` built from the same commit, so a release carries a task assembly
 compiled by its own compiler (issue #4921: a bootstrap `gsc` that predates a
 codegen fix would otherwise ship that defect for one more release). The `build`
 job's `build/check-netstandard-host-refs.py` step fails if the packed task assembly
-names a `System.Private.*` host assembly.
+names a `System.Private.*` host assembly, and `build/check-netstandard-member-refs.py`
+fails if any of its TypeRefs or MemberRefs is missing from the netstandard2.0
+reference surface (issue #4924). The `desktop-msbuild-sdk-smoke` job builds a
+project with Visual Studio's MSBuild against the package from the same build, and
+`publish` depends on it, so a task assembly that .NET Framework cannot load or run
+blocks the release.
 
 ## Minor release (0.N to 0.N+1)
 

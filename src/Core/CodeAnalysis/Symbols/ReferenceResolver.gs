@@ -581,6 +581,35 @@ class ReferenceResolver : IDisposable {
         return nestedType != nil
     }
 
+    /// Issue #4924: returns the type whose members binding may see for
+    /// [`type`](paramref), that is, its declaration in this compilation's reference
+    /// set.
+    /// @remarks The predefined type symbols (`string`, `object`, `int32`, ...) carry the
+    /// gsc host's `System.Private.CoreLib` types, which have every member of the host
+    /// runtime. Enumerating members on them binds a call to an overload the target
+    /// framework may not have: `s.Split(',')` against `netstandard2.0` chose the host's
+    /// `Split(char, StringSplitOptions)`, which .NET Framework does not have
+    /// (MissingMethodException in Visual Studio's MSBuild), instead of the target's
+    /// `Split(params char[])`. Every imported-member lookup on a receiver therefore goes
+    /// through this method. A type from the reference set is returned unchanged: it
+    /// already has the target's identity, and projecting it again by name could pick a
+    /// same-named type from another assembly (#4381). The (cref:Default) resolver has no
+    /// separate target, so it returns the host type. Loads nothing: the lookup is the
+    /// resolver's cached name index.
+    /// @param type The CLR type of a receiver.
+    /// @returns The reference-set type, or the input when it cannot be projected (a type the
+    /// target does not declare at all; emit rejects any member reference to it).
+    internal func GetMemberLookupType(type Type) Type {
+        if metadataContext == nil || type.GetType() != typeof(object).GetType() {
+            return type
+        }
+        try {
+            return MapClrTypeToReferences(type) ?? type
+        } catch (InvalidOperationException) {
+            return type
+        }
+    }
+
     /// Projects a CLR (cref:Type) that may originate from the gsc host
     /// runtime onto the equivalent (cref:Type) from this resolver's
     /// reference set (its (cref:MetadataLoadContext) when one is in
@@ -1349,6 +1378,17 @@ class ReferenceResolver : IDisposable {
             // references include at least one non-BCL/runtime path: callers that
             // pass only raw BCL (e.g. integration tests pinning a single
             // System.Private.CoreLib) get exactly the surface they asked for.
+            //
+            // Issue #4924: nor is it applied for a downlevel target, whose core
+            // library is the supplied `netstandard.dll` or `mscorlib`. That target
+            // brings its own complete BCL surface, and every host type visible to
+            // binding beyond it is a type the target framework does not have:
+            // `import System` put the host's `MemoryExtensions` in scope, so
+            // `s.Contains('x')` bound to `MemoryExtensions.Contains(ReadOnlySpan<char>,
+            // char)` in `System.Private.CoreLib`, and `d.TryAdd(k, v)` to the host's
+            // `CollectionExtensions`, an output .NET Framework cannot load. The host
+            // assemblies stay in the resolver closure above, so a supplied reference
+            // that depends on them (Gsharp.Extensions) still resolves its signatures.
             var userHasNonBcl = false
             for path in paths {
                 if !IsBclOrRuntimeAssemblyPath(path) {
@@ -1356,7 +1396,7 @@ class ReferenceResolver : IDisposable {
                     break
                 }
             }
-            if userHasNonBcl {
+            if userHasNonBcl && !SuppliesDownlevelCoreLibrary(paths) {
                 for host in fallbackHostPaths {
                     if !IsBclOrRuntimeAssemblyPath(host) {
                         continue
@@ -1736,6 +1776,30 @@ class ReferenceResolver : IDisposable {
             } else {
                 default(string?)
             }
+        }
+
+        /// Issue #4924: whether the supplied references declare `System.Object` in
+        /// `netstandard.dll` (netstandard2.x) or `mscorlib.dll` (.NET Framework), the
+        /// same classification as (cref:TargetsDownlevelFramework). Only the supplied
+        /// paths count: the host's own `mscorlib.dll` and `netstandard.dll` are facades
+        /// that declare nothing.
+        /// @param paths The supplied reference paths.
+        /// @returns `true` when the target's core library is a downlevel one.
+        private func SuppliesDownlevelCoreLibrary(paths IReadOnlyList[string]) bool {
+            for path in paths {
+                let fileName = Path.GetFileNameWithoutExtension(path)
+                if (
+                    string.Equals(fileName, "netstandard", StringComparison.OrdinalIgnoreCase) || string.Equals(
+                        fileName,
+                        "mscorlib",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                ) &&
+                    DeclaresSystemObject(path) {
+                    return true
+                }
+            }
+            return false
         }
 
         private func DeclaresSystemObject(path string) bool {

@@ -43,9 +43,10 @@ import Xunit
 /// reported success; only ILVerify caught it.
 ///
 /// Issue #3769 subsequently removed this handler from the emit path entirely:
-/// the resolver fallback remains observable, while interpolation lowers to
-/// target-compatible composite formatting and executes without referencing the
-/// host core library.
+/// interpolation lowers to target-compatible composite formatting and executes
+/// without referencing the host core library. Issue #4924 then removed the host
+/// assemblies from what a downlevel resolver can name, so the cross-context
+/// shape is now built directly with a `MetadataLoadContext`.
 open class Issue3764CrossContextValueTypeCallShapeTests {
     /// The predicate underneath the emit decision, asked about the exact type
     /// that reaches the emitter. The closure's core assembly is
@@ -55,22 +56,29 @@ open class Issue3764CrossContextValueTypeCallShapeTests {
     @Fact
     func HandlerFromOutsideTheClosuresCoreAssembly_IsAValueType() {
         using let workspace = Issue3764CrossContextValueTypeCallShapeTests.Workspace()
-        using let resolver = ReferenceResolver.WithReferences(workspace.NetStandardClosureWithDependency())
-        Assert.True(
-            resolver.TryResolveType(
-                "System.Runtime.CompilerServices.DefaultInterpolatedStringHandler",
-                out var handler
-            ),
-            "the fixture's netstandard closure did not surface a handler at all; " +
-                "the differential below would be vacuous"
+        let closure = workspace.NetStandardClosureWithDependency()
+        {
+            // Issue #4924: a downlevel resolver no longer names the host's handler at all.
+            using let resolver = ReferenceResolver.WithReferences(closure)
+            Assert.False(resolver.TryResolveType(HandlerFullName, out _))
+            Assert.False(DefaultInterpolatedStringHandlerShape.TryResolve(resolver, out _, out _))
+        }
+        // The shape #3764 met: a context whose core assembly is `netstandard`, holding the
+        // handler out of the host's `System.Private.CoreLib`.
+        let hostCoreLibrary = typeof(object).Assembly.Location
+        using let context = MetadataLoadContext(
+            PathAssemblyResolver(closure.Append(hostCoreLibrary)),
+            coreAssemblyName: "netstandard"
+        )
+        let handler = Assert.IsAssignableFrom[Type](
+            context.LoadFromAssemblyPath(hostCoreLibrary).GetType(HandlerFullName, throwOnError: true)
         )
         // Anti-vacuity: the point of the fixture is that the handler is NOT the
         // target framework's own type. If a future netstandard pack declares
         // one, this fixture no longer reproduces #3764 and must be re-aimed
         // rather than silently passing.
         Assert.Equal("System.Private.CoreLib", handler.Assembly.GetName().Name)
-        Assert.True(resolver.IsHostFallback(handler))
-        Assert.False(DefaultInterpolatedStringHandlerShape.TryResolve(resolver, out _, out _))
+        Assert.Equal("netstandard", context.CoreAssembly?.GetName().Name)
         // Only a value type can be by-ref-like. Both answers must agree.
         Assert.True(ClrTypeUtilities.IsByRefLike(handler))
         Assert.True(ClrTypeUtilities.IsValueTypeSafe(handler))
@@ -230,6 +238,7 @@ open class Issue3764CrossContextValueTypeCallShapeTests {
 
     shared {
         private const HandlerTypeName string = "DefaultInterpolatedStringHandler"
+        private const HandlerFullName string = "System.Runtime.CompilerServices.DefaultInterpolatedStringHandler"
 
         private const ProbeSource string = `package Probe
 

@@ -96,6 +96,17 @@ jobs:
         # MSBuild, which has no System.Private.CoreLib.
         run: python3 build/check-netstandard-host-refs.py out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg
 
+      - name: Test the netstandard member-reference check
+        run: python3 build/test-check-netstandard-member-refs.py
+
+      - name: Check packed netstandard2.0 SDK assemblies reference only members their target declares
+        # Issue #4924: every TypeRef and MemberRef of tools/task/Gsharp.NET.Sdk.dll
+        # must resolve on the netstandard2.0 reference surface it is compiled
+        # against (NETStandard.Library + Microsoft.Build reference assemblies,
+        # from the NuGet cache restored above); a host-only overload such as
+        # String.Split(char, StringSplitOptions) fails on .NET Framework MSBuild.
+        run: python3 build/check-netstandard-member-refs.py out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg
+
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v5
         with:
@@ -550,9 +561,68 @@ jobs:
           name: visual-studio-gsharp-vsix
           path: src/vs-gsharp/src/VsGsharp/bin/Release/net472/GSharp.VisualStudio.vsix
 
+  desktop-msbuild-sdk-smoke:
+    # Issue #4924: prove that Visual Studio's MSBuild (.NET Framework) loads and
+    # runs the Gsharp.NET.Sdk task assembly packed by THIS build, before any
+    # release. The visual-studio-extension job above uses the SDK version pinned
+    # in global.json (a published release), so it only sees a task defect after
+    # that release has shipped. Here global.json is re-pinned, in the runner's
+    # checkout only, to the in-tree package, served from the repository's local
+    # `.nugs` feed (nuget.config). InternalAnalyzers.gsproj is the project the
+    # 0.5.6 task failed on; the repository .editorconfig's `[*.{gs,gsproj}]`
+    # section drives EditorConfigSeverityReader through String.Split.
+    runs-on: windows-latest
+    needs: [build]
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Download NuGet packages
+        uses: actions/download-artifact@v5
+        with:
+          name: nuget-packages
+          path: ./.nugs
+
+      - name: Pin global.json to the in-tree Gsharp.NET.Sdk
+        id: pin
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem .nugs -Filter 'Gsharp.NET.Sdk.*.nupkg' | Where-Object { $_.Name -match '^Gsharp\.NET\.Sdk\.(\d+\.\d+\.\d+[^\\/]*)\.nupkg$' })
+          if ($packages.Count -ne 1) { throw "expected exactly one Gsharp.NET.Sdk package in .nugs, found $($packages.Count): $($packages.Name -join ', ')" }
+          $null = $packages[0].Name -match '^Gsharp\.NET\.Sdk\.(.+)\.nupkg$'
+          $version = $Matches[1]
+          $json = Get-Content global.json -Raw | ConvertFrom-Json
+          $json.'msbuild-sdks'.'Gsharp.NET.Sdk' = $version
+          $json | ConvertTo-Json -Depth 10 | Set-Content global.json -Encoding utf8
+          Get-Content global.json
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build InternalAnalyzers with desktop MSBuild and the in-tree SDK
+        run: msbuild src\Analyzers\InternalAnalyzers\InternalAnalyzers.gsproj /restore /t:Build /p:Configuration=Release /m /v:minimal /nologo
+
+      - name: Verify the in-tree SDK task ran
+        shell: pwsh
+        run: |
+          $version = '${{ steps.pin.outputs.version }}'
+          $sdk = Join-Path $env:USERPROFILE ".nuget\packages\gsharp.net.sdk\$version\tools\task\Gsharp.NET.Sdk.dll"
+          if (-not (Test-Path $sdk)) { throw "the build did not resolve Gsharp.NET.Sdk $version from the in-tree package ($sdk missing)" }
+          $output = 'out\bin\Release\InternalAnalyzers\GSharp.InternalAnalyzers.dll'
+          if (-not (Test-Path $output)) { throw "the BuildTask produced no $output" }
+          Get-Item $sdk, $output | Format-Table FullName, Length, LastWriteTime
+
   publish:
     runs-on: ubuntu-latest
-    needs: [build, tests, test-partition, e2e, ilverify, cs2gs-corpus, vsix, visual-studio-extension]
+    needs: [build, tests, test-partition, e2e, ilverify, cs2gs-corpus, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke]
     if: startsWith(github.ref, 'refs/tags/v')
 
     permissions:

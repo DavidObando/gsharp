@@ -150,20 +150,18 @@ open class Issue3730InterpolatedStringHandlerTargetFrameworkTests {
         Assert.Equal("value = 3", ExecuteDescribe(netStandardBytes))
     }
 
-    /// The hazard pinned directly, and the proof that the netstandard closure is
-    /// a genuine handler-less target rather than a fixture artefact: the host
-    /// declares the handler, that closure does not, and only a target-resolved
-    /// probe can tell the two apart.
+    /// The proof that the netstandard closure is a genuine handler-less target
+    /// rather than a fixture artefact: the host declares the handler and that
+    /// closure does not. Issue #4924: the host's copy is not visible to the
+    /// downlevel closure at all any more (binding there sees only the target's
+    /// surface), so a name lookup cannot reach it either.
     @Fact
-    func HostFallbackHandler_IsObservableAndNotATargetHandler() {
+    func HostFallbackHandler_IsNotATargetHandler() {
         Assert.NotNull(Type.GetType(DefaultInterpolatedStringHandlerShape.HandlerTypeFullName))
         using let netStandard = NetStandardClosure()
-        Assert.True(
-            netStandard.TryResolveType(DefaultInterpolatedStringHandlerShape.HandlerTypeFullName, out var handler)
-        )
-        Assert.True(
-            netStandard.IsHostFallback(handler),
-            "resolved from unexpected assembly '${handler.Assembly.FullName}'"
+        Assert.False(
+            netStandard.TryResolveType(DefaultInterpolatedStringHandlerShape.HandlerTypeFullName, out var handler),
+            "resolved from unexpected assembly '${handler?.Assembly.FullName}'"
         )
         Assert.False(DefaultInterpolatedStringHandlerShape.TryResolve(netStandard, out _, out var missing))
         Assert.Equal(DefaultInterpolatedStringHandlerShape.HandlerTypeFullName, missing)
