@@ -239,6 +239,27 @@ namespace Demo
         Assert.DoesNotContain("var X int32 = 2", printed)
     }
 
+    /// Issue #4918: the fold check asks Roslyn for the symbol of every simple
+    /// name in the RHS, and the `nameof` in `nameof(Console)` binds to no
+    /// symbol. That is "not a static member of the type", so the constructor
+    /// still folds; the cut-over had turned it into a NullReferenceException
+    /// that crashed the whole translate stage.
+    @Fact
+    func StaticCtorRhsWithNameof_FoldsWithoutCrashing() {
+        let (printed, context) = Translate(`
+namespace Demo
+{
+    public class C
+    {
+        public static string X;
+        static C() { X = nameof(System.Console); }
+    }
+}`)
+        Assert.Contains("var X string = ", printed)
+        Assert.DoesNotContain("init()", printed)
+        Assert.DoesNotContain(context.Diagnostics, (d TranslationDiagnostic) -> d.IsUnsupported)
+    }
+
     shared {
         private func Translate(source string)(Printed string, Context TranslationContext) {
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})

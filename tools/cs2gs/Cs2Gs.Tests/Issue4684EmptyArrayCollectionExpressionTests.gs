@@ -133,6 +133,33 @@ namespace Demo
         Assert.Equal(1, CountOccurrences(printed, "Array.Empty"))
     }
 
+    /// Issue #4918: proving the constructor overwrites an array field asks
+    /// Roslyn for the symbol of every simple name in each constructor
+    /// statement, and the `nameof` in `nameof(source)` binds to no symbol.
+    /// Oahu's JobScheduler has exactly this shape; the cut-over turned the
+    /// unbound name into a NullReferenceException that crashed the translate
+    /// stage for the whole project. An unbound name is not an instance member.
+    @Fact
+    func ProvenCtorOverwrite_StatementWithNameof_DoesNotCrash() {
+        let printed = TranslateUnit(`
+#nullable enable
+namespace Demo
+{
+    public sealed class C
+    {
+        private readonly string source;
+        private readonly int[] items;
+
+        public C(string source, int count)
+        {
+            this.source = source ?? throw new System.ArgumentNullException(nameof(source));
+            items = new int[count];
+        }
+    }
+}`)
+        Assert.Contains("let items []int32 = System.Array.Empty[int32]()", printed)
+    }
+
     @Theory
     @InlineData("int*", false)
     @InlineData("int*", true)

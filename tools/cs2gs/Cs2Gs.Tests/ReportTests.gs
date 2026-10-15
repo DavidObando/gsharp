@@ -177,6 +177,58 @@ open class ReportTests {
         Assert.Contains("&lt;b&gt;bad &amp; title&lt;/b&gt;", html, StringComparison.Ordinal)
     }
 
+    /// Issue #4918: a compile error raised while building a dependency project
+    /// carries a line and column but neither a C# nor a G# file (the diagnostic
+    /// did not resolve to an emitted .gs). The report must still render the
+    /// failed run, with the occurrence listed and no location, instead of
+    /// crashing with a NullReferenceException and leaving the run without a
+    /// report.
+    @Fact
+    func HtmlReport_OccurrenceWithLineButNoFile_RendersWithoutLocation() {
+        let runDir = NewRunDir("no-file")
+        let run = RunResult{
+            RunId: "run-y",
+            Timestamp: "2026-01-01T00:00:00Z",
+            GscVersion: "9.9.9",
+            Succeeded: false,
+            Apps: List[AppResult]{
+                AppResult{
+                    AppId: "src/Dependent",
+                    Succeeded: false,
+                    FailureCategory: "compile-error",
+                    Stages: AllStages("failed"),
+                    Artifacts: List[string]{"src_Dependent/compile-nofile.json"},
+                    Fingerprints: List[string]{"sha256:nofile"}
+                }
+            }
+        }
+        WriteRunJson(runDir, run)
+        let artifact = TriageArtifact{
+            RunId: "run-y",
+            CorpusAppId: "src/Dependent",
+            Stage: "compile",
+            Category: "compile-error",
+            Diagnostic: TriageDiagnostic{
+                Id: "GS0157",
+                Message: "Cannot find type CliPaths. Are you missing an import?",
+                Severity: "error"
+            },
+            SourceLocation: TriageSourceLocation{GsLine: 39, GsColumn: 42},
+            OffendingCSharpConstruct: TriageOffendingConstruct{
+                Kind: "GSharpConstruct",
+                Snippet: "<emitted G# line unavailable>"
+            },
+            SuggestedIssue: TriageSuggestedIssue{Title: "[cs2gs] GS0157", Body: "body", Labels: List[string]{"Oats"}},
+            Fingerprint: "sha256:nofile"
+        }
+        WriteArtifact(runDir, "src_Dependent/compile-nofile.json", artifact)
+        let model = ReportModel.FromRunDirectory(runDir)
+        let html = HtmlReportWriter.Render(model)
+        Assert.Contains("Cannot find type CliPaths", html, StringComparison.Ordinal)
+        Assert.Contains("<li><span class=\"app\">src/Dependent</span></li>", html, StringComparison.Ordinal)
+        Assert.DoesNotContain(":39:42", html, StringComparison.Ordinal)
+    }
+
     /// The HTML render is deterministic: the same model yields byte-identical
     /// output (ADR-0115 §F diffability requirement).
     @Fact

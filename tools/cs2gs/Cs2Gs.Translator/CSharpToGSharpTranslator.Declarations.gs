@@ -2050,7 +2050,10 @@ partial class CSharpToGSharpTranslator {
                 if node.Parent is MemberAccessExpressionSyntax memberAccess && memberAccess.Name == node {
                     continue
                 }
-                let symbol = this.context.GetSymbolInfo(name).Symbol!!
+                // Issue #4918: a name can bind to no symbol (an unresolved name, or one
+                // Roslyn only resolves as part of a larger construct); that is a "no",
+                // not a crash, so keep the symbol nullable and test it.
+                let symbol = this.context.GetSymbolInfo(name).Symbol
                 if symbol != nil &&
                     symbol.IsStatic == false &&
                     (
@@ -2202,7 +2205,10 @@ partial class CSharpToGSharpTranslator {
                 if node is not SimpleNameSyntax name {
                     continue
                 }
-                let symbol = this.context.GetSymbolInfo(name).Symbol!!
+                // Issue #4918: a name can bind to no symbol (an unresolved name, or one
+                // Roslyn only resolves as part of a larger construct); that is a "no",
+                // not a crash, so keep the symbol nullable and test it.
+                let symbol = this.context.GetSymbolInfo(name).Symbol
                 if symbol != nil &&
                     symbol.IsStatic == true &&
                     (
