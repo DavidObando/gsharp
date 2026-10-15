@@ -149,6 +149,30 @@ open class Issue2814GenerateAssemblyInfoTests {
         }
     }
 
+    /// Issue #4932: when OutputFile is a filesystem root, Path.GetDirectoryName
+    /// returns null. The task must skip creating a directory and fail at the
+    /// write, as the C# task did, instead of throwing a NullReferenceException
+    /// from an assertion on that null.
+    @Fact
+    func Execute_OutputFileIsFilesystemRoot_DoesNotThrowNullReference() {
+        let root = Path.GetPathRoot(Path.GetTempPath())
+        Assert.False(string.IsNullOrEmpty(root))
+        Assert.Null(Path.GetDirectoryName(Path.GetFullPath(root!!)))
+        let task = WriteGsharpAssemblyInfoTask{
+            BuildEngine: StubBuildEngine(),
+            AssemblyAttributes: Array.Empty[ITaskItem](),
+            OutputFile: root
+        }
+        let ex = Record.Exception(
+            func () {
+                task.Execute()
+            }
+        )
+        Assert.NotNull(ex)
+        Assert.IsNotType[NullReferenceException](ex)
+        Assert.True(ex is UnauthorizedAccessException || ex is IOException, "Unexpected exception: " + ex.ToString())
+    }
+
     private class StubBuildEngine : IBuildEngine {
         prop ContinueOnError bool -> false
         prop LineNumberOfTaskNode int32 -> 0

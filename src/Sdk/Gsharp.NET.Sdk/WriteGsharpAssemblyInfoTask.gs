@@ -67,7 +67,9 @@ open class WriteGsharpAssemblyInfoTask : Task {
             this.Log.LogError("WriteGsharpAssemblyInfo: " + ex.Message)
             return false
         }
-        let directory = Path.GetDirectoryName(Path.GetFullPath(this.OutputFile))!!
+        // Issue #4932: GetDirectoryName returns null when OutputFile is a root
+        // path; there is then no directory to create, as in the C# task.
+        let directory = Path.GetDirectoryName(Path.GetFullPath(this.OutputFile))
         if !string.IsNullOrEmpty(directory) {
             Directory.CreateDirectory(directory)
         }

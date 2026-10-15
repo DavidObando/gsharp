@@ -473,12 +473,13 @@ shared class ClrTypeUtilities {
     /// @param flags The binding flags controlling visibility.
     /// @returns The matching event, or `null` when none is found.
     func SafeGetEventIncludingInterfaces(type Type?, name string, flags BindingFlags) EventInfo? {
-        let direct EventInfo? = SafeGetEvent(type!!, name, flags)
-        if direct != nil {
-            return direct
-        }
+        // Issue #4932: a nil type finds nothing, as in the C#; do not assert it.
         if type == nil {
             return nil
+        }
+        let direct EventInfo? = SafeGetEvent(type, name, flags)
+        if direct != nil {
+            return direct
         }
         for iface in SafeGetInterfaces(type) {
             let inherited EventInfo? = SafeGetEvent(iface, name, flags)
@@ -501,12 +502,13 @@ shared class ClrTypeUtilities {
     /// @param flags The binding flags controlling visibility.
     /// @returns The matching property, or `null` when none is found.
     func SafeGetPropertyIncludingInterfaces(type Type?, name string, flags BindingFlags) PropertyInfo? {
-        let direct PropertyInfo? = SafeGetProperty(type!!, name, flags)
-        if direct != nil {
-            return direct
-        }
+        // Issue #4932: a nil type finds nothing, as in the C#; do not assert it.
         if type == nil {
             return nil
+        }
+        let direct PropertyInfo? = SafeGetProperty(type, name, flags)
+        if direct != nil {
+            return direct
         }
         for iface in SafeGetInterfaces(type) {
             let inherited PropertyInfo? = SafeGetProperty(iface, name, flags)
@@ -551,10 +553,11 @@ shared class ClrTypeUtilities {
     /// @param flags The binding flags controlling visibility.
     /// @returns The methods whose signatures load cleanly.
     func SafeGetMethodsIncludingInterfaces(type Type?, flags BindingFlags)[]MethodInfo {
-        let direct = SafeGetMethods(type!!, flags)
+        // Issue #4932: a nil type has no methods, as in the C#; do not assert it.
         if type == nil {
-            return direct
+            return Array.Empty[MethodInfo]()
         }
+        let direct = SafeGetMethods(type, flags)
         let interfaces = SafeGetInterfaces(type)
         if interfaces.Length == 0 {
             return direct
