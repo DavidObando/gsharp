@@ -530,7 +530,7 @@ def inherited(surface: Surface, metadata: Metadata, coded: int, type_arguments: 
 
 
 def find_member(surface: Surface, declaring: tuple[Metadata, int], name: str, is_field: bool, signature: str) -> bool:
-    """Whether `declaring`, one of its base types or one of its base interfaces declares the member.
+    """Whether `declaring`, one of its base types or (for an interface) one of its base interfaces declares the member.
 
     `signature` is the MemberRef's canonical signature; its `!n` name the declaring type's
     own generic parameters. A member found on a generic base is read with the base's
@@ -565,6 +565,8 @@ def find_member(surface: Surface, declaring: tuple[Metadata, int], name: str, is
             base = inherited(surface, metadata, typedef[3], type_arguments)
             if base is not None:
                 pending.append(base)
+        if not typedef[0] & 0x20:
+            continue  # a class's implemented interfaces add no members to the class itself
         for implementer, interface in metadata.tables.get(INTERFACEIMPL, []):
             if implementer == row:
                 resolved = inherited(surface, metadata, interface, type_arguments)

@@ -87,10 +87,10 @@ class Image:
         )
         return self.add(check.TYPEREF, [scope, self.s(name), self.s(namespace)])
 
-    def add_typedef(self, namespace: str, name: str, extends: int = 0, enclosing: int | None = None) -> int:
+    def add_typedef(self, namespace: str, name: str, extends: int = 0, enclosing: int | None = None, flags: int = 0x1) -> int:
         row = self.add(
             check.TYPEDEF,
-            [0x1, self.s(name), self.s(namespace), extends, len(self.tables[check.FIELD]) + 1, len(self.tables[check.METHODDEF]) + 1],
+            [flags, self.s(name), self.s(namespace), extends, len(self.tables[check.FIELD]) + 1, len(self.tables[check.METHODDEF]) + 1],
         )
         if enclosing is not None:
             self.add(check.NESTEDCLASS, [row, enclosing])
@@ -192,6 +192,16 @@ def netstandard() -> bytes:
     image.method("Add", method_sig(bytes([VOID]), bytes([VAR, 0])))
     base_of_string = image.type_spec(bytes([GENERICINST]) + class_of(td, generic_base) + bytes([1, STRING]))
     image.add_typedef("System", "Derived", coded("TypeDefOrRef", check.TYPESPEC, base_of_string))
+    # IProbe.Probe(); IDerivedProbe : IProbe; ExplicitProbe : IProbe implements it explicitly,
+    # so the class itself has no method named Probe.
+    interface = 0x1 | 0x20 | 0x80
+    probe = image.add_typedef("System", "IProbe", flags=interface)
+    image.method("Probe", method_sig(bytes([VOID])))
+    derived_probe = image.add_typedef("System", "IDerivedProbe", flags=interface)
+    image.add(check.INTERFACEIMPL, [derived_probe, coded("TypeDefOrRef", td, probe)])
+    explicit_probe = image.add_typedef("System", "ExplicitProbe", coded("TypeDefOrRef", td, obj))
+    image.method("System.IProbe.Probe", method_sig(bytes([VOID])))
+    image.add(check.INTERFACEIMPL, [explicit_probe, coded("TypeDefOrRef", td, probe)])
     assert string
     return image.build()
 
@@ -223,6 +233,7 @@ def checked_image(
     token_from: str | None = None,
     rank_one_split: bool = False,
     bad_inherited: bool = False,
+    class_probe: bool = False,
 ) -> bytes:
     """A netstandard2.0 library. By default every reference resolves; each flag adds one bad reference."""
     image = Image("Lib")
@@ -247,6 +258,13 @@ def checked_image(
     # Inherited from a generic base: Derived::Add(string) is Base<string>.Add(!0).
     derived = image.type_ref("netstandard", "System", "Derived")
     image.member_ref(check.TYPEREF, derived, "Add", method_sig(bytes([VOID]), bytes([STRING])))
+    # A base interface's member through a derived interface.
+    derived_probe = image.type_ref("netstandard", "System", "IDerivedProbe")
+    image.member_ref(check.TYPEREF, derived_probe, "Probe", method_sig(bytes([VOID])))
+    if class_probe:
+        # ExplicitProbe implements IProbe.Probe explicitly; the class has no Probe().
+        explicit_probe = image.type_ref("netstandard", "System", "ExplicitProbe")
+        image.member_ref(check.TYPEREF, explicit_probe, "Probe", method_sig(bytes([VOID])))
     if token_from is not None:
         # Api.Accept is declared over A's Token; B declares a Token with the same full name.
         api = image.type_ref("A", "Contracts", "Api")
@@ -337,6 +355,14 @@ class MemberReferenceCheckTests(unittest.TestCase):
         code, out = self.check(self.write("Inherited.dll", checked_image(bad_inherited=True)))
         self.assertEqual(code, 1, out)
         self.assertIn("[netstandard]System.Derived::Add(int) : void", out)
+        self.assertEqual(out.count("does not exist"), 1, out)
+
+    def test_interface_members_are_not_members_of_an_implementing_class(self) -> None:
+        # The default image's IDerivedProbe::Probe() resolves through the base interface;
+        # the class that only implements IProbe has no Probe().
+        code, out = self.check(self.write("Class.dll", checked_image(class_probe=True)))
+        self.assertEqual(code, 1, out)
+        self.assertIn("[netstandard]System.ExplicitProbe::Probe() : void", out)
         self.assertEqual(out.count("does not exist"), 1, out)
 
     def test_type_the_surface_does_not_declare_fails(self) -> None:
