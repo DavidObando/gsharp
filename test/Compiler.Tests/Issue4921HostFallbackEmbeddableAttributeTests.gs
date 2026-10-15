@@ -225,7 +225,67 @@ open class Issue4921HostFallbackEmbeddableAttributeTests {
         }
     }
 
+    /// A same-named class that cannot serve as the attribute (no `System.Attribute` base, or only a
+    /// by-reference constructor) must not be bound: the library still compiles, and no custom-attribute
+    /// row names its constructor.
+    @Fact
+    func UnusablePolyfill_IsNotBound() {
+        let netstandard string? = FindNetStandardReference()
+        Assert.True(netstandard != nil, "could not locate a netstandard.dll reference assembly")
+        for extra in[]string{NonAttributePolyfillSource, RefConstructorPolyfillSource} {
+            let tempDir = Directory.CreateTempSubdirectory("gs_4922_unusable_").FullName
+            try {
+                let libPath = Path.Combine(tempDir, "Lib.dll")
+                CompileOrThrow("lib", LibrarySource, libPath, tempDir, netstandard!!, extraSource: extra)
+                using let stream = File.OpenRead(libPath)
+                using let peReader = PEReader(stream)
+                let reader = peReader.GetMetadataReader()
+                for handle in reader.CustomAttributes {
+                    let attribute = reader.GetCustomAttribute(handle)
+                    if attribute.Constructor.Kind != HandleKind.MethodDefinition {
+                        continue
+                    }
+                    let declaring = reader.GetTypeDefinition(
+                        reader.GetMethodDefinition(MethodDefinitionHandle(attribute.Constructor)).GetDeclaringType()
+                    )
+                    Assert.NotEqual("NullableAttribute", reader.GetString(declaring.Name))
+                }
+            } finally {
+                Directory.Delete(tempDir, recursive: true)
+            }
+        }
+    }
+
     shared {
+        private const NonAttributePolyfillSource string = `
+package System.Runtime.CompilerServices
+
+internal class NullableAttribute {
+    init(flag uint8) {}
+}
+`
+
+        private const RefConstructorPolyfillSource string = `
+package System.Runtime.CompilerServices
+
+import System
+
+internal class NullableAttribute : Attribute {
+    init(ref flag uint8) {}
+}
+`
+
+        private const EscapedNamePolyfillSource string = `
+package System.Runtime.CompilerServices
+
+import System
+
+internal class $NullableAttribute : Attribute {
+    init(flag uint8) {}
+    init(flags []uint8) {}
+}
+`
+
         private const HomonymSource string = `
 package App
 

@@ -11,6 +11,7 @@ import System
 import System.Collections.Immutable
 import System.Linq
 import System.Reflection.Metadata
+import System.Runtime.CompilerServices
 import System.Text
 
 /// Issue #4922: the compiler-embedded copies of `NullableAttribute` and
@@ -36,6 +37,13 @@ internal shared class EmbeddedAttributeSource {
     /// The pseudo file-name prefix of the synthetic trees.
     internal const FileName string = "<gsc-embedded-attributes"
 
+    // Compiler-owned provenance: only trees this class created are in the table, whatever
+    // file name a caller gives its own SourceText (the name is a label, not an identity).
+    private let SyntheticTrees ConditionalWeakTable[SyntaxTree, SyntaxTree] = ConditionalWeakTable[
+        SyntaxTree,
+        SyntaxTree
+    ]()
+
     private const CompilerServicesPackage string = "System.Runtime.CompilerServices"
     private const MarkerPackage string = "Microsoft.CodeAnalysis"
     private const MarkerName string = "EmbeddedAttribute"
@@ -47,11 +55,7 @@ internal shared class EmbeddedAttributeSource {
     /// Returns whether [`tree`](paramref) is the synthetic tree.
     /// @param tree The tree to test.
     /// @returns `true` for the compiler-embedded attribute tree.
-    func IsSyntheticTree(tree SyntaxTree?) bool -> tree != nil &&
-        tree
-        .Text
-        .FileName
-        .StartsWith(FileName, StringComparison.Ordinal)
+    func IsSyntheticTree(tree SyntaxTree?) bool -> tree != nil && SyntheticTrees.TryGetValue(tree, out var _provenance)
 
     /// Returns whether [`fullName`](paramref) names one of the embeddable attributes.
     /// @param fullName A package-qualified type name.
@@ -87,11 +91,9 @@ internal shared class EmbeddedAttributeSource {
         // synthesized unless the project already declares it, which the copies then reuse.
         var result = trees
         if !DeclaresType(trees, MarkerPackage, MarkerName) {
-            result = result.Add(SyntaxTree.Parse(SourceText.From(BuildMarkerSource(), FileName + "-marker>")))
+            result = result.Add(CreateSyntheticTree(BuildMarkerSource(), "-marker>"))
         }
-        return result.Add(
-            SyntaxTree.Parse(SourceText.From(BuildSource(needNullable, needContext), FileName + "-nullable>"))
-        )
+        return result.Add(CreateSyntheticTree(BuildSource(needNullable, needContext), "-nullable>"))
     }
 
     /// The single decision point for "is this source declaration the framework's attribute
@@ -126,7 +128,9 @@ internal shared class EmbeddedAttributeSource {
         isArrayCtor bool
     ) EntityHandle {
         for declared in structs {
-            if !IsFrameworkAttributeDeclaration(declared, fullName) {
+            // Custom-attribute rows must name an attribute class: a same-named class that does
+            // not derive from System.Attribute is the project's own problem and is not bound.
+            if !IsFrameworkAttributeDeclaration(declared, fullName) || !declared.DerivesFromSystemAttribute() {
                 continue
             }
             if !declared.ExplicitConstructors.IsDefaultOrEmpty {
@@ -150,7 +154,8 @@ internal shared class EmbeddedAttributeSource {
     }
 
     private func IsByteConstructor(parameters ImmutableArray[ParameterSymbol], isArrayCtor bool) bool {
-        if parameters.Length != 1 {
+        // By-reference constructors (`ref`/`in`/`out`) are different overloads.
+        if parameters.Length != 1 || parameters[0].RefKind != RefKind.None {
             return false
         }
         let parameterType = parameters[0].Type
@@ -161,6 +166,12 @@ internal shared class EmbeddedAttributeSource {
         return arrayType != nil && arrayType.ElementType == TypeSymbol.UInt8
     }
 
+    private func CreateSyntheticTree(text string, suffix string) SyntaxTree {
+        let tree = SyntaxTree.Parse(SourceText.From(text, FileName + suffix))
+        SyntheticTrees.Add(tree, tree)
+        return tree
+    }
+
     // Matches the package-qualified, non-generic top-level declaration only: a homonym in
     // another package (or a generic one) is a different type and must not suppress embedding.
     private func DeclaresType(trees ImmutableArray[SyntaxTree], packageName string, name string) bool {
@@ -168,13 +179,17 @@ internal shared class EmbeddedAttributeSource {
             let package_ = tree.Root.Members.OfType[PackageSyntax]().FirstOrDefault()
             if package_ == nil || string.Join(
                 ".",
-                package_.Identifiers.Select((t SyntaxToken) -> t.Text)
+                package_.Identifiers.Select((t SyntaxToken) -> t.ValueText)
             ) != packageName {
                 continue
             }
             for member in tree.Root.Members {
                 let declaration = member as StructDeclarationSyntax
-                if declaration != nil && declaration.Identifier.Text == name && declaration.TypeParameterList == nil {
+                if declaration != nil &&
+                    declaration
+                    .Identifier
+                    .ValueText == name &&
+                    declaration.TypeParameterList == nil {
                     return true
                 }
             }
