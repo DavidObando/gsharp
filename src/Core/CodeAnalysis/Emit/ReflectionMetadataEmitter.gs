@@ -930,7 +930,7 @@ internal class ReflectionMetadataEmitter {
             this.emitCtx,
             this.memberRefs.GetTypeReference,
             this.memberRefs.GetMethodReference,
-            this.cache.ExplicitCtorHandles
+            this.cache
         )
         // PR-E-12: CustomAttributeEncoder depends on GetTypeReference (the
         // dedup-cached root resolver) and wellKnown's GetIsReadOnlyAttributeCtorRef.
@@ -2398,22 +2398,38 @@ internal class ReflectionMetadataEmitter {
             methodList: MetadataTokens.MethodDefinitionHandle(1)
         )
         this.EmitModuleInitializer()
+        let PreRegisterClassCtorHandles = func (c StructSymbol) {
+            if !classCtorRows.TryGetValue(c, out var firstCtorRow) {
+                return
+            }
+            if c.ExplicitConstructor != nil {
+                let firstHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow)
+                for var i = 0; i < c.ExplicitConstructors.Length; i++ {
+                    this.cache.ExplicitCtorHandles[c.ExplicitConstructors[i]] = MetadataTokens.MethodDefinitionHandle(
+                        firstCtorRow + i
+                    )
+                }
+                this.cache.ClassCtorHandles[c] = firstHandle
+                this.cache.ClassPrimaryCtorHandles[c] = firstHandle
+            } else if c.BaseConstructorInitializer != nil {
+                let forwardingHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow)
+                this.cache.ClassCtorHandles[c] = forwardingHandle
+                this.cache.ClassPrimaryCtorHandles[c] = forwardingHandle
+            } else {
+                this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(firstCtorRow)
+                if c.HasPrimaryConstructor && classPrimaryCtorRows.TryGetValue(c, out var primaryRow) {
+                    this.cache.ClassPrimaryCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(primaryRow)
+                }
+            }
+        }
         // Issue #4922: a compilation-embedded NullableAttribute / NullableContextAttribute
         // (see EmbeddedAttributeSource) is stamped on members of every other type,
-        // including interfaces and delegates that are emitted before the general ctor
-        // pre-registration below. Register just those ctor handles now, from the same
-        // planned rows, so the stamps can bind to them whatever the emission order.
-        for c in topClasses {
-            if c.ExplicitConstructors.IsDefaultOrEmpty || !EmbeddedAttributeSource.IsEmbeddableAttributeName(
-                c.PackageName + "." + c.Name
-            ) ||
-                !classCtorRows.TryGetValue(c, out var embeddedFirstCtorRow) {
-                continue
-            }
-            for var i = 0; i < c.ExplicitConstructors.Length; i++ {
-                this.cache.ExplicitCtorHandles[c.ExplicitConstructors[i]] = MetadataTokens.MethodDefinitionHandle(
-                    embeddedFirstCtorRow + i
-                )
+        // including interfaces and delegates that are emitted before the general
+        // registration below. Register just those classes' ctor handles now, from the
+        // same planned rows, so the stamps can bind to them whatever the emission order.
+        for c in nonSmClasses {
+            if EmbeddedAttributeSource.IsEmbeddableAttributeName(c.PackageName + "." + c.Name) {
+                PreRegisterClassCtorHandles(c)
             }
         }
         // Issue #973: pre-reserve the TypeDefinitionHandle for every user
@@ -2537,28 +2553,7 @@ internal class ReflectionMetadataEmitter {
         // `firstSmClassMethodRow` below, right before class method bodies are
         // emitted, which documents that no further pre-registration runs).
         for c in nonSmClasses {
-            if !classCtorRows.TryGetValue(c, out var firstCtorRow) {
-                continue
-            }
-            if c.ExplicitConstructor != nil {
-                let firstHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow)
-                for var i = 0; i < c.ExplicitConstructors.Length; i++ {
-                    this.cache.ExplicitCtorHandles[c.ExplicitConstructors[i]] = MetadataTokens.MethodDefinitionHandle(
-                        firstCtorRow + i
-                    )
-                }
-                this.cache.ClassCtorHandles[c] = firstHandle
-                this.cache.ClassPrimaryCtorHandles[c] = firstHandle
-            } else if c.BaseConstructorInitializer != nil {
-                let forwardingHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow)
-                this.cache.ClassCtorHandles[c] = forwardingHandle
-                this.cache.ClassPrimaryCtorHandles[c] = forwardingHandle
-            } else {
-                this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(firstCtorRow)
-                if c.HasPrimaryConstructor && classPrimaryCtorRows.TryGetValue(c, out var primaryRow) {
-                    this.cache.ClassPrimaryCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(primaryRow)
-                }
-            }
+            PreRegisterClassCtorHandles(c)
         }
         // Same hazard, same fix, for an `inline struct`'s primary ctor: an
         // interface body may `newobj Box(n)` where `Box` is an inline struct

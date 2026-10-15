@@ -48,14 +48,31 @@
        launches is redirected through GsharpCompilerFullPath, so there is no cycle with
        this project's own BuildTask (the pinned one is used). The ProjectReference below
        orders the in-tree Compiler before this project's CoreCompile; it is build-only.
-       Note the value must be set in the project body: the SDK props only default it when
-       empty, and a body assignment is evaluated after them. -->
-  <PropertyGroup>
+       The value is set in the project body because the SDK props only default it when
+       empty. A controlled graph that disables Directory.Build.props (stage-2
+       certification, build/selfhost-stage2.py, which requires every project to use the
+       compiler it supplies) keeps the supplied compiler: the repository layout the
+       path below assumes does not exist there.
+       The pinned CoreCompile does not list the compiler as an input, so
+       _GsharpTaskRecompileOnCompilerChange (below) discards the stale task assembly when
+       the compiler is newer: a compiler change then recompiles it. -->
+  <PropertyGroup Condition=" '$(ImportDirectoryBuildProps)' != 'false' ">
     <GsharpCompilerFullPath>$(MSBuildThisFileDirectory)..\..\..\out\bin\$(Configuration)\Compiler\gsc.dll</GsharpCompilerFullPath>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition=" '$(ImportDirectoryBuildProps)' != 'false' ">
     <ProjectReference Include="../../Compiler/Compiler.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <Target Name="_GsharpTaskRecompileOnCompilerChange" BeforeTargets="CoreCompile" Condition=" '$(ImportDirectoryBuildProps)' != 'false' ">
+    <PropertyGroup>
+      <_GsharpTaskIntermediate>@(IntermediateAssembly->'%(FullPath)')</_GsharpTaskIntermediate>
+    </PropertyGroup>
+    <Delete Files="$(_GsharpTaskIntermediate)"
+            Condition=" Exists('$(_GsharpTaskIntermediate)') And Exists('$(GsharpCompilerFullPath)') And $([System.IO.File]::GetLastWriteTime('$(GsharpCompilerFullPath)').Ticks) &gt; $([System.IO.File]::GetLastWriteTime('$(_GsharpTaskIntermediate)').Ticks) " />
+  </Target>
+
+  <ItemGroup>
     <ProjectReference Include="../Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <!-- ADR-0174 D1: the channel runtime is packed under tools/channels/ and
          auto-referenced by every consumer .gsproj (build/Gsharp.NET.Sdk.props). -->

@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.Diagnostics.CodeAnalysis
 import System.Reflection
@@ -60,7 +61,7 @@ internal class WellKnownReferences {
     private let emitCtx EmitContext
     private let getTypeReference(Type) -> TypeReferenceHandle
     private let getMethodReference(MethodInfo) -> MemberReferenceHandle
-    private let explicitCtorHandles Dictionary[ConstructorSymbol, MethodDefinitionHandle]?
+    private let tokenCache MetadataTokenCache?
     private let hashCodeCombineOpenRefs[]MemberReferenceHandle? = [8]MemberReferenceHandle?
 
     // ADR-0051 Phase 6: cached MemberReferenceHandle for NotImplementedException..ctor().
@@ -160,9 +161,9 @@ internal class WellKnownReferences {
         emitCtx EmitContext,
         getTypeReference(Type) -> TypeReferenceHandle,
         getMethodReference(MethodInfo) -> MemberReferenceHandle,
-        explicitCtorHandles Dictionary[ConstructorSymbol, MethodDefinitionHandle]? = nil
+        tokenCache MetadataTokenCache? = nil
     ) {
-        this.explicitCtorHandles = explicitCtorHandles
+        this.tokenCache = tokenCache
         this.emitCtx = emitCtx ?? throw ArgumentNullException("emitCtx")
         this.getTypeReference = getTypeReference ?? throw ArgumentNullException("getTypeReference")
         this.getMethodReference = getMethodReference ?? throw ArgumentNullException("getMethodReference")
@@ -814,16 +815,17 @@ internal class WellKnownReferences {
         if (this.nullableAttributeByteCtorRef != nil) {
             return this.nullableAttributeByteCtorRef!!
         }
-        let embeddedCtor = this.TryGetEmbeddedAttributeCtor(
-            "System.Runtime.CompilerServices.NullableAttribute",
-            isArrayCtor: false
-        )
-        if !embeddedCtor.IsNil {
-            this.nullableAttributeByteCtorRef = embeddedCtor
-            return embeddedCtor
-        }
         if !this.TryResolveEmbeddableAttribute("System.Runtime.CompilerServices.NullableAttribute", out var attrType) {
-            return default(EntityHandle)
+            // The target publishes no usable declaration: bind to the copy this
+            // compilation declares (embedded by EmbeddedAttributeSource, or a polyfill).
+            let embeddedCtor = this.TryGetEmbeddedAttributeCtor(
+                "System.Runtime.CompilerServices.NullableAttribute",
+                isArrayCtor: false
+            )
+            if !embeddedCtor.IsNil {
+                this.nullableAttributeByteCtorRef = embeddedCtor
+            }
+            return embeddedCtor
         }
         let attrTypeRef = this.getTypeReference(attrType!!)
         let ctorSig = BlobBuilder()
@@ -853,16 +855,17 @@ internal class WellKnownReferences {
         if (this.nullableAttributeByteArrayCtorRef != nil) {
             return this.nullableAttributeByteArrayCtorRef!!
         }
-        let embeddedCtor = this.TryGetEmbeddedAttributeCtor(
-            "System.Runtime.CompilerServices.NullableAttribute",
-            isArrayCtor: true
-        )
-        if !embeddedCtor.IsNil {
-            this.nullableAttributeByteArrayCtorRef = embeddedCtor
-            return embeddedCtor
-        }
         if !this.TryResolveEmbeddableAttribute("System.Runtime.CompilerServices.NullableAttribute", out var attrType) {
-            return default(EntityHandle)
+            // The target publishes no usable declaration: bind to the copy this
+            // compilation declares (embedded by EmbeddedAttributeSource, or a polyfill).
+            let embeddedCtor = this.TryGetEmbeddedAttributeCtor(
+                "System.Runtime.CompilerServices.NullableAttribute",
+                isArrayCtor: true
+            )
+            if !embeddedCtor.IsNil {
+                this.nullableAttributeByteArrayCtorRef = embeddedCtor
+            }
+            return embeddedCtor
         }
         let attrTypeRef = this.getTypeReference(attrType!!)
         let ctorSig = BlobBuilder()
@@ -973,19 +976,20 @@ internal class WellKnownReferences {
         if (this.nullableContextAttributeByteCtorRef != nil) {
             return this.nullableContextAttributeByteCtorRef!!
         }
-        let embeddedCtor = this.TryGetEmbeddedAttributeCtor(
-            "System.Runtime.CompilerServices.NullableContextAttribute",
-            isArrayCtor: false
-        )
-        if !embeddedCtor.IsNil {
-            this.nullableContextAttributeByteCtorRef = embeddedCtor
-            return embeddedCtor
-        }
         if !this.TryResolveEmbeddableAttribute(
             "System.Runtime.CompilerServices.NullableContextAttribute",
             out var attrType
         ) {
-            return default(EntityHandle)
+            // The target publishes no usable declaration: bind to the copy this
+            // compilation declares (embedded by EmbeddedAttributeSource, or a polyfill).
+            let embeddedCtor = this.TryGetEmbeddedAttributeCtor(
+                "System.Runtime.CompilerServices.NullableContextAttribute",
+                isArrayCtor: false
+            )
+            if !embeddedCtor.IsNil {
+                this.nullableContextAttributeByteCtorRef = embeddedCtor
+            }
+            return embeddedCtor
         }
         let attrTypeRef = this.getTypeReference(attrType!!)
         let ctorSig = BlobBuilder()
@@ -1751,30 +1755,15 @@ internal class WellKnownReferences {
     /// @param isArrayCtor `true` to select the `(byte[])` ctor, `false` for `(byte)`.
     /// @returns The MethodDef handle, or `default` when the source declares no usable copy.
     private func TryGetEmbeddedAttributeCtor(fullName string, isArrayCtor bool) EntityHandle {
-        if this.explicitCtorHandles == nil {
+        if this.tokenCache == nil {
             return default(EntityHandle)
         }
-        for declared in this.emitCtx.Program.Structs {
-            if !declared.IsClass || declared.PackageName + "." + declared.Name != fullName {
-                continue
-            }
-            for ctor in declared.ExplicitConstructors {
-                if ctor.Parameters.Length != 1 {
-                    continue
-                }
-                let parameterType = ctor.Parameters[0].Type
-                let arrayType = parameterType as ArrayTypeSymbol
-                let matches = if isArrayCtor {
-                    arrayType != nil && arrayType.ElementType == TypeSymbol.UInt8
-                } else {
-                    parameterType == TypeSymbol.UInt8
-                }
-                if matches && this.explicitCtorHandles!!.TryGetValue(ctor, out var handle) {
-                    return handle
-                }
-            }
-        }
-        return default(EntityHandle)
+        return EmbeddedAttributeSource.FindSourceConstructor(
+            this.emitCtx.Program.Structs,
+            this.tokenCache,
+            fullName,
+            isArrayCtor
+        )
     }
 
     private func BuildObjectDefaultCtorReference() MemberReferenceHandle {

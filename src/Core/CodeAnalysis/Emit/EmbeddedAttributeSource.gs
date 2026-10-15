@@ -10,6 +10,7 @@ import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Immutable
 import System.Linq
+import System.Reflection.Metadata
 import System.Text
 
 /// Issue #4922: the compiler-embedded copies of `NullableAttribute` and
@@ -35,6 +36,9 @@ internal shared class EmbeddedAttributeSource {
     /// The pseudo file-name prefix of the synthetic trees.
     internal const FileName string = "<gsc-embedded-attributes"
 
+    private const CompilerServicesPackage string = "System.Runtime.CompilerServices"
+    private const MarkerPackage string = "Microsoft.CodeAnalysis"
+    private const MarkerName string = "EmbeddedAttribute"
     private const NullableName string = "NullableAttribute"
     private const NullableContextName string = "NullableContextAttribute"
     private const NullableFullName string = "System.Runtime.CompilerServices.NullableAttribute"
@@ -70,26 +74,107 @@ internal shared class EmbeddedAttributeSource {
             NullableFullName,
             out var publishedNullable
         ) &&
-            !DeclaresType(trees, NullableName)
+            !DeclaresType(trees, CompilerServicesPackage, NullableName)
         let needContext = !references.TryResolvePublishedEmbeddableAttribute(
             NullableContextFullName,
             out var publishedContext
         ) &&
-            !DeclaresType(trees, NullableContextName)
+            !DeclaresType(trees, CompilerServicesPackage, NullableContextName)
         if !needNullable && !needContext {
             return trees
         }
-        // One tree per package: a source file declares a single `package`.
-        return trees.Add(SyntaxTree.Parse(SourceText.From(BuildMarkerSource(), FileName + "-marker>"))).Add(
+        // One tree per package: a source file declares a single `package`. The marker is
+        // synthesized unless the project already declares it, which the copies then reuse.
+        var result = trees
+        if !DeclaresType(trees, MarkerPackage, MarkerName) {
+            result = result.Add(SyntaxTree.Parse(SourceText.From(BuildMarkerSource(), FileName + "-marker>")))
+        }
+        return result.Add(
             SyntaxTree.Parse(SourceText.From(BuildSource(needNullable, needContext), FileName + "-nullable>"))
         )
     }
 
-    private func DeclaresType(trees ImmutableArray[SyntaxTree], name string) bool {
+    /// The single decision point for "is this source declaration the framework's attribute
+    /// type": a top-level, non-generic class whose package-qualified name is exactly
+    /// [`fullName`](paramref). A nested type or a generic type of the same name is a
+    /// different metadata type that consumers do not recognize. The syntax-level check used
+    /// before binding (`DeclaresType`) applies the same rule to declarations.
+    /// @param declared A bound source class.
+    /// @param fullName The framework attribute's fully-qualified name.
+    /// @returns `true` when the class is that attribute type.
+    func IsFrameworkAttributeDeclaration(declared StructSymbol, fullName string) bool -> declared.IsClass &&
+        declared.ContainingType == nil &&
+        declared
+        .TypeParameters
+        .IsDefaultOrEmpty &&
+        declared.PackageName +
+        "." +
+        declared.Name == fullName
+
+    /// Finds the constructor of a source-declared framework attribute (the injected copy or
+    /// a project polyfill) that takes one `byte` (or one `byte[]`), whether it is declared
+    /// as an explicit `init` or as the class's primary constructor.
+    /// @param structs The bound program's classes and structs.
+    /// @param cache The token cache holding the planned constructor MethodDefs.
+    /// @param fullName The framework attribute's fully-qualified name.
+    /// @param isArrayCtor `true` to select the `(byte[])` constructor.
+    /// @returns The MethodDef handle, or `default` when no usable constructor is declared.
+    func FindSourceConstructor(
+        structs ImmutableArray[StructSymbol],
+        cache MetadataTokenCache,
+        fullName string,
+        isArrayCtor bool
+    ) EntityHandle {
+        for declared in structs {
+            if !IsFrameworkAttributeDeclaration(declared, fullName) {
+                continue
+            }
+            if !declared.ExplicitConstructors.IsDefaultOrEmpty {
+                for ctor in declared.ExplicitConstructors {
+                    if IsByteConstructor(ctor.Parameters, isArrayCtor) && cache.ExplicitCtorHandles.TryGetValue(
+                        ctor,
+                        out var explicitHandle
+                    ) {
+                        return explicitHandle
+                    }
+                }
+            } else if declared.HasPrimaryConstructor &&
+                IsByteConstructor(declared.PrimaryConstructorParameters, isArrayCtor) &&
+                cache
+                .ClassPrimaryCtorHandles
+                .TryGetValue(declared, out var primaryHandle) {
+                return primaryHandle
+            }
+        }
+        return default(EntityHandle)
+    }
+
+    private func IsByteConstructor(parameters ImmutableArray[ParameterSymbol], isArrayCtor bool) bool {
+        if parameters.Length != 1 {
+            return false
+        }
+        let parameterType = parameters[0].Type
+        if !isArrayCtor {
+            return parameterType == TypeSymbol.UInt8
+        }
+        let arrayType = parameterType as ArrayTypeSymbol
+        return arrayType != nil && arrayType.ElementType == TypeSymbol.UInt8
+    }
+
+    // Matches the package-qualified, non-generic top-level declaration only: a homonym in
+    // another package (or a generic one) is a different type and must not suppress embedding.
+    private func DeclaresType(trees ImmutableArray[SyntaxTree], packageName string, name string) bool {
         for tree in trees {
+            let package_ = tree.Root.Members.OfType[PackageSyntax]().FirstOrDefault()
+            if package_ == nil || string.Join(
+                ".",
+                package_.Identifiers.Select((t SyntaxToken) -> t.Text)
+            ) != packageName {
+                continue
+            }
             for member in tree.Root.Members {
                 let declaration = member as StructDeclarationSyntax
-                if declaration != nil && declaration.Identifier.Text == name {
+                if declaration != nil && declaration.Identifier.Text == name && declaration.TypeParameterList == nil {
                     return true
                 }
             }

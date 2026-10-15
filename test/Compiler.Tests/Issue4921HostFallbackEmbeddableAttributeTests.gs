@@ -171,7 +171,89 @@ open class Issue4921HostFallbackEmbeddableAttributeTests {
         }
     }
 
+    /// Review findings on the polyfill detection: a homonym in another package must not suppress
+    /// embedding, a project-declared `EmbeddedAttribute` marker must be reused (no duplicate type),
+    /// and a polyfill whose only constructor is a primary constructor must be bound.
+    @Fact
+    func PolyfillDetection_IsPackageQualifiedAndAcceptsMarkerAndPrimaryConstructor() {
+        let netstandard string? = FindNetStandardReference()
+        Assert.True(netstandard != nil, "could not locate a netstandard.dll reference assembly")
+        for extra in[]string{HomonymSource, MarkerAndPolyfillSource, PrimaryConstructorPolyfillSource} {
+            let tempDir = Directory.CreateTempSubdirectory("gs_4922_cases_").FullName
+            try {
+                let libPath = Path.Combine(tempDir, "Lib.dll")
+                CompileOrThrow("lib", LibrarySource, libPath, tempDir, netstandard!!, extraSource: extra)
+                using let stream = File.OpenRead(libPath)
+                using let peReader = PEReader(stream)
+                let reader = peReader.GetMetadataReader()
+                var compilerServicesNullable = 0
+                var markers = 0
+                for handle in reader.TypeDefinitions {
+                    let definition = reader.GetTypeDefinition(handle)
+                    let ns = reader.GetString(definition.Namespace)
+                    let name = reader.GetString(definition.Name)
+                    if ns == "System.Runtime.CompilerServices" && name == "NullableAttribute" {
+                        compilerServicesNullable++
+                    } else if name == "EmbeddedAttribute" {
+                        markers++
+                    }
+                }
+                Assert.Equal(1, compilerServicesNullable)
+                Assert.Equal(1, markers)
+                var stampsOnFrameworkNamedType = 0
+                for handle in reader.CustomAttributes {
+                    let attribute = reader.GetCustomAttribute(handle)
+                    if attribute.Constructor.Kind != HandleKind.MethodDefinition {
+                        continue
+                    }
+                    let declaring = reader.GetTypeDefinition(
+                        reader.GetMethodDefinition(MethodDefinitionHandle(attribute.Constructor)).GetDeclaringType()
+                    )
+                    let declaringName = reader.GetString(declaring.Name)
+                    if reader.GetString(declaring.Namespace) == "System.Runtime.CompilerServices" &&
+                        (declaringName == "NullableAttribute" || declaringName == "NullableContextAttribute") {
+                        stampsOnFrameworkNamedType++
+                    }
+                }
+                Assert.True(
+                    stampsOnFrameworkNamedType > 0,
+                    "nullable stamps must bind to System.Runtime.CompilerServices.*"
+                )
+            } finally {
+                Directory.Delete(tempDir, recursive: true)
+            }
+        }
+    }
+
     shared {
+        private const HomonymSource string = `
+package App
+
+import System
+
+internal class NullableAttribute : Attribute {
+    init(flag uint8) {}
+}
+`
+
+        private const MarkerAndPolyfillSource string = `
+package Microsoft.CodeAnalysis
+
+import System
+
+internal class EmbeddedAttribute : Attribute {
+}
+`
+
+        private const PrimaryConstructorPolyfillSource string = `
+package System.Runtime.CompilerServices
+
+import System
+
+internal class NullableContextAttribute(flag uint8) : Attribute {
+}
+`
+
         private const PolyfillSource string = `
 package System.Runtime.CompilerServices
 
