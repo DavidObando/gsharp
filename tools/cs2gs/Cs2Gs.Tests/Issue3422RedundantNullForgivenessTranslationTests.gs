@@ -22,8 +22,11 @@ import Xunit
 class Issue3422RedundantNullForgivenessTranslationTests {
     @Fact
     async func CoreMigration_RedundantAssertionInventoryDoesNotRegress() {
-        let repoRoot = GsharpTestProjectRunner.FindRepoRoot()!!
-        Assert.False(string.IsNullOrEmpty(repoRoot))
+        // Issue #4932: assert after the check, so a missing root fails the
+        // assertion (as in the C#) rather than throwing a NullReferenceException.
+        let foundRoot = GsharpTestProjectRunner.FindRepoRoot()
+        Assert.False(string.IsNullOrEmpty(foundRoot))
+        let repoRoot = foundRoot!!
         if CommittedCompilerSource.IsGSharp(repoRoot) {
             // Issue #4656: after the cut-over the committed G# IS the
             // translation, and the same inventory is counted over it.
