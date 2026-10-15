@@ -10,6 +10,7 @@ import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
 import System.Linq
 import System.Reflection
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -472,7 +473,12 @@ internal partial class DeclarationBinder {
         // CompilerGenerated, Nullable, NullableContext). Recognition is
         // type-identity based on the resolved CLR type so renaming or
         // shadowing the source-level name cannot bypass the rule.
-        if KnownAttributes.IsReservedForCompiler(attrType.ClrType) {
+        if (
+            KnownAttributes.IsReservedForCompiler(attrType.ClrType) ||
+                EmbeddedAttributeSource.IsSourceNullabilityAttribute(attrType)
+        ) &&
+            !EmbeddedAttributeSource
+            .IsSyntheticTree(annotation.SyntaxTree) {
             Diagnostics.ReportAttributeReservedForCompiler(GetAnnotationNameLocation(annotation), nameText)
             return nil
         }

@@ -6,6 +6,8 @@ package GSharp.Core.CodeAnalysis.Emit
 
 import GSharp.Core.CodeAnalysis.Symbols
 import System
+import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.Diagnostics.CodeAnalysis
 import System.Reflection
@@ -59,6 +61,7 @@ internal class WellKnownReferences {
     private let emitCtx EmitContext
     private let getTypeReference(Type) -> TypeReferenceHandle
     private let getMethodReference(MethodInfo) -> MemberReferenceHandle
+    private let tokenCache MetadataTokenCache?
     private let hashCodeCombineOpenRefs[]MemberReferenceHandle? = [8]MemberReferenceHandle?
 
     // ADR-0051 Phase 6: cached MemberReferenceHandle for NotImplementedException..ctor().
@@ -106,12 +109,12 @@ internal class WellKnownReferences {
     // ctor. Stamped on per-parameter / per-return Param rows and on the
     // MethodDef itself so C# nullable-flow analysis treats `T?` reference
     // parameters as annotated instead of inferring the assembly default.
-    private var nullableAttributeByteCtorRef MemberReferenceHandle?
+    private var nullableAttributeByteCtorRef EntityHandle?
 
     private var tupleElementNamesAttributeCtorRef MemberReferenceHandle?
     private var paramCollectionAttributeCtorRef MemberReferenceHandle?
-    private var nullableAttributeByteArrayCtorRef MemberReferenceHandle?
-    private var nullableContextAttributeByteCtorRef MemberReferenceHandle?
+    private var nullableAttributeByteArrayCtorRef EntityHandle?
+    private var nullableContextAttributeByteCtorRef EntityHandle?
 
     // Issue #410 / ADR-0029: cached member refs for data-struct synthesized members.
     private var stringConcatRef MemberReferenceHandle
@@ -157,8 +160,10 @@ internal class WellKnownReferences {
     init(
         emitCtx EmitContext,
         getTypeReference(Type) -> TypeReferenceHandle,
-        getMethodReference(MethodInfo) -> MemberReferenceHandle
+        getMethodReference(MethodInfo) -> MemberReferenceHandle,
+        tokenCache MetadataTokenCache? = nil
     ) {
+        this.tokenCache = tokenCache
         this.emitCtx = emitCtx ?? throw ArgumentNullException("emitCtx")
         this.getTypeReference = getTypeReference ?? throw ArgumentNullException("getTypeReference")
         this.getMethodReference = getMethodReference ?? throw ArgumentNullException("getMethodReference")
@@ -806,12 +811,21 @@ internal class WellKnownReferences {
     /// @returns The cached (cref:MemberReferenceHandle), or
     /// `default` when `System.Runtime.CompilerServices.NullableAttribute`
     /// cannot be resolved from the reference closure (very old TFMs).
-    func GetNullableAttributeByteCtorRef() MemberReferenceHandle {
+    func GetNullableAttributeByteCtorRef() EntityHandle {
         if (this.nullableAttributeByteCtorRef != nil) {
             return this.nullableAttributeByteCtorRef!!
         }
         if !this.TryResolveEmbeddableAttribute("System.Runtime.CompilerServices.NullableAttribute", out var attrType) {
-            return default(MemberReferenceHandle)
+            // The target publishes no usable declaration: bind to the copy this
+            // compilation declares (embedded by EmbeddedAttributeSource, or a polyfill).
+            let embeddedCtor = this.TryGetEmbeddedAttributeCtor(
+                "System.Runtime.CompilerServices.NullableAttribute",
+                isArrayCtor: false
+            )
+            if !embeddedCtor.IsNil {
+                this.nullableAttributeByteCtorRef = embeddedCtor
+            }
+            return embeddedCtor
         }
         let attrTypeRef = this.getTypeReference(attrType!!)
         let ctorSig = BlobBuilder()
@@ -837,12 +851,21 @@ internal class WellKnownReferences {
     /// generic-type arguments (e.g. `IEnumerable<string?>?`).
     /// @returns The cached (cref:MemberReferenceHandle), or
     /// `default` when the attribute can't be resolved.
-    func GetNullableAttributeByteArrayCtorRef() MemberReferenceHandle {
+    func GetNullableAttributeByteArrayCtorRef() EntityHandle {
         if (this.nullableAttributeByteArrayCtorRef != nil) {
             return this.nullableAttributeByteArrayCtorRef!!
         }
         if !this.TryResolveEmbeddableAttribute("System.Runtime.CompilerServices.NullableAttribute", out var attrType) {
-            return default(MemberReferenceHandle)
+            // The target publishes no usable declaration: bind to the copy this
+            // compilation declares (embedded by EmbeddedAttributeSource, or a polyfill).
+            let embeddedCtor = this.TryGetEmbeddedAttributeCtor(
+                "System.Runtime.CompilerServices.NullableAttribute",
+                isArrayCtor: true
+            )
+            if !embeddedCtor.IsNil {
+                this.nullableAttributeByteArrayCtorRef = embeddedCtor
+            }
+            return embeddedCtor
         }
         let attrTypeRef = this.getTypeReference(attrType!!)
         let ctorSig = BlobBuilder()
@@ -949,7 +972,7 @@ internal class WellKnownReferences {
     /// deviate from this default.
     /// @returns The cached (cref:MemberReferenceHandle), or
     /// `default` when the attribute can't be resolved.
-    func GetNullableContextAttributeByteCtorRef() MemberReferenceHandle {
+    func GetNullableContextAttributeByteCtorRef() EntityHandle {
         if (this.nullableContextAttributeByteCtorRef != nil) {
             return this.nullableContextAttributeByteCtorRef!!
         }
@@ -957,7 +980,16 @@ internal class WellKnownReferences {
             "System.Runtime.CompilerServices.NullableContextAttribute",
             out var attrType
         ) {
-            return default(MemberReferenceHandle)
+            // The target publishes no usable declaration: bind to the copy this
+            // compilation declares (embedded by EmbeddedAttributeSource, or a polyfill).
+            let embeddedCtor = this.TryGetEmbeddedAttributeCtor(
+                "System.Runtime.CompilerServices.NullableContextAttribute",
+                isArrayCtor: false
+            )
+            if !embeddedCtor.IsNil {
+                this.nullableContextAttributeByteCtorRef = embeddedCtor
+            }
+            return embeddedCtor
         }
         let attrTypeRef = this.getTypeReference(attrType!!)
         let ctorSig = BlobBuilder()
@@ -1698,17 +1730,41 @@ internal class WellKnownReferences {
     /// externally-visible overload additionally skips an inaccessible shim and
     /// keeps searching for an accessible duplicate (issue #3445), so a closure
     /// containing both an embedded copy and the real contract assembly resolves
-    /// to the contract assembly. When nothing public declares it — a genuinely
-    /// old TFM — the attribute is omitted, the lossy-but-sound outcome the
-    /// accessors already documented. Synthesizing our own embedded copy, the way
-    /// csc does, is the full-fidelity follow-up.
+    /// to the contract assembly. When nothing public declares it — a downlevel
+    /// target such as netstandard2.0 — the accessors bind to an embedded copy
+    /// declared in this assembly (issue #4922, (cref:EmbeddedAttributeSource)); a
+    /// target on a runtime that cannot embed (no source copy) keeps the old
+    /// outcome of omitting the attribute. A declaration found only through the host
+    /// fallback (issue #4921) counts as "nothing public declares it" for a
+    /// downlevel target (cref:ReferenceResolver.TryResolvePublishedEmbeddableAttribute).
     /// @param fullName The attribute's fully-qualified metadata name.
     /// @param attributeType The resolved, externally visible attribute type.
     /// @returns `true` when an externally visible declaration was found; otherwise `false`.
     private func TryResolveEmbeddableAttribute(fullName string, @NotNullWhen(true) out attributeType Type?) bool -> this
         .emitCtx
         .References
-        .TryResolveType(fullName, requireExternalVisibility: true, out attributeType)
+        .TryResolvePublishedEmbeddableAttribute(fullName, out attributeType)
+
+    /// Issue #4922: returns the constructor of a copy of the embeddable
+    /// attribute <em>declared in the compilation's own source</em> (the copy
+    /// (cref:EmbeddedAttributeSource) injected for a target that publishes none, or a
+    /// polyfill the user wrote), the way csc binds to its embedded copy.
+    /// The result is a bare MethodDef: it lives in this assembly, so it needs no
+    /// assembly reference.
+    /// @param fullName The attribute's fully-qualified metadata name.
+    /// @param isArrayCtor `true` to select the `(byte[])` ctor, `false` for `(byte)`.
+    /// @returns The MethodDef handle, or `default` when the source declares no usable copy.
+    private func TryGetEmbeddedAttributeCtor(fullName string, isArrayCtor bool) EntityHandle {
+        if this.tokenCache == nil {
+            return default(EntityHandle)
+        }
+        return EmbeddedAttributeSource.FindSourceConstructor(
+            this.emitCtx.Program.Structs,
+            this.tokenCache,
+            fullName,
+            isArrayCtor
+        )
+    }
 
     private func BuildObjectDefaultCtorReference() MemberReferenceHandle {
         let sigBlob = BlobBuilder()

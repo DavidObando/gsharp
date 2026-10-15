@@ -324,6 +324,20 @@ func Helper() {
         Assert.Empty(helper.Attributes)
     }
 
+    /// Issue #4921/#4922: the GS0205 exemption belongs to the compiler-embedded trees only.
+    /// A caller-built tree that merely borrows their file-name label is still rejected.
+    @Fact
+    func Reserved_CompilerGenerated_Attribute_Is_Rejected_ForATreeBorrowingTheEmbeddedFileName() {
+        let source = `import System.Runtime.CompilerServices
+
+@CompilerGenerated
+func Helper() {
+}`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "<gsc-embedded-attributes-marker>"))
+        let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        Assert.Contains(GetBinderDiagnostics(globalScope), (d Diagnostic) -> d.Id == "GS0205")
+    }
+
     @Fact
     func Reserved_Extension_Attribute_Is_Rejected() {
         let source = `import System.Runtime.CompilerServices

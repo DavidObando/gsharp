@@ -458,6 +458,49 @@ class ReferenceResolver : IDisposable {
         return assemblyName != nil && this.hostFallbackAssemblyNames.Contains(assemblyName)
     }
 
+    /// Issue #4921 / #4922: returns whether this compilation targets a downlevel
+    /// framework whose core library is `netstandard.dll` or `mscorlib` (netstandard2.x,
+    /// .NET Framework). Those targets run on runtimes that have no
+    /// `System.Private.CoreLib`, and they publish neither embeddable nullability
+    /// attribute.
+    /// @returns `true` when `System.Object` is declared by `netstandard` or `mscorlib`.
+    internal func TargetsDownlevelFramework() bool {
+        if !TryResolveType("System.Object", out var objectType) {
+            return false
+        }
+        let name string? = objectType!!.Assembly.GetName().Name
+        return string.Equals(name, "netstandard", StringComparison.OrdinalIgnoreCase) || string.Equals(
+            name,
+            "mscorlib",
+            StringComparison.OrdinalIgnoreCase
+        )
+    }
+
+    /// Issue #4921: resolves a compiler-embeddable attribute (for example
+    /// `System.Runtime.CompilerServices.NullableAttribute`) that the target
+    /// framework itself <em>publishes</em>, that is, an externally visible declaration
+    /// the emitted assembly can legitimately reference.
+    /// @remarks The host runtime assemblies are appended to every reference set as a
+    /// transitive-dependency fallback (cref:IsHostFallback). Where the target is a
+    /// downlevel framework (cref:TargetsDownlevelFramework), a declaration found only
+    /// there is the host's `System.Private.CoreLib`, which does not exist on the runtime
+    /// that will load the output (.NET Framework), so it does not count as published.
+    /// Where the target runs on the host's own runtime the fallback is harmless and is
+    /// kept, as it always was.
+    /// @param fullName The attribute's fully-qualified metadata name.
+    /// @param type The resolved declaration, if the target publishes one.
+    /// @returns `true` when the target publishes the attribute.
+    internal func TryResolvePublishedEmbeddableAttribute(fullName string, @NotNullWhen(true) out type Type?) bool {
+        if !TryResolveType(fullName, requireExternalVisibility: true, out type) {
+            return false
+        }
+        if IsHostFallback(type!!) && TargetsDownlevelFramework() {
+            type = nil
+            return false
+        }
+        return true
+    }
+
     /// Issue #3297: tries to resolve a fully-qualified type name from the
     /// specific referenced assembly whose simple name is
     /// [`assemblySimpleName`](paramref), rather than across the whole
