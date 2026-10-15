@@ -56,7 +56,7 @@ CODED = {
     "HasSemantics": (1, (0x14, 0x17)),
     "MethodDefOrRef": (1, (0x06, 0x0A)),
     "MemberForwarded": (1, (0x04, 0x06)),
-    "ResolutionScope": (2, (0x00, 0x1A, 0x20, 0x23)),
+    "ResolutionScope": (2, (0x00, 0x1A, 0x23, 0x01)),
 }
 C = lambda name: ("C", name)  # noqa: E731
 T = lambda table: ("T", table)  # noqa: E731

@@ -28,7 +28,7 @@ sys.modules[SPEC.name] = check
 SPEC.loader.exec_module(check)
 
 
-def make_pe(refs: list[str], tail_shared: bool = False) -> bytes:
+def make_pe(refs: list[str], tail_shared: bool = False, type_refs: int = 0) -> bytes:
     """A PE32 with one section holding a CLI header and a metadata root with #~ and #Strings.
 
     The #~ stream has one AssemblyRef row per name in [`refs`]. With `tail_shared` each name
@@ -42,7 +42,15 @@ def make_pe(refs: list[str], tail_shared: bool = False) -> bytes:
         indices.append(len(heap) + (len("Probe.") if tail_shared else 0))
         heap += stored.encode() + b"\0"
     heap += b"\0" * (-len(heap) % 4)
-    tables = struct.pack("<IBBBBQQ", 0, 2, 0, 0, 1, 1 << 0x23, 0) + struct.pack("<I", len(refs))
+    valid = (1 << 0x23) | ((1 << 0x01) if type_refs else 0)
+    tables = struct.pack("<IBBBBQQ", 0, 2, 0, 0, 1, valid, 0)
+    if type_refs:
+        tables += struct.pack("<I", type_refs)
+    tables += struct.pack("<I", len(refs))
+    if type_refs:
+        # TypeRef rows: ResolutionScope (coded; 4 bytes once a target table has >= 2^14 rows), Name, Namespace.
+        width = 4 if type_refs >= 1 << 14 else 2
+        tables += b"\0" * (type_refs * (width + 2 + 2))
     for index in indices:
         # MajorVersion..RevisionNumber, Flags, PublicKeyOrToken, Name, Culture, HashValue (2-byte heap indices).
         tables += struct.pack("<HHHHIHHHH", 2, 0, 0, 0, 0, 0, index, 0, 0)
@@ -78,6 +86,7 @@ def make_pe(refs: list[str], tail_shared: bool = False) -> bytes:
 
 GOOD = make_pe(["netstandard", "Microsoft.Build.Utilities.Core"])
 BAD = make_pe(["netstandard", "System.Private.CoreLib"])
+BAD_WIDE_TYPEREFS = make_pe(["netstandard", "System.Private.CoreLib"], type_refs=20000)
 BAD_TAIL_SHARED = make_pe(["netstandard", "System.Private.CoreLib"], tail_shared=True)
 
 
@@ -118,6 +127,13 @@ class HostReferenceCheckTests(unittest.TestCase):
     def test_assembly_ref_sharing_a_heap_string_tail_is_found(self) -> None:
         code, out = run(str(self.write("Tail.dll", BAD_TAIL_SHARED)))
         self.assertEqual(code, 1)
+        self.assertIn("System.Private.CoreLib", out)
+
+    def test_wide_resolution_scope_index_is_sized_correctly(self) -> None:
+        # 20000 TypeRef rows widen the ResolutionScope coded index to 4 bytes, which moves the
+        # AssemblyRef table; mis-sizing it reads the wrong bytes and misses the reference.
+        code, out = run(str(self.write("Wide.dll", BAD_WIDE_TYPEREFS)))
+        self.assertEqual(code, 1, out)
         self.assertIn("System.Private.CoreLib", out)
 
     def test_task_dll_inside_nupkg_is_checked(self) -> None:

@@ -171,6 +171,21 @@ internal shared class EmbeddedAttributeSource {
         return arrayType != nil && arrayType.ElementType == TypeSymbol.UInt8
     }
 
+    /// Returns whether [`type`](paramref) is a source-declared nullability attribute
+    /// (the compiler's embedded copy or a polyfill of it). Like csc, explicit application of
+    /// these is not allowed: they are written by the compiler only, and a user-written
+    /// `@NullableContextAttribute(2)` would override the compiler's own stamp.
+    /// @param type The resolved attribute type.
+    /// @returns `true` for a source class that is `NullableAttribute` or `NullableContextAttribute`.
+    func IsSourceNullabilityAttribute(type TypeSymbol) bool {
+        let declared = type as StructSymbol
+        return declared != nil &&
+            (
+            IsFrameworkAttributeDeclaration(declared, NullableFullName) ||
+                IsFrameworkAttributeDeclaration(declared, NullableContextFullName)
+        )
+    }
+
     private func CreateSyntheticTree(text string, suffix string) SyntaxTree {
         let tree = SyntaxTree.Parse(SourceText.From(text, FileName + suffix))
         SyntheticTrees.Add(tree, tree)
@@ -206,11 +221,8 @@ internal shared class EmbeddedAttributeSource {
     // System.Runtime.CompilerServices.
     private func BuildMarkerSource() string -> `package Microsoft.CodeAnalysis
 
-import System
-import System.Runtime.CompilerServices
-
-@CompilerGenerated
-internal class EmbeddedAttribute : Attribute {
+@System.Runtime.CompilerServices.CompilerGenerated
+internal class EmbeddedAttribute : System.Attribute {
 }
 `
 
@@ -218,15 +230,13 @@ internal class EmbeddedAttribute : Attribute {
         let source = StringBuilder()
         source.Append(`package System.Runtime.CompilerServices
 
-import System
-import Microsoft.CodeAnalysis
 `)
         if needNullable {
             source.Append(`
-@CompilerGenerated
-@EmbeddedAttribute
-@AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Method | AttributeTargets.Event | AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Parameter | AttributeTargets.ReturnValue | AttributeTargets.GenericParameter, AllowMultiple = false, Inherited = false)
-internal class NullableAttribute : Attribute {
+@System.Runtime.CompilerServices.CompilerGenerated
+@Microsoft.CodeAnalysis.EmbeddedAttribute
+@System.AttributeUsage(System.AttributeTargets.Class | System.AttributeTargets.Struct | System.AttributeTargets.Method | System.AttributeTargets.Event | System.AttributeTargets.Property | System.AttributeTargets.Field | System.AttributeTargets.Parameter | System.AttributeTargets.ReturnValue | System.AttributeTargets.GenericParameter, AllowMultiple = false, Inherited = false)
+internal class NullableAttribute : System.Attribute {
     public let NullableFlags []uint8
 
     init(flag uint8) {
@@ -241,10 +251,10 @@ internal class NullableAttribute : Attribute {
         }
         if needContext {
             source.Append(`
-@CompilerGenerated
-@EmbeddedAttribute
-@AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Method | AttributeTargets.Interface | AttributeTargets.Delegate, AllowMultiple = false, Inherited = false)
-internal class NullableContextAttribute : Attribute {
+@System.Runtime.CompilerServices.CompilerGenerated
+@Microsoft.CodeAnalysis.EmbeddedAttribute
+@System.AttributeUsage(System.AttributeTargets.Class | System.AttributeTargets.Struct | System.AttributeTargets.Method | System.AttributeTargets.Interface | System.AttributeTargets.Delegate, AllowMultiple = false, Inherited = false)
+internal class NullableContextAttribute : System.Attribute {
     public let Flag uint8
 
     init(flag uint8) {

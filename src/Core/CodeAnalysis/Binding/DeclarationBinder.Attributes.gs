@@ -473,9 +473,12 @@ internal partial class DeclarationBinder {
         // CompilerGenerated, Nullable, NullableContext). Recognition is
         // type-identity based on the resolved CLR type so renaming or
         // shadowing the source-level name cannot bypass the rule.
-        if KnownAttributes.IsReservedForCompiler(attrType.ClrType) && !EmbeddedAttributeSource.IsSyntheticTree(
-            annotation.SyntaxTree
-        ) {
+        if (
+            KnownAttributes.IsReservedForCompiler(attrType.ClrType) ||
+                EmbeddedAttributeSource.IsSourceNullabilityAttribute(attrType)
+        ) &&
+            !EmbeddedAttributeSource
+            .IsSyntheticTree(annotation.SyntaxTree) {
             Diagnostics.ReportAttributeReservedForCompiler(GetAnnotationNameLocation(annotation), nameText)
             return nil
         }

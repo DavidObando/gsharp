@@ -261,7 +261,77 @@ open class Issue4921HostFallbackEmbeddableAttributeTests {
         }
     }
 
+    /// Like csc, explicit application of the nullability attributes is not allowed, so user metadata
+    /// cannot override the compiler's own stamps.
+    @Fact
+    func UserWrittenNullabilityAttribute_IsRejected() {
+        let netstandard string? = FindNetStandardReference()
+        Assert.True(netstandard != nil, "could not locate a netstandard.dll reference assembly")
+        let tempDir = Directory.CreateTempSubdirectory("gs_4922_apply_").FullName
+        try {
+            let result = CompileLibrary(
+                "lib",
+                UserAppliedContextSource,
+                Path.Combine(tempDir, "Lib.dll"),
+                tempDir,
+                netstandard!!
+            )
+            Assert.True(result.Item1 != 0 && result.Item2.Contains("GS0205"), "expected GS0205:\n" + result.Item2)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    /// The compiler-generated declarations name framework types by their full names, so a project
+    /// type called `Attribute` in the same package cannot change what they derive from.
+    @Fact
+    func ShadowedFrameworkNames_DoNotChangeTheEmbeddedCopies() {
+        let netstandard string? = FindNetStandardReference()
+        Assert.True(netstandard != nil, "could not locate a netstandard.dll reference assembly")
+        let tempDir = Directory.CreateTempSubdirectory("gs_4922_shadow_").FullName
+        try {
+            let libPath = Path.Combine(tempDir, "Lib.dll")
+            CompileOrThrow("lib", LibrarySource, libPath, tempDir, netstandard!!, extraSource: ShadowSource)
+            using let stream = File.OpenRead(libPath)
+            using let peReader = PEReader(stream)
+            let reader = peReader.GetMetadataReader()
+            var stamps = 0
+            for handle in reader.CustomAttributes {
+                let attribute = reader.GetCustomAttribute(handle)
+                if attribute.Constructor.Kind == HandleKind.MethodDefinition {
+                    let ctor = reader.GetMethodDefinition(MethodDefinitionHandle(attribute.Constructor))
+                    if reader.GetString(reader.GetTypeDefinition(ctor.GetDeclaringType()).Name) == "NullableAttribute" {
+                        stamps++
+                    }
+                }
+            }
+            Assert.True(stamps > 0, "the embedded NullableAttribute must still be used")
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
+        private const UserAppliedContextSource string = `
+package Lib
+
+import System.Runtime.CompilerServices
+
+@NullableContext(2)
+class Holder {
+}
+`
+
+        private const ShadowSource string = `
+package System.Runtime.CompilerServices
+
+internal class Attribute {
+}
+
+internal class AttributeUsage {
+}
+`
+
         private const NonAttributePolyfillSource string = `
 package System.Runtime.CompilerServices
 
@@ -416,14 +486,14 @@ class Holder {
                 .FirstOrDefault()
         }
 
-        private func CompileOrThrow(
+        private func CompileLibrary(
             name string,
             source string,
             outPath string,
             tempDir string,
             reference string,
             extraSource string? = nil
-        ) {
+        )(int32, string) {
             let srcPath = Path.Combine(tempDir, name + ".gs")
             File.WriteAllText(srcPath, source)
             var args = []string{
@@ -451,7 +521,19 @@ class Holder {
                 Console.SetOut(prevOut)
                 Console.SetError(prevErr)
             }
-            Assert.True(exit == 0, "gsc failed compiling '$name':\nstdout:\n$compileOut\nstderr:\n$compileErr")
+            return (exit, "stdout:\n$compileOut\nstderr:\n$compileErr")
+        }
+
+        private func CompileOrThrow(
+            name string,
+            source string,
+            outPath string,
+            tempDir string,
+            reference string,
+            extraSource string? = nil
+        ) {
+            let result = CompileLibrary(name, source, outPath, tempDir, reference, extraSource)
+            Assert.True(result.Item1 == 0, "gsc failed compiling '$name':\n" + result.Item2)
         }
     }
 }
