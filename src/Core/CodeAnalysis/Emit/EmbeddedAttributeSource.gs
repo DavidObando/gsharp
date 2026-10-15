@@ -162,6 +162,11 @@ internal shared class EmbeddedAttributeSource {
         if !isArrayCtor {
             return parameterType == TypeSymbol.UInt8
         }
+        // `[]uint8` binds to a slice type; accept a CLR array form as well.
+        let sliceType = parameterType as SliceTypeSymbol
+        if sliceType != nil {
+            return sliceType.ElementType == TypeSymbol.UInt8
+        }
         let arrayType = parameterType as ArrayTypeSymbol
         return arrayType != nil && arrayType.ElementType == TypeSymbol.UInt8
     }

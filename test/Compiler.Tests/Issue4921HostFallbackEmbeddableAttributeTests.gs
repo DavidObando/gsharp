@@ -101,6 +101,7 @@ open class Issue4921HostFallbackEmbeddableAttributeTests {
             // The stamps bind to those in-assembly types (MethodDef constructors), not to a TypeRef.
             var nullableStamps = 0
             var contextStamps = 0
+            var arrayFormStamps = 0
             var nullableValues = List[uint8]()
             for handle in reader.CustomAttributes {
                 let attribute = reader.GetCustomAttribute(handle)
@@ -114,12 +115,16 @@ open class Issue4921HostFallbackEmbeddableAttributeTests {
                 if declaringName == "NullableAttribute" && blob.Length == 5 {
                     nullableStamps++
                     nullableValues.Add(blob[2])
+                } else if declaringName == "NullableAttribute" {
+                    // The byte[] constructor: per-position flags of a nested annotation such as `[]string?`.
+                    arrayFormStamps++
                 } else if declaringName == "NullableContextAttribute" {
                     contextStamps++
                 }
             }
             Assert.True(nullableStamps > 0, "the nullable members must be stamped with the embedded NullableAttribute")
             Assert.True(contextStamps > 0, "the embedded NullableContextAttribute must be applied")
+            Assert.True(arrayFormStamps > 0, "a nested annotation must be stamped through the byte[] constructor")
             // `string?` is flag 2 (annotated).
             Assert.True(nullableValues.Contains(2), "string? is flag 2")
             // Consume it from a modern target: reading the annotation back rejects the assignment.
@@ -388,6 +393,7 @@ class Holder {
     var name string?
     func Get(input string?) string? -> input
     func Name() string -> "n"
+    func Many(input []string?) []string? -> input
 }
 `
 
