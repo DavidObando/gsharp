@@ -2549,7 +2549,18 @@ internal partial class ExpressionBinder {
         // instance-method lookup (e.g. `GetValueOrDefault`, `Equals`,
         // `ToString`) must go through the constructed `Nullable<T>` type that
         // actually carries those members.
-        var clrType = effectiveReceiverType!!.ClrType
+        // Issue #4924: the members of the target framework's declaration, not the host's.
+        // `effectiveReceiverType.ClrType` is non-null here: the `ClrType == nil` branch
+        // above returns unconditionally.
+        let receiverClrType = effectiveReceiverType!!.ClrType!!
+        if !$scope.References!!.TryGetMemberLookupType(receiverClrType, out var lookupType) {
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(
+                ce.Location,
+                (receiverClrType.FullName ?? receiverClrType.Name) + "." + methodName
+            )
+            return BoundErrorExpression(nil)
+        }
+        var clrType Type? = lookupType
         if receiver.Type is NullableTypeSymbol nullableRecv {
             let nullableInnerVt = nullableRecv.UnderlyingType?.ClrType
             if nullableInnerVt?.IsValueType == true && this.memberLookup.TryGetNullableConstructedType(

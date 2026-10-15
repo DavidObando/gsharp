@@ -923,12 +923,20 @@ internal partial class ExpressionBinder {
                     // symbolic Dictionary view so `.Keys`/`.Count`/… resolve
                     // over the erased closed shape with symbolic [K, V]
                     // re-projection, exactly as on `Dictionary[K, V]`.
-                    let clrReceiverType = Invariant.Required(
+                    let declaredReceiverType = Invariant.Required(
                         clrInstanceReceiverType.ClrType,
                         "a CLR member receiver has a CLR type",
                         expression: "clrInstanceReceiverType.ClrType"
                     )
                     let memberName = ne.IdentifierToken.ValueText
+                    // Issue #4924: the members of the target framework's declaration.
+                    if !$scope.References!!.TryGetMemberLookupType(declaredReceiverType, out var clrReceiverType) {
+                        Diagnostics.ReportTargetFrameworkMemberUnavailable(
+                            ne.Location,
+                            (declaredReceiverType.FullName ?? declaredReceiverType.Name) + "." + memberName
+                        )
+                        return BoundErrorExpression(nil)
+                    }
                     // Issue #529: use interface-aware lookup so that members
                     // declared on a base interface (e.g. IReadOnlyCollection<T>.Count
                     // surfaced through IReadOnlyList<T>) are found.
