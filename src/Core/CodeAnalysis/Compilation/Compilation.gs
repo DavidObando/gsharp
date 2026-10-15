@@ -300,7 +300,7 @@ open class Compilation {
                 using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
                 let globalScope = ReusedGlobalScope ?? Binder.BindGlobalScope(
                     previous: nil,
-                    SyntaxTrees,
+                    EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),
                     References,
                     ImplicitSystemImport,
                     PreprocessorSymbols,

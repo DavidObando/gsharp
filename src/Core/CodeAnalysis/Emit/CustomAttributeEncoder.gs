@@ -343,7 +343,7 @@ internal class CustomAttributeEncoder {
         }
         let valueBlob = BlobBuilder()
         valueBlob.WriteUInt16(0x0001)
-        var ctorRef MemberReferenceHandle
+        var ctorRef EntityHandle
         if flags.Length == 1 {
             ctorRef = this.wellKnown.GetNullableAttributeByteCtorRef()
             if ctorRef.IsNil {

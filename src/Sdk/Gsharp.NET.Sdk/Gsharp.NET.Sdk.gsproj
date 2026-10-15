@@ -39,7 +39,23 @@
     <InternalsVisibleTo Include="GSharp.Sdk.Tests" />
   </ItemGroup>
 
+  <!-- Issue #4921: the task assembly is netstandard2.0 and ships to .NET Framework
+       MSBuild, so it must be compiled by the gsc built from THIS commit, not by the
+       bootstrap gsc that global.json pins. A bootstrap gsc older than a codegen fix
+       would otherwise put its defect (#4921: TypeRefs scoped at System.Private.CoreLib)
+       into the next release's task assembly and only the following release could be
+       clean. The pinned SDK's BuildTask still drives the build; only the compiler it
+       launches is redirected through GsharpCompilerFullPath, so there is no cycle with
+       this project's own BuildTask (the pinned one is used). The ProjectReference below
+       orders the in-tree Compiler before this project's CoreCompile; it is build-only.
+       Note the value must be set in the project body: the SDK props only default it when
+       empty, and a body assignment is evaluated after them. -->
+  <PropertyGroup>
+    <GsharpCompilerFullPath>$(MSBuildThisFileDirectory)..\..\..\out\bin\$(Configuration)\Compiler\gsc.dll</GsharpCompilerFullPath>
+  </PropertyGroup>
+
   <ItemGroup>
+    <ProjectReference Include="../../Compiler/Compiler.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <ProjectReference Include="../Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <!-- ADR-0174 D1: the channel runtime is packed under tools/channels/ and
          auto-referenced by every consumer .gsproj (build/Gsharp.NET.Sdk.props). -->

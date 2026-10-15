@@ -929,7 +929,8 @@ internal class ReflectionMetadataEmitter {
         this.wellKnown = WellKnownReferences(
             this.emitCtx,
             this.memberRefs.GetTypeReference,
-            this.memberRefs.GetMethodReference
+            this.memberRefs.GetMethodReference,
+            this.cache.ExplicitCtorHandles
         )
         // PR-E-12: CustomAttributeEncoder depends on GetTypeReference (the
         // dedup-cached root resolver) and wellKnown's GetIsReadOnlyAttributeCtorRef.
@@ -2397,6 +2398,24 @@ internal class ReflectionMetadataEmitter {
             methodList: MetadataTokens.MethodDefinitionHandle(1)
         )
         this.EmitModuleInitializer()
+        // Issue #4922: a compilation-embedded NullableAttribute / NullableContextAttribute
+        // (see EmbeddedAttributeSource) is stamped on members of every other type,
+        // including interfaces and delegates that are emitted before the general ctor
+        // pre-registration below. Register just those ctor handles now, from the same
+        // planned rows, so the stamps can bind to them whatever the emission order.
+        for c in topClasses {
+            if c.ExplicitConstructors.IsDefaultOrEmpty || !EmbeddedAttributeSource.IsEmbeddableAttributeName(
+                c.PackageName + "." + c.Name
+            ) ||
+                !classCtorRows.TryGetValue(c, out var embeddedFirstCtorRow) {
+                continue
+            }
+            for var i = 0; i < c.ExplicitConstructors.Length; i++ {
+                this.cache.ExplicitCtorHandles[c.ExplicitConstructors[i]] = MetadataTokens.MethodDefinitionHandle(
+                    embeddedFirstCtorRow + i
+                )
+            }
+        }
         // Issue #973: pre-reserve the TypeDefinitionHandle for every user
         // TypeDef (interfaces, delegates, classes, structs, enums — top-level
         // and nested) BEFORE any member signature is encoded. A field, method,

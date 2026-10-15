@@ -21,14 +21,12 @@ only metadata entity names are stored there and no legitimate entity is named
 UTF-16, and are not looked at.)
 
 Usage: check-netstandard-host-refs.py [PATH ...]
-Exit status 0 when clean (or skipped, see FIRST_FIXED_BOOTSTRAP), 1 with one line per finding, 2 when nothing was checked.
+Exit status 0 when clean, 1 with one line per finding, 2 when nothing was checked.
 """
 
 from __future__ import annotations
 
 import fnmatch
-import json
-import re
 import struct
 import sys
 import zipfile
@@ -36,12 +34,6 @@ from pathlib import Path
 
 BANNED_PREFIX = "System.Private."
 DEFAULT_GLOB = "out/bin/Release/nupkgs/Gsharp*.nupkg"
-# The repository builds itself with the pinned bootstrap SDK in global.json. A
-# bootstrap gsc older than the #4921 fix still emits the bad TypeRefs when it
-# compiles src/Sdk/Gsharp.NET.Sdk, so the packed task assembly cannot be clean
-# until the pin moves to a release that contains the fix. Raise (or drop) this
-# once the first release carrying the fix is pinned.
-FIRST_FIXED_BOOTSTRAP = (0, 5, 4)
 PACKAGE_ENTRY_PATTERNS = ("tools/task/*.dll", "lib/netstandard*/*.dll", "lib/net4*/*.dll")
 
 
@@ -121,27 +113,7 @@ def check_path(path: Path) -> tuple[int, list[str]]:
     return 1, check_image(str(path), path.read_bytes())
 
 
-def bootstrap_version(root: Path) -> tuple[int, ...] | None:
-    """The Gsharp.NET.Sdk version pinned in global.json, as a numeric tuple."""
-    try:
-        pin = json.loads((root / "global.json").read_text(encoding="utf-8"))["msbuild-sdks"]["Gsharp.NET.Sdk"]
-        match = re.match(r"(\d+)\.(\d+)\.(\d+)", pin)
-        return tuple(int(g) for g in match.groups()) if match else None
-    except (OSError, KeyError, ValueError, TypeError):
-        return None
-
-
-def main(argv: list[str], root: Path = Path(".")) -> int:
-    pin = bootstrap_version(root)
-    if pin is not None and pin < FIRST_FIXED_BOOTSTRAP:
-        print(
-            "skipped: the pinned bootstrap Gsharp.NET.Sdk "
-            + ".".join(map(str, pin))
-            + " predates the #4921 fix, so the SDK it builds still carries the defect; "
-            + "the check enforces from "
-            + ".".join(map(str, FIRST_FIXED_BOOTSTRAP))
-        )
-        return 0
+def main(argv: list[str]) -> int:
     paths = [Path(a) for a in argv] or sorted(Path(".").glob(DEFAULT_GLOB))
     total = 0
     findings: list[str] = []

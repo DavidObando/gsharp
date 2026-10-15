@@ -143,6 +143,14 @@ whose emitter drops annotations on `shared` fields (fixed in #4911, issue
 
 Grep for `#4903` and `#4909` to find every site.
 
+The packed `tools/task/Gsharp.NET.Sdk.dll` does not follow the bootstrap pin:
+`src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj` redirects `GsharpCompilerFullPath`
+to the `gsc` built from the same commit, so a release carries a task assembly
+compiled by its own compiler (issue #4921: a bootstrap `gsc` that predates a
+codegen fix would otherwise ship that defect for one more release). The `build`
+job's `build/check-netstandard-host-refs.py` step fails if the packed task assembly
+names a `System.Private.*` host assembly.
+
 ## Minor release (0.N to 0.N+1)
 
 Everything in the patch procedure, plus:
