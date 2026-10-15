@@ -1935,6 +1935,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Channel-typed local '{0}' may be used before it is assigned — a path can reach this use without a preceding assignment, and a bare 'chan T' slot has no zero value; assign it on every path first, e.g. '{0} = make({1})' or '{0} = make({1}, capacity)' (ADR-0159, issue #3316)."
     )
+    internal let NilComparisonOfNonNullableLocal DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0624",
+        DiagnosticSeverity.Warning,
+        "Local '{0}' has the non-nullable type '{1}', so comparing it with 'nil' is always {2}; if the value can be nil, declare the local as '{1}?' instead of asserting its initializer."
+    )
     internal let NilComparisonAlwaysConstant DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0523",
         DiagnosticSeverity.Warning,

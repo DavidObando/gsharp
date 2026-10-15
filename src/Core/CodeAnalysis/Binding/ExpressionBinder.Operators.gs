@@ -1313,6 +1313,33 @@ internal partial class ExpressionBinder {
             }
             return BoundErrorExpression(nil)
         }
+        // Issue #4932: a local declared with a non-nullable reference type can
+        // never hold nil, so comparing it with nil is dead code. The cut-over
+        // self-migration produced exactly this shape when it asserted (`!!`) a
+        // value the C# null-tested afterwards, and the assertion then threw
+        // where the C# took the null branch. Checked before any operator arm
+        // (string's `==`, reference equality) can return.
+        if syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken {
+            let nilComparedLocal BoundVariableExpression? = if boundRight.Type == TypeSymbol.Null {
+                boundLeft as BoundVariableExpression
+            } else if boundLeft.Type == TypeSymbol.Null {
+                boundRight as BoundVariableExpression
+            } else {
+                nil
+            }
+            if nilComparedLocal != nil && IsNonNullableReferenceLocal(nilComparedLocal) {
+                Diagnostics.ReportNilComparisonOfNonNullableLocal(
+                    syntax.Location,
+                    nilComparedLocal.Variable.Name,
+                    nilComparedLocal.Variable.Type,
+                    if syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken {
+                        "false"
+                    } else {
+                        "true"
+                    }
+                )
+            }
+        }
         let nativeEqualityLeftType = if boundLeft.Type is NullableTypeSymbol nullableNativeLeft {
             nullableNativeLeft.UnderlyingType
         } else {
@@ -2890,6 +2917,28 @@ internal partial class ExpressionBinder {
         /// refinement).
         /// @param operand The non-nil side of the comparison.
         /// @returns Whether GS0523 should be reported.
+        private func IsNonNullableReferenceLocal(operand BoundVariableExpression) bool {
+            // Issue #4932: only a LOCAL's declared type is a promise the
+            // compiler enforces on every write. Parameters (callers outside
+            // G# can pass nil) and fields (nil before initialization) are
+            // excluded, as are `T?`, platform `T!`, type parameters, value
+            // types and the magic collections GS0523 already covers.
+            if operand.Variable.Kind != SymbolKind.LocalVariable {
+                return false
+            }
+            let type = operand.Variable.Type
+            if type.IsValueType {
+                return false
+            }
+            return type is StructSymbol ||
+                type is InterfaceSymbol ||
+                type is DelegateTypeSymbol ||
+                type is FunctionTypeSymbol ||
+                type is ImportedTypeSymbol ||
+                type == TypeSymbol.String ||
+                type == TypeSymbol.Object
+        }
+
         private func IsBareMagicCollectionNilCompareOperand(operand BoundExpression) bool {
             // ADR-0186 §6: GS0523 must not fire for a PLATFORM-typed magic
             // collection — `map[K, V]!` can genuinely be nil, so the comparison is

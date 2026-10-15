@@ -290,6 +290,19 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         elementType TypeSymbol
     ) -> Report(location, DiagnosticDescriptors.VariadicCarrierElementNotConstructible, carrierType, elementType)
 
+    /// Issue #4932: reports a nil comparison of a local whose declared type is a
+    /// non-nullable reference type; the comparison is statically constant.
+    /// @param location The text location of the comparison.
+    /// @param localName The local's name.
+    /// @param localType The local's declared type.
+    /// @param constantResult The constant outcome text: `"false"` for `==`, `"true"` for `!=`.
+    func ReportNilComparisonOfNonNullableLocal(
+        location TextLocation,
+        localName string,
+        localType TypeSymbol,
+        constantResult string
+    ) -> Report(location, DiagnosticDescriptors.NilComparisonOfNonNullableLocal, localName, localType, constantResult)
+
     /// Issue #3317 / ADR-0159: reports that a nil comparison against a bare
     /// (non-`?`) magic collection type is statically constant — with
     /// sound empty-instance zero values such a value can never be nil, so
