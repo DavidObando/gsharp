@@ -133,15 +133,18 @@ Order matters: publish first, then point the website at the published package.
 
 The repository is built by the pinned `Gsharp.NET.Sdk` (currently `0.5.7`),
 whose emitter dropped annotations on `shared` fields before the fix in #4911 (issue
-#4903). `0.5.7` contains #4911, so the remaining step is to revert the
-`ThreadLocal<T>` workarounds to `@ThreadStatic` fields (issue #4909):
+#4903). `0.5.7` contains #4911, and the `ThreadLocal<T>` workarounds that
+stood in for `@ThreadStatic` fields under the older pin have been reverted
+(issue #4909):
 
 - `src/Core/CodeAnalysis/Binding/DeclarationBinder.Functions.gs`
   (`conformanceMatchingDepth`);
 - `src/Sdk/Gsharp.Runtime.Channels/SelectWaiter.gs` (`cache`),
   `SelectRandom.gs` and `InlineBudget.gs`.
 
-Grep for `#4903` and `#4909` to find every site.
+`Issue4909ConformanceDepthThreadIsolationTests` (Core.Tests) and
+`Issue4909ThreadStaticStateTests` (Runtime.Channels.Tests) fail if a pin moves
+to an SDK whose emitter drops `@ThreadStatic` on these fields again.
 
 The packed `tools/task/Gsharp.NET.Sdk.dll` does not follow the bootstrap pin:
 `src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj` redirects `GsharpCompilerFullPath`

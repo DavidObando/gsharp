@@ -414,7 +414,7 @@ class SelectWaiter : IValueTaskSource[int32] {
         Volatile.Write(&word, (generation << StateBits) | int64(StateIdle))
         if canPool {
             core.Reset()
-            cache.Value = this
+            cache = this
         }
     }
 
@@ -626,12 +626,8 @@ class SelectWaiter : IValueTaskSource[int32] {
         private let GateOrder Comparison[(Order int64, Gate object)] =
         (a(Order int64, Gate object), b(Order int64, Gate object)) -> a.Order.CompareTo(b.Order)
 
-        // Held in a ThreadLocal rather than a `@ThreadStatic` field: the bootstrap
-        // compiler pinned in `global.json` drops `@ThreadStatic` on a `shared`
-        // field (issue #4903), which made the pool one process-wide slot that
-        // concurrent selects raced on. Revert once the pinned SDK carries the
-        // emitter fix.
-        private let cache ThreadLocal[SelectWaiter?] = ThreadLocal[SelectWaiter?]()
+        @ThreadStatic
+        private var cache SelectWaiter?
 
         /// Rents a waiter for [`arms`](paramref) arms, cancelled by
         /// [`context`](paramref) (ADR-0174 D7/D8). This is the overload the
@@ -646,8 +642,8 @@ class SelectWaiter : IValueTaskSource[int32] {
         /// @param cancellationToken The ambient cancellation.
         /// @returns A waiter; call (cref:Return()) when the select completes.
         func Rent(arms int32, cancellationToken CancellationToken) SelectWaiter {
-            var waiter SelectWaiter? = cache.Value
-            cache.Value = nil
+            var waiter SelectWaiter? = cache
+            cache = nil
             waiter ??= SelectWaiter()
             waiter!!.Begin(cancellationToken)
             return waiter!!

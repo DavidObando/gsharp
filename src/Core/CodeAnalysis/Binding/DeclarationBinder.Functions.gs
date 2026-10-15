@@ -3038,13 +3038,8 @@ internal partial class DeclarationBinder {
             return true
         }
 
-        // Held in a ThreadLocal rather than a `@ThreadStatic` field: the bootstrap
-        // compiler pinned in `global.json` drops `@ThreadStatic` on a `shared`
-        // field (issues #4903, #4909), which made this one process-wide counter
-        // that concurrent compilations (language server, test hosts) corrupted.
-        // Revert to a `@ThreadStatic` field once the pinned SDK carries the
-        // emitter fix from #4911 (tracked in #4909 and the version-bump checklist).
-        private let conformanceMatchingDepth ThreadLocal[int32] = ThreadLocal[int32]()
+        @ThreadStatic
+        private var conformanceMatchingDepth int32
 
         /// ADR-0186: (cref:TypeSignaturesEquivalent(TypeSymbol, TypeSymbol,
         /// IReadOnlyDictionary{TypeParameterSymbol, TypeSymbol}))
@@ -3062,11 +3057,11 @@ internal partial class DeclarationBinder {
             b TypeSymbol?,
             typeParamMap IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]? = nil
         ) bool {
-            conformanceMatchingDepth.Value = conformanceMatchingDepth.Value + 1
+            conformanceMatchingDepth++
             try {
                 return TypeSignaturesEquivalent(a, b, typeParamMap)
             } finally {
-                conformanceMatchingDepth.Value = conformanceMatchingDepth.Value - 1
+                conformanceMatchingDepth--
             }
         }
 
@@ -3118,7 +3113,7 @@ internal partial class DeclarationBinder {
             // means "nothing was stated", one written as `Item?` too, as C#
             // accepts an oblivious override of an annotated member. Recursion
             // applies the same reading to nested positions.
-            if conformanceMatchingDepth.Value > 0 && (a is PlatformTypeSymbol || b is PlatformTypeSymbol) {
+            if conformanceMatchingDepth > 0 && (a is PlatformTypeSymbol || b is PlatformTypeSymbol) {
                 a = StripPlatformOrReferenceNullable(a)
                 b = StripPlatformOrReferenceNullable(b)
             }
@@ -3244,7 +3239,7 @@ internal partial class DeclarationBinder {
             // answer — compare element by element, so `(Item) -> Item` conforms to
             // an oblivious `(Item!) -> Item!`. Scoped to conformance so every
             // exact caller keeps its existing answer for these shapes.
-            if conformanceMatchingDepth.Value > 0 {
+            if conformanceMatchingDepth > 0 {
                 switch (a, b) {
                     case {Item1: fa is FunctionTypeSymbol, Item2: fb is FunctionTypeSymbol} {
                         return fa

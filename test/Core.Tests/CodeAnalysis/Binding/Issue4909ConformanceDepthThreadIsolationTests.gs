@@ -18,13 +18,16 @@ import Xunit
 
 /// Issue #4909: `DeclarationBinder.conformanceMatchingDepth` scopes the ADR-0186
 /// "`T!` has `T`'s signature" reading to one conformance question on one thread.
-/// The bootstrap compiler pinned in `global.json` drops `@ThreadStatic` on a
-/// `shared` field (#4903), which made the counter one process-wide slot: a
-/// conformance comparison on one thread flipped every exact comparison on every
-/// other thread (language server, parallel test hosts) to the lenient reading,
-/// and unsynchronised `++`/`--` could also lose updates.
-/// The pre-fix mutant is a plain process-wide `int32` counter; the exact
-/// comparison below then observes the conformance reading and returns true.
+/// The bootstrap compiler once pinned in `global.json` (0.4.1270) dropped
+/// `@ThreadStatic` on a `shared` field (#4903), which made the counter one
+/// process-wide slot: a conformance comparison on one thread flipped every exact
+/// comparison on every other thread (language server, parallel test hosts) to the
+/// lenient reading, and unsynchronised `++`/`--` could also lose updates. It was
+/// held in a `ThreadLocal[int32]` until the pin carried the #4911 emitter fix, and
+/// is a `@ThreadStatic` field again.
+/// The mutant is a plain process-wide `int32` counter (delete `@ThreadStatic`):
+/// the exact comparison below then observes the conformance reading and returns
+/// true, and (cref:ConformanceDepth_IsEmittedThreadStatic) fails.
 class Hits {
     var ExactSawConformance int32
     var ConformanceSawExact int32
@@ -83,6 +86,17 @@ class Issue4909ConformanceDepthThreadIsolationTests {
 
         Assert.Equal(0, hits.ExactSawConformance)
         Assert.Equal(0, hits.ConformanceSawExact)
+    }
+
+    @Fact
+    func ConformanceDepth_IsEmittedThreadStatic() {
+        let field = typeof(DeclarationBinder).GetField(
+            "conformanceMatchingDepth",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
+        )
+        Assert.True(field != nil, "DeclarationBinder.conformanceMatchingDepth is not a static field")
+        Assert.Equal(typeof(int32), field!!.FieldType)
+        Assert.True(field!!.IsDefined(typeof(ThreadStaticAttribute), false))
     }
 
     @Fact
