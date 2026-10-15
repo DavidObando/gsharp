@@ -109,39 +109,65 @@ def body_for(result: dict, fp: str, prio: str) -> str:
     )
 
 
+def report_one(r: dict, banked: set[str], ref: str, gh: Gh) -> bool:
+    """Files or updates the issue for one red result; True when it filed one."""
+    fp = fingerprint(r)
+    prio = priority(r, banked, ref)
+    found = json.loads(
+        gh.run("issue", "list", "--state", "open", "--label", LABEL, "--search",
+               f'"cs2gs-gate-fp:{fp}" in:body', "--json", "number,labels", read=True) or "[]"
+    )
+    if found:
+        n = str(found[0]["number"])
+        current = {l["name"] for l in found[0].get("labels", [])} & set(PRIORITIES)
+        # Exactly one priority label, never lowered: the highest of the
+        # existing labels and this run's priority (P0 is highest). The
+        # comment reports that retained target, so it agrees with the label.
+        target = min(current | {prio}, key=PRIORITIES.index)
+        gh.run("issue", "comment", n, "--body", f"Still failing.\n\n{body_for(r, fp, target)}")
+        for old in sorted(current - {target}):
+            gh.run("issue", "edit", n, "--remove-label", old)
+        if target not in current:
+            gh.run("issue", "edit", n, "--add-label", target)
+        return False
+    gh.run("issue", "create", "--title", f"cs2gs apps nightly: {r['app']} is red",
+           "--label", LABEL, "--label", "bug", "--label", prio,
+           "--body", body_for(r, fp, prio))
+    return True
+
+
 def process(results: list[dict], banked: set[str], ref: str, gh: Gh) -> int:
+    """Reports every red result. A failure reporting one leg (a gh error, an
+    unexpected field) is printed and the remaining legs are still reported; the
+    gate's exit code is already non-zero because that leg is red."""
     filed = 0
     for r in results:
         if r.get("status") != "red":
             continue
-        fp = fingerprint(r)
-        prio = priority(r, banked, ref)
-        found = json.loads(
-            gh.run("issue", "list", "--state", "open", "--label", LABEL, "--search",
-                   f'"cs2gs-gate-fp:{fp}" in:body', "--json", "number,labels", read=True) or "[]"
-        )
-        if found:
-            n = str(found[0]["number"])
-            current = {l["name"] for l in found[0].get("labels", [])} & set(PRIORITIES)
-            # Exactly one priority label, never lowered: the highest of the
-            # existing labels and this run's priority (P0 is highest). The
-            # comment reports that retained target, so it agrees with the label.
-            target = min(current | {prio}, key=PRIORITIES.index)
-            gh.run("issue", "comment", n, "--body", f"Still failing.\n\n{body_for(r, fp, target)}")
-            for old in sorted(current - {target}):
-                gh.run("issue", "edit", n, "--remove-label", old)
-            if target not in current:
-                gh.run("issue", "edit", n, "--add-label", target)
-        else:
-            gh.run("issue", "create", "--title", f"cs2gs apps nightly: {r['app']} is red",
-                   "--label", LABEL, "--label", "bug", "--label", prio,
-                   "--body", body_for(r, fp, prio))
-            filed += 1
+        try:
+            filed += report_one(r, banked, ref, gh)
+        except Exception as exc:  # fail closed: keep reporting the other legs
+            print(f"could not report {r.get('app')!r}: {exc.__class__.__name__}: {exc}", file=sys.stderr)
     return filed
 
 
 def is_main(ref: str) -> bool:
     return ref in ("main", "refs/heads/main")
+
+
+# Fields fingerprinting and the issue body read as text. Each must be absent
+# or a string: anything else (e.g. `"log_tail": null`) would crash reporting
+# for this and every later leg, so it makes the result malformed instead.
+TEXT_FIELDS = ("summary", "log_tail", "fingerprint", "gate", "run_url")
+
+
+def schema_problem(r: dict) -> str | None:
+    if not (isinstance(r.get("app"), str) and r["app"]):
+        return "has no app name"
+    bad = [k for k in TEXT_FIELDS if k in r and not isinstance(r[k], str)]
+    if bad:
+        return "has non-string " + ", ".join(bad)
+    return None
 
 
 def load_results(results_dir: Path) -> list[dict]:
@@ -154,8 +180,8 @@ def load_results(results_dir: Path) -> list[dict]:
             problem = None if isinstance(r, dict) else "is not a JSON object"
         except (OSError, ValueError) as exc:  # json.JSONDecodeError is a ValueError
             r, problem = None, f"does not parse ({exc.__class__.__name__})"
-        if problem is None and not (isinstance(r.get("app"), str) and r["app"]):
-            problem = "has no app name"
+        if problem is None:
+            problem = schema_problem(r)
         if problem is not None:
             r = {"app": app, "status": "red", "summary": f"malformed leg result: {p.name} {problem}",
                  "fingerprint": "malformed-result", "log_tail": "", "run_url": "(see the workflow run)"}

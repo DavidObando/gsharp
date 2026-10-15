@@ -110,6 +110,49 @@ def main():
                           "--dry-run", "--summary", str(summary), "--expect", "oahu,code-exploder,gsharp-csharp"]) == 1
         assert summary.read_text().count("| red |") == 3, summary.read_text()
 
+    # A non-string text field (e.g. log_tail: null, which fingerprint() would
+    # crash on) makes the result malformed at load time, and reporting it and
+    # the legs after it still runs end to end.
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "b.json").write_text('{"banked": []}')
+        Path(d, "r").mkdir()
+        Path(d, "r", "result-code-exploder.json").write_text(json.dumps({"app": "code-exploder", "status": "red", "log_tail": None}))
+        Path(d, "r", "result-oahu.json").write_text(json.dumps({"app": "oahu", "status": "red", "summary": 3}))
+        Path(d, "r", "result-zz.json").write_text(json.dumps(red("zz")))
+        loaded = gate.load_results(Path(d, "r"))
+        assert [(r["app"], r["status"], r.get("fingerprint")) for r in loaded] == [
+            ("code-exploder", "red", "malformed-result"), ("oahu", "red", "malformed-result"), ("zz", "red", None)], loaded
+        assert "non-string log_tail" in loaded[0]["summary"] and "non-string summary" in loaded[1]["summary"], loaded
+        g = FakeGh([])
+        assert gate.process(loaded, set(), "main", g) == 3
+        assert [w[:2] for w in g.writes] == [["issue", "create"]] * 3, g.writes
+        summary = Path(d, "summary.md")
+        assert gate.main(["--results", str(Path(d, "r")), "--banked", str(Path(d, "b.json")), "--ref", "main",
+                          "--dry-run", "--summary", str(summary)]) == 1
+        assert summary.read_text().count("| red |") == 3, summary.read_text()
+
+    # Reporting one leg can fail (a gh error); the legs after it are still reported.
+    class Flaky(FakeGh):
+        def run(self, *args, read=False):
+            if read and any("oahu" in a for a in self.pending):
+                raise RuntimeError("gh: HTTP 502")
+            return super().run(*args, read=read)
+
+    g = Flaky([])
+    g.pending = []
+    orig_report = gate.report_one
+
+    def tracked(r, banked, ref, gh):
+        gh.pending = [r["app"]]
+        return orig_report(r, banked, ref, gh)
+
+    gate.report_one = tracked
+    try:
+        assert gate.process([red("oahu"), red("code-exploder")], set(), "main", g) == 1
+    finally:
+        gate.report_one = orig_report
+    assert len(g.writes) == 1 and "code-exploder is red" in g.writes[0][3], g.writes
+
     # The summary table: scalar stats as k=v (lists and the source path left
     # out), each leg's red apps listed below, and a non-object stats is n/a.
     table = gate.render_summary([

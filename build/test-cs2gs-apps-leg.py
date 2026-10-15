@@ -69,6 +69,16 @@ def main():
         assert s["bangs"] == 12 and s["baseline"] == "passed", s
         assert s["redApps"] == ["src/C/C.csproj (compile-error, reached compile)"], s
         assert s["source"].endswith("2026-01-02/run.json"), s
+        # A succeeded-but-unverified app (a stage was skipped) is not green: a
+        # leg cannot pass without full validation.
+        unverified = app("src/D/D.csproj", "passed", "passed", "passed", "skipped")
+        unverified["succeeded"], unverified["unverified"] = True, True
+        (d / "unverified.json").write_text(json.dumps({"apps": RUN["apps"][:2] + [unverified]}))
+        assert stats_cmd("--run", str(d / "unverified.json"), "--out", str(out)) == 0
+        s = json.loads(out.read_text())
+        assert (s["green"], s["total"], s["red"]) == (2, 3, 1), s
+        assert s["redApps"] == ["src/D/D.csproj (unverified, reached ilverify)"], s
+        assert leg.leg_result("x", 0, out, "", "", "u")["status"] == "red"
         assert stats_cmd("--run", str(d / "runs" / "2026-01-02" / "run.json"), "--out", str(out),
                          "--floor", "2") == 0
         assert json.loads(out.read_text())["floor"] == 2

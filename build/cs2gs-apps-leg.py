@@ -7,7 +7,8 @@ run.json behind. Two subcommands turn that into what the gate job reads:
 
   stats   Reads a run.json-shaped file (`apps[].succeeded`,
           `apps[].stages[].{stage,status}`) and writes the leg's stats.json:
-          green/total, the floor the leg is judged against, per-stage status
+          green/total (green = succeeded and not unverified, the cs2gs CLI's
+          own verdict rule), the floor the leg is judged against, per-stage status
           counts, the red apps with their failure category, and any extra
           `key=value` numbers the caller measured (readability counters, the
           baseline verdict). The shape is shared by `cs2gs migrate`'s
@@ -67,11 +68,25 @@ def reached(app: dict) -> str:
     return last
 
 
+def is_green(app: dict) -> bool:
+    """Fully green: succeeded AND verified. An app that succeeded only because
+    a stage was skipped is `unverified` (Cs2Gs.Pipeline RunResult) and is not
+    green, the same rule the cs2gs CLI's verdict applies
+    (tools/cs2gs/Cs2Gs.Cli/Program.gs: `a.Succeeded && !a.Unverified`)."""
+    return app.get("succeeded") is True and app.get("unverified") is not True
+
+
+def red_reason(app: dict) -> str:
+    if app.get("succeeded") is True:
+        return "unverified"
+    return app.get("failureCategory") or "unknown"
+
+
 def compute_stats(run: dict, floor: int | None, extras: dict[str, object]) -> dict:
     apps = run.get("apps")
     if not isinstance(apps, list) or not all(isinstance(a, dict) for a in apps):
         raise ValueError("run has no apps[] list of objects")
-    green = sum(1 for a in apps if a.get("succeeded") is True)
+    green = sum(1 for a in apps if is_green(a))
     total = len(apps)
     stats: dict[str, object] = {"green": green, "total": total, "red": total - green,
                                 "floor": total if floor is None else floor}
@@ -83,8 +98,8 @@ def compute_stats(run: dict, floor: int | None, extras: dict[str, object]) -> di
                 stats[f"{name}_{status}"] = n
     stats.update(extras)
     stats["redApps"] = sorted(
-        f"{a.get('appId', '?')} ({a.get('failureCategory') or 'unknown'}, reached {reached(a)})"
-        for a in apps if a.get("succeeded") is not True)
+        f"{a.get('appId', '?')} ({red_reason(a)}, reached {reached(a)})"
+        for a in apps if not is_green(a))
     return stats
 
 
