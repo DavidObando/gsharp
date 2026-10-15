@@ -77,5 +77,8 @@ fi
 green=$(jq '[.apps[] | select(.succeeded)] | length' "$run_json")
 total=$(jq '.apps | length' "$run_json")
 
+# Issue #4856: the leg's stats.json, as the sharded gate writes it.
+trap 'selfmig_write_stats "$run_json" "$baseline" "$work_root/stats.json" "$?"' EXIT
+
 selfmig_measure "$migrated_dir"
 selfmig_apply_baseline "$baseline" "$green" "$total" "$run_json"

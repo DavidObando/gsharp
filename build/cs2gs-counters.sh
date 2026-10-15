@@ -503,6 +503,47 @@ cs2gs_counter_report() {
   rm -rf "$tmp"
 }
 
+# Machine-readable headline counters for a migrated tree, one KEY=VALUE per
+# line, for the leg's stats.json (issue #4856: the per-app accounting of the
+# cs2gs apps nightly). Same definitions as the table above: `bangs` and
+# `synthetic` count code lines, the long-line counts are raw. Prints nothing
+# when the tree does not exist, so a leg that failed before translating simply
+# reports no counters.
+#
+#   cs2gs_counter_stats <migrated-tree>
+cs2gs_counter_stats() {
+  local tree=$1 code_lines
+  [[ -d "$tree" ]] || return 0
+  code_lines=$(mktemp)
+  cs2gs_code_lines "$tree" > "$code_lines"
+  local gs_files bangs synthetic long_lines atomic_long_lines total_long_lines
+  gs_files=$(cs2gs_find_translated_sources "$tree" -print | wc -l | tr -d ' ')
+  bangs=$(cs2gs_count_stream '!!' < "$code_lines")
+  synthetic=$(cs2gs_extract_synthetics < "$code_lines" | wc -l | tr -d ' ')
+  read -r long_lines atomic_long_lines total_long_lines < <(cs2gs_long_line_counts "$tree")
+  rm -f "$code_lines"
+  printf '%s\n' "gs_files=$gs_files" "bangs=$bangs" "synthetic=$synthetic" \
+    "long_lines=$long_lines" "long_lines_atomic=$atomic_long_lines"
+}
+
+# Writes the leg's stats.json (see build/cs2gs-apps-leg.py) from the newest
+# run under <runs-dir>, adding the counters of <migrated-tree>. Best effort: a
+# failure here is reported and returns 0, because the nightly reports a leg
+# without stats.json red anyway (fail-safe), with that as the reason.
+#
+#   cs2gs_write_leg_stats <runs-dir> <migrated-tree> <out> [stats args...]
+cs2gs_write_leg_stats() {
+  local runs_dir=$1 tree=$2 out=$3 kv
+  shift 3
+  local args=("$@")
+  while IFS= read -r kv; do
+    args+=(--extra "$kv")
+  done < <(cs2gs_counter_stats "$tree")
+  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cs2gs-apps-leg.py" stats \
+    --runs-dir "$runs_dir" --out "$out" ${args[@]+"${args[@]}"} \
+    || echo "cs2gs counters: could not write $out." >&2
+}
+
 # Convenience wrapper: print the report to the log AND to the job summary.
 cs2gs_emit_counter_report() {
   local tree=$1 heading=$2 subtitle=${3:-} report

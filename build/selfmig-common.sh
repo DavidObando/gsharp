@@ -185,6 +185,29 @@ selfmig_measure() {
   bangs=$(selfmig_code_grep "$migrated_dir" '!!')
 }
 
+# Issue #4856: the leg's per-app accounting for the cs2gs apps nightly, written
+# as stats.json by build/cs2gs-apps-leg.py from the (merged) run.json. The floor
+# is the baseline's greenFloor, so the nightly judges this leg by the same
+# floor this gate applies. The readability metrics selfmig_measure set (when it
+# has run) and the gate verdict ride along as extras. Best effort: a failure is
+# reported and returns 0, because the nightly reports a leg without stats.json
+# red anyway, with that as the reason.
+#
+#   selfmig_write_stats <run-json> <baseline> <out> <gate-exit-code>
+selfmig_write_stats() {
+  local run_json=$1 baseline=$2 out=$3 gate_exit=$4 verdict=failed key floor
+  (( gate_exit == 0 )) && verdict=passed
+  floor=$(jq -r '.greenFloor' "$baseline") || floor=''
+  local args=(--run "$run_json" --out "$out" --floor "$floor" --extra "baseline=$verdict")
+  for key in labels lifts long_lines long_lines_atomic bangs; do
+    if [[ -n "${!key:-}" ]]; then
+      args+=(--extra "$key=${!key}")
+    fi
+  done
+  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cs2gs-apps-leg.py" stats "${args[@]}" \
+    || echo "self-migration gate: could not write $out." >&2
+}
+
 # Applies the ratcheting baseline to a green count and the measured metrics,
 # printing the canonical one-line summary, the step-summary table, and one
 # `GATE: ...` line per breach. Returns 1 when any threshold is breached.

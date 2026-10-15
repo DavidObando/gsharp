@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Per-app accounting for the cs2gs apps nightly (issues #4856, #4917, #4919).
+
+Every leg of .github/workflows/cs2gs-apps-nightly.yml (gsharp-csharp, oahu,
+code-exploder) runs `cs2gs migrate` (or the sharded equivalent) and leaves a
+run.json behind. Two subcommands turn that into what the gate job reads:
+
+  stats   Reads a run.json-shaped file (`apps[].succeeded`,
+          `apps[].stages[].{stage,status}`) and writes the leg's stats.json:
+          green/total, the floor the leg is judged against, per-stage status
+          counts, the red apps with their failure category, and any extra
+          `key=value` numbers the caller measured (readability counters, the
+          baseline verdict). The shape is shared by `cs2gs migrate`'s
+          runs/<id>/run.json (and summary.json) and by the sharded gate's
+          run.merged.json, so one writer serves all three legs.
+
+              cs2gs-apps-leg.py stats (--run FILE | --runs-dir DIR) --out FILE
+                                      [--floor N] [--extra KEY=VALUE ...]
+
+          --runs-dir picks the newest DIR/*/run.json. A missing or malformed
+          run is an error (exit 2) and writes nothing: no stats is reported
+          red by `result`, never as a pass.
+
+  result  Writes result-<app>.json for the gate job. FAIL-SAFE: the leg is
+          green only when ALL of these hold, otherwise it is red with a note
+          saying which one failed:
+            * the leg's exit code is 0;
+            * stats.json exists and parses to an object with integer
+              green/total and total > 0;
+            * green >= floor (floor defaults to total, so a leg without a
+              baseline must be fully green). This catches a leg script that
+              forgets to propagate cs2gs's exit code.
+
+              cs2gs-apps-leg.py result --app APP --exit-code N --stats FILE
+                                       --out FILE [--log FILE] [--note TEXT]
+                                       [--run-url URL]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+GATE = "cs2gs-apps-nightly"
+# The four cs2gs stages, in run order. A stage the run does not mention is
+# simply absent from the counts.
+STAGES = ("translate", "compile", "ilverify", "test-parity")
+STATUSES = ("passed", "failed", "skipped", "not-applicable")
+LOG_TAIL_CHARS = 8000
+
+
+def newest_run(runs_dir: Path) -> Path:
+    runs = sorted(runs_dir.glob("*/run.json"))
+    if not runs:
+        raise ValueError(f"no */run.json under {runs_dir}")
+    return runs[-1]
+
+
+def reached(app: dict) -> str:
+    """The furthest stage the app attempted (passed or failed), or 'none'."""
+    last = "none"
+    for stage in app.get("stages") or []:
+        if isinstance(stage, dict) and stage.get("status") in ("passed", "failed"):
+            last = str(stage.get("stage"))
+    return last
+
+
+def compute_stats(run: dict, floor: int | None, extras: dict[str, object]) -> dict:
+    apps = run.get("apps")
+    if not isinstance(apps, list) or not all(isinstance(a, dict) for a in apps):
+        raise ValueError("run has no apps[] list of objects")
+    green = sum(1 for a in apps if a.get("succeeded") is True)
+    total = len(apps)
+    stats: dict[str, object] = {"green": green, "total": total, "red": total - green,
+                                "floor": total if floor is None else floor}
+    for name in STAGES:
+        for status in STATUSES:
+            n = sum(1 for a in apps for s in (a.get("stages") or [])
+                    if isinstance(s, dict) and s.get("stage") == name and s.get("status") == status)
+            if n:
+                stats[f"{name}_{status}"] = n
+    stats.update(extras)
+    stats["redApps"] = sorted(
+        f"{a.get('appId', '?')} ({a.get('failureCategory') or 'unknown'}, reached {reached(a)})"
+        for a in apps if a.get("succeeded") is not True)
+    return stats
+
+
+def parse_extra(pairs: list[str]) -> dict[str, object]:
+    extras: dict[str, object] = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not key:
+            raise ValueError(f"--extra expects KEY=VALUE, got {pair!r}")
+        try:
+            extras[key] = int(value)
+        except ValueError:
+            extras[key] = value
+    return extras
+
+
+def cmd_stats(a: argparse.Namespace) -> int:
+    try:
+        run_path = a.run if a.run else newest_run(a.runs_dir)
+        run = json.loads(run_path.read_text(encoding="utf-8"))
+        if not isinstance(run, dict):
+            raise ValueError("run.json is not an object")
+        stats = compute_stats(run, a.floor, parse_extra(a.extra))
+    except (OSError, ValueError) as exc:  # json.JSONDecodeError is a ValueError
+        print(f"cs2gs-apps-leg stats: {exc}", file=sys.stderr)
+        return 2
+    stats["source"] = str(run_path)
+    a.out.parent.mkdir(parents=True, exist_ok=True)
+    a.out.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
+    print(f"cs2gs-apps-leg stats: {stats['green']}/{stats['total']} green (floor {stats['floor']}) -> {a.out}")
+    return 0
+
+
+def load_stats(path: Path) -> tuple[dict | None, str]:
+    """Returns (stats, problem). A non-empty problem means the stats are unusable."""
+    if not path.is_file():
+        return None, "no stats.json: per-app accounting was not produced"
+    try:
+        stats = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, f"unreadable stats.json ({exc.__class__.__name__})"
+    if not isinstance(stats, dict):
+        return None, "stats.json is not an object"
+    green, total, floor = stats.get("green"), stats.get("total"), stats.get("floor", stats.get("total"))
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in (green, total, floor)):
+        return stats, "stats.json has no integer green/total/floor"
+    if total <= 0:
+        return stats, "stats.json counts no apps"
+    return stats, ""
+
+
+def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_url: str) -> dict:
+    stats, problem = load_stats(stats_path)
+    notes = [note] if note else []
+    if problem:
+        notes.append(problem)
+    elif stats["green"] < stats.get("floor", stats["total"]):
+        notes.append("below the floor")
+    status = "green" if code == 0 and not notes else "red"
+    headline = f"leg exited {code}"
+    if stats and not problem:
+        headline += f"; {stats['green']}/{stats['total']} apps green (floor {stats.get('floor', stats['total'])})"
+    summary = "; ".join([headline, *notes])
+    return {"app": app, "gate": GATE, "status": status, "summary": summary, "stats": stats,
+            "log_tail": log[-LOG_TAIL_CHARS:], "run_url": run_url}
+
+
+def cmd_result(a: argparse.Namespace) -> int:
+    log = ""
+    if a.log and a.log.is_file():
+        log = a.log.read_text(encoding="utf-8", errors="replace")
+    result = leg_result(a.app, a.exit_code, a.stats, log, a.note, a.run_url)
+    a.out.parent.mkdir(parents=True, exist_ok=True)
+    a.out.write_text(json.dumps(result), encoding="utf-8")
+    print(f"cs2gs-apps-leg result: {a.app} is {result['status']}: {result['summary']}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("stats")
+    src = s.add_mutually_exclusive_group(required=True)
+    src.add_argument("--run", type=Path)
+    src.add_argument("--runs-dir", type=Path)
+    s.add_argument("--out", type=Path, required=True)
+    s.add_argument("--floor", type=int)
+    s.add_argument("--extra", action="append", default=[])
+    r = sub.add_parser("result")
+    r.add_argument("--app", required=True)
+    r.add_argument("--exit-code", type=int, required=True)
+    r.add_argument("--stats", type=Path, required=True)
+    r.add_argument("--out", type=Path, required=True)
+    r.add_argument("--log", type=Path)
+    r.add_argument("--note", default="")
+    r.add_argument("--run-url", default="(see the workflow run)")
+    a = ap.parse_args(argv)
+    return cmd_stats(a) if a.cmd == "stats" else cmd_result(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -59,6 +59,12 @@ grep -Fq '| lines >300 chars (total) | n/a | 4 |' <<< "$report"
 selfmig_measure "$tree"
 assert_eq "$long_lines $long_lines_atomic" "1 3" "selfmig_measure long lines"
 
+# Issue #4856: the machine-readable counters the apps nightly folds into each
+# leg's stats.json agree with the table above, and a missing tree prints none.
+counter_stats=$(TMPDIR="$scratch" cs2gs_counter_stats "$tree" | tr '\n' ' ')
+assert_eq "$counter_stats" "gs_files=1 bangs=0 synthetic=0 long_lines=1 long_lines_atomic=3 " "cs2gs_counter_stats"
+assert_eq "$(cs2gs_counter_stats "$scratch/no-such-tree")" "" "cs2gs_counter_stats on a missing tree"
+
 # Issue #4082: a backtick that is NOT a raw-string delimiter must not be
 # mistaken for one. The old counter toggled an in-raw flag on per-line backtick
 # parity, so a backtick inside a "..." literal, inside a // comment, or as a

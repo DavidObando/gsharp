@@ -20,7 +20,24 @@ P0 only when a previously banked app (listed in the banked file) goes red on
 `main`; every other red app is P1. An update never lowers a priority and
 raises it to P0 when the rule now applies.
 
-    cs2gs-apps-gate-issues.py --results DIR --banked FILE --ref REF [--dry-run]
+    cs2gs-apps-gate-issues.py --results DIR --banked FILE --ref REF
+        [--expect APP,APP,...] [--run-url URL] [--summary FILE] [--dry-run]
+
+Issues are filed ONLY for a run on `main` (the schedule, or a dispatch with
+`--ref main`). A run on any other ref (a branch proving a workflow change)
+prints what it would file and touches no issue, so iterating on a branch
+cannot spam or comment on the real gate issues; its exit code still reports
+the red apps.
+
+Fail-safe input handling (issue #4887): a result file that does not parse, is
+not an object, or has no app name becomes a RED result named after its file
+(`result-<app>.json`), and an app listed in `--expect` with no result at all is
+red too. Neither can stop the report or pass as green.
+
+`--summary FILE` appends the end-of-run markdown table (one row per app with
+its status, summary and stats, then each red leg's red apps) to FILE, e.g.
+$GITHUB_STEP_SUMMARY. It is rendered from the same normalized results, so a
+malformed result cannot break it.
 
 Needs `gh` and a token with `issues: write`. `--dry-run` prints the gh calls
 instead of making them (used by build/test-cs2gs-apps-gate-issues.py).
@@ -54,7 +71,7 @@ def fingerprint(result: dict) -> str:
 
 
 def priority(result: dict, banked: set[str], ref: str) -> str:
-    return "P0" if result["app"] in banked and ref in ("main", "refs/heads/main") else "P1"
+    return "P0" if result["app"] in banked and is_main(ref) else "P1"
 
 
 class Gh:
@@ -73,11 +90,19 @@ class Gh:
 
 
 def body_for(result: dict, fp: str, prio: str) -> str:
-    tail = result.get("log_tail", "").strip()
+    tail = str(result.get("log_tail") or "").strip()
+    stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+    accounting = ""
+    if stats:
+        green, total = stats.get("green", "?"), stats.get("total", "?")
+        accounting = f"- Apps: {green}/{total} green (floor {stats.get('floor', total)})\n"
+        red_apps = stats.get("redApps") if isinstance(stats.get("redApps"), list) else []
+        accounting += "".join(f"  - red: {a}\n" for a in red_apps[:30])
     return (
         f"{MARKER.format(fp)}\n"
         f"The `{result.get('gate', 'cs2gs-apps-nightly')}` gate failed for **{result['app']}**.\n\n"
         f"- Summary: {result.get('summary', '(none)')}\n"
+        f"{accounting}"
         f"- Run: {result.get('run_url', '(unknown)')}\n"
         f"- Priority: {prio} (P0 only when a banked app goes red on main)\n\n"
         "Gate report (log tail):\n\n```text\n" + tail[-6000:] + "\n```\n"
@@ -115,30 +140,92 @@ def process(results: list[dict], banked: set[str], ref: str, gh: Gh) -> int:
     return filed
 
 
+def is_main(ref: str) -> bool:
+    return ref in ("main", "refs/heads/main")
+
+
+def load_results(results_dir: Path) -> list[dict]:
+    """Every result-*.json under results_dir; a malformed one becomes red."""
+    results = []
+    for p in sorted(results_dir.rglob("result-*.json")):
+        app = p.stem[len("result-"):] or p.stem
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+            problem = None if isinstance(r, dict) else "is not a JSON object"
+        except (OSError, ValueError) as exc:  # json.JSONDecodeError is a ValueError
+            r, problem = None, f"does not parse ({exc.__class__.__name__})"
+        if problem is None and not (isinstance(r.get("app"), str) and r["app"]):
+            problem = "has no app name"
+        if problem is not None:
+            r = {"app": app, "status": "red", "summary": f"malformed leg result: {p.name} {problem}",
+                 "fingerprint": "malformed-result", "log_tail": "", "run_url": "(see the workflow run)"}
+        results.append(r)
+    return results
+
+
+def cell(text: object) -> str:
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def render_summary(results: list[dict]) -> str:
+    lines = ["### cs2gs apps nightly", "", "| app | status | summary | stats |", "|---|---|---|---|"]
+    for r in results:
+        stats = r.get("stats") if isinstance(r.get("stats"), dict) else {}
+        first = ("green", "total", "floor", "red")
+        keys = [k for k in first if k in stats] + sorted(k for k in stats if k not in first)
+        shown = ", ".join(f"{k}={stats[k]}" for k in keys
+                          if isinstance(stats[k], (int, float, str)) and k != "source") or "n/a"
+        lines.append(f"| {cell(r['app'])} | {cell(r.get('status'))} | {cell(r.get('summary', ''))} | {cell(shown)} |")
+    for r in results:
+        stats = r.get("stats") if isinstance(r.get("stats"), dict) else {}
+        red_apps = stats.get("redApps")
+        if isinstance(red_apps, list) and red_apps:
+            lines += ["", f"**{r['app']}**: {len(red_apps)} red app(s)", ""]
+            lines += [f"- {cell(a)}" for a in red_apps[:50]]
+            if len(red_apps) > 50:
+                lines.append(f"- ... {len(red_apps) - 50} more")
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", type=Path, required=True)
     ap.add_argument("--banked", type=Path, required=True)
     ap.add_argument("--ref", required=True)
     ap.add_argument("--expect", default="", help="comma-separated apps that must have a result; a missing one counts as red")
+    ap.add_argument("--run-url", default="(see the workflow run)", help="the run, for results synthesized here")
+    ap.add_argument("--summary", type=Path, help="append the end-of-run markdown table to this file")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
-    results = [json.loads(p.read_text()) for p in sorted(a.results.rglob("result-*.json"))]
+    results = load_results(a.results) if a.results.is_dir() else []
     if not results and not a.expect:
         print("no result-*.json files found: refusing to report a vacuous green", file=sys.stderr)
         return 2
+    for r in results:
+        if r.get("run_url") in (None, "", "(see the workflow run)"):
+            r["run_url"] = a.run_url
     for app in filter(None, a.expect.split(",")):
         if not any(r["app"] == app for r in results):
             results.append({"app": app, "status": "red", "summary": "no result file: the leg crashed before reporting",
-                            "fingerprint": "missing-result", "log_tail": "", "run_url": "(see the workflow run)"})
+                            "fingerprint": "missing-result", "log_tail": "", "run_url": a.run_url})
     # A status other than exactly green or red is a malformed result, never a pass.
     for r in results:
         if r.get("status") not in ("green", "red"):
             r["summary"] = f"invalid status {r.get('status')!r} in the leg result; {r.get('summary', '')}"
             r["fingerprint"] = r.get("fingerprint") or "invalid-status"
             r["status"] = "red"
+    if a.summary:
+        try:
+            with a.summary.open("a", encoding="utf-8") as handle:
+                handle.write(render_summary(results))
+        except Exception as exc:  # best effort: the report below must still run
+            print(f"could not write the summary table: {exc}", file=sys.stderr)
     banked = set(json.loads(a.banked.read_text()).get("banked", []))
-    process(results, banked, a.ref, Gh(a.dry_run))
+    dry_run = a.dry_run
+    if not is_main(a.ref) and not dry_run:
+        print(f"ref {a.ref!r} is not main: reporting only, no issue is filed or updated.")
+        dry_run = True
+    process(results, banked, a.ref, Gh(dry_run))
     reds = [r["app"] for r in results if r.get("status") == "red"]
     print(f"{len(results)} apps, {len(reds)} red: {', '.join(reds) or 'none'}")
     return 1 if reds else 0

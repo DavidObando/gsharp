@@ -311,6 +311,9 @@ jobs:
       - name: Verify the cs2gs apps gate issue logic
         run: python3 build/test-cs2gs-apps-gate-issues.py
 
+      - name: Verify the cs2gs apps nightly per-leg accounting
+        run: python3 build/test-cs2gs-apps-leg.py
+
       - name: Verify the self-host compiler benchmark gate
         run: |
           # The benchmark measures peak memory with GNU time.

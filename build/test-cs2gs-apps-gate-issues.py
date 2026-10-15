@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Proves the cs2gs apps gate issue logic: dedup, priority rule, vacuous input."""
+"""Proves the cs2gs apps gate issue logic: dedup, priority rule, vacuous and
+malformed input, the summary table, and that branch runs file no issues."""
 import importlib.util
 import json
 import tempfile
@@ -92,6 +93,77 @@ def main():
         Path(d, "result-oahu.json").write_text(json.dumps({"app": "oahu", "status": "green"}))
         assert gate.main(base) == 0
         assert gate.main(base + ["--expect", "oahu,code-exploder"]) == 1
+    # Issue #4887: a truncated, non-object or nameless result is red, named
+    # after its file, and never stops the report.
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "b.json").write_text('{"banked": []}')
+        Path(d, "r").mkdir()
+        Path(d, "r", "result-oahu.json").write_text('{"app": "oahu", "status": "gre')
+        Path(d, "r", "result-code-exploder.json").write_text("[]")
+        Path(d, "r", "result-gsharp-csharp.json").write_text('{"status": "green"}')
+        loaded = {r["app"]: r for r in gate.load_results(Path(d, "r"))}
+        assert set(loaded) == {"oahu", "code-exploder", "gsharp-csharp"}, loaded
+        assert all(r["status"] == "red" and r["fingerprint"] == "malformed-result" for r in loaded.values()), loaded
+        assert "does not parse" in loaded["oahu"]["summary"] and "not a JSON object" in loaded["code-exploder"]["summary"]
+        summary = Path(d, "summary.md")
+        assert gate.main(["--results", str(Path(d, "r")), "--banked", str(Path(d, "b.json")), "--ref", "main",
+                          "--dry-run", "--summary", str(summary), "--expect", "oahu,code-exploder,gsharp-csharp"]) == 1
+        assert summary.read_text().count("| red |") == 3, summary.read_text()
+
+    # The summary table: scalar stats as k=v (lists and the source path left
+    # out), each leg's red apps listed below, and a non-object stats is n/a.
+    table = gate.render_summary([
+        {"app": "oahu", "status": "red", "summary": "a|b", "stats": {"total": 15, "green": 9, "bangs": 2, "source": "/x",
+                                                                    "redApps": ["src/X (compile-error, reached compile)"]}},
+        {"app": "code-exploder", "status": "green", "summary": "ok", "stats": "garbage"},
+    ])
+    assert "| oahu | red | a\\|b | green=9, total=15, bangs=2 |" in table, table
+    assert "| code-exploder | green | ok | n/a |" in table, table
+    assert "**oahu**: 1 red app(s)" in table and "- src/X (compile-error, reached compile)" in table, table
+    assert "/x" not in table
+
+    # The issue body carries the leg's accounting.
+    body = gate.body_for({"app": "oahu", "summary": "s", "stats": {"green": 9, "total": 15, "floor": 15,
+                                                                   "redApps": ["src/X (c, reached compile)"]}},
+                         "fp", "P1")
+    assert "- Apps: 9/15 green (floor 15)" in body and "  - red: src/X (c, reached compile)" in body, body
+
+    # Branch runs never file or update issues; main runs do. --run-url reaches
+    # the synthesized missing-result entry.
+    made = []
+
+    class Recording(gate.Gh):
+        def __init__(self, dry_run):
+            super().__init__(dry_run)
+            made.append(dry_run)
+
+        def run(self, *args, read=False):
+            if not self.dry_run and not read:
+                self.calls.append(list(args))
+                return ""
+            return "[]" if read else ""
+
+    real_gh, gate.Gh = gate.Gh, Recording
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "b.json").write_text('{"banked": []}')
+            base = ["--results", d, "--banked", str(Path(d, "b.json")), "--expect", "oahu", "--run-url", "https://run/1"]
+            assert gate.main(base + ["--ref", "cs2gs/fix-nightly"]) == 1
+            assert made == [True], made
+            assert gate.main(base + ["--ref", "main"]) == 1
+            assert made == [True, False], made
+            assert gate.main(base + ["--ref", "refs/heads/main", "--dry-run"]) == 1
+            assert made == [True, False, True], made
+            loaded = []
+            orig_process = gate.process
+            gate.process = lambda results, banked, ref, gh: loaded.extend(results) or 0
+            try:
+                gate.main(base + ["--ref", "main"])
+            finally:
+                gate.process = orig_process
+            assert loaded[0]["run_url"] == "https://run/1" and loaded[0]["status"] == "red", loaded
+    finally:
+        gate.Gh = real_gh
     print("OK")
 
 
