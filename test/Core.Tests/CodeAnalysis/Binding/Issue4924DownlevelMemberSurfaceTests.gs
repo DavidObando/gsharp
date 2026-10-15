@@ -114,11 +114,55 @@ class Reader {
             (assembly Assembly) -> assembly.GetName().Name == "System.Private.CoreLib"
         )
         Assert.True(resolver.Assemblies.Length <= references.Count)
-        let projected = resolver.GetMemberLookupType(typeof(string))
+        Assert.True(resolver.TryGetMemberLookupType(typeof(string), out var projected))
         Assert.Same(stringType, projected)
-        Assert.Same(projected, resolver.GetMemberLookupType(typeof(string)))
+        Assert.True(resolver.TryGetMemberLookupType(typeof(string), out var again))
+        Assert.Same(projected, again)
         // A reference-set type is never re-projected by name.
-        Assert.Same(stringType, resolver.GetMemberLookupType(stringType))
+        Assert.True(resolver.TryGetMemberLookupType(stringType, out var unchanged))
+        Assert.Same(stringType, unchanged)
+        // A host type netstandard2.0 does not declare has no members to bind.
+        Assert.False(resolver.TryGetMemberLookupType(typeof(CollectionExtensions), out _))
+    }
+
+    /// A type the host fallback supplies only to resolve a dependency's signature (here
+    /// `System.DateOnly` out of `System.Private.CoreLib`, from a dependency built for the
+    /// host runtime) is not part of the netstandard2.0 surface: binding a member on it
+    /// reports GS0546 instead of referencing the host's member.
+    @Fact
+    func HostFallbackReceiver_FromADependency_IsNotBound() {
+        let directory = Directory.CreateTempSubdirectory("gs_4924_").FullName
+        try {
+            let dependencyPath = Path.Combine(directory, "Dep.dll")
+            File.WriteAllBytes(dependencyPath, CompileOrFail(nil, `package Dep
+
+import System
+
+class Clock {
+    func Today() DateOnly -> DateOnly(2026, 10, 15)
+}
+`))
+            let references = List[string](NetStandardReferences())
+            references.Add(dependencyPath)
+            let (diagnostics, image) = Compile(references, `package App
+
+import Dep
+
+class Use {
+    func Next(c Clock) object -> c.Today().AddDays(1)
+}
+`)
+            Assert.Null(image)
+            Assert.Contains(
+                diagnostics,
+                (d Diagnostic) -> d.Id == "GS0546" && d.Message.Contains(
+                    "System.DateOnly.AddDays",
+                    StringComparison.Ordinal
+                )
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
     }
 
     shared {

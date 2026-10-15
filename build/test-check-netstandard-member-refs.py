@@ -187,7 +187,23 @@ def netstandard() -> bytes:
     outer = image.add_typedef("System", "Outer", coded("TypeDefOrRef", td, obj))
     image.add_typedef("", "Inner", coded("TypeDefOrRef", td, obj), enclosing=outer)
     image.field("Value", bytes([0x06, I4]))
+    # Base<T>.Add(T), and Derived : Base<string>, which inherits it as Add(string).
+    generic_base = image.add_typedef("System", "Base`1", coded("TypeDefOrRef", td, obj))
+    image.method("Add", method_sig(bytes([VOID]), bytes([VAR, 0])))
+    base_of_string = image.type_spec(bytes([GENERICINST]) + class_of(td, generic_base) + bytes([1, STRING]))
+    image.add_typedef("System", "Derived", coded("TypeDefOrRef", check.TYPESPEC, base_of_string))
     assert string
+    return image.build()
+
+
+def contracts(name: str, *, with_api: bool) -> bytes:
+    """An assembly declaring `Contracts.Token`; with `with_api`, also `Contracts.Api.Accept(Token)`."""
+    image = Image(name)
+    obj = coded("TypeDefOrRef", check.TYPEREF, image.type_ref("netstandard", "System", "Object"))
+    token = image.add_typedef("Contracts", "Token", obj)
+    if with_api:
+        image.add_typedef("Contracts", "Api", obj)
+        image.method("Accept", method_sig(bytes([VOID]), class_of(check.TYPEDEF, token)))
     return image.build()
 
 
@@ -198,7 +214,16 @@ def system_runtime_facade() -> bytes:
     return image.build()
 
 
-def checked_image(*, bad_split: bool = False, missing_type: bool = False, missing_member: bool = False, host_ref: bool = False) -> bytes:
+def checked_image(
+    *,
+    bad_split: bool = False,
+    missing_type: bool = False,
+    missing_member: bool = False,
+    host_ref: bool = False,
+    token_from: str | None = None,
+    rank_one_split: bool = False,
+    bad_inherited: bool = False,
+) -> bytes:
     """A netstandard2.0 library. By default every reference resolves; each flag adds one bad reference."""
     image = Image("Lib")
     obj = image.type_ref("netstandard", "System", "Object")
@@ -219,6 +244,19 @@ def checked_image(*, bad_split: bool = False, missing_type: bool = False, missin
     outer = image.type_ref("netstandard", "System", "Outer")
     inner = image.type_ref("netstandard", "", "Inner", enclosing=outer)
     image.member_ref(check.TYPEREF, inner, "Value", bytes([0x06, I4]))
+    # Inherited from a generic base: Derived::Add(string) is Base<string>.Add(!0).
+    derived = image.type_ref("netstandard", "System", "Derived")
+    image.member_ref(check.TYPEREF, derived, "Add", method_sig(bytes([VOID]), bytes([STRING])))
+    if token_from is not None:
+        # Api.Accept is declared over A's Token; B declares a Token with the same full name.
+        api = image.type_ref("A", "Contracts", "Api")
+        token = image.type_ref(token_from, "Contracts", "Token")
+        image.member_ref(check.TYPEREF, api, "Accept", method_sig(bytes([VOID]), class_of(check.TYPEREF, token)))
+    if rank_one_split:
+        # char[*], a rank-one multi-dimensional array: not the vector char[].
+        image.member_ref(check.TYPEREF, string, "Split", method_sig(bytes([SZARRAY, STRING]), bytes([0x14, CHAR, 1, 0, 0])))
+    if bad_inherited:
+        image.member_ref(check.TYPEREF, derived, "Add", method_sig(bytes([VOID]), bytes([I4])))
     if bad_split:
         image.member_ref(
             check.TYPEREF,
@@ -251,6 +289,8 @@ class MemberReferenceCheckTests(unittest.TestCase):
         self.surface.mkdir()
         (self.surface / "netstandard.dll").write_bytes(netstandard())
         (self.surface / "System.Runtime.dll").write_bytes(system_runtime_facade())
+        (self.surface / "A.dll").write_bytes(contracts("A", with_api=True))
+        (self.surface / "B.dll").write_bytes(contracts("B", with_api=False))
 
     def write(self, name: str, data: bytes) -> Path:
         path = self.dir / name
@@ -276,7 +316,27 @@ class MemberReferenceCheckTests(unittest.TestCase):
     def test_split_char_string_split_options_on_netstandard_fails(self) -> None:
         code, out = self.check(self.write("Bad.dll", checked_image(bad_split=True)))
         self.assertEqual(code, 1, out)
-        self.assertIn("System.String::Split(char, System.StringSplitOptions) : string[]", out)
+        self.assertIn("[netstandard]System.String::Split(char, [netstandard]System.StringSplitOptions) : string[]", out)
+        self.assertEqual(out.count("does not exist"), 1, out)
+
+    def test_same_named_type_from_another_assembly_does_not_match(self) -> None:
+        code, out = self.check(self.write("Same.dll", checked_image(token_from="A")))
+        self.assertEqual(code, 0, out)
+        code, out = self.check(self.write("Other.dll", checked_image(token_from="B")))
+        self.assertEqual(code, 1, out)
+        self.assertIn("[A]Contracts.Api::Accept([B]Contracts.Token) : void", out)
+
+    def test_rank_one_array_is_not_the_vector_array(self) -> None:
+        code, out = self.check(self.write("Rank.dll", checked_image(rank_one_split=True)))
+        self.assertEqual(code, 1, out)
+        self.assertIn("System.String::Split(char[*]) : string[]", out)
+
+    def test_member_inherited_from_a_generic_base_reads_with_its_arguments(self) -> None:
+        # The default image's Derived::Add(string) resolves (asserted by the passing case);
+        # Add(int) does not exist on Base<string>.
+        code, out = self.check(self.write("Inherited.dll", checked_image(bad_inherited=True)))
+        self.assertEqual(code, 1, out)
+        self.assertIn("[netstandard]System.Derived::Add(int) : void", out)
         self.assertEqual(out.count("does not exist"), 1, out)
 
     def test_type_the_surface_does_not_declare_fails(self) -> None:

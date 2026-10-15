@@ -581,9 +581,9 @@ class ReferenceResolver : IDisposable {
         return nestedType != nil
     }
 
-    /// Issue #4924: returns the type whose members binding may see for
-    /// [`type`](paramref), that is, its declaration in this compilation's reference
-    /// set.
+    /// Issue #4924: finds the type whose members binding may see for
+    /// [`type`](paramref), that is, its declaration on this compilation's target
+    /// surface.
     /// @remarks The predefined type symbols (`string`, `object`, `int32`, ...) carry the
     /// gsc host's `System.Private.CoreLib` types, which have every member of the host
     /// runtime. Enumerating members on them binds a call to an overload the target
@@ -591,23 +591,64 @@ class ReferenceResolver : IDisposable {
     /// `Split(char, StringSplitOptions)`, which .NET Framework does not have
     /// (MissingMethodException in Visual Studio's MSBuild), instead of the target's
     /// `Split(params char[])`. Every imported-member lookup on a receiver therefore goes
-    /// through this method. A type from the reference set is returned unchanged: it
-    /// already has the target's identity, and projecting it again by name could pick a
-    /// same-named type from another assembly (#4381). The (cref:Default) resolver has no
-    /// separate target, so it returns the host type. Loads nothing: the lookup is the
-    /// resolver's cached name index.
+    /// through this method, and a host type is projected onto its reference-set
+    /// declaration. A type from the reference set keeps its identity: projecting it again
+    /// by name could pick a same-named type from another assembly (#4381).
+    ///
+    /// For a downlevel target (cref:TargetsDownlevelFramework) a type the target does not
+    /// declare has no members binding may use: a host type the reference set cannot
+    /// project, or a type the host fallback supplied only to resolve a dependency's
+    /// signature (for example `System.DateOnly` out of `System.Private.CoreLib`). The
+    /// method answers `false` for it and the caller reports GS0546. On any other target
+    /// the host fallback is part of the runtime the output runs on, and such a type is
+    /// used as is, as before. The (cref:Default) resolver has no separate target, so it
+    /// keeps the host type. Loads nothing: projection is the resolver's cached name index.
     /// @param type The CLR type of a receiver.
-    /// @returns The reference-set type, or the input when it cannot be projected (a type the
-    /// target does not declare at all; emit rejects any member reference to it).
-    internal func GetMemberLookupType(type Type) Type {
-        if metadataContext == nil || type.GetType() != typeof(object).GetType() {
-            return type
+    /// @param lookupType The type to enumerate members on; [`type`](paramref) itself when the
+    /// method answers `false`.
+    /// @returns `false` when the compilation targets a downlevel framework that does not
+    /// declare [`type`](paramref).
+    internal func TryGetMemberLookupType(type Type, out lookupType Type) bool {
+        lookupType = type
+        if metadataContext == nil {
+            return true
         }
-        try {
-            return MapClrTypeToReferences(type) ?? type
-        } catch (InvalidOperationException) {
-            return type
+        if type.GetType() == typeof(object).GetType() {
+            try {
+                if MapClrTypeToReferences(type) is Type projected {
+                    lookupType = projected
+                    return true
+                }
+            } catch (InvalidOperationException) {
+                // The reference set does not declare the type (or one of its arguments).
+
+            }
+        } else if !IsHostFallback(
+            if type.IsConstructedGenericType {
+                type.GetGenericTypeDefinition()
+            } else {
+                type
+            }
+        ) {
+            return true
         }
+        return !IsDownlevelTarget()
+    }
+
+    // Issue #4924: TargetsDownlevelFramework, computed once per resolver (0 = not yet
+    // computed, 1 = downlevel, 2 = not). The value cannot change, so a racing first
+    // computation stores the same answer.
+    private var downlevelTarget int32 = 0
+
+    private func IsDownlevelTarget() bool {
+        if downlevelTarget == 0 {
+            downlevelTarget = if TargetsDownlevelFramework() {
+                1
+            } else {
+                2
+            }
+        }
+        return downlevelTarget == 1
     }
 
     /// Projects a CLR (cref:Type) that may originate from the gsc host

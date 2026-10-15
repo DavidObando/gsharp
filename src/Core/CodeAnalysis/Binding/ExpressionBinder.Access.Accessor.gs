@@ -1229,7 +1229,9 @@ internal partial class ExpressionBinder {
         // share identity with imported argument types under SDK compilation,
         // and so only the target framework's members are candidates (#4924;
         // the same decision as the instance-receiver lookups).
-        let receiverType = $scope.References!!.GetMemberLookupType(predefinedClrType)
+        if !$scope.References!!.TryGetMemberLookupType(predefinedClrType, out var receiverType) {
+            return false
+        }
         classSymbol = ImportedClassSymbol(receiverType, declaration, references: $scope.References)
         return true
     }

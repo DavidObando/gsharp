@@ -343,6 +343,19 @@ class Surface:
 
     def __init__(self, assemblies: dict[str, Metadata]) -> None:
         self.assemblies = assemblies
+        # The core library: the assembly that declares System.Object itself.
+        self.core = next(
+            (m for m in assemblies.values() if m.find_top_level("System", "Object") is not None and m.row(TYPEDEF, m.find_top_level("System", "Object"))[3] == 0),
+            None,
+        )
+
+    def canonical_name(self, metadata: Metadata, row: int) -> str:
+        """A declaration's name qualified by its declaring assembly, so same-named types in
+        different assemblies differ while a forwarded spelling matches its declaration."""
+        full_name = metadata.typedef_full_name(row)
+        if metadata is self.core and full_name in PRIMITIVE_NAMES:
+            return PRIMITIVE_NAMES[full_name]
+        return f"[{metadata.name}]{full_name}"
 
     def resolve(self, assembly: str, namespace: str, path: list[str], depth: int = 0) -> tuple[Metadata, int] | None:
         """Resolves type `namespace.path[0]/path[1]/...` declared or forwarded by `assembly`."""
@@ -398,11 +411,14 @@ class Surface:
 class SignatureReader:
     """Decodes signature blobs to a canonical text in which every type is named by its declaration."""
 
-    def __init__(self, surface: Surface, metadata: Metadata, blob: bytes) -> None:
+    def __init__(self, surface: Surface, metadata: Metadata, blob: bytes, type_arguments: list[str] | None = None) -> None:
         self.surface = surface
         self.metadata = metadata
         self.blob = blob
         self.at = 0
+        # The enclosing type's generic arguments: a `!n` in the blob reads as the nth
+        # argument, so an inherited member is compared as the derived type sees it.
+        self.type_arguments = type_arguments
 
     def u(self) -> int:
         value, used = compressed(self.blob, self.at)
@@ -417,14 +433,13 @@ class SignatureReader:
     def type_name(self, coded: int) -> str:
         table, row = decode_coded("TypeDefOrRef", coded)
         if table == TYPESPEC:
-            return SignatureReader(self.surface, self.metadata, self.metadata.blob(self.metadata.row(TYPESPEC, row)[0])).type()
+            spec = self.metadata.blob(self.metadata.row(TYPESPEC, row)[0])
+            return SignatureReader(self.surface, self.metadata, spec, self.type_arguments).type()
         resolved = self.surface.resolve_type_handle(self.metadata, coded)
         if resolved is not None:
-            full_name = resolved[0].typedef_full_name(resolved[1])
-            return PRIMITIVE_NAMES.get(full_name, full_name)
+            return self.surface.canonical_name(*resolved)
         # Unresolvable: named as written, so it can still match nothing on the surface.
-        scope, name, namespace = self.metadata.row(TYPEREF, row)
-        return "?" + self.metadata.string(namespace) + "." + self.metadata.string(name)
+        return "?" + type_ref_label(self.metadata, row)
 
     def type(self) -> str:
         code = self.byte()
@@ -447,9 +462,13 @@ class SignatureReader:
                 self.u()
             for _ in range(self.u()):
                 self.u()  # lower bounds are signed compressed; only their width matters here
-            return f"{element}[{',' * (rank - 1)}]"
+            # A rank-one ARRAY (`T[*]`) is a different type from the vector `T[]`.
+            return f"{element}[{'*' if rank == 1 else ',' * (rank - 1)}]"
         if code == 0x13:
-            return f"!{self.u()}"
+            index = self.u()
+            if self.type_arguments is not None and index < len(self.type_arguments):
+                return self.type_arguments[index]
+            return f"!{index}"
         if code == 0x1E:
             return f"!!{self.u()}"
         if code == 0x15:  # GENERICINST
@@ -481,6 +500,14 @@ class SignatureReader:
             raise MetadataError("not a field signature")
         return self.type()
 
+    def generic_arguments(self) -> list[str]:
+        """The canonical type arguments of a GENERICINST TypeSpec blob."""
+        if self.byte() != 0x15:
+            raise MetadataError("not a generic instantiation")
+        self.byte()
+        self.u()
+        return [self.type() for _ in range(self.u())]
+
     def member(self) -> tuple[bool, str]:
         """(is field, canonical signature) of a MemberRef signature."""
         if self.blob and self.blob[0] == 0x06:
@@ -488,38 +515,59 @@ class SignatureReader:
         return False, self.method()
 
 
+def inherited(surface: Surface, metadata: Metadata, coded: int, type_arguments: list[str] | None) -> tuple[Metadata, int, list[str] | None] | None:
+    """A base type or interface (a TypeDefOrRef coded index of `metadata`) with the generic
+    arguments it is instantiated with, read in the deriving type's own argument context."""
+    resolved = surface.resolve_type_handle(metadata, coded)
+    if resolved is None:
+        return None
+    table, row = decode_coded("TypeDefOrRef", coded)
+    arguments = None
+    if table == TYPESPEC:
+        spec = metadata.blob(metadata.row(TYPESPEC, row)[0])
+        arguments = SignatureReader(surface, metadata, spec, type_arguments).generic_arguments()
+    return resolved[0], resolved[1], arguments
+
+
 def find_member(surface: Surface, declaring: tuple[Metadata, int], name: str, is_field: bool, signature: str) -> bool:
-    """Whether `declaring`, one of its base types or one of its base interfaces declares the member."""
-    pending = [declaring]
-    seen: set[tuple[int, int]] = set()
+    """Whether `declaring`, one of its base types or one of its base interfaces declares the member.
+
+    `signature` is the MemberRef's canonical signature; its `!n` name the declaring type's
+    own generic parameters. A member found on a generic base is read with the base's
+    arguments substituted (`Base<T>.Add(T)` reached from `Derived : Base<string>` reads as
+    `Add(string)`)."""
+    pending: list[tuple[Metadata, int, list[str] | None]] = [(declaring[0], declaring[1], None)]
+    seen: set[tuple[int, int, str]] = set()
     while pending:
-        metadata, row = pending.pop()
-        if (id(metadata), row) in seen:
+        metadata, row, type_arguments = pending.pop()
+        key = (id(metadata), row, repr(type_arguments))
+        if key in seen:
             continue
-        seen.add((id(metadata), row))
+        seen.add(key)
         typedef = metadata.row(TYPEDEF, row)
         if is_field:
             for field in metadata.member_range(TYPEDEF, row, 4, FIELD):
                 _, field_name, field_signature = metadata.row(FIELD, field)
                 if metadata.string(field_name) == name and SignatureReader(
-                    surface, metadata, metadata.blob(field_signature)
+                    surface, metadata, metadata.blob(field_signature), type_arguments
                 ).field() == signature:
                     return True
         else:
             for method in metadata.member_range(TYPEDEF, row, 5, METHODDEF):
                 method_row = metadata.row(METHODDEF, method)
                 if metadata.string(method_row[3]) == name and SignatureReader(
-                    surface, metadata, metadata.blob(method_row[4])
+                    surface, metadata, metadata.blob(method_row[4]), type_arguments
                 ).method() == signature:
                     return True
         if name in (".ctor", ".cctor"):
             return False
-        base = surface.resolve_type_handle(metadata, typedef[3]) if typedef[3] else None
-        if base is not None:
-            pending.append(base)
+        if typedef[3]:
+            base = inherited(surface, metadata, typedef[3], type_arguments)
+            if base is not None:
+                pending.append(base)
         for implementer, interface in metadata.tables.get(INTERFACEIMPL, []):
             if implementer == row:
-                resolved = surface.resolve_type_handle(metadata, interface)
+                resolved = inherited(surface, metadata, interface, type_arguments)
                 if resolved is not None:
                     pending.append(resolved)
     return False
