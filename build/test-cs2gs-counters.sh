@@ -397,11 +397,31 @@ stubbin="$scratch/stubbin"
 mkdir -p "$stubbin"
 printf '#!/usr/bin/env bash\necho "$@" >> "$DOTNET_STUB_LOG"\n' > "$stubbin/dotnet"
 chmod +x "$stubbin/dotnet"
+touch "$scratch/csharp-src/GSharp.sln"
 DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-src" \
   bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
 assert_eq "$(grep -c "$repo_root/src/" "$scratch/dotnet-stub.log")" "3" "prerequisite builds stay on the checkout"
-if grep -Fq "$scratch/csharp-src" "$scratch/dotnet-stub.log"; then
+if grep -v '^restore ' "$scratch/dotnet-stub.log" | grep -Fq "$scratch/csharp-src"; then
   echo "FAIL: a prerequisite build followed SELFMIG_SOURCE_ROOT" >&2
+  exit 1
+fi
+
+# Issue #4919: the separate corpus is the one thing that IS touched, and only
+# restored (with its lock files), never built: on an unrestored corpus cs2gs
+# cannot resolve any package type and most apps fail translate.
+corpus_sln="$(cd "$scratch/csharp-src" && pwd -P)/GSharp.sln"
+assert_eq "$(grep -c '' "$scratch/dotnet-stub.log")" "4" "three prerequisite builds and one corpus restore"
+assert_eq "$(grep -Fx -c "restore $corpus_sln --locked-mode" "$scratch/dotnet-stub.log")" "1" "the corpus is restored with its lock files"
+# The checkout as the corpus (the default) restores nothing extra.
+: > "$scratch/dotnet-stub.log"
+DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" \
+  env -u SELFMIG_SOURCE_ROOT bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
+assert_eq "$(grep -c '^restore ' "$scratch/dotnet-stub.log" || true)" "0" "no extra restore when the checkout is the corpus"
+# A corpus with no solution to restore fails loudly instead of migrating unrestored.
+mkdir -p "$scratch/csharp-nosln"
+if DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-nosln" \
+  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root" 2>/dev/null; then
+  echo "FAIL: a corpus without GSharp.sln was accepted unrestored" >&2
   exit 1
 fi
 

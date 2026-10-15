@@ -111,6 +111,32 @@ selfmig_build_prerequisites() {
   dotnet build \
     "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" \
     -c Release -graph
+  selfmig_restore_corpus
+}
+
+# Issue #4919: a separate C# corpus (SELFMIG_SOURCE_ROOT) must be RESTORED
+# before cs2gs loads it. cs2gs reads the corpus through MSBuildWorkspace, which
+# resolves PackageReferences only from a restored project's assets file; on an
+# unrestored tree every package type (Roslyn's ISymbol/SyntaxNode,
+# MetadataLoadContext, ...) is unresolved, and 22 of 58 apps failed translate
+# with thousands of "Could not resolve a C# type symbol" gaps (branch run
+# 38809539739). Before the cut-over the checkout WAS the corpus, so the job's
+# own `dotnet restore GSharp.sln --locked-mode` covered it; with the corpus in
+# its own directory nothing did. Every entrypoint (single-job, migrate,
+# validate) goes through selfmig_build_prerequisites, so the corpus is restored
+# here, with its own lock files. This restores the INPUT only: no corpus
+# project is built, so the tool and the toolchain still come from the checkout.
+# When the checkout is the corpus there is nothing extra to do.
+selfmig_restore_corpus() {
+  if [[ "$selfmig_source_root" == "$selfmig_default_root" ]]; then
+    return 0
+  fi
+  local solution="$selfmig_source_root/GSharp.sln"
+  if [[ ! -f "$solution" ]]; then
+    echo "self-migration: the C# corpus at '$selfmig_source_root' has no GSharp.sln to restore." >&2
+    return 1
+  fi
+  dotnet restore "$solution" --locked-mode
 }
 
 # Most metrics count CODE, not fixtures: migrated test sources embed
