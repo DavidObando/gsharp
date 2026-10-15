@@ -163,7 +163,11 @@ open class Issue2814GenerateAssemblyInfoTests {
             AssemblyAttributes: Array.Empty[ITaskItem](),
             OutputFile: root
         }
-        let ex = Record.Exception(func () { task.Execute() })
+        let ex = Record.Exception(
+            func () {
+                task.Execute()
+            }
+        )
         Assert.NotNull(ex)
         Assert.IsNotType[NullReferenceException](ex)
         Assert.True(ex is UnauthorizedAccessException || ex is IOException, "Unexpected exception: " + ex.ToString())

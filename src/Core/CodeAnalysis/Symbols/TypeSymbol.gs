@@ -938,7 +938,9 @@ open partial class TypeSymbol : Symbol {
         func AreRuntimeEquivalentIgnoringReferenceNullability(left TypeSymbol?, right TypeSymbol?) bool {
             var left = left
             var right = right
-            let StripReferenceNullabilityCore = func (type TypeSymbol) TypeSymbol {
+            // Issue #4932: nil passes through, so a nil operand compares as in the C#
+            // (equal only to nil) instead of throwing.
+            let StripReferenceNullabilityCore = func (type TypeSymbol?) TypeSymbol? {
                 var type = type
                 while true {
                     switch type {
@@ -984,8 +986,8 @@ open partial class TypeSymbol : Symbol {
                 }
                 return true
             }
-            left = StripReferenceNullabilityCore(left!!)
-            right = StripReferenceNullabilityCore(right!!)
+            left = StripReferenceNullabilityCore(left)
+            right = StripReferenceNullabilityCore(right)
             if object.ReferenceEquals(left, right) {
                 return true
             }
