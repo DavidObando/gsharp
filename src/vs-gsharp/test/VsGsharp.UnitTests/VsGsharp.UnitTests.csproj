@@ -10,7 +10,7 @@
     <!-- MessagePack + StreamJsonRpc versions: keep in sync with
          build/gsharp.build.props (this tree is an isolated build island and
          does not import the repo-wide props). MessagePack is pinned to 2.5.307
-         for GHSA-qhrr-8q5h-9q3h (patched in 2.5.303). -->
+         for GHSA-qhrr-8q5h-9q3h (patched in 2.5.303; issue #4941). -->
     <PackageReference Include="MessagePack" Version="2.5.307" />
     <PackageReference Include="StreamJsonRpc" Version="2.22.11" />
     <PackageReference Include="xunit" Version="2.9.2" />

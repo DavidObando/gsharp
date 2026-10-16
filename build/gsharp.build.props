@@ -30,8 +30,8 @@
     <!-- Pin transitive MessagePack to a patched version. StreamJsonRpc's MessagePack
          dependency floor is below the patched version, and NuGetAudit fails restore on it
          (Warning As Error). 2.5.301 patched GHSA-hv8m-jj95-wg3x (NU1903); 2.5.307 patches
-         GHSA-qhrr-8q5h-9q3h (NU1902, fixed in 2.5.303). Stay on the 2.5 line, which is the
-         line StreamJsonRpc 2.22.x is built against. -->
+         GHSA-qhrr-8q5h-9q3h (NU1902, fixed in 2.5.303; issue #4941). Stay on the 2.5 line,
+         which is the line StreamJsonRpc 2.22.x is built against. -->
     <MessagePackPackageReference Include="MessagePack" Version="2.5.307" />
     <!-- TUI for the gsi REPL (issue #1404). -->
     <SpectreConsolePackageReference Include="Spectre.Console" Version="0.55.2" />

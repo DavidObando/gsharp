@@ -170,12 +170,21 @@ jobs:
       # (docs/self-migration-cutover.md, "Source-inspection tests need the
       # final C# tree"), so the Cs2Gs.Tests shards check out the final C# commit
       # beside the workspace and build it, and only they get the variable: the
-      # Core.Tests guards must keep scanning this G# tree.
+      # Core.Tests guards must keep scanning this G# tree. The commit is the
+      # single pin in tools/cs2gs/external/gsharp-csharp.json (also read by
+      # cs2gs-apps-nightly.yml): the head of the semi-frozen cs2gs/csharp-0.4
+      # branch, which takes back-ports such as the MessagePack bump for
+      # GHSA-qhrr-8q5h-9q3h (#4941), so it no longer equals tag v0.4.1270.
+      - name: Read the pinned C# commit for the cs2gs tests
+        id: csharp-pin
+        if: contains(matrix.project, 'Cs2Gs.Tests')
+        run: echo "commit=$(jq -r '.commit' tools/cs2gs/external/gsharp-csharp.json)" >> "$GITHUB_OUTPUT"
+
       - name: Check out the final C# tree for the cs2gs tests
         if: contains(matrix.project, 'Cs2Gs.Tests')
         uses: actions/checkout@v5
         with:
-          ref: v0.4.1270
+          ref: ${{ steps.csharp-pin.outputs.commit }}
           path: csharp-source
           fetch-depth: 0
 
