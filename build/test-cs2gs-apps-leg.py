@@ -117,6 +117,47 @@ def main():
         (d / "leg.log").write_text("x" * 9000 + "THE END")
         assert result(d, 1, full, log=str(d / "leg.log"))["log_tail"].endswith("THE END")
 
+        # A run-level failure (cs2gs failed the RUN with every app green: an
+        # orphan or mirror-completeness check) survives merging and is red,
+        # while a run that failed only because an app failed is left to the
+        # floor. Driven through the real merge script, as the aggregate does.
+        rl = d / "run-level"
+        (rl / "shards").mkdir(parents=True)
+        (rl / "migrate.json").write_text(json.dumps(
+            {"runId": "m", "succeeded": False, "apps": [app("src/A/A.csproj", "passed"), app("src/B/B.csproj", "passed")]}))
+        shard_apps = [app("src/A/A.csproj", *GREEN), app("src/B/B.csproj", *GREEN)]
+        for a in shard_apps:
+            a["stages"] = a["stages"][1:]
+        (rl / "shards" / "shard-run.json").write_text(json.dumps({"apps": shard_apps}))
+        subprocess.run(["python3", str(HERE / "merge-selfmig-runs.py"), "--migrate", str(rl / "migrate.json"),
+                        "--out", str(rl / "merged.json"), str(rl / "shards" / "shard-run.json")], check=True)
+        assert stats_cmd("--run", str(rl / "merged.json"), "--out", str(rl / "stats.json")) == 0
+        s = json.loads((rl / "stats.json").read_text())
+        assert (s["green"], s["total"], s["runLevelFailure"]) == (2, 2, True), s
+        r = leg.leg_result("gsharp-csharp", 0, rl / "stats.json", "", "", "u")
+        assert r["status"] == "red" and "the run itself failed" in r["summary"], r
+        # The same merged run with the translate pass green is green.
+        (rl / "migrate.json").write_text(json.dumps(
+            {"runId": "m", "succeeded": True, "apps": [app("src/A/A.csproj", "passed"), app("src/B/B.csproj", "passed")]}))
+        subprocess.run(["python3", str(HERE / "merge-selfmig-runs.py"), "--migrate", str(rl / "migrate.json"),
+                        "--out", str(rl / "merged.json"), str(rl / "shards" / "shard-run.json")], check=True)
+        assert stats_cmd("--run", str(rl / "merged.json"), "--out", str(rl / "stats.json")) == 0
+        assert json.loads((rl / "stats.json").read_text())["runLevelFailure"] is False
+        assert leg.leg_result("gsharp-csharp", 0, rl / "stats.json", "", "", "u")["status"] == "green"
+        # A failed app makes the run fail too; that is per-app, left to the floor.
+        assert stats_cmd("--run", str(d / "runs" / "2026-01-02" / "run.json"), "--out", str(out)) == 0
+        json_run = json.loads((d / "runs" / "2026-01-02" / "run.json").read_text())
+        json_run["succeeded"] = False
+        (d / "app-red.json").write_text(json.dumps(json_run))
+        assert stats_cmd("--run", str(d / "app-red.json"), "--out", str(out), "--floor", "2") == 0
+        assert json.loads(out.read_text())["runLevelFailure"] is False
+        assert leg.leg_result("x", 0, out, "", "", "u")["status"] == "green"
+        # A non-boolean runLevelFailure is malformed, and a recorded failed
+        # baseline verdict is red even at or above the floor.
+        assert result(d, 0, {"green": 2, "total": 2, "runLevelFailure": "no"})["status"] == "red"
+        r = result(d, 0, {"green": 57, "total": 58, "floor": 56, "baseline": "failed"})
+        assert r["status"] == "red" and "baseline gate failed" in r["summary"], r
+
         # The sharded gate writes stats.json even when the baseline fails it
         # (one app is far below greenFloor) and keeps its own exit status.
         migrate = d / "selfmig"

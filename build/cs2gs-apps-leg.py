@@ -30,7 +30,10 @@ run.json behind. Two subcommands turn that into what the gate job reads:
               green/total and total > 0;
             * green >= floor (floor defaults to total, so a leg without a
               baseline must be fully green). This catches a leg script that
-              forgets to propagate cs2gs's exit code.
+              forgets to propagate cs2gs's exit code;
+            * the run itself did not fail with every app green
+              (`runLevelFailure`: an orphan or mirror-completeness failure);
+            * the baseline verdict, when recorded, is not "failed".
 
               cs2gs-apps-leg.py result --app APP --exit-code N --stats FILE
                                        --out FILE [--log FILE] [--note TEXT]
@@ -96,6 +99,15 @@ def compute_stats(run: dict, floor: int | None, extras: dict[str, object]) -> di
                     if isinstance(s, dict) and s.get("stage") == name and s.get("status") == status)
             if n:
                 stats[f"{name}_{status}"] = n
+    # The run-level verdict. cs2gs fails a RUN without failing any app when a
+    # repository-wide check fails after every app passed: an orphan C# file with
+    # no translated mirror, or an incomplete mirror (MigrationPipeline: those
+    # checks run only while the run is still green). That is exactly the case
+    # per-app counts cannot see, so record it explicitly. A run that failed
+    # because some app failed is NOT flagged: those apps are counted red and the
+    # floor decides, as the baseline intends. merge-selfmig-runs.py keeps the
+    # translate pass's run verdict in the merged run, so this works there too.
+    stats["runLevelFailure"] = run.get("succeeded") is False and all(a.get("succeeded") is True for a in apps)
     stats.update(extras)
     stats["redApps"] = sorted(
         f"{a.get('appId', '?')} ({red_reason(a)}, reached {reached(a)})"
@@ -148,6 +160,8 @@ def load_stats(path: Path) -> tuple[dict | None, str]:
         return stats, "stats.json has no integer green/total/floor"
     if total <= 0:
         return stats, "stats.json counts no apps"
+    if not isinstance(stats.get("runLevelFailure", False), bool):
+        return stats, "stats.json has a non-boolean runLevelFailure"
     return stats, ""
 
 
@@ -156,8 +170,13 @@ def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_u
     notes = [note] if note else []
     if problem:
         notes.append(problem)
-    elif stats["green"] < stats.get("floor", stats["total"]):
-        notes.append("below the floor")
+    else:
+        if stats["green"] < stats.get("floor", stats["total"]):
+            notes.append("below the floor")
+        if stats.get("runLevelFailure") is True:
+            notes.append("the run itself failed (a repository-wide orphan or mirror check; see the log)")
+        if stats.get("baseline") == "failed":
+            notes.append("the baseline gate failed (see the GATE: lines in the log)")
     status = "green" if code == 0 and not notes else "red"
     headline = f"leg exited {code}"
     if stats and not problem:
