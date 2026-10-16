@@ -19,6 +19,9 @@ single whole run would have produced:
     an allow-listed pass indistinguishable from an unconditional one;
   * ``succeeded`` is the conjunction, ``unverified`` is recomputed with the
     whole run's rule (nothing failed, but something was skipped);
+  * ``runLevelFailure`` records that the translate pass failed the RUN while
+    every app translated (an orphan or mirror-completeness failure), so it
+    survives even when a shard then fails an app;
   * an app that translated but that no shard reported on is a sharding bug, not
     a green app: the merge fails loudly rather than silently shrinking the
     denominator or inflating the green count.
@@ -141,6 +144,16 @@ def main() -> int:
         "succeeded": bool(migrate.get("succeeded", False))
         and all(app["succeeded"] for app in merged_apps),
         "unverified": False,
+        # Issue #4919: the translate pass's RUN-LEVEL failure, kept apart from
+        # app failures. cs2gs runs the orphan-mirror and mirror-completeness
+        # checks only once every app has passed, and records a failure there
+        # by failing the run without failing an app. In the translate-only
+        # pass that is "the run failed although every app translated". The
+        # conjunction above loses that distinction as soon as a shard fails
+        # an app (which the baseline floor may well permit), so carry it
+        # explicitly for the nightly's accounting (build/cs2gs-apps-leg.py).
+        "runLevelFailure": migrate.get("succeeded") is False
+        and all(app.get("succeeded") is True for app in migrate.get("apps", [])),
         "apps": merged_apps,
     }
     merged["unverified"] = merged["succeeded"] and any(

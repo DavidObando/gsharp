@@ -27,6 +27,13 @@ def app(app_id, *statuses, category=None):
             "failureCategory": category, "stages": stages}
 
 
+def translated(app_id, status="passed"):
+    """A translate-only pass's app: succeeded when its one stage passed."""
+    a = app(app_id, status)
+    a["succeeded"] = status == "passed"
+    return a
+
+
 GREEN = ("passed",) * 4
 COMPILE_RED = ("passed", "failed", "skipped", "skipped")
 RUN = {"runId": "r", "apps": [app("src/A/A.csproj", *GREEN), app("src/B/B.csproj", *GREEN),
@@ -128,7 +135,7 @@ def main():
         rl = d / "run-level"
         (rl / "shards").mkdir(parents=True)
         (rl / "migrate.json").write_text(json.dumps(
-            {"runId": "m", "succeeded": False, "apps": [app("src/A/A.csproj", "passed"), app("src/B/B.csproj", "passed")]}))
+            {"runId": "m", "succeeded": False, "apps": [translated("src/A/A.csproj"), translated("src/B/B.csproj")]}))
         shard_apps = [app("src/A/A.csproj", *GREEN), app("src/B/B.csproj", *GREEN)]
         for a in shard_apps:
             a["stages"] = a["stages"][1:]
@@ -142,12 +149,41 @@ def main():
         assert r["status"] == "red" and "the run itself failed" in r["summary"], r
         # The same merged run with the translate pass green is green.
         (rl / "migrate.json").write_text(json.dumps(
-            {"runId": "m", "succeeded": True, "apps": [app("src/A/A.csproj", "passed"), app("src/B/B.csproj", "passed")]}))
+            {"runId": "m", "succeeded": True, "apps": [translated("src/A/A.csproj"), translated("src/B/B.csproj")]}))
         subprocess.run(["python3", str(HERE / "merge-selfmig-runs.py"), "--migrate", str(rl / "migrate.json"),
                         "--out", str(rl / "merged.json"), str(rl / "shards" / "shard-run.json")], check=True)
         assert stats_cmd("--run", str(rl / "merged.json"), "--out", str(rl / "stats.json")) == 0
         assert json.loads((rl / "stats.json").read_text())["runLevelFailure"] is False
         assert leg.leg_result("gsharp-csharp", 0, rl / "stats.json", "", "", "u")["status"] == "green"
+        # Mixed: the translate pass failed the run (orphan/mirror) AND a shard
+        # failed one app the floor permits. The run-level failure must still be
+        # red, while the same app failure alone stays within the floor.
+        mixed_shards = [app("src/A/A.csproj", *GREEN), app("src/B/B.csproj", *COMPILE_RED, category="compile-error")]
+        for a in mixed_shards:
+            a["stages"] = a["stages"][1:]
+        (rl / "shards" / "shard-run.json").write_text(json.dumps({"apps": mixed_shards}))
+        for verdict, expect_flag, expect_status in ((False, True, "red"), (True, False, "green")):
+            (rl / "migrate.json").write_text(json.dumps(
+                {"runId": "m", "succeeded": verdict,
+                 "apps": [translated("src/A/A.csproj"), translated("src/B/B.csproj")]}))
+            subprocess.run(["python3", str(HERE / "merge-selfmig-runs.py"), "--migrate", str(rl / "migrate.json"),
+                            "--out", str(rl / "merged.json"), str(rl / "shards" / "shard-run.json")], check=True)
+            assert json.loads((rl / "merged.json").read_text())["runLevelFailure"] is expect_flag
+            assert stats_cmd("--run", str(rl / "merged.json"), "--out", str(rl / "stats.json"), "--floor", "1") == 0
+            s = json.loads((rl / "stats.json").read_text())
+            assert (s["green"], s["total"], s["runLevelFailure"]) == (1, 2, expect_flag), s
+            assert leg.leg_result("gsharp-csharp", 0, rl / "stats.json", "", "", "u")["status"] == expect_status
+        # A translate-only pass in which an app failed translate failed the run
+        # because of that app: not a run-level failure.
+        (rl / "migrate.json").write_text(json.dumps(
+            {"runId": "m", "succeeded": False, "apps": [translated("src/A/A.csproj"), translated("src/B/B.csproj", "failed")]}))
+        (rl / "shards" / "shard-run.json").write_text(json.dumps({"apps": [mixed_shards[0]]}))
+        subprocess.run(["python3", str(HERE / "merge-selfmig-runs.py"), "--migrate", str(rl / "migrate.json"),
+                        "--out", str(rl / "merged.json"), str(rl / "shards" / "shard-run.json")], check=True)
+        assert json.loads((rl / "merged.json").read_text())["runLevelFailure"] is False
+        # A non-boolean explicit flag is malformed.
+        (d / "bad-flag.json").write_text(json.dumps({"runLevelFailure": "yes", "apps": RUN["apps"]}))
+        assert stats_cmd("--run", str(d / "bad-flag.json"), "--out", str(d / "bad-flag-stats.json")) == 2
         # A failed app makes the run fail too; that is per-app, left to the floor.
         assert stats_cmd("--run", str(d / "runs" / "2026-01-02" / "run.json"), "--out", str(out)) == 0
         json_run = json.loads((d / "runs" / "2026-01-02" / "run.json").read_text())
@@ -168,7 +204,7 @@ def main():
         (migrate / "migrated").mkdir(parents=True)
         (migrate / "runs" / "r1").mkdir(parents=True)
         (migrate / "runs" / "r1" / "run.json").write_text(json.dumps(
-            {"runId": "r1", "succeeded": True, "apps": [app("src/A/A.csproj", "passed")]}))
+            {"runId": "r1", "succeeded": True, "apps": [translated("src/A/A.csproj")]}))
         shard = d / "shards" / "cs2gs-selfmig-shard-1"
         shard.mkdir(parents=True)
         shard_app = app("src/A/A.csproj", *GREEN)
@@ -196,7 +232,7 @@ def main():
             (root / "runs" / "r1").mkdir(parents=True)
             (root / "runs" / "r1" / "run.json").write_text(json.dumps(
                 {"runId": "r1", "succeeded": True,
-                 "apps": [app("src/A/A.csproj", "passed"), app("src/B/B.csproj", "passed")]}))
+                 "apps": [translated("src/A/A.csproj"), translated("src/B/B.csproj")]}))
             return root
 
         def shard_with(root, name, *apps):

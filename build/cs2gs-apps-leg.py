@@ -111,7 +111,15 @@ def compute_stats(run: dict, floor: int | None, extras: dict[str, object]) -> di
     # because some app failed is NOT flagged: those apps are counted red and the
     # floor decides, as the baseline intends. merge-selfmig-runs.py keeps the
     # translate pass's run verdict in the merged run, so this works there too.
-    stats["runLevelFailure"] = run.get("succeeded") is False and all(a.get("succeeded") is True for a in apps)
+    # A merged run (merge-selfmig-runs.py) says so explicitly, because there a
+    # shard's app failure can coexist with the translate pass's run-level one;
+    # in a single run the checks never run once an app failed, so the
+    # predicate is exact.
+    explicit = run.get("runLevelFailure")
+    if explicit is not None and not isinstance(explicit, bool):
+        raise ValueError("run has a non-boolean runLevelFailure")
+    stats["runLevelFailure"] = explicit if explicit is not None else (
+        run.get("succeeded") is False and all(a.get("succeeded") is True for a in apps))
     stats.update(extras)
     stats["redApps"] = sorted(
         f"{a.get('appId', '?')} ({red_reason(a)}, reached {reached(a)})"
