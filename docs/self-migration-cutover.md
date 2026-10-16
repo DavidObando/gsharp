@@ -59,6 +59,8 @@ outcome. Commit it into the PR description, not the tree.
 | Stage-2 certification of the same C# commit | certified: true on the dry-run tree (run `8d1e76c726801a48e1db4689b37db1da`, 2026-10-13/14, published bootstrap SDK 0.4.1270) and, earlier, on the tree of `eac5b487b` (second attempt); details in "Stage-2 certification" below |
 | PR CI | green (37 checks pass, 3 skipped) on `e6a0c9f54`, run 38493756916. The head of the commit that records this line only changes documentation and is checked by its own run (see the PR) |
 
+The branch `cs2gs/csharp-0.4` has since taken back-ports, starting with `6fff986fc` (MessagePack 2.5.307 for GHSA-qhrr-8q5h-9q3h, #4941), so it no longer equals the tag; CI uses the commit pinned in `tools/cs2gs/external/gsharp-csharp.json`. The values above are as recorded at the cut-over.
+
 The cut-over commit is the dry run's `migrate` output assembled and hand-fixed by the same code,
 with these deliberate differences, all found while preparing the commit:
 
