@@ -395,13 +395,12 @@ fi
 # and record every project path it is asked to build with the override set.
 stubbin="$scratch/stubbin"
 mkdir -p "$stubbin"
-# The stub also records, per call, the WarningsNotAsErrors it was given and
-# its working directory, in a second log.
-printf '#!/usr/bin/env bash\necho "$@" >> "$DOTNET_STUB_LOG"\necho "${WarningsNotAsErrors:-<unset>} @ $PWD" >> "$DOTNET_STUB_LOG.env"\n' > "$stubbin/dotnet"
+# The stub also records each call's working directory in a second log.
+printf '#!/usr/bin/env bash\necho "$@" >> "$DOTNET_STUB_LOG"\necho "$PWD" >> "$DOTNET_STUB_LOG.cwd"\n' > "$stubbin/dotnet"
 chmod +x "$stubbin/dotnet"
 touch "$scratch/csharp-src/GSharp.sln"
 DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-src" \
-  env -u WarningsNotAsErrors bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
+  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
 assert_eq "$(grep -c "$repo_root/src/" "$scratch/dotnet-stub.log")" "3" "prerequisite builds stay on the checkout"
 if head -n 3 "$scratch/dotnet-stub.log" | grep -Fq "$scratch/csharp-src"; then
   echo "FAIL: a prerequisite build followed SELFMIG_SOURCE_ROOT" >&2
@@ -423,36 +422,16 @@ expected_corpus=$(printf '%s\n' \
   "build $corpus/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj -c Release -graph")
 assert_eq "$(tail -n +4 "$scratch/dotnet-stub.log")" "$expected_corpus" "the corpus is prepared like the pre-cut-over checkout"
 assert_eq "$(head -n 3 "$scratch/dotnet-stub.log" | grep -c "$repo_root/src/")" "3" "main's prerequisite builds come first, on the checkout"
-# The corpus is restored with ITS OWN lock files (--locked-mode, run from inside
-# the corpus so its global.json applies), and NuGet audit findings are warnings
-# for the corpus commands only: main's three builds get no relaxation.
-assert_eq "$(head -n 3 "$scratch/dotnet-stub.log.env" | sort -u)" "<unset> @ $(pwd)" "main's builds keep audit findings as errors"
-assert_eq "$(tail -n +4 "$scratch/dotnet-stub.log.env" | sort -u)" "NU1901;NU1902;NU1903;NU1904 @ $corpus" "corpus commands relax audit findings and run inside the corpus"
-# An ambient WarningsNotAsErrors is appended to, not replaced, and still does
-# not change main's builds.
-: > "$scratch/dotnet-stub.log"; : > "$scratch/dotnet-stub.log.env"
-WarningsNotAsErrors=CS1234 DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-src" \
-  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
-assert_eq "$(head -n 3 "$scratch/dotnet-stub.log.env" | sort -u)" "CS1234 @ $(pwd)" "main's builds see the ambient value unchanged"
-assert_eq "$(tail -n +4 "$scratch/dotnet-stub.log.env" | sort -u)" "CS1234;NU1901;NU1902;NU1903;NU1904 @ $corpus" "the corpus relaxation appends to an ambient value"
-# Every cs2gs invocation and every corpus restore/build/test in the leg scripts
-# goes through the wrapper, so cs2gs's own corpus and migrated-tree restores
-# inherit the relaxation.
-for leg_script in run-cs2gs-selfmig.sh run-cs2gs-selfmig-migrate.sh run-cs2gs-selfmig-validate.sh run-cs2gs-oahu.sh run-cs2gs-code-exploder.sh; do
-  unwrapped=$(grep -nE '^[[:space:]]*dotnet ("\$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll"|(restore|build|test) "\$source_dir)' "$repo_root/build/$leg_script" || true)
-  if [[ -n "$unwrapped" ]]; then
-    echo "FAIL: $leg_script runs a corpus command outside cs2gs_frozen_corpus_env: $unwrapped" >&2
-    exit 1
-  fi
-  if ! grep -q 'cs2gs_frozen_corpus_env dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll"' "$repo_root/build/$leg_script"; then
-    echo "FAIL: $leg_script has no wrapped cs2gs invocation" >&2
-    exit 1
-  fi
-done
+# The corpus is restored with ITS OWN lock files: --locked-mode on the corpus
+# solution, run from inside the corpus so its global.json and tool manifest
+# apply. Main's builds run where the caller is, and nothing about the corpus
+# preparation changes them.
+assert_eq "$(tail -n +4 "$scratch/dotnet-stub.log.cwd" | sort -u)" "$corpus" "corpus commands run inside the corpus"
+assert_eq "$(head -n 3 "$scratch/dotnet-stub.log.cwd" | sort -u)" "$(pwd)" "main's builds run from the caller's directory"
 # The checkout as the corpus (the default) restores nothing extra.
 : > "$scratch/dotnet-stub.log"
 DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" \
-  env -u SELFMIG_SOURCE_ROOT -u WarningsNotAsErrors bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
+  env -u SELFMIG_SOURCE_ROOT bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
 assert_eq "$(grep -c '' "$scratch/dotnet-stub.log" || true)" "3" "no corpus preparation when the checkout is the corpus"
 # A corpus with no solution to restore fails loudly instead of migrating unrestored.
 mkdir -p "$scratch/csharp-nosln"

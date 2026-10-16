@@ -39,7 +39,7 @@ runs_dir="$work_root/runs"
 selfmig_build_prerequisites
 
 set +e
-cs2gs_frozen_corpus_env dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
+dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$selfmig_source_root" \
   --sdk-pin global-json \
   --out "$migrated_dir" \
@@ -82,7 +82,7 @@ jq -n \
 # fails its own parity with TEST-ORACLE-MISSING, which names it, while every
 # other app still gets a verdict.
 set +e
-cs2gs_frozen_corpus_env dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
+dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
   --corpus "$selfmig_source_root" \
   --out "$work_root/csharp-tests" \
   --manifests "$run_dir" \

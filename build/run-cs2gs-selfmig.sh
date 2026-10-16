@@ -49,14 +49,14 @@ selfmig_build_prerequisites
 # runs test parity inside the same `migrate` invocation, so the oracle must
 # already exist. (The sharded gate captures after translation instead.) A
 # capture failure only fails the affected apps, as TEST-ORACLE-MISSING.
-cs2gs_frozen_corpus_env dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
+dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
   --corpus "$selfmig_source_root" \
   --out "$work_root/csharp-tests" \
   "${selfmig_project_filters[@]}" \
   || echo "self-migration gate: capturing the C# test oracle failed for some test project(s)." >&2
 
 set +e
-cs2gs_frozen_corpus_env dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
+dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$selfmig_source_root" \
   --sdk-pin global-json \
   --out "$migrated_dir" \

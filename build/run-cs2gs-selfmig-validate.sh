@@ -73,7 +73,7 @@ done
 validate_started=$(date +%s)
 
 set +e
-cs2gs_frozen_corpus_env dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate \
+dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate \
   --corpus "$selfmig_source_root" \
   --migrated "$migrated_dir" \
   --artifacts "$shard_out/runs" \

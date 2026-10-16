@@ -53,13 +53,13 @@ export NuGetAudit=false
 
 echo "code-exploder gate '$label': $actual_commit"
 
-cs2gs_frozen_corpus_env dotnet restore "$source_dir/codeexploder.slnx"
-cs2gs_frozen_corpus_env dotnet build "$source_dir/codeexploder.slnx" --configuration Release --no-restore
-cs2gs_frozen_corpus_env dotnet test "$source_dir/codeexploder.slnx" \
+dotnet restore "$source_dir/codeexploder.slnx"
+dotnet build "$source_dir/codeexploder.slnx" --configuration Release --no-restore
+dotnet test "$source_dir/codeexploder.slnx" \
   --configuration Release --no-build --no-restore
 
 set +e
-cs2gs_frozen_corpus_env dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
+dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$source_dir" \
   --out "$migrated_dir" \
   --artifacts "$runs_dir" \
