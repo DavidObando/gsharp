@@ -15,13 +15,19 @@
 # Unset or empty, it is `repo_root` (the checkout IS the C# source). The cs2gs
 # apps nightly sets it to a separate checkout of the C# branch (cs2gs/csharp-0.4).
 #
-# RULE: it moves the corpus and nothing else. Only the --corpus argument uses
-# `selfmig_source_root`. The tool (cs2gs.dll), these scripts, the baselines and
-# shard-cost files, and the toolchain (the Debug prerequisite builds of the
-# compiler, SDK and analyzers-testing package below) all stay on `repo_root`,
-# i.e. main, so the migrated output targets main's compiler and SDK. A value
-# that is not an existing directory is an error, never a silent fallback, so a
-# typo cannot make a leg migrate the wrong tree.
+# RULE: it moves the corpus and nothing else. Only the --corpus argument and
+# the corpus preparation below (selfmig_prepare_corpus) use
+# `selfmig_source_root`. The tool under test
+# ($repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll), these scripts, the
+# baselines and shard-cost files, and main's prerequisite builds of the
+# compiler, SDK and analyzers-testing package all stay on `repo_root`, i.e.
+# main, so the migrated output targets main's compiler and SDK. The corpus's
+# OWN out/ tree is part of the INPUT, not the toolchain: before the cut-over
+# the checkout was the corpus, and the gate always saw it restored and built
+# (see selfmig_prepare_corpus for what reads it), so a separate corpus gets the
+# same restore and builds. A value that is not an existing directory is an
+# error, never a silent fallback, so a typo cannot make a leg migrate the wrong
+# tree.
 # Some callers (the Issue3885 allow-list test) source this file without setting
 # `repo_root`, under `set -u`; fall back to this file's own checkout.
 selfmig_default_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
@@ -111,32 +117,55 @@ selfmig_build_prerequisites() {
   dotnet build \
     "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" \
     -c Release -graph
-  selfmig_restore_corpus
+  selfmig_prepare_corpus
 }
 
-# Issue #4919: a separate C# corpus (SELFMIG_SOURCE_ROOT) must be RESTORED
-# before cs2gs loads it. cs2gs reads the corpus through MSBuildWorkspace, which
-# resolves PackageReferences only from a restored project's assets file; on an
-# unrestored tree every package type (Roslyn's ISymbol/SyntaxNode,
-# MetadataLoadContext, ...) is unresolved, and 22 of 58 apps failed translate
-# with thousands of "Could not resolve a C# type symbol" gaps (branch run
-# 38809539739). Before the cut-over the checkout WAS the corpus, so the job's
-# own `dotnet restore GSharp.sln --locked-mode` covered it; with the corpus in
-# its own directory nothing did. Every entrypoint (single-job, migrate,
-# validate) goes through selfmig_build_prerequisites, so the corpus is restored
-# here, with its own lock files. This restores the INPUT only: no corpus
-# project is built, so the tool and the toolchain still come from the checkout.
-# When the checkout is the corpus there is nothing extra to do.
-selfmig_restore_corpus() {
+# Issue #4919: a separate C# corpus (SELFMIG_SOURCE_ROOT) must be in the state
+# the pre-cut-over gate always saw, because before the cut-over the checkout
+# WAS the corpus: restored, local tools restored, cs2gs built in Release (whose
+# graph builds the C# compiler, SDK and their nupkgs), and the Debug compiler,
+# Debug SDK and Release analyzers-testing prerequisites built. Nothing did that
+# for a corpus in its own directory, and the branch runs show what reads it:
+#
+#   * cs2gs loads the corpus through MSBuildWorkspace, which resolves
+#     PackageReferences only from a restored assets file. Unrestored, every
+#     package type (Roslyn's ISymbol, MetadataLoadContext, ...) is unresolved
+#     and 22 of 58 apps failed translate (run 38809539739).
+#   * The corpus's Gsharp.Extensions.csproj imports the bootstrap targets,
+#     which need <corpus>/out/bin/Debug/{Compiler/gsc.dll,Gsharp.NET.Sdk}; every
+#     app referencing it failed ProjectLoad (Repl and three test projects, run
+#     38824831419).
+#   * Migrated tests that drive cs2gs (Cs2Gs.Tests) locate gsc and the local
+#     Gsharp.NET.Sdk nupkg under <corpus>/out/bin/Release through the source-root
+#     variable cs2gs sets to --corpus, and failed without them.
+#
+# Every entrypoint (single-job, migrate, validate) goes through
+# selfmig_build_prerequisites, so this is the one place the corpus is prepared,
+# with the same commands the old jobs ran on the checkout and in the same
+# order. When the checkout is the corpus there is nothing extra to do.
+selfmig_prepare_corpus() {
   if [[ "$selfmig_source_root" == "$selfmig_default_root" ]]; then
     return 0
   fi
-  local solution="$selfmig_source_root/GSharp.sln"
-  if [[ ! -f "$solution" ]]; then
-    echo "self-migration: the C# corpus at '$selfmig_source_root' has no GSharp.sln to restore." >&2
+  local corpus=$selfmig_source_root
+  if [[ ! -f "$corpus/GSharp.sln" ]]; then
+    echo "self-migration: the C# corpus at '$corpus' has no GSharp.sln to restore." >&2
     return 1
   fi
-  dotnet restore "$solution" --locked-mode
+  # Run from inside the corpus so dotnet resolves the CORPUS's global.json
+  # (and its local tool manifest), as it did when the corpus was the checkout.
+  (
+    set -e
+    cd "$corpus"
+    dotnet restore "$corpus/GSharp.sln" --locked-mode
+    dotnet tool restore
+    dotnet build "$corpus/tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj" --configuration Release --no-restore -graph
+    dotnet build "$corpus/src/Compiler/Compiler.csproj" -c Debug -graph
+    dotnet build "$corpus/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
+    dotnet build \
+      "$corpus/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj" \
+      -c Release -graph
+  )
 }
 
 # Most metrics count CODE, not fixtures: migrated test sources embed

@@ -401,22 +401,31 @@ touch "$scratch/csharp-src/GSharp.sln"
 DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-src" \
   bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
 assert_eq "$(grep -c "$repo_root/src/" "$scratch/dotnet-stub.log")" "3" "prerequisite builds stay on the checkout"
-if grep -v '^restore ' "$scratch/dotnet-stub.log" | grep -Fq "$scratch/csharp-src"; then
+if head -n 3 "$scratch/dotnet-stub.log" | grep -Fq "$scratch/csharp-src"; then
   echo "FAIL: a prerequisite build followed SELFMIG_SOURCE_ROOT" >&2
   exit 1
 fi
 
-# Issue #4919: the separate corpus is the one thing that IS touched, and only
-# restored (with its lock files), never built: on an unrestored corpus cs2gs
-# cannot resolve any package type and most apps fail translate.
-corpus_sln="$(cd "$scratch/csharp-src" && pwd -P)/GSharp.sln"
-assert_eq "$(grep -c '' "$scratch/dotnet-stub.log")" "4" "three prerequisite builds and one corpus restore"
-assert_eq "$(grep -Fx -c "restore $corpus_sln --locked-mode" "$scratch/dotnet-stub.log")" "1" "the corpus is restored with its lock files"
+# Issue #4919: the separate corpus is prepared exactly as the pre-cut-over
+# checkout was (restore, tool restore, cs2gs Release graph, Debug compiler and
+# SDK, Release analyzers-testing), in that order and nothing else; without it
+# cs2gs cannot resolve package types, the bootstrap import fails ProjectLoad,
+# and migrated cs2gs tests find no gsc or SDK nupkg under the corpus.
+corpus="$(cd "$scratch/csharp-src" && pwd -P)"
+expected_corpus=$(printf '%s\n' \
+  "restore $corpus/GSharp.sln --locked-mode" \
+  "tool restore" \
+  "build $corpus/tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj --configuration Release --no-restore -graph" \
+  "build $corpus/src/Compiler/Compiler.csproj -c Debug -graph" \
+  "build $corpus/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Debug -graph" \
+  "build $corpus/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj -c Release -graph")
+assert_eq "$(tail -n +4 "$scratch/dotnet-stub.log")" "$expected_corpus" "the corpus is prepared like the pre-cut-over checkout"
+assert_eq "$(head -n 3 "$scratch/dotnet-stub.log" | grep -c "$repo_root/src/")" "3" "main's prerequisite builds come first, on the checkout"
 # The checkout as the corpus (the default) restores nothing extra.
 : > "$scratch/dotnet-stub.log"
 DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" \
   env -u SELFMIG_SOURCE_ROOT bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
-assert_eq "$(grep -c '^restore ' "$scratch/dotnet-stub.log" || true)" "0" "no extra restore when the checkout is the corpus"
+assert_eq "$(grep -c '' "$scratch/dotnet-stub.log" || true)" "3" "no corpus preparation when the checkout is the corpus"
 # A corpus with no solution to restore fails loudly instead of migrating unrestored.
 mkdir -p "$scratch/csharp-nosln"
 if DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-nosln" \
