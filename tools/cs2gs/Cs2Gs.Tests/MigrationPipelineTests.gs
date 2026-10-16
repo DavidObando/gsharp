@@ -312,6 +312,12 @@ open class MigrationPipelineTests {
         )
         GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, sdk.NupkgPath)
         GsharpTestProjectRunner.WriteIsolationBoundary(projectDir)
+        // MSBuild resolves the `Gsharp.NET.Sdk/<version>` SDK through the
+        // nuget.config found above the project, not `RestoreConfigFile`. The
+        // project sits under this tree's `out/`, so without a config of its
+        // own a locally built SDK version that nuget.org lacks fails with
+        // MSB4236 (#4941). The pipeline's compile stage writes the same file.
+        SdkCompileRunner.WriteLocalNugetConfig(projectDir, repoRoot)
         let build = ProcessRunner.Run(
             "dotnet",
             []string{

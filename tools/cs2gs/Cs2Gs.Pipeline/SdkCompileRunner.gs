@@ -1439,7 +1439,7 @@ class SdkCompileRunner {
         /// `.gsproj` makes it discoverable unconditionally.
         /// @param appRunDir The directory the `.gsproj` is written to.
         /// @param repoRoot The repository root containing the `.nugs` feed.
-        private func WriteLocalNugetConfig(appRunDir string, repoRoot string?) {
+        internal func WriteLocalNugetConfig(appRunDir string, repoRoot string?) {
             WriteLocalNugetConfigFile(Path.Combine(appRunDir, "nuget.config"), repoRoot)
         }
 
