@@ -157,12 +157,14 @@ selfmig_prepare_corpus() {
   (
     set -e
     cd "$corpus"
-    dotnet restore "$corpus/GSharp.sln" --locked-mode
-    dotnet tool restore
-    dotnet build "$corpus/tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj" --configuration Release --no-restore -graph
-    dotnet build "$corpus/src/Compiler/Compiler.csproj" -c Debug -graph
-    dotnet build "$corpus/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
-    dotnet build \
+    # The corpus is frozen input: audit findings stay warnings (see
+    # cs2gs_frozen_corpus_env in cs2gs-counters.sh).
+    cs2gs_frozen_corpus_env dotnet restore "$corpus/GSharp.sln" --locked-mode
+    cs2gs_frozen_corpus_env dotnet tool restore
+    cs2gs_frozen_corpus_env dotnet build "$corpus/tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj" --configuration Release --no-restore -graph
+    cs2gs_frozen_corpus_env dotnet build "$corpus/src/Compiler/Compiler.csproj" -c Debug -graph
+    cs2gs_frozen_corpus_env dotnet build "$corpus/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
+    cs2gs_frozen_corpus_env dotnet build \
       "$corpus/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj" \
       -c Release -graph
   )

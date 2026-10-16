@@ -503,6 +503,25 @@ cs2gs_counter_report() {
   rm -rf "$tmp"
 }
 
+# Issue #4919: runs a command against a FROZEN C# corpus (the pinned
+# cs2gs/csharp-0.4 tree, Oahu, Code Exploder) with NuGet audit findings kept as
+# warnings instead of errors. A corpus is gate input and ships nothing, and its
+# package versions cannot move: when an advisory is published against one of
+# its pins (MessagePack 2.5.301, GHSA-qhrr-8q5h-9q3h, turned every gsharp-csharp
+# job red at restore) the leg must keep measuring cs2gs, with the finding still
+# printed. The codes go through the WarningsNotAsErrors environment variable,
+# which MSBuild reads as a property, so they reach every process the command
+# spawns (cs2gs's own restores, builds and test runs of the corpus and of the
+# tree migrated from it) and are appended to any ambient value. This tree's own
+# restores and builds never go through here, so they keep failing on an
+# advisory.
+#
+#   cs2gs_frozen_corpus_env <command> [args...]
+cs2gs_frozen_corpus_audit_codes='NU1901;NU1902;NU1903;NU1904'
+cs2gs_frozen_corpus_env() {
+  WarningsNotAsErrors="${WarningsNotAsErrors:+$WarningsNotAsErrors;}$cs2gs_frozen_corpus_audit_codes" "$@"
+}
+
 # Machine-readable headline counters for a migrated tree, one KEY=VALUE per
 # line, for the leg's stats.json (issue #4856: the per-app accounting of the
 # cs2gs apps nightly). Same definitions as the table above: `bangs` and

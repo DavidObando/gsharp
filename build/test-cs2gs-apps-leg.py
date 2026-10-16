@@ -180,6 +180,67 @@ def main():
         assert (s["green"], s["total"], s["floor"], s["baseline"]) == (1, 1, floor, "failed"), s
         assert s["bangs"] == 0 and s["labels"] == 0, s
         assert leg.leg_result("gsharp-csharp", gate.returncode, migrate / "stats.json", "", "", "u")["status"] == "red"
+
+        def run_gate(migrate_dir, shards_dir, **extra_env):
+            env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+            env.update(extra_env)
+            return subprocess.run(["bash", str(HERE / "run-cs2gs-selfmig-gate.sh"), str(migrate_dir), str(shards_dir)],
+                                  capture_output=True, text=True, env=env)
+
+        def two_app_migrate(root):
+            (root / "migrated").mkdir(parents=True)
+            (root / "runs" / "r1").mkdir(parents=True)
+            (root / "runs" / "r1" / "run.json").write_text(json.dumps(
+                {"runId": "r1", "succeeded": True,
+                 "apps": [app("src/A/A.csproj", "passed"), app("src/B/B.csproj", "passed")]}))
+            return root
+
+        def shard_with(root, name, *apps):
+            (root / name).mkdir(parents=True)
+            for a in apps:
+                a["stages"] = a["stages"][1:]
+            (root / name / "shard-run.json").write_text(json.dumps({"apps": list(apps)}))
+
+        # Fail closed: a shard that left no result (a crashed or cancelled
+        # validate job) fails the merge, so the gate writes no stats.json and
+        # the leg is red, never a smaller green denominator.
+        missing = two_app_migrate(d / "missing")
+        shard_with(d / "missing-shards", "cs2gs-selfmig-shard-1", app("src/A/A.csproj", *GREEN))
+        gate = run_gate(missing, d / "missing-shards")
+        assert gate.returncode != 0 and "no shard reported a result" in gate.stderr, gate.stderr
+        assert not (missing / "stats.json").exists()
+        r = leg.leg_result("gsharp-csharp", gate.returncode, missing / "stats.json", "", "", "u")
+        assert r["status"] == "red" and "no stats.json" in r["summary"], r
+        # A corrupt (truncated) shard artifact fails closed the same way.
+        corrupt = two_app_migrate(d / "corrupt")
+        shard_with(d / "corrupt-shards", "cs2gs-selfmig-shard-1", app("src/A/A.csproj", *GREEN), app("src/B/B.csproj", *GREEN))
+        (d / "corrupt-shards" / "cs2gs-selfmig-shard-1" / "shard-run.json").write_text('{"apps": [')
+        gate = run_gate(corrupt, d / "corrupt-shards")
+        assert gate.returncode != 0 and not (corrupt / "stats.json").exists(), gate.stderr
+        assert leg.leg_result("gsharp-csharp", gate.returncode, corrupt / "stats.json", "", "", "u")["status"] == "red"
+        # A failure inside ONE validate shard reaches the merged run, the
+        # stats and the leg result.
+        one_red = two_app_migrate(d / "one-red")
+        shard_with(d / "one-red-shards", "cs2gs-selfmig-shard-1", app("src/A/A.csproj", *GREEN))
+        shard_with(d / "one-red-shards", "cs2gs-selfmig-shard-2", app("src/B/B.csproj", *COMPILE_RED, category="compile-error"))
+        gate = run_gate(one_red, d / "one-red-shards")
+        s = json.loads((one_red / "stats.json").read_text())
+        assert (s["green"], s["total"], s["compile_failed"]) == (1, 2, 1), s
+        assert s["redApps"] == ["src/B/B.csproj (compile-error, reached compile)"], s
+        assert leg.leg_result("gsharp-csharp", gate.returncode, one_red / "stats.json", "", "", "u")["status"] == "red"
+        # The baseline is main's tools/cs2gs/selfmig-baseline.json even when
+        # SELFMIG_SOURCE_ROOT points at a corpus carrying its own copy.
+        corpus = d / "corpus"
+        (corpus / "tools" / "cs2gs").mkdir(parents=True)
+        (corpus / "tools" / "cs2gs" / "selfmig-baseline.json").write_text(json.dumps(
+            {"greenFloor": 1, "syntheticLabelCeiling": 99, "liftedLocalCeiling": 99, "longLineCeiling": 99,
+             "nullAssertionCeiling": 99, "greenApps": [], "stageFloor": {}}))
+        from_corpus = two_app_migrate(d / "from-corpus")
+        shard_with(d / "from-corpus-shards", "cs2gs-selfmig-shard-1", app("src/A/A.csproj", *GREEN), app("src/B/B.csproj", *GREEN))
+        gate = run_gate(from_corpus, d / "from-corpus-shards", SELFMIG_SOURCE_ROOT=str(corpus))
+        s = json.loads((from_corpus / "stats.json").read_text())
+        assert (s["green"], s["floor"], s["baseline"]) == (2, floor, "failed"), s
+        assert gate.returncode != 0 and f"fell below floor {floor}" in gate.stderr, gate.stderr
     print("OK")
 
 

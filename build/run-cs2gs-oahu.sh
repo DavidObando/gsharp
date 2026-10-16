@@ -48,13 +48,13 @@ fi
 
 echo "Oahu gate '$label': $actual_commit"
 
-dotnet restore "$source_dir/Oahu.sln"
-dotnet build "$source_dir/Oahu.sln" --configuration Release --no-restore
-dotnet test "$source_dir/tests/Oahu.Cli.Tests/Oahu.Cli.Tests.csproj" \
+cs2gs_frozen_corpus_env dotnet restore "$source_dir/Oahu.sln"
+cs2gs_frozen_corpus_env dotnet build "$source_dir/Oahu.sln" --configuration Release --no-restore
+cs2gs_frozen_corpus_env dotnet test "$source_dir/tests/Oahu.Cli.Tests/Oahu.Cli.Tests.csproj" \
   --configuration Release --no-build
-dotnet test "$source_dir/tests/Oahu.Foundation.Tests/Oahu.Foundation.Tests.csproj" \
+cs2gs_frozen_corpus_env dotnet test "$source_dir/tests/Oahu.Foundation.Tests/Oahu.Foundation.Tests.csproj" \
   --configuration Release --no-build
-dotnet test "$source_dir/tests/Oahu.Cli.E2E.Tests/Oahu.Cli.E2E.Tests.csproj" \
+cs2gs_frozen_corpus_env dotnet test "$source_dir/tests/Oahu.Cli.E2E.Tests/Oahu.Cli.E2E.Tests.csproj" \
   --configuration Release --no-build
 dotnet "$source_dir/src/Oahu.App/bin/Release/net10.0/Oahu.dll" --smoke-test
 
@@ -64,7 +64,7 @@ dotnet "$source_dir/src/Oahu.App/bin/Release/net10.0/Oahu.dll" --smoke-test
 # it, so this gate alone downgrades them to forwarded warnings that name each
 # site in the log. Remove the flag once the pinned Oahu commit has no #if.
 set +e
-dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
+cs2gs_frozen_corpus_env dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$source_dir" \
   --out "$migrated_dir" \
   --artifacts "$runs_dir" \
