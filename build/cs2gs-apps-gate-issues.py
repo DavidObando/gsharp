@@ -30,8 +30,9 @@ prints what it would file and touches no issue, so iterating on a branch
 cannot spam or comment on the real gate issues; its exit code still reports
 the red apps.
 
-A leg whose job was cancelled or skipped (`--incomplete`, or a leg result with
-status "incomplete") is reported "incomplete": the gate still exits non-zero,
+A leg whose own job was cancelled or skipped (`--incomplete`, or `--jobs` with
+`--leg-job APP=JOB`, which reads each matrix child's conclusion separately; or a
+leg result with status "incomplete") is reported "incomplete": the gate still exits non-zero,
 so a cancelled run is never green, but no issue is filed or commented on,
 because nothing showed a migration failure (scheduled run 38908586181 had all
 three legs cancelled and filed three bogus issues).
@@ -199,6 +200,31 @@ def load_results(results_dir: Path) -> list[dict]:
     return results
 
 
+def cancelled_legs(jobs_path: Path | None, leg_jobs: list[str]) -> set[str]:
+    """The apps whose OWN job was cancelled or skipped, decided per leg.
+
+    A matrix job's `needs.<id>.result` is one conclusion for all of its
+    children, so a failed Oahu leg and a cancelled Code Exploder leg cannot be
+    told apart from it. The Actions jobs API names each child ("app (oahu)").
+    Fail-closed: when the jobs cannot be read, no leg is excused, and a
+    missing result stays a red, filed crash.
+    """
+    if jobs_path is None or not leg_jobs:
+        return set()
+    try:
+        jobs = json.loads(jobs_path.read_text(encoding="utf-8")).get("jobs", [])
+        conclusions = {j["name"]: j.get("conclusion") or j.get("status") for j in jobs if isinstance(j, dict)}
+    except (OSError, ValueError, AttributeError, KeyError, TypeError) as exc:
+        print(f"could not read the run's jobs ({exc.__class__.__name__}): no leg is treated as cancelled", file=sys.stderr)
+        return set()
+    legs = set()
+    for pair in leg_jobs:
+        app, _, job = pair.partition("=")
+        if conclusions.get(job) in ("cancelled", "skipped"):
+            legs.add(app)
+    return legs
+
+
 def cell(text: object) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ")
 
@@ -233,6 +259,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--incomplete", default="",
                     help="comma-separated apps whose job was cancelled or skipped; if such an app has no result it is "
                          "reported incomplete (the run is not green, no issue is filed) instead of crashed")
+    ap.add_argument("--jobs", type=Path,
+                    help="the run's jobs as the Actions API returns them ({\"jobs\": [{\"name\", \"conclusion\"}]})")
+    ap.add_argument("--leg-job", action="append", default=[], metavar="APP=JOB",
+                    help="the job whose conclusion decides whether APP is incomplete; with --jobs")
     ap.add_argument("--summary", type=Path, help="append the end-of-run markdown table to this file")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
@@ -243,7 +273,7 @@ def main(argv: list[str]) -> int:
     for r in results:
         if r.get("run_url") in (None, "", "(see the workflow run)"):
             r["run_url"] = a.run_url
-    incomplete = set(filter(None, a.incomplete.split(",")))
+    incomplete = set(filter(None, a.incomplete.split(","))) | cancelled_legs(a.jobs, a.leg_job)
     for app in filter(None, a.expect.split(",")):
         if not any(r["app"] == app for r in results):
             if app in incomplete:

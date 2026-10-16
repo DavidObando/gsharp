@@ -177,6 +177,38 @@ def main():
             assert filed[0]["fingerprint"] == "missing-result", filed
         finally:
             gate.process = real_process
+    # Per-leg conclusions (--jobs/--leg-job): a matrix's needs.result is one
+    # value for both children, so Oahu failing at restore while Code Exploder
+    # is cancelled must file Oahu and excuse only Code Exploder.
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "b.json").write_text('{"banked": []}')
+        legs = ["--leg-job", "oahu=app (oahu)", "--leg-job", "code-exploder=app (code-exploder)",
+                "--leg-job", "gsharp-csharp=gsharp-csharp (aggregate)"]
+        base = ["--results", str(Path(d, "r")), "--banked", str(Path(d, "b.json")), "--ref", "main", "--dry-run",
+                "--expect", "gsharp-csharp,oahu,code-exploder", "--jobs", str(Path(d, "jobs.json"))] + legs
+        Path(d, "r").mkdir()
+        Path(d, "r", "result-gsharp-csharp.json").write_text(json.dumps({"app": "gsharp-csharp", "status": "green"}))
+
+        def outcome(jobs):
+            Path(d, "jobs.json").write_text(jobs if isinstance(jobs, str) else json.dumps({"jobs": jobs}))
+            seen = []
+            real = gate.process
+            gate.process = lambda results, banked, ref, gh: seen.extend(results) or 0
+            try:
+                code = gate.main(base)
+            finally:
+                gate.process = real
+            return code, {r["app"]: r["status"] for r in seen}
+
+        mixed = [{"name": "app (oahu)", "conclusion": "failure"},
+                 {"name": "app (code-exploder)", "conclusion": "cancelled"},
+                 {"name": "gsharp-csharp (aggregate)", "conclusion": "success"}]
+        assert outcome(mixed) == (1, {"gsharp-csharp": "green", "oahu": "red", "code-exploder": "incomplete"})
+        both = [{"name": "app (oahu)", "conclusion": "cancelled"}, {"name": "app (code-exploder)", "conclusion": "skipped"}]
+        assert outcome(both) == (1, {"gsharp-csharp": "green", "oahu": "incomplete", "code-exploder": "incomplete"})
+        # Unreadable jobs: nothing is excused, both missing legs are red crashes.
+        assert outcome("{not json") == (1, {"gsharp-csharp": "green", "oahu": "red", "code-exploder": "red"})
+        assert outcome([]) == (1, {"gsharp-csharp": "green", "oahu": "red", "code-exploder": "red"})
     # process() itself never files an incomplete result.
     g = FakeGh([])
     gate.process([{"app": "oahu", "status": "incomplete", "summary": "cancelled"}], {"oahu"}, "main", g)

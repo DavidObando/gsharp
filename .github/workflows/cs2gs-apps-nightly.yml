@@ -433,6 +433,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # Per-leg job conclusions for cancelled-leg handling.
+      actions: read
     steps:
       - uses: actions/checkout@v5
 
@@ -454,22 +456,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          APP_RESULT: ${{ needs.app.result }}
-          CSHARP_RESULT: ${{ needs.csharp-aggregate.result }}
         run: |
           mkdir -p results
-          # A leg whose job was cancelled or skipped and left no result is
+          # A leg whose OWN job was cancelled or skipped and left no result is
           # "incomplete": the gate stays red, but no issue is filed for a
           # migration failure nothing showed (run 38908586181). A job that
-          # failed or crashed without a result is still red and filed.
-          incomplete=""
-          case "$APP_RESULT" in cancelled|skipped) incomplete+="oahu,code-exploder," ;; esac
-          case "$CSHARP_RESULT" in cancelled|skipped) incomplete+="gsharp-csharp," ;; esac
+          # failed or crashed without a result is still red and filed. Each
+          # matrix child's conclusion comes from the jobs API, because
+          # needs.app.result is one value for both legs. If the API cannot be
+          # read, no leg is excused (fail-closed).
+          gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/jobs.json" \
+            || echo '{}' > "$RUNNER_TEMP/jobs.json"
           python3 build/cs2gs-apps-gate-issues.py \
             --results results \
             --banked tools/cs2gs/apps-nightly-banked.json \
             --expect gsharp-csharp,oahu,code-exploder \
-            --incomplete "$incomplete" \
+            --jobs "$RUNNER_TEMP/jobs.json" \
+            --leg-job "oahu=app (oahu)" \
+            --leg-job "code-exploder=app (code-exploder)" \
+            --leg-job "gsharp-csharp=gsharp-csharp (aggregate)" \
             --run-url "$RUN_URL" \
             --summary "$GITHUB_STEP_SUMMARY" \
             --ref "${GITHUB_REF_NAME}"
