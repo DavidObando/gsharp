@@ -46,7 +46,7 @@ def result(d: Path, code: int, stats: object | None, **kw) -> dict:
     out = d / "result.json"
     args = ["result", "--app", "x", "--exit-code", str(code), "--stats", str(stats_path), "--out", str(out)]
     for k, v in kw.items():
-        args += [f"--{k.replace('_', '-')}", v]
+        args += [f"--{k.replace('_', '-')}"] + ([v] if v != "" else [])
     assert leg.main(args) == 0
     return json.loads(out.read_text())
 
@@ -113,6 +113,10 @@ def main():
         assert r["status"] == "red" and "below the floor" in r["summary"], r
         r = result(d, 0, full, note="the validate shards failed")
         assert r["status"] == "red" and "the validate shards failed" in r["summary"], r
+        # A cancelled dependency makes the leg incomplete, whatever the stats.
+        assert leg.leg_result("x", 0, d / "stats.json", "", "", "u", incomplete=True)["status"] == "incomplete"
+        r = result(d, 1, None, note="the translate job finished 'cancelled'", incomplete="")
+        assert r["status"] == "incomplete" and "cancelled" in r["summary"], r
         # The log tail is the END of the log.
         (d / "leg.log").write_text("x" * 9000 + "THE END")
         assert result(d, 1, full, log=str(d / "leg.log"))["log_tail"].endswith("THE END")

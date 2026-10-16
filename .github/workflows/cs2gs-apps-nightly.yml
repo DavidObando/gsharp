@@ -66,7 +66,9 @@ name: cs2gs-apps-nightly
 # (tools/cs2gs/apps-nightly-banked.json) goes red on main, otherwise P1. Only
 # runs on main file issues; a dispatch on any other ref (proving a workflow
 # change) reports in its summary and exit code but touches no issue. A leg that
-# crashed without a result, or left a malformed one, is reported red.
+# crashed without a result, or left a malformed one, is reported red. A leg
+# whose job was cancelled is "incomplete": the gate is red, but no issue is
+# filed, since nothing showed a migration failure.
 
 on:
   schedule:
@@ -382,7 +384,15 @@ jobs:
           fi
           note=""
           for n in "${notes[@]}"; do note+="${note:+; }$n"; done
+          # A cancelled translate or validate job did not finish: report the
+          # leg incomplete (the gate stays red but files no issue), not as a
+          # migration failure. A job that FAILED is still red.
+          incomplete=()
+          if [[ "$MIGRATE_RESULT" == cancelled || "$VALIDATE_RESULT" == cancelled ]]; then
+            incomplete=(--incomplete)
+          fi
           python3 build/cs2gs-apps-leg.py result --app gsharp-csharp --exit-code "$code" \
+            "${incomplete[@]}" \
             --stats "$SELFMIG_GATE_ROOT/stats.json" --note "$note" \
             --log "$RUNNER_TEMP/leg.log" --run-url "$RUN_URL" \
             --out "$RUNNER_TEMP/results/result-gsharp-csharp.json"
@@ -444,12 +454,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          APP_RESULT: ${{ needs.app.result }}
+          CSHARP_RESULT: ${{ needs.csharp-aggregate.result }}
         run: |
           mkdir -p results
+          # A leg whose job was cancelled or skipped and left no result is
+          # "incomplete": the gate stays red, but no issue is filed for a
+          # migration failure nothing showed (run 38908586181). A job that
+          # failed or crashed without a result is still red and filed.
+          incomplete=""
+          case "$APP_RESULT" in cancelled|skipped) incomplete+="oahu,code-exploder," ;; esac
+          case "$CSHARP_RESULT" in cancelled|skipped) incomplete+="gsharp-csharp," ;; esac
           python3 build/cs2gs-apps-gate-issues.py \
             --results results \
             --banked tools/cs2gs/apps-nightly-banked.json \
             --expect gsharp-csharp,oahu,code-exploder \
+            --incomplete "$incomplete" \
             --run-url "$RUN_URL" \
             --summary "$GITHUB_STEP_SUMMARY" \
             --ref "${GITHUB_REF_NAME}"

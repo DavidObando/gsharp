@@ -37,7 +37,11 @@ run.json behind. Two subcommands turn that into what the gate job reads:
 
               cs2gs-apps-leg.py result --app APP --exit-code N --stats FILE
                                        --out FILE [--log FILE] [--note TEXT]
-                                       [--run-url URL]
+                                       [--run-url URL] [--incomplete]
+
+          --incomplete (a job the leg depends on was cancelled) makes the
+          status "incomplete": the run is not green, but no migration failure
+          is claimed, so the gate files no issue for it.
 """
 
 from __future__ import annotations
@@ -165,7 +169,8 @@ def load_stats(path: Path) -> tuple[dict | None, str]:
     return stats, ""
 
 
-def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_url: str) -> dict:
+def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_url: str,
+               incomplete: bool = False) -> dict:
     stats, problem = load_stats(stats_path)
     notes = [note] if note else []
     if problem:
@@ -178,6 +183,11 @@ def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_u
         if stats.get("baseline") == "failed":
             notes.append("the baseline gate failed (see the GATE: lines in the log)")
     status = "green" if code == 0 and not notes else "red"
+    if incomplete:
+        # A job this leg depends on was cancelled: whatever the stats say, the
+        # run did not finish, so it is neither a pass nor a migration failure.
+        # The gate reports it red-for-the-run and files no issue for it.
+        status = "incomplete"
     headline = f"leg exited {code}"
     if stats and not problem:
         headline += f"; {stats['green']}/{stats['total']} apps green (floor {stats.get('floor', stats['total'])})"
@@ -190,7 +200,7 @@ def cmd_result(a: argparse.Namespace) -> int:
     log = ""
     if a.log and a.log.is_file():
         log = a.log.read_text(encoding="utf-8", errors="replace")
-    result = leg_result(a.app, a.exit_code, a.stats, log, a.note, a.run_url)
+    result = leg_result(a.app, a.exit_code, a.stats, log, a.note, a.run_url, a.incomplete)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(result), encoding="utf-8")
     print(f"cs2gs-apps-leg result: {a.app} is {result['status']}: {result['summary']}")
@@ -215,6 +225,8 @@ def main(argv: list[str]) -> int:
     r.add_argument("--log", type=Path)
     r.add_argument("--note", default="")
     r.add_argument("--run-url", default="(see the workflow run)")
+    r.add_argument("--incomplete", action="store_true",
+                   help="a job the leg depends on was cancelled: report the leg incomplete, not green or red")
     a = ap.parse_args(argv)
     return cmd_stats(a) if a.cmd == "stats" else cmd_result(a)
 

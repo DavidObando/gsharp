@@ -21,13 +21,20 @@ P0 only when a previously banked app (listed in the banked file) goes red on
 raises it to P0 when the rule now applies.
 
     cs2gs-apps-gate-issues.py --results DIR --banked FILE --ref REF
-        [--expect APP,APP,...] [--run-url URL] [--summary FILE] [--dry-run]
+        [--expect APP,APP,...] [--incomplete APP,APP,...] [--run-url URL]
+        [--summary FILE] [--dry-run]
 
 Issues are filed ONLY for a run on `main` (the schedule, or a dispatch with
 `--ref main`). A run on any other ref (a branch proving a workflow change)
 prints what it would file and touches no issue, so iterating on a branch
 cannot spam or comment on the real gate issues; its exit code still reports
 the red apps.
+
+A leg whose job was cancelled or skipped (`--incomplete`, or a leg result with
+status "incomplete") is reported "incomplete": the gate still exits non-zero,
+so a cancelled run is never green, but no issue is filed or commented on,
+because nothing showed a migration failure (scheduled run 38908586181 had all
+three legs cancelled and filed three bogus issues).
 
 Fail-safe input handling (issue #4887): a result file that does not parse, is
 not an object, or has no app name becomes a RED result named after its file
@@ -54,6 +61,9 @@ import sys
 from pathlib import Path
 
 LABEL = "cs2gs-nightly"
+# "incomplete": the leg's job was cancelled or skipped, so it neither passed nor
+# showed a migration failure. It keeps the gate red but files no issue.
+STATUSES = ("green", "red", "incomplete")
 PRIORITIES = ("P0", "P1", "P2")
 MARKER = "<!-- cs2gs-gate-fp:{} -->"
 
@@ -220,6 +230,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--ref", required=True)
     ap.add_argument("--expect", default="", help="comma-separated apps that must have a result; a missing one counts as red")
     ap.add_argument("--run-url", default="(see the workflow run)", help="the run, for results synthesized here")
+    ap.add_argument("--incomplete", default="",
+                    help="comma-separated apps whose job was cancelled or skipped; if such an app has no result it is "
+                         "reported incomplete (the run is not green, no issue is filed) instead of crashed")
     ap.add_argument("--summary", type=Path, help="append the end-of-run markdown table to this file")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
@@ -230,13 +243,18 @@ def main(argv: list[str]) -> int:
     for r in results:
         if r.get("run_url") in (None, "", "(see the workflow run)"):
             r["run_url"] = a.run_url
+    incomplete = set(filter(None, a.incomplete.split(",")))
     for app in filter(None, a.expect.split(",")):
         if not any(r["app"] == app for r in results):
-            results.append({"app": app, "status": "red", "summary": "no result file: the leg crashed before reporting",
-                            "fingerprint": "missing-result", "log_tail": "", "run_url": a.run_url})
-    # A status other than exactly green or red is a malformed result, never a pass.
+            if app in incomplete:
+                results.append({"app": app, "status": "incomplete", "log_tail": "", "run_url": a.run_url,
+                                "summary": "no result file: the leg's job was cancelled or skipped before reporting"})
+            else:
+                results.append({"app": app, "status": "red", "summary": "no result file: the leg crashed before reporting",
+                                "fingerprint": "missing-result", "log_tail": "", "run_url": a.run_url})
+    # A status other than green, red or incomplete is a malformed result, never a pass.
     for r in results:
-        if r.get("status") not in ("green", "red"):
+        if r.get("status") not in STATUSES:
             r["summary"] = f"invalid status {r.get('status')!r} in the leg result; {r.get('summary', '')}"
             r["fingerprint"] = r.get("fingerprint") or "invalid-status"
             r["status"] = "red"
@@ -253,8 +271,10 @@ def main(argv: list[str]) -> int:
         dry_run = True
     process(results, banked, a.ref, Gh(dry_run))
     reds = [r["app"] for r in results if r.get("status") == "red"]
-    print(f"{len(results)} apps, {len(reds)} red: {', '.join(reds) or 'none'}")
-    return 1 if reds else 0
+    unfinished = [r["app"] for r in results if r.get("status") == "incomplete"]
+    print(f"{len(results)} apps, {len(reds)} red: {', '.join(reds) or 'none'}"
+          + (f"; {len(unfinished)} incomplete (cancelled, no issue filed): {', '.join(unfinished)}" if unfinished else ""))
+    return 1 if reds or unfinished else 0
 
 
 if __name__ == "__main__":

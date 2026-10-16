@@ -153,6 +153,35 @@ def main():
         gate.report_one = orig_report
     assert len(g.writes) == 1 and "code-exploder is red" in g.writes[0][3], g.writes
 
+    # Cancelled legs (run 38908586181): with --incomplete, an expected app with
+    # no result is "incomplete" -- the gate still exits 1, so the run is never
+    # green, but no issue is filed or commented on, even on main. A leg result
+    # that says "incomplete" behaves the same. An app NOT listed as incomplete
+    # that left no result is still a red crash and is filed.
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "b.json").write_text('{"banked": ["oahu"]}')
+        base = ["--results", d, "--banked", str(Path(d, "b.json")), "--ref", "main", "--dry-run",
+                "--expect", "gsharp-csharp,oahu,code-exploder"]
+        filed = []
+        real_process = gate.process
+        gate.process = lambda results, banked, ref, gh: filed.extend(r for r in results if r["status"] == "red") or 0
+        try:
+            summary = Path(d, "summary.md")
+            assert gate.main(base + ["--incomplete", "oahu,code-exploder,gsharp-csharp,", "--summary", str(summary)]) == 1
+            assert filed == [], filed
+            assert summary.read_text().count("| incomplete |") == 3, summary.read_text()
+            Path(d, "result-gsharp-csharp.json").write_text(json.dumps(
+                {"app": "gsharp-csharp", "status": "incomplete", "summary": "the translate job finished 'cancelled'"}))
+            assert gate.main(base + ["--incomplete", "oahu"]) == 1
+            assert [r["app"] for r in filed] == ["code-exploder"], filed
+            assert filed[0]["fingerprint"] == "missing-result", filed
+        finally:
+            gate.process = real_process
+    # process() itself never files an incomplete result.
+    g = FakeGh([])
+    gate.process([{"app": "oahu", "status": "incomplete", "summary": "cancelled"}], {"oahu"}, "main", g)
+    assert not g.writes and not g.reads, g.writes
+
     # The summary table: scalar stats as k=v (lists and the source path left
     # out), each leg's red apps listed below, and a non-object stats is n/a.
     table = gate.render_summary([
