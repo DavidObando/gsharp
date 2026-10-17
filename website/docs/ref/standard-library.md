@@ -44,7 +44,7 @@ Shift counts are `int32`. Compound assignments exist for the corresponding binar
 
 ## Intrinsic operations
 
-Channel operations are recognized specially by the binder; they are language syntax, not methods imported from the BCL, and they need no import (ADR-0174).
+Channel operations are recognized specially by the binder; they are language syntax, not methods imported from the BCL, and they need no import.
 
 | Operation | Form | Operands | Result |
 | --- | --- | --- | --- |
@@ -56,7 +56,7 @@ Channel operations are recognized specially by the binder; they are language syn
 | close | `ch.Close()` | `chan[T]` or `out chan[T]` | member call; closing twice throws, `Dispose()` is idempotent |
 | `select` | `select { case … }` | channel operations | runs the first ready case |
 
-The Go-style built-in functions `len`, `cap`, `append`, `delete`, `close(ch)`, and `make(chan T)` are **retired** (ADR-0174 D12/D13). A call reports `GS0566` naming the member replacement for the site — `xs.Length`, `m.Count`, `m.Remove(k)`, `ch.Length()`, `ch.Capacity`, `ch.Close()`, `chan[T](n)` — and a user-defined function of the same name is an ordinary call. See [Go-style built-ins (retired)](../extensions/go-builtins) for the full table.
+The Go-style built-in functions `len`, `cap`, `append`, `delete`, `close(ch)`, and `make(chan T)` are **retired**. A call reports `GS0566` naming the member replacement for the site — `xs.Length`, `m.Count`, `m.Remove(k)`, `ch.Length()`, `ch.Capacity`, `ch.Close()`, `chan[T](n)` — and a user-defined function of the same name is an ordinary call. See [Go-style built-ins (retired)](../extensions/go-builtins) for the full table.
 
 ```gsharp
 let ch = chan[int32](3)

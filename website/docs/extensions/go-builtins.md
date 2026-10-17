@@ -8,7 +8,7 @@ description: "Replace retired Go-style built-ins with the corresponding G# and .
 # Go-style built-ins (retired)
 
 Early G# 0.4 packages shipped the Go-style built-in functions `len`, `cap`, `append`, and
-`delete` behind a per-file `import Gsharp.Extensions.Go`. ADR-0174 (D13)
+`delete` behind a per-file `import Gsharp.Extensions.Go`. Later releases
 retired them, together with the import gate and the `Gsharp.Extensions.Go`
 namespace itself: every receiver already carries the member, so a free
 function that adds no syntax of its own only competed with it. A call to a
@@ -54,8 +54,8 @@ Console.WriteLine(counts.Count)       // 1
 Console.WriteLine("hello".Length)     // 5
 ```
 
-Because `[]T` **is** `T[]` and `map[K, V]` **is** `Dictionary[K, V]` (ADR-0158
-type identity), no new API ships with this change; the members were always
+Because `[]T` **is** `T[]` and `map[K, V]` **is** `Dictionary[K, V]` (the same
+type), no new API ships with this change; the members were always
 there.
 
 ## See also

@@ -12,7 +12,9 @@ This page mirrors the authoritative diagnostic catalogue in [`docs/diagnostics.m
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
-## Persistent managed references (ADR-0188)
+<span id="persistent-managed-references-adr-0188"></span>
+
+## Persistent managed references
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
@@ -41,7 +43,9 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 
 IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms are equivalent.
 
-### Source-level, scoped suppression (ADR-0175)
+<span id="source-level-scoped-suppression-adr-0175"></span>
+
+### Source-level, scoped suppression
 
 The flags above are whole-compilation. To turn an analyzer diagnostic, or a
 compiler **warning**, off for one declaration or one range of statements,
@@ -68,7 +72,7 @@ declaration or block it precedes; nesting adds identifiers and never removes
 them. An argument that is not a constant string shaped like a diagnostic ID is
 reported as [GS9305](#analyzer-host-diagnostics-gs9300gs9319-reserved).
 
-Since issue #4422 the same scopes also filter the compiler's own `GS####`
+The same scopes also filter the compiler's own `GS####`
 diagnostics, in gsc, the language server and every `EmitResult`, but only
 warnings: as with C#'s `#pragma warning disable`, a compiler error cannot be
 suppressed. The check uses the diagnostic's own severity before `/warnaserror`
@@ -112,7 +116,7 @@ declaration.
 | GS0100 | Error | Not all code paths return a value. | A non-void function is missing a `return` on some branch. |
 | GS0101 | Error | Parameter already declared. | Two parameters share the same name. |
 | GS0102 | Error | Symbol already declared. | A variable or function name is used twice in the same scope. |
-| GS0103 | _Retired_ | Previously: a same-package receiver clause on a non-aggregate type (enum, interface, non-struct alias) was rejected. ADR-0182 made every receiver clause an extension regardless of the receiver's owning package or kind, so any receiver type is now valid; this diagnostic is no longer emitted. | — |
+| GS0103 | _Retired_ | Previously: a same-package receiver clause on a non-aggregate type (enum, interface, non-struct alias) was rejected. Every receiver clause is now an extension regardless of the receiver's owning package or kind, so any receiver type is now valid; this diagnostic is no longer emitted. | — |
 | GS0104 | Error | Reserved; not currently emitted. Zero-field `data class`/`data struct` declarations are supported with trivial equality/hash/ToString/copy semantics and no synthesized `Deconstruct`. | — |
 | GS0105 | Error | `inline struct` requires exactly one field. | `inline struct Foo { a int; b int }` has two fields. |
 | GS0106 | Error | `inline` cannot be combined with `data`. | `inline data struct Foo { … }` is not legal. (Historical: the `record` keyword was removed by; pre-removal this diagnostic also covered `inline record`.) |
@@ -141,7 +145,7 @@ declaration.
 | GS0129 | Error | Binary operator not defined for types. | `true + 1` — `+` is not defined for `(bool, int)`. |
 | GS0130 | Error | Undefined function. | A call to a function name that was never declared. |
 | GS0131 | Error | Name is not a function. | `x()` where `x` is an `int` variable. |
-| GS0132 | Error | `await` has no enclosing function to make suspending. | `await someTask` where no enclosing function exists. A plain `func` may await: ADR-0174 D4 makes the await a suspension point that colours the awaiting function — see GS0574/GS0575/GS0576 for the positions that reject it. |
+| GS0132 | Error | `await` has no enclosing function to make suspending. | `await someTask` where no enclosing function exists. A plain `func` may await: the await is a suspension point that colours the awaiting function — see GS0574/GS0575/GS0576 for the positions that reject it. |
 | GS0133 | Error | Expression is not awaitable. | `await 42` — `int` is not a `Task` or `Task[T]`. |
 | GS0134 | Error | Expression is not async-enumerable. | `await for x in 42` — `int` does not implement `IAsyncEnumerable[T]`. |
 | GS0135 | Error | `async` modifier in a type clause is only valid before `sequence[T]`, `(T) -> R`, or `func(...)`. | `async int` in a type position. |
@@ -177,7 +181,7 @@ declaration.
 | GS0165 | Error | Top-level statements may appear in at most one package per compilation. | Two or more `package` declarations in a single compilation each contain top-level statements. |
 | GS0166 | Warning | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present; TLS wins and the explicit `Main` is shadowed. |
 | GS0167 | Error | Multi-assignment target/value count mismatch. | `a, b = 1, 2, 3` — three values for two targets. |
-| GS0168 | Error | `fallthrough` must be the last statement of a `switch` case body. | `fallthrough` followed by more statements in the same case body (issue #3501 A3: a trailing `fallthrough` is now legal Go-style control flow). |
+| GS0168 | Error | `fallthrough` must be the last statement of a `switch` case body. | `fallthrough` followed by more statements in the same case body (a trailing `fallthrough` is legal Go-style control flow). |
 | GS0169 | Error | Duplicate `default` arm in `switch`. | Two `default:` arms inside one `switch` statement. |
 | GS0170 | Error | Switch case value is not a constant expression. | `case x:` where `x` is a mutable variable. |
 | GS0171 | Error | Switch case type is incompatible with the switch expression. | `switch (s) { case 42: }` where `s` is `string`. |
@@ -194,7 +198,7 @@ declaration.
 | GS0182 | Error | Method is overridable; `override` required. | Redefining an `open` method without the `override` keyword. |
 | GS0183 | Error | No matching open base method for `override`. | `override` keyword present but no base class defines a matching open method. |
 | GS0184 | Error | Cannot override a non-open base method. | `override` targets a method that was not declared `open`. |
-| GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. Also an `override` property whose by-ref return does not match the base slot's (issue #3879): `ref` may only override `ref`, and by-value only by-value. |
+| GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. Also an `override` property whose by-ref return does not match the base slot's: `ref` may only override `ref`, and by-value only by-value. |
 | GS0186 | Error | _(historical — removed)_ Interface method may not have a body. | Default-interface methods are now supported (see GS0318–GS0321). |
 | GS0187 | Error | Class or struct does not implement interface method. | A class or struct claims to implement an interface but a required method is absent. |
 | GS0188 | Error | Class or struct cannot implement a sealed interface from a different package. | A class or struct implements a `sealed interface` defined outside its package. |
@@ -290,7 +294,7 @@ Such a type is emitted with `System.Runtime.CompilerServices.IsByRefLikeAttribut
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS0219 | Error | A by-ref-like (`ref struct`) value is used in a position that would let it escape the stack: boxing / converting it to a reference type (`object`, an interface, a delegate base), storing it in a field of a non-ref-struct (instance, primary-constructor, or static — **including an auto-property's compiler-synthesized backing field**, issue #3873), capturing it in a closure, declaring it as a local in an `async` function or an iterator (where it would be hoisted into the heap-allocated state machine), using it as a generic type argument, or returning it from a function when its value scope is explicit or implicitly `scoped`. A `ref` parameter of ref-struct type is implicitly value-scoped; use `@UnscopedRef` only when its value may intentionally escape. | `var o object = span` (box); a `class`/`struct` field typed `Span[int32]`; `struct X { prop Values Span[int32] }` (auto-property backing field); `ref struct X { shared { prop Values Span[int32] } }` (static backing field); capturing a `ReadOnlySpan[char]` local inside `func() { ... }`; declaring a `Span[int32]` local in an `async` function; `List[ReadOnlySpan[int32]]`; `func f(ref s Span[int32]) Span[int32] { return s }` — add `@UnscopedRef` to opt out. |
+| GS0219 | Error | A by-ref-like (`ref struct`) value is used in a position that would let it escape the stack: boxing / converting it to a reference type (`object`, an interface, a delegate base), storing it in a field of a non-ref-struct (instance, primary-constructor, or static — **including an auto-property's compiler-synthesized backing field**), capturing it in a closure, declaring it as a local in an `async` function or an iterator (where it would be hoisted into the heap-allocated state machine), using it as a generic type argument, or returning it from a function when its value scope is explicit or implicitly `scoped`. A `ref` parameter of ref-struct type is implicitly value-scoped; use `@UnscopedRef` only when its value may intentionally escape. | `var o object = span` (box); a `class`/`struct` field typed `Span[int32]`; `struct X { prop Values Span[int32] }` (auto-property backing field); `ref struct X { shared { prop Values Span[int32] } }` (static backing field); capturing a `ReadOnlySpan[char]` local inside `func() { ... }`; declaring a `Span[int32]` local in an `async` function; `List[ReadOnlySpan[int32]]`; `func f(ref s Span[int32]) Span[int32] { return s }` — add `@UnscopedRef` to opt out. |
 
 A **computed** property of a by-ref-like type is fine — it has no backing field, so nothing reaches the heap — and so is an *instance* auto-property inside a `ref struct`. Indexers cannot reach this rule at all: G# has no auto-indexer form (a bodiless indexer is GS0371), so an indexer never synthesizes a backing field.
 
@@ -317,29 +321,29 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
 | GS0586 | Error | Generic local function requires a lexical owner whose direct generic-local hosting is unsupported. | A generic local inside a generic class takes a closed private method group or creates a nested literal requiring that class's generic access domain. Use a named member or an owner-independent helper. |
-| GS0587 | Error | The `extension` keyword before a receiver clause is retired; every receiver clause now declares an extension. Remove `extension` (ADR-0182). | `func extension (c Color) Rank() int32 { ... }` — drop `extension`: `func (c Color) Rank() int32 { ... }` means exactly the same thing. |
-| GS0588 | Error | A `ref`-returning function cannot be converted to a delegate or function-type value; call it directly instead. A ref-returning function LITERAL is only supported as `let name = func (...) ref T { ... }`, a directly-callable local function (issue #4219). | `let at = func(xs []int32, i int32) ref int32 { return ref xs[i] }` followed by `let cb = at` (bare-name delegate conversion), or passing a `func (...) ref T { ... }` literal as an argument, or `var at = func (...) ref T { ... }` (only a `let` local-function declaration is the direct-call shape). |
-| GS0589 | Error | A struct member cannot return a reference to its own instance state; `this` is implicitly `scoped`. Mark the member `@UnscopedRef` (import System.Diagnostics.CodeAnalysis) to allow it (ADR-0184, the CS8170 analogue). | `struct Acc { var Total int32; func slot() ref int32 { return ref this.Total } }` — add `import System.Diagnostics.CodeAnalysis` and `@UnscopedRef` above `func slot`. |
+| GS0587 | Error | The `extension` keyword before a receiver clause is retired; every receiver clause now declares an extension. Remove `extension`. | `func extension (c Color) Rank() int32 { ... }` — drop `extension`: `func (c Color) Rank() int32 { ... }` means exactly the same thing. |
+| GS0588 | Error | A `ref`-returning function cannot be converted to a delegate or function-type value; call it directly instead. A ref-returning function LITERAL is only supported as `let name = func (...) ref T { ... }`, a directly-callable local function. | `let at = func(xs []int32, i int32) ref int32 { return ref xs[i] }` followed by `let cb = at` (bare-name delegate conversion), or passing a `func (...) ref T { ... }` literal as an argument, or `var at = func (...) ref T { ... }` (only a `let` local-function declaration is the direct-call shape). |
+| GS0589 | Error | A struct member cannot return a reference to its own instance state; `this` is implicitly `scoped`. Mark the member `@UnscopedRef` (import System.Diagnostics.CodeAnalysis) to allow it (the CS8170 analogue). | `struct Acc { var Total int32; func slot() ref int32 { return ref this.Total } }` — add `import System.Diagnostics.CodeAnalysis` and `@UnscopedRef` above `func slot`. |
 | GS0590 | Error | `@UnscopedRef` is invalid where no ref-scope contract exists. An interface implementation may not add it unless its selected slot has it; an override is checked only when its signature is ref-safety-relevant. | `@UnscopedRef` on a receiver-clause func, free function, class member, `shared` member, private interface helper, by-value parameter, or explicitly `scoped` parameter; on any annotated implementation of an unannotated interface slot; or on an annotated ref-safety-relevant override of an unannotated slot. |
-| GS0591 | Error | Cannot return a reference obtained through a read-only receiver (an `in` parameter, a `ref readonly` alias, or a `ref readonly` result): the receiver is defensively copied into function-local storage before the call, so the returned reference would point into that copy (ADR-0184 amendment, the CS8156 analogue). | `func fromIn(in a Acc) ref readonly int32 { return ref a.Slot() }` where `Slot` is `@UnscopedRef` — take the receiver by `ref` instead of `in`, or return the value. |
-| GS0592 | Error | A tuple-destructuring arrow-lambda parameter pattern (ADR-0185) requires at least two elements — G# has no 1-tuples. | `let f = ((x int32)) -> x` — add a second element, or use an ordinary parameter (`(x int32) -> x`) instead. |
-| GS0607 | Error | `partial` is not valid here; only a `func` member of a `partial class` or `partial struct` (including a `data class` or `data struct`) may be partial (ADR-0192). | `partial prop P int32 { … }`, `partial func F()` at top level, `partial func` on an interface member, or a partial method with a receiver clause or explicit-interface qualifier (`partial func (IFoo) Bar()`) — all out of scope. |
-| GS0608 | Error | A partial method must be declared inside a `partial class` or `partial struct`, including a `data class` or `data struct` (ADR-0192; the C# CS0751 analogue). | `class A { partial func F() int32; … }` — mark the enclosing type `partial`. |
-| GS0609 | Error | A partial method has no implementing part; every partial method declared in G# must be implemented by exactly one part with a body (ADR-0192 §B). G# deliberately diverges from C#, which silently elides an unimplemented `void` partial method and its call sites. | `partial class A { partial func F() int32; }` with no second part — add the implementing part, or drop `partial` and give the declaration a body. |
-| GS0610 | Error | A partial method must have exactly one signature-only declaring part and one implementing part with a body (ADR-0192). | Two parts that both have bodies, two parts that are both signature-only, or an implementing part with no declaring part (the C# CS0759 analogue). |
-| GS0611 | Error | The declaring and implementing parts of a partial method disagree on some aspect of the signature — return type, parameter names/modifiers, accessibility, `open`/`override`, `async`/`suspend`, `ref` return, or type parameters (ADR-0192 §D); also a return or parameter type whose IDENTICAL spelling resolves to two different types across the two files' imports. A textually *different* parameter type never reaches GS0611: the grouping key treats it as a distinct, unmatched overload and reports GS0609/GS0610 instead. | `partial func F(x int32) int32;` paired with `partial func F(y int32) int32 { … }` — the parameter names differ. |
-| GS0612 | Warning | A by-reference argument's storage type differs from the parameter type only in reference nullability (issue #4422; the C# CS8620/CS8601 analogue). The storage is shared, so a nil can flow through it: the warning fires for any difference at a `ref` parameter, for nullable storage at a non-null `in` parameter, for a nullable `out` parameter over non-null storage, and for any nested difference (`List[string?]` against `List[string]`). A platform (`T!`, ADR-0186) position never warns. GS0612 reads declared types, not C#'s flow state, so it can fire where csc is silent (a `string?` local that holds a non-nil value). A value-type `int32?` is a different runtime type and is GS0154, not GS0612. Suppressible with `@SuppressDiagnostic("GS0612")` (ADR-0175). | `var s string? = nil` then `f(&s)` where `f(ref s string)` — give the storage the parameter's type, or narrow into a non-null local first. |
+| GS0591 | Error | Cannot return a reference obtained through a read-only receiver (an `in` parameter, a `ref readonly` alias, or a `ref readonly` result): the receiver is defensively copied into function-local storage before the call, so the returned reference would point into that copy (the CS8156 analogue). | `func fromIn(in a Acc) ref readonly int32 { return ref a.Slot() }` where `Slot` is `@UnscopedRef` — take the receiver by `ref` instead of `in`, or return the value. |
+| GS0592 | Error | A tuple-destructuring arrow-lambda parameter pattern requires at least two elements — G# has no 1-tuples. | `let f = ((x int32)) -> x` — add a second element, or use an ordinary parameter (`(x int32) -> x`) instead. |
+| GS0607 | Error | `partial` is not valid here; only a `func` member of a `partial class` or `partial struct` (including a `data class` or `data struct`) may be partial. | `partial prop P int32 { … }`, `partial func F()` at top level, `partial func` on an interface member, or a partial method with a receiver clause or explicit-interface qualifier (`partial func (IFoo) Bar()`) — all out of scope. |
+| GS0608 | Error | A partial method must be declared inside a `partial class` or `partial struct`, including a `data class` or `data struct` (the C# CS0751 analogue). | `class A { partial func F() int32; … }` — mark the enclosing type `partial`. |
+| GS0609 | Error | A partial method has no implementing part; every partial method declared in G# must be implemented by exactly one part with a body. G# deliberately diverges from C#, which silently elides an unimplemented `void` partial method and its call sites. | `partial class A { partial func F() int32; }` with no second part — add the implementing part, or drop `partial` and give the declaration a body. |
+| GS0610 | Error | A partial method must have exactly one signature-only declaring part and one implementing part with a body. | Two parts that both have bodies, two parts that are both signature-only, or an implementing part with no declaring part (the C# CS0759 analogue). |
+| GS0611 | Error | The declaring and implementing parts of a partial method disagree on some aspect of the signature — return type, parameter names/modifiers, accessibility, `open`/`override`, `async`/`suspend`, `ref` return, or type parameters; also a return or parameter type whose IDENTICAL spelling resolves to two different types across the two files' imports. A textually *different* parameter type never reaches GS0611: the grouping key treats it as a distinct, unmatched overload and reports GS0609/GS0610 instead. | `partial func F(x int32) int32;` paired with `partial func F(y int32) int32 { … }` — the parameter names differ. |
+| GS0612 | Warning | A by-reference argument's storage type differs from the parameter type only in reference nullability (the C# CS8620/CS8601 analogue). The storage is shared, so a nil can flow through it: the warning fires for any difference at a `ref` parameter, for nullable storage at a non-null `in` parameter, for a nullable `out` parameter over non-null storage, and for any nested difference (`List[string?]` against `List[string]`). A platform (`T!`) position never warns. GS0612 reads declared types, not C#'s flow state, so it can fire where csc is silent (a `string?` local that holds a non-nil value). A value-type `int32?` is a different runtime type and is GS0154, not GS0612. Suppressible with `@SuppressDiagnostic("GS0612")`. | `var s string? = nil` then `f(&s)` where `f(ref s string)` — give the storage the parameter's type, or narrow into a non-null local first. |
 | GS0613 | Error | A named attribute argument selects neither a constructor parameter nor a writable public property or field. | Correct the name; use `name: value` for a constructor parameter or `Name = value` for a property/field. |
 | GS0614 | Error | A named attribute argument's constant value is not assignable to the selected property or field type. | Supply a constant of the member's declared type. |
 | GS0615 | Error | A selected named attribute property or field has a type that cannot be encoded in a CLR custom-attribute blob. | Change the attribute member to a primitive, string, `System.Type`, object, enum, or one-dimensional array thereof. |
 | GS0616 | Error | An attribute constructor argument appears after a property or field assignment. | Move every positional or `name: value` constructor argument before all `Name = value` member assignments. |
-| GS0617 | Error | A `shared` class declares an `init(…)` constructor, a primary constructor, a `deinit`, a `shared { }` block, or an `open` or `override` method, property or event (ADR-0195). | A shared class has only shared members, declared directly in its body, and a shared member is never virtual; remove the declaration or modifier, or drop `shared`. |
-| GS0618 | Error | `shared` is combined with `open`, `sealed`, `abstract` or `data` (ADR-0195). | A shared class is neither inheritable nor instantiable; remove the conflicting modifier. |
-| GS0619 | Error | A `shared` class lists a base class or an interface (ADR-0195). | Remove the base-type clause, or drop `shared`. |
-| GS0620 | Error | An explicit abstract property has a non-abstract owner, a private required accessor, a body or bare auto-property form, or a conflicting `open` or explicit-interface modifier (ADR-0197). | Declare an abstract class and a non-private, bodyless accessor list; use `abstract override prop` to reabstract a base slot. |
+| GS0617 | Error | A `shared` class declares an `init(…)` constructor, a primary constructor, a `deinit`, a `shared { }` block, or an `open` or `override` method, property or event. | A shared class has only shared members, declared directly in its body, and a shared member is never virtual; remove the declaration or modifier, or drop `shared`. |
+| GS0618 | Error | `shared` is combined with `open`, `sealed`, `abstract` or `data`. | A shared class is neither inheritable nor instantiable; remove the conflicting modifier. |
+| GS0619 | Error | A `shared` class lists a base class or an interface. | Remove the base-type clause, or drop `shared`. |
+| GS0620 | Error | An explicit abstract property has a non-abstract owner, a private required accessor, a body or bare auto-property form, or a conflicting `open` or explicit-interface modifier. | Declare an abstract class and a non-private, bodyless accessor list; use `abstract override prop` to reabstract a base slot. |
 | GS0621 | Error | A property that replaces a positional data member has no getter. | Add a getter so the positional value remains readable. |
 | GS0622 | Error | A positional member follows a braced or content initializer in a composite literal. | Move positional members before composite elements so constructor arguments keep source evaluation order. |
-| GS0623 | Error | A data class or struct declares `PrintMembers(StringBuilder)` with a shape other than an instance, non-generic, synchronous (neither `async` nor `suspend`) method returning `bool` whose accessibility is `private` (a sealed type that starts the slot) or `protected`, marked `override` exactly when the type has an inherited slot (ADR-0199). | A compatible `PrintMembers` replaces the synthesized one; remove it to use the synthesized print members, or fix its shape. |
+| GS0623 | Error | A data class or struct declares `PrintMembers(StringBuilder)` with a shape other than an instance, non-generic, synchronous (neither `async` nor `suspend`) method returning `bool` whose accessibility is `private` (a sealed type that starts the slot) or `protected`, marked `override` exactly when the type has an inherited slot. | A compatible `PrintMembers` replaces the synthesized one; remove it to use the synthesized print members, or fix its shape. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |
@@ -352,7 +356,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0398 | Error | Unmanaged pointer to a non-blittable pointee. | An `unsafe`-context `*T` whose pointee `T` is a managed reference type or otherwise non-blittable (e.g. `*string`, or a struct with a managed field); only blittable primitives, pointers-to-pointers, and blittable user/value structs are legal pointees. |
 | GS0399 | Error | `stackalloc` element type must be a blittable (unmanaged) type. | A `stackalloc [n]T` whose element type `T` is a managed reference type or otherwise non-blittable (e.g. `stackalloc [4]string`); only blittable primitives and pointers are legal `stackalloc` element types. |
 | GS0400 | Error | A `fixed` statement requires an `unsafe` context. | A `fixed <name> *T = <source> {... }` statement used outside an `unsafe` context (function, `unsafe {... }` block, or unsafe type). Because it binds a raw unmanaged pointer, `fixed` is legal only inside `unsafe`, consistent with `*T` pointer gating. |
-| GS0401 | Error | A `fixed` statement source is not pinnable, or the pointer's element type does not match. | The source of a `fixed` statement must be a managed array/slice (`[]T`), a `string`, a span-like type exposing a public instance `ref T GetPinnableReference()` (e.g. `System.Span[T]` / `System.ReadOnlySpan[T]`), or a fixed-size buffer field of a variable (issue #4378), and the bound pointer's pointee type must match the buffer's element type (`uint16`/`char` interchangeable for `string`). Reported for a non-pinnable source (e.g. a scalar, a type without `GetPinnableReference`, or a fixed-size buffer of a call result) or a pointee/element-type mismatch. A fixed-size buffer reached through an already-fixed variable reports GS0507 instead. |
+| GS0401 | Error | A `fixed` statement source is not pinnable, or the pointer's element type does not match. | The source of a `fixed` statement must be a managed array/slice (`[]T`), a `string`, a span-like type exposing a public instance `ref T GetPinnableReference()` (e.g. `System.Span[T]` / `System.ReadOnlySpan[T]`), or a fixed-size buffer field of a variable, and the bound pointer's pointee type must match the buffer's element type (`uint16`/`char` interchangeable for `string`). Reported for a non-pinnable source (e.g. a scalar, a type without `GetPinnableReference`, or a fixed-size buffer of a call result) or a pointee/element-type mismatch. A fixed-size buffer reached through an already-fixed variable reports GS0507 instead. |
 | GS0402 | Error | The operand of an increment/decrement operator must be writable storage or a writable ref-returning call. | A prefix or postfix `++`/`--` applied to something that is not writable storage, e.g. `5++`, `(a + b)--`, or a by-value function-call result. Mutable variables, fields, properties, indexed elements, pointers, and writable `ref`-returning calls are valid targets. |
 | GS0403 | Error | Cannot dereference, index, or perform arithmetic on a void pointer `*void`. | A true void-element pointer `*void` (C# `void*`) carries no element type, so `*p`, `p[i]`, `p + i`, `p - i`, and `p - q` are rejected; cast it to a typed pointer `*T` (e.g. `*int32(p)`) first. Casts to/from typed pointers and `nint`, and comparison/equality, are allowed. |
 | GS0404 | Error | A managed function-pointer type `*func(...) R` requires an `unsafe` context. | A managed function-pointer type clause `*func(T1, T2) R` used outside an `unsafe` context; like the raw pointer `*T`, a function pointer is only legal inside `unsafe`. |
@@ -383,8 +387,8 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 
 ### Analyzer host diagnostics (GS9300–GS9319, reserved)
 
-The GS9300–GS9319 block is reserved for the G# analyzer framework host
-(ADR-0169): `gsc` loading and running `GSharpDiagnosticAnalyzer` assemblies
+The GS9300–GS9319 block is reserved for the G# analyzer framework host:
+`gsc` loading and running `GSharpDiagnosticAnalyzer` assemblies
 passed via `/gsanalyzer:`.
 
 | ID | Severity | Description |
@@ -394,14 +398,14 @@ passed via `/gsanalyzer:`.
 | GS9302 | Info | An analyzer exceeded its time budget in an interactive host and was disabled for subsequent runs. |
 | GS9303 | Warning | An analyzer was built against a different `GSharp.Core` version than the host; the load is attempted anyway. |
 | GS9304 | Warning | An analyzer reported a diagnostic whose ID is not declared in its `SupportedDiagnostics`; the diagnostic is suppressed. |
-| GS9305 | Error | `@SuppressDiagnostic` (ADR-0175) was given an argument that is not a constant string shaped like a diagnostic ID, or no argument at all. |
-| GS9306 | Error | `@ExtensionOwner` (issue #4234), synthesized by cs2gs to preserve a migrated C# static extension class's CLR owner-type identity, was used outside the one shape it supports: a top-level extension function carrying a single `typeof(T)` argument naming a non-generic class declared in the same package. |
-| GS9307 | Error | `@Oblivious` / `@NullabilityEnabled` (ADR-0186 §9) was written in a shape it does not support: with arguments, with a target specifier, or both annotations on the same declaration. Neither takes arguments; the nearest annotation decides whether the unadorned reference types written inside it are oblivious (`T!`). |
+| GS9305 | Error | `@SuppressDiagnostic` was given an argument that is not a constant string shaped like a diagnostic ID, or no argument at all. |
+| GS9306 | Error | `@ExtensionOwner`, synthesized by cs2gs to preserve a migrated C# static extension class's CLR owner-type identity, was used outside the one shape it supports: a top-level extension function carrying a single `typeof(T)` argument naming a non-generic class declared in the same package. |
+| GS9307 | Error | `@Oblivious` / `@NullabilityEnabled` was written in a shape it does not support: with arguments, with a target specifier, or both annotations on the same declaration. Neither takes arguments; the nearest annotation decides whether the unadorned reference types written inside it are oblivious (`T!`). |
 
 ### Source-generator host diagnostics (GS9200–GS9219)
 
-The GS9200–GS9219 block belongs to `gsgen`, the Roslyn source-generator host
-([ADR-0145](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0145-source-generator-host-native-gsharp.md)). `gsgen` runs before `gsc`, and the SDK relays its diagnostics
+The GS9200–GS9219 block belongs to `gsgen`, the Roslyn source-generator host.
+`gsgen` runs before `gsc`, and the SDK relays its diagnostics
 into the build; an error fails the build. A generator's own diagnostics keep
 the generator's IDs (for example `SYSLIB1043`).
 
@@ -415,8 +419,8 @@ the generator's IDs (for example `SYSLIB1043`).
 | GS9205 | Reserved | Reserved: analyzer assembly load failure (reported as GS9203 today). |
 | GS9206 | Reserved | Reserved: a generator matched nothing although its trigger attribute appears in user code. |
 | GS9207 | Info | A note about the `gsgen` invocation, such as an unrecognized or malformed argument that was ignored. |
-| GS9208 | Error | A generated implementing part of a partial method could not take its declaring part's header (ADR-0192). It is reported at the declaring part in two cases. First, the generated implementation names a parameter differently: its body uses the generated names, so the header is left as generated and `gsc` reports the two parts as mismatched. Second, an alias the header needs is already bound to a different target in the generated file: either by the generated code, or by another file's declaring part whose header went into the same file. Give the alias one meaning across the partial class's files, or spell the type without it. |
-| GS9209 | Error | A generator declared a positional parameter list on a G# `data class` or `data struct` that already has one (ADR-0192 amendment, partial data types). Only one part of a data type may state it, so the generated part keeps its list and `gsc` also reports the two parts (`GS0482`). It is reported at your positional list. Remove your list if the generator is meant to supply it. |
+| GS9208 | Error | A generated implementing part of a partial method could not take its declaring part's header. It is reported at the declaring part in two cases. First, the generated implementation names a parameter differently: its body uses the generated names, so the header is left as generated and `gsc` reports the two parts as mismatched. Second, an alias the header needs is already bound to a different target in the generated file: either by the generated code, or by another file's declaring part whose header went into the same file. Give the alias one meaning across the partial class's files, or spell the type without it. |
+| GS9209 | Error | A generator declared a positional parameter list on a G# `data class` or `data struct` that already has one (partial data types). Only one part of a data type may state it, so the generated part keeps its list and `gsc` also reports the two parts (`GS0482`). It is reported at your positional list. Remove your list if the generator is meant to supply it. |
 
 ### Internal diagnostics (GS9996–GS9999)
 
@@ -450,7 +454,7 @@ emitted code, where these constructs run natively.
 
 Every `data struct` synthesizes a fixed contract of value-semantics members — `Equals(object)`, `Equals(Name)`, `GetHashCode()`, `ToString()`, `op_Equality(Name, Name)`, `op_Inequality(Name, Name)`, and `Deconstruct(out T1, out T2, …)`. Hand-written versions are rejected so the contract stays predictable and so consumers (G# and external.NET) can rely on the synthesized IL.
 
-**Update (ADR-0199).** `ToString` is no longer the Kotlin `Name(F=v)` form with the invariant culture; it is the C# record format `Name { F = v }` with the current culture, built around a synthesized `PrintMembers(StringBuilder)`, and every data type implements `IEquatable<Self>`. A hand-written `ToString` (GS0487) or `PrintMembers` (GS0623) of the compatible shape replaces the synthesized member. `Deconstruct`, equality and hashing are unchanged. Known gaps: #4876 (GS0387 over an abstract `PrintMembers`), #4877 (imported non-data intermediary), #4874 (cs2gs duplicates a repeated base parameter).
+**Update.** `ToString` is no longer the Kotlin `Name(F=v)` form with the invariant culture; it is the C# record format `Name { F = v }` with the current culture, built around a synthesized `PrintMembers(StringBuilder)`, and every data type implements `IEquatable<Self>`. A hand-written `ToString` (GS0487) or `PrintMembers` (GS0623) of the compatible shape replaces the synthesized member. `Deconstruct`, equality and hashing are unchanged. Known gaps: #4876 (GS0387 over an abstract `PrintMembers`), #4877 (imported non-data intermediary), #4874 (cs2gs duplicates a repeated base parameter).
 
 | Code | Severity | Message |
 |------|----------|---------|
@@ -462,7 +466,7 @@ Every `data struct` synthesizes a fixed contract of value-semantics members — 
 
 | Code | Severity | Message |
 |------|----------|---------|
-| GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (retired `type Name = delegate …` recovery form only; the canonical spelling is `delegate Name(params) ReturnType;` — see GS0535 / issue #3510). |
+| GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (retired `type Name = delegate …` recovery form only; the canonical spelling is `delegate Name(params) ReturnType;` — see GS0535). |
 
 ## Ref-kind parameter diagnostics (GS0235–GS0243)
 
@@ -477,7 +481,7 @@ G# supports explicit `ref`, `out`, and `in` parameter passing modes at both call
 | GS0239 | Error | The variable `{name}` must be definitely assigned before it can be passed by 'ref'. |
 | GS0240 | Error | Override of `{name}` must match the base ref-kind on parameter `{parameter}` (`{baseKind}` vs `{overrideKind}`). |
 | GS0241 | Error | A variadic parameter cannot carry a ref-kind modifier ('ref'/'out'/'in'). |
-| GS0242 | _Retired_ | Previously: an argument written without `in` at an `in` parameter was rejected. Since issue #4400 it is passed by readonly reference, as in C# — the address of an lvalue of the parameter type, otherwise the address of a readonly temp holding the (implicitly converted) value; this diagnostic is no longer emitted. |
+| GS0242 | _Retired_ | Previously: an argument written without `in` at an `in` parameter was rejected. It is now passed by readonly reference, as in C# — the address of an lvalue of the parameter type, otherwise the address of a readonly temp holding the (implicitly converted) value; this diagnostic is no longer emitted. |
 | GS0243 | Error | A pointer type '*T' is not a valid parameter type; use the appropriate ref-kind modifier instead (e.g. 'ref T', 'out T', 'in T'). |
 
 Cause/fix examples:
@@ -569,12 +573,12 @@ Cause/fix examples:
 - **GS0251** — a `return ref x` statement in a function whose declaration is `func f() int32`. Fix: add `ref` to the return type, or drop `ref` from the return statement.
 - **GS0252** — a plain `return x` in a `ref`-returning function. Fix: write `return ref x`.
 - **GS0253** — `return ref (a + b)` or `return ref Foo()`. Fix: alias an addressable expression first (`let ref t = arr[i]; return ref t`) or restructure to return a pointer to durable storage.
-- **GS0254** — `func f() ref int32 { var x = 0; return ref x }`, or `func f(out x int32) ref int32 { x = 0; return ref x }`. Fix: do not return references to function locals; for an implicitly scoped `out` parameter, add `@UnscopedRef` only when the API contract intentionally permits the reference to escape. Also reported for `return ref this.n` inside a function literal declared in a struct member (issue [#4580](https://github.com/DavidObando/gsharp/issues/4580)): the literal captures `this` by value, so the reference would alias the closure's copy rather than the caller's struct, and `@UnscopedRef` cannot change that. Fix: return a reference into heap storage (an array element or a class field), or make the literal a member function.
+- **GS0254** — `func f() ref int32 { var x = 0; return ref x }`, or `func f(out x int32) ref int32 { x = 0; return ref x }`. Fix: do not return references to function locals; for an implicitly scoped `out` parameter, add `@UnscopedRef` only when the API contract intentionally permits the reference to escape. Also reported for `return ref this.n` inside a function literal declared in a struct member: the literal captures `this` by value, so the reference would alias the closure's copy rather than the caller's struct, and `@UnscopedRef` cannot change that. Fix: return a reference into heap storage (an array element or a class field), or make the literal a member function.
 - **GS0255** — overriding a base method declared `int32` with a `ref int32` override (or vice versa). Fix: match the base return ref-kind exactly.
 
 ## Ref-returning property / indexer diagnostics (GS0578-GS0579)
 
-Issue #3879 (the ADR-0060 amendment) extends the by-ref return from `func` to `prop`: `prop Value ref int32 { get { return ref this.slot } }`, its arrow sugar `prop Value ref int32 -> this.slot`, and the indexer form `prop this[i int32] ref int32 -> this.items[i]`. The getter returns a managed pointer, so a CLR consumer can alias the storage (`ref int slot = ref holder.Value`).
+The by-ref return also applies to `prop`: `prop Value ref int32 { get { return ref this.slot } }`, its arrow sugar `prop Value ref int32 -> this.slot`, and the indexer form `prop this[i int32] ref int32 -> this.items[i]`. The getter returns a managed pointer, so a CLR consumer can alias the storage (`ref int slot = ref holder.Value`).
 
 The form is restricted to the **computed, read-only** shapes, and the two diagnostics below enforce that. Everything else about a ref-returning getter -- `return ref <lvalue>` vs a plain `return`, the lvalue rule, and the escape rule -- is the existing GS0248-GS0255 surface above, because the accessor body is bound with the getter as its enclosing function.
 
@@ -815,8 +819,7 @@ Cause/fix:
 The legacy `type Name <kind>...` aggregate
 head and the `record` keyword. The aggregate keyword (`class`, `struct`,
 `enum`, `interface`) is the declaration keyword. These diagnostics
-catalogue the invalid combinations and the legacy migrations. See
-for the full grammar and rationale.
+catalogue the invalid combinations and the legacy migrations.
 
 | ID | Severity | Message |
 |----|----------|---------|
@@ -857,23 +860,21 @@ Cause/fix:
 
 ## Owned-receiver method warning, retired (GS0314)
 
-See [ADR-0182](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0182-receiver-clause-is-always-extension.md), which
-supersedes [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md).
 Go-style receiver-clause methods (`func (r T) M() { ... }`) are
 unconditionally extensions now, whether or not the current package owns
 `T`. There is no more owned-instance-method meaning to warn about: a
 same-package instance method is declared inside the type body, full stop,
 with no receiver-clause alternative. Operator overloads (`func (a T)
 operator +(b T) T`) remain the one receiver-clause form that still attaches
-to an owned type, unchanged from ADR-0079.
+to an owned type.
 
 | ID | Severity | Message | Example trigger |
 |----|----------|--------------------------|-----------------|
-| GS0314 | _Retired_ | Previously: a receiver-clause method on an owned class/struct warned that it should move into the type body. ADR-0182 removed the owned-instance-method meaning of the receiver-clause form entirely (it is always an extension now), so there is nothing left to warn about; this diagnostic is no longer emitted. | — |
+| GS0314 | _Retired_ | Previously: a receiver-clause method on an owned class/struct warned that it should move into the type body. The owned-instance-method meaning of the receiver-clause form no longer exists (it is always an extension now), so there is nothing left to warn about; this diagnostic is no longer emitted. | — |
 
 Cause/fix:
 
-- **GS0314** was retired by ADR-0182. A receiver-clause method on an owned
+- **GS0314** is retired. A receiver-clause method on an owned
   class/struct — `func (p Point) Distance() int32 { ... }` where `Point` is
   declared in the same package — now binds as an extension, exactly like a
   cross-package or CLR receiver, instead of an instance method. If you
@@ -885,13 +886,13 @@ Cause/fix:
   itself retired (`GS0587`); drop the `extension` word and the
   plain receiver clause does the same thing unconditionally.
 
-  Migrating off the pre-ADR-0182 warned spelling changes behavior, not just
+  Migrating off the old warned spelling changes behavior, not just
   style: interface conformance, `override`, and private-member access on
   the old instance-method form now fail to compile (loudly), and a
   receiver-clause method on an owned **struct** that mutated a field now
   silently mutates a throwaway by-value copy instead of the caller's
   struct (no diagnostic — the same hazard any struct extension method
-  already has). See ADR-0182's migration section for detail.
+  already has).
 
 ## Named-argument `=` separator retired (GS0524)
 
@@ -918,7 +919,7 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 
 | ID | Severity | Summary | Example |
 | --- | --- | --- | --- |
-| GS0525 | Error | A boolean `is` pattern uses the switch binding spelling `name is Type`, which reads as an incoherent double test in expression position. Write the designation after the type (`is Type name`, ADR-0166) to introduce a pattern variable, or use `if let` / `guard let` / `while let`. | `if value is text is string { }` |
+| GS0525 | Error | A boolean `is` pattern uses the switch binding spelling `name is Type`, which reads as an incoherent double test in expression position. Write the designation after the type (`is Type name`) to introduce a pattern variable, or use `if let` / `guard let` / `while let`. | `if value is text is string { }` |
 
 ## Invalid multi-assignment target (GS0526)
 
@@ -943,7 +944,7 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 
 ## `fallthrough` placement (GS0533–GS0534)
 
-Issue #3501 A3: `fallthrough` gained Go semantics — legal only as the LAST
+`fallthrough` has Go semantics: it is legal only as the LAST
 statement of a non-final `switch` arm, transferring into the next arm's body
 without evaluating its pattern or guard. GS0168 (above) reports a misplaced
 `fallthrough`; these report the two structural misuses.
@@ -955,11 +956,11 @@ without evaluating its pattern or guard. GS0168 (above) reports a misplaced
 
 ## Retired delegate-declaration spelling (GS0535)
 
-Issue #3510: named delegates are declared with the standalone
+Named delegates are declared with the standalone
 `delegate Name(parameters) ReturnType;` form (trailing semicolon required —
 it terminates the optional return-type clause the way extern natives and
 interface bodiless members do, so a void delegate can no longer consume the
-declaration that follows it). The ADR-0059 `type Name = delegate func(...)`
+declaration that follows it). The retired `type Name = delegate func(...)`
 spelling reports this error and recovers, and `type` itself is no longer a
 reserved keyword (erased aliases `type Name = Target` parse contextually).
 
@@ -969,9 +970,9 @@ reserved keyword (erased aliases `type Name = Target` parse contextually).
 
 ## Redundant null assertion (GS0536)
 
-Issue #3501 (`!!` noise reduction): a user-written `!!` whose operand is
-already non-nullable — statically, or through ADR-0069 smart-cast narrowing
-— performs no useful work. The warning marks exactly the operator token so
+A user-written `!!` whose operand is
+already non-nullable — statically, or through smart-cast narrowing —
+performs no useful work. The warning marks exactly the operator token so
 the assertion can be deleted; cs2gs's migrate pipeline consumes it to strip
 redundant assertions from translated output automatically.
 
@@ -1001,7 +1002,7 @@ representation. Use `int64`/`uint64` for a compile-time package constant, or
 
 ## Tuple equality arity mismatch (GS0539)
 
-ADR-0171 / issue #3501: tuple
+Tuple
 `==` / `!=` compares element-wise and is only defined between tuple operands
 of the same arity. Comparing tuples of different arities is an error rather
 than a constant `false`, matching C#.
@@ -1012,16 +1013,16 @@ than a constant `false`, matching C#.
 
 ## Named tuple elements (GS0540, GS0541, GS0542, GS0543)
 
-ADR-0172: tuple types may name elements
+Tuple types may name elements
 name-first — `(line int32, column int32)` — and tuple literals may label
 them — `(line: 1, column: 2)`. Names are metadata over the positional shape:
 same-shape tuples differing only in names are identity-convertible. GS0541
 warns only when an explicit tuple-literal label is renamed by the target
-type (the C# CS8123 analog, issue #3643); converting a named-tuple-typed
+type (the C# CS8123 analog); converting a named-tuple-typed
 value to a differently-named same-shape target is silent. `ItemN` at the wrong position and
 `Rest` (used by the CLR ValueTuple encoding) are reserved; a name on a
 parenthesized single element is an error because `(T)` is grouping, not a
-1-tuple (issue #3315).
+1-tuple.
 
 | ID | Severity | Message | Example |
 |---|---|---|---|
@@ -1032,7 +1033,7 @@ parenthesized single element is an error because `(T)` is grouping, not a
 
 ## Variadic carrier construction (GS0544)
 
-ADR-0173 / issue #3627: a
+A
 variadic COLLECTION carrier (`...List[T]`, `...ReadOnlySpan[T]`) packs its
 expanded call-site arguments via the carrier's CLR construction form
 (`new List<T>(T[])`, the span's `T[]` constructor). When the element type is
@@ -1046,8 +1047,8 @@ an existing collection directly.
 
 ## Interpolated-string handler missing from the target framework (GS0545)
 
-Issue #3730: interpolated strings lower to the C# 10 handler pattern
-(`System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`, ADR-0055).
+Interpolated strings lower to the C# 10 handler pattern
+(`System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`).
 The handler type and the `AppendFormatted<T>` overload each hole needs are
 resolved from the compilation's **reference closure**, so they describe the
 framework being compiled against rather than the SDK hosting `gsc`. When the
@@ -1061,7 +1062,7 @@ target's runtime cannot resolve.
 
 ## Emit-time well-known member missing from the target framework (GS0546)
 
-Issue #3755 (issue #3705, family 3): the `fixed` / pointer lowering emits calls
+The `fixed` / pointer lowering emits calls
 to two well-known members — `System.Runtime.CompilerServices.Unsafe.AsPointer<T>`
 for every pin, and `System.String.GetPinnableReference()` for the string-pin
 form. Both are resolved from the compilation's **reference closure**, so they
@@ -1069,8 +1070,8 @@ describe the framework being compiled against rather than the SDK hosting `gsc`.
 
 Neither is universally available. `Unsafe` is absent from `netstandard2.x`
 altogether (it ships there as a NuGet package), and `String.GetPinnableReference()`
-is absent from `netstandard2.1` even though `System.String` is present. Before
-#3755 the probes read off the host, so a `fixed` statement compiled against such
+is absent from `netstandard2.1` even though `System.String` is present. Earlier
+releases read the probes off the host, so a `fixed` statement compiled against such
 a target reported success and emitted either a `TypeRef` scoped to the host's
 `System.Private.CoreLib` or a `MemberRef` naming a method the target does not
 declare — a `MissingMethodException` at the target's runtime. The compile now
@@ -1081,8 +1082,8 @@ stops here instead.
 | GS0546 | Error | `This construct lowers onto '<member>', which the referenced target framework does not provide. Reference a framework or package that declares it.` | `fixed p *int32 = values { }` compiled with a `netstandard2.1` reference closure |
 ## Ambiguous imported type reference (GS0547)
 
-Issue #3734: a bare type name that two or more explicitly written `import`s
-each resolve to a **different** CLR type in referenced metadata. Before #3734
+A bare type name that two or more explicitly written `import`s
+each resolve to a **different** CLR type in referenced metadata. In earlier releases
 the first import that resolved the name won silently, so the reference bound a
 type chosen by the order of the import list rather than by anything the author
 wrote — and when the two homonyms had compatible members the program compiled
@@ -1108,7 +1109,7 @@ Console.WriteLine(Thing.Name())
 // either qualify the reference...
 Console.WriteLine(Probe.Beta.Thing.Name())
 
-// ...or alias it (issue #2273)
+// ...or alias it
 import Thing = Probe.Beta.Thing
 ```
 
@@ -1147,7 +1148,7 @@ is not a spelling gsc accepts today (GS0157).
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
-ADR-0166: a designation in a boolean `is`
+A designation in a boolean `is`
 pattern (`value is string text`, `value is { Length: > 0 } text`,
 `values is [..rest]`) introduces a read-only pattern variable that is in scope
 exactly where C# would consider it definitely assigned — the right operand of
@@ -1184,8 +1185,7 @@ Cause/fix:
   token. GS0273 does **not** fire when a symbol named `null` is in
   scope — `let null = "hi"; let s = null` and
   `func null() int32 { return 42 }; let v = null()` both resolve
-  normally with no diagnostic. See
-  for the full rule, scope, and recovery rationale.
+  normally with no diagnostic.
 
 <span id="adr-0174-channels-and-goroutines-wave-2-gs0548-gs0550-gs0554-gs0555-gs0566-gs0567"></span>
 
@@ -1203,24 +1203,24 @@ These diagnostics explain channel direction, receive bindings, and migration fro
 
 ## Go-flavored concurrency gate (GS0316, retired)
 
-ADR-0082 gated the Go-shaped concurrency surface (`go`, `chan`, `<-`, `select`,
-`close`, `make(chan …)`) behind `import Gsharp.Extensions.Go`. ADR-0174 (D13)
-retired the gate: the syntax is part of the language, `make`/`close` are
+Earlier releases gated the Go-shaped concurrency surface (`go`, `chan`, `<-`, `select`,
+`close`, `make(chan …)`) behind `import Gsharp.Extensions.Go`. That gate is
+retired: the syntax is part of the language, `make`/`close` are
 replaced by `chan[T](…)` and `ch.Close()` (GS0566), and the concurrency library
 lives in the implicitly imported `Gsharp.Concurrency` namespace. GS0316 is never
 reported again and its identifier is not reused.
 
 | ID | Severity | Message |
 |---|---|---|
-| GS0316 | Retired | Retired by ADR-0174 (D13): the concurrency syntax (`go`, `chan[T]`, `<-`, `select`) is part of the language and no longer gated behind `import Gsharp.Extensions.Go`. |
+| GS0316 | Retired | Retired: the concurrency syntax (`go`, `chan[T]`, `<-`, `select`) is part of the language and no longer gated behind `import Gsharp.Extensions.Go`. |
 
 <span id="go-style-built-ins-require-import-gsharpextensionsgo-gs0317"></span>
 
 ## Go-style built-ins gate (GS0317, retired)
 
-ADR-0083 gated the Go-style built-in functions `len`, `cap`, `append`, and
+Earlier releases gated the Go-style built-in functions `len`, `cap`, `append`, and
 `delete` behind a per-file `import Gsharp.Extensions.Go`, and GS0317 fired when
-the import was missing. ADR-0174 (D13) retired the built-ins themselves: every
+the import was missing. The built-ins themselves are retired: every
 receiver already carries the member (`xs.Length`, `m.Count`, `m.Remove(k)`,
 `List[T].Add`, `ch.Length()`, `ch.Capacity`), so there is nothing left to gate.
 A call to a retired name reports [GS0566](#channel-operations-and-retired-spellings)
@@ -1231,7 +1231,7 @@ reported again and its identifier is not reused.
 
 | ID | Severity | Message |
 |---|---|---|
-| GS0317 | Retired | Retired by ADR-0174 (D13): `len`, `cap`, `append`, and `delete` are no longer built-ins, so there is no import gate to miss; a call to one reports GS0566 naming the member replacement. |
+| GS0317 | Retired | Retired: `len`, `cap`, `append`, and `delete` are no longer built-ins, so there is no import gate to miss; a call to one reports GS0566 naming the member replacement. |
 
 
 
@@ -1311,7 +1311,7 @@ blanket-rejection at GS0211 has been retired.
 | GS0323 | Error | P/Invoke parameter or return type `{type}` is not in the supported marshalling table. | `@DllImport("libc") func F(o Object) int32;` — `Object` is not marshallable in v1. |
 | GS0324 | Error | Function `{name}` is annotated `@DllImport` but has a managed body; P/Invoke declarations must use a `;` body. | `@DllImport("libc") func F() int32 { return 0 }`. |
 | GS0325 | Error | Function `{name}` has no body; only `@DllImport`- or `@LibraryImport`-annotated functions may use a `;` body marker. | `func F() int32;` with neither `@DllImport` nor `@LibraryImport`. |
-| GS0326 | Error | `@DllImport` or `@LibraryImport` (the attribute actually used) is not supported on this function shape (`{reason}`). | `@DllImport("libc") async func F() int32;` — async functions, generic functions, instance/extension methods, members of generic types, and ref-returning functions are all disallowed. A static member in a class or struct `shared { … }` block is supported (issue #4370). |
+| GS0326 | Error | `@DllImport` or `@LibraryImport` (the attribute actually used) is not supported on this function shape (`{reason}`). | `@DllImport("libc") async func F() int32;` — async functions, generic functions, instance/extension methods, members of generic types, and ref-returning functions are all disallowed. A static member in a class or struct `shared { … }` block is supported. |
 | GS0327 | Error | `@DllImport` `CharSet` value `{value}` is not recognised; valid values are `CharSet.Ansi`, `CharSet.Unicode`, `CharSet.Auto`, and `CharSet.None`. | `@DllImport("libc", CharSet: "Utf8")`. |
 | GS0328 | Error | `@DllImport` `CallingConvention` value `{value}` is not recognised; valid values are `CallingConvention.Winapi`, `Cdecl`, `StdCall`, `ThisCall`, and `FastCall`. | `@DllImport("libc", CallingConvention: "MyCall")`. |
 | GS0329 | Error | `@DllImport` `EntryPoint` must be a non-empty string. | `@DllImport("libc", EntryPoint: "")`. |
@@ -1841,9 +1841,9 @@ two complementary shapes:
 | ID | Severity | Description |
 |----|----------|-------------|
 | GS0353 | Error | Delegate-typed P/Invoke parameter `<name>` of type `<T>` requires the delegate declaration to be annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or a matching calling convention). |
-| GS0354 | Error | Unknown calling convention `<name>` on an `unmanaged` function-pointer type clause: no `System.Runtime.CompilerServices.CallConv<name>` type is available in the compilation's references. Use one of the legacy conventions (`Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`) or a name with a matching CallConv type (ADR-0095 v2). |
+| GS0354 | Error | Unknown calling convention `<name>` on an `unmanaged` function-pointer type clause: no `System.Runtime.CompilerServices.CallConv<name>` type is available in the compilation's references. Use one of the legacy conventions (`Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`) or a name with a matching CallConv type. |
 | GS0355 | Error | Returning a managed delegate `<T>` from a P/Invoke declaration is not supported. Declare the return as `unmanaged[CC] (...) -> R` (a raw function pointer) or `nint` and wrap manually with `Marshal.GetDelegateForFunctionPointer`. |
-| GS0356 | _Retired_ | Previously: raw function-pointer type clause is missing its calling-convention slot. ADR-0095 v2 (issue #3611) made the slot optional — bare `unmanaged (...) -> R` is the platform-default unmanaged calling convention; this diagnostic is no longer emitted. |
+| GS0356 | _Retired_ | Previously: raw function-pointer type clause is missing its calling-convention slot. The slot is now optional — bare `unmanaged (...) -> R` is the platform-default unmanaged calling convention; this diagnostic is no longer emitted. |
 
 Cause/fix:
 
@@ -1855,7 +1855,7 @@ Cause/fix:
 - **GS0354 — unknown calling convention.** A convention identifier
   must be one of the four legacy names or resolve to a
   `System.Runtime.CompilerServices.CallConv<Name>` type in the
-  compilation's references (ADR-0095 v2). `Cdecl` is the right choice
+  compilation's references. `Cdecl` is the right choice
   for almost all libc-style APIs; pick `Stdcall` only for the legacy
   Win32 ABI.
 - **GS0355 — delegate-typed return.** The runtime cannot conjure a
@@ -1863,7 +1863,7 @@ Cause/fix:
   has no contract for who owns the pointer's lifetime. Switch the
   return to `unmanaged[CC] (...) -> R` for a raw FNPTR, or to `nint`
   if the caller will wrap manually.
-- **GS0356 — retired (ADR-0095 v2 / issue #3611).** The `[CC]` slot
+- **GS0356 — retired.** The `[CC]` slot
   is now optional: bare `unmanaged (...) -> R` is the platform-default
   unmanaged calling convention, encoded exactly as C#'s bare
   `delegate* unmanaged<...>`.
@@ -1953,7 +1953,7 @@ Cause/fix:
 
 ## Target-typed bare `default` literal diagnostic (GS0362)
 
-. The bare `default` literal (without an
+The bare `default` literal (without an
 accompanying `(T)` type clause) takes its type from the surrounding
 target-typed position: the initializer of `let`/`var` with an explicit
 type clause, the value of `return` when the enclosing function has a
@@ -2010,7 +2010,7 @@ VB consumers see it as `params T[]`.
 
 ## Map type-clause spelling removal (GS0366)
 
-. The legacy Go-flavored map type-clause spelling
+The legacy Go-flavored map type-clause spelling
 `map[K]V` (key inside the brackets, value outside) has been **removed**
 in v0.2. The canonical G# spelling is `map[K,V]` with both type
 arguments inside the brackets, separated by a comma — the same
@@ -2111,8 +2111,8 @@ different method.
 |----|----------|-------------|
 | GS0507 | Error | A `fixed` statement pins a fixed-size buffer field reached through an already-fixed variable. |
 
-A `fixed` statement may pin a fixed-size buffer field (`fixed p *int8 = h.B.Name { … }`,
-ADR-0125 amendment, issue #4378) only when the buffer lives in *movable*
+A `fixed` statement may pin a fixed-size buffer field (`fixed p *int8 = h.B.Name { … }`)
+only when the buffer lives in *movable*
 storage: a field of a class instance, an array or slice element, a `ref`/`out`/`in`
 parameter, or the receiver `this` of a struct method. When the buffer is reached
 through storage that cannot move — a local variable, a by-value parameter, or a
@@ -2208,7 +2208,7 @@ this analysis applies only to kinds with no usable zero value.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0521 | Error | Pointer and function-pointer types cannot be used as generic type arguments because the CLR cannot instantiate generic types with them. The called `cast[T](x)` intrinsic is not a generic instantiation (ADR-0167), so `cast[*uint8](address)` and `cast[unmanaged[Cdecl] () -> int32](address)` do not report it (issue #4938). |
+| GS0521 | Error | Pointer and function-pointer types cannot be used as generic type arguments because the CLR cannot instantiate generic types with them. The called `cast[T](x)` intrinsic is not a generic instantiation, so `cast[*uint8](address)` and `cast[unmanaged[Cdecl] () -> int32](address)` do not report it. |
 
 ## Nil comparison against a bare collection type is statically constant (GS0523)
 
@@ -2260,7 +2260,7 @@ above retain their longer explanations and examples.
 | GS0381 | Error | A class participates in a direct or transitive inheritance cycle.  | |
 | GS0382 | Error | Struct `{structName}` cannot declare base type `{baseTypeName}`; a struct may only implement interfaces.  | |
 | GS0392 | Error | A range expression slices a type that has no supported array, slice, string, span-like, or `System.Range` indexer shape.  | |
-| GS0410 | _Retired_ | Previously: a standalone range could not start with a from-end `^` marker. ADR-0187 (issue #4350) made prefix `^x` a first-class `System.Index` expression and moved one's-complement to `~x`, so `^a..^b` is valid; this diagnostic is no longer emitted. | — |
+| GS0410 | _Retired_ | Previously: a standalone range could not start with a from-end `^` marker. Prefix `^x` is now a first-class `System.Index` expression and one's-complement is `~x`, so `^a..^b` is valid; this diagnostic is no longer emitted. | — |
 | GS0414 | Error | An unqualified reference to a `shared` member is ambiguous between two or more imported types (the G# form of C# `using static`). Qualify it with the owning type name.  | |
 | GS0415 | Error | The operand of `sizeof(T)` must be an unmanaged type — a blittable primitive, an enum, a value struct whose fields are all unmanaged, a pointer, or a generic type parameter constrained `unmanaged`.  | |
 | GS0416 | Error | A list pattern contains more than one slice (`..`) subpattern.  | |
@@ -2320,7 +2320,7 @@ above retain their longer explanations and examples.
 | GS0570 | Error | A `rethrow` appears where no exception is being handled — outside any `catch`, or inside a lambda / local function declared in one (the nested body is emitted as its own method, so at run time it is not inside the handler). Use `throw <expr>` to raise a new exception. | `func f() { rethrow }` |
 | GS0571 | Error | A `rethrow` appears in a `finally` clause nested inside the enclosing `catch` handler. By the time that `finally` runs the CLR has left the handler, so `ILOpCode.Rethrow` there is unverifiable. Move the `rethrow` into the `catch` body, or `throw` a captured exception. | `catch (e Exception) { try { … } finally { rethrow } }` |
 
-`rethrow` ([ADR-0176](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0176-rethrow-statement.md), issue #3897) re-raises the
+`rethrow` re-raises the
 exception the lexically innermost enclosing `catch` is handling, emitting
 `ILOpCode.Rethrow`. Unlike `throw <expr>`, which emits `ILOpCode.Throw` and
 resets `StackTrace` to the throw site, a `rethrow` preserves the original throw
@@ -2335,7 +2335,7 @@ statement on the next line would parse as `throw <that expression>`.
 | GS0572 | Error | An `await` appears in a `catch` clause's `when` filter. A filter runs during the CLR's *first pass*, on the throwing thread, before any unwinding — there is no suspension point available there, so the filter cannot be asynchronous. Move the `await` into the handler body, or compute the value before the `try`. | `catch (e Exception) when await IsTransient(e) { … }` |
 | GS0573 | Error | A `catch` clause can never run because an earlier, unfiltered clause already catches its exception type. Reorder the clauses so the more specific type comes first, or delete the shadowed clause. | `catch (e Exception) { … } catch (e FormatException) { … }` |
 
-Both come from [ADR-0177](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0177-catch-clause-parity.md) (issue #3897). A
+Catch clauses follow C#. A
 `when` filter is emitted as a real CLR filter region, so it is evaluated before
 any intervening `finally` and a false filter falls through to the next clause —
 the same ordering C# gives you. GS0573 only fires when the earlier clause is
