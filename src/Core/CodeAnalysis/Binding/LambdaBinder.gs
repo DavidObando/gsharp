@@ -2384,15 +2384,33 @@ internal class LambdaBinder {
         if returnType == TypeSymbol.Error {
             return boundBody
         }
+        let rewriter = ReturnConversionRewriter(conversions, syntax, returnType)
         if boundBody is BoundBlockExpression block {
-            let rewriter = ReturnConversionRewriter(conversions, syntax, returnType)
             let newStatements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
             for stmt in block.Statements {
                 newStatements.Add(rewriter.RewriteStatement(stmt))
             }
-            return BoundBlockExpression(block.Syntax, newStatements.ToImmutable(), block.Expression)
+            // Issue #4965 (ADR-0200): returns inside the tail (see
+            // InferLambdaReturnType) get the same conversion.
+            return BoundBlockExpression(
+                block.Syntax,
+                newStatements.ToImmutable(),
+                RewriteTailReturns(rewriter, block.Expression)
+            )
         }
-        return boundBody
+        return RewriteTailReturns(rewriter, boundBody)
+    }
+
+    // Issue #4965 (ADR-0200): converts the returns inside a lambda body's
+    // trailing value, leaving a tail that contains none untouched.
+    private func RewriteTailReturns(rewriter ReturnConversionRewriter, tail BoundExpression) BoundExpression {
+        let collector = ReturnTypeCollector()
+        collector.Visit(tail)
+        return if collector.ReturnTypes.Count == 0 {
+            tail
+        } else {
+            rewriter.RewriteTail(tail)
+        }
     }
 
     private func CollectCapturedVariables(body BoundStatement, function FunctionSymbol) ImmutableArray[VariableSymbol] {
@@ -2618,6 +2636,11 @@ internal class LambdaBinder {
             this.syntax = syntax
             this.returnType = returnType
         }
+
+        /// Rewrites the returns inside a lambda body's trailing value.
+        /// @param node The trailing value.
+        /// @returns The rewritten value.
+        internal func RewriteTail(node BoundExpression) BoundExpression -> RewriteExpression(node)
 
         protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
             if node.Expression == nil {
@@ -3550,19 +3573,29 @@ internal class LambdaBinder {
                 return TypeSymbol.Error
             }
             let trailingType = boundBody.Type ?? TypeSymbol.Void
+            // Issue #4965 (ADR-0200): a `return` can also sit inside the
+            // trailing value — `(c) -> { if c { return 1 } else { return 2 } }`,
+            // whose tail is an if-expression with exiting (`never`) branches —
+            // so the collector walks the tail as well as the prefix statements.
             let collector = ReturnTypeCollector()
             if boundBody is BoundBlockExpression block {
                 for stmt in block.Statements {
                     collector.Visit(stmt)
                 }
+                collector.Visit(block.Expression)
+            } else {
+                collector.Visit(boundBody)
             }
             let returnTypes = collector.ReturnTypes
             let hasExplicitReturn = returnTypes.Count > 0
             let hasExplicitValueReturn = returnTypes.Any((type TypeSymbol) -> type != TypeSymbol.Void)
-            let trailingIsVoidPlaceholder = boundBody is BoundBlockExpression{
-                Expression: BoundLiteralExpression{Type: var trailingLit}
-            } &&
-                trailingLit == TypeSymbol.Void
+            // A never-typed tail (every path exits) produces no value, exactly
+            // like the void placeholder of a body without a tail.
+            let trailingIsVoidPlaceholder = (
+                boundBody is BoundBlockExpression{Expression: BoundLiteralExpression{Type: var trailingLit}} &&
+                    trailingLit == TypeSymbol.Void
+            ) ||
+                (hasExplicitReturn && trailingType == TypeSymbol.Never)
             // Issue #2152: in G#'s Kotlin-like semantics an assignment yields
             // Unit/void, so a block-body lambda whose trailing expression is an
             // assignment (simple `=` or a compound `+=`/`-=`/... which the binder

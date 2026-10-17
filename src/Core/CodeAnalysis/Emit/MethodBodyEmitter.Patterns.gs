@@ -81,6 +81,9 @@ internal partial class MethodBodyEmitter {
     // produce the expression's value.
     private func EmitSwitchExpression(node BoundSwitchExpression) {
         let (resultSlot, discrSlot) = this.switchExpressionSlots[node]
+        // Issue #4966 (ADR-0200): a void switch (or one whose every arm exits)
+        // has no value to carry, so it has no result slot; see SlotPlanner.
+        let hasResult = SlotPlanner.SwitchExpressionHasResult(node)
         this.EmitExpression(node.Discriminant)
         this.il.StoreLocal(discrSlot)
         let endLabel = this.il.DefineLabel()
@@ -102,13 +105,21 @@ internal partial class MethodBodyEmitter {
                 this.il.Branch(ILOpCode.Brfalse, nextArm)
             }
             this.EmitExpression(arm.Result)
-            this.il.StoreLocal(resultSlot)
+            if hasResult {
+                this.il.StoreLocal(resultSlot)
+            }
             this.il.Branch(ILOpCode.Br, endLabel)
             this.il.MarkLabel(nextArm)
         }
         if defaultArm != nil {
             this.EmitExpression(defaultArm.Result)
-            this.il.StoreLocal(resultSlot)
+            if hasResult {
+                this.il.StoreLocal(resultSlot)
+            }
+        } else if node.Type == TypeSymbol.Void {
+            // The void switch: like the switch statement, an unmatched value
+            // runs no arm.
+            let _ = 0
         } else {
             const Message = "Unmatched switch expression value."
             let constructor = BclMember.Ctor(typeof(InvalidOperationException), typeof(string))
@@ -118,7 +129,9 @@ internal partial class MethodBodyEmitter {
             this.il.OpCode(ILOpCode.Throw)
         }
         this.il.MarkLabel(endLabel)
-        this.il.LoadLocal(resultSlot)
+        if hasResult {
+            this.il.LoadLocal(resultSlot)
+        }
     }
 
     // Emit IL that branches to failLabel when the pattern does not match

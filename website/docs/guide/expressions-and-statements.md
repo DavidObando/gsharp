@@ -61,7 +61,7 @@ Closures capture local and parameter variable cells, not value snapshots.
 Writes through the enclosing scope or another closure are visible to every
 closure that captures the same variable.
 
-Members can also use `->` for a single-expression body: `func Square(x int32) int32 -> x * x`, `prop Count int32 -> items.Length`, `get -> field`, and `set -> field = value`. The C# fat arrow `=>` is not G# syntax.
+Members can also use `->` for a single-expression body: `func Square(x int32) int32 -> x * x`, `prop Count int32 -> items.Length`, `get -> field`, and `set -> field = value`. `-> { … }` takes the same block body a lambda does, so `return` statements and void endings work as in a block-bodied member, and a void arrow body accepts what the equivalent block body does (`set -> if value > 0 { n = value }`). The C# fat arrow `=>` is not G# syntax.
 
 ## Interpolation
 
@@ -106,7 +106,7 @@ greeting ??= "ignored" // no-op — RHS not evaluated
 
 ## If and switch
 
-`if` can include a simple statement before the condition. Switch statements use block-bodied cases and do not fall through implicitly. A direct trailing `fallthrough` in a non-final arm jumps to the next body without retesting its pattern; targets with pattern bindings or a `when` guard are rejected. Switch expressions use `:` arms and require semantic coverage or a default arm. See [explicit fallthrough](../tour/control-flow.md#explicit-fallthrough) for a complete program and the placement diagnostics.
+`if` can include a simple statement before the condition. Switch statements use block-bodied cases and do not fall through implicitly. A direct trailing `fallthrough` in a non-final arm jumps to the next body without retesting its pattern; targets with pattern bindings or a `when` guard are rejected. Switch expressions use `:` arms and require semantic coverage or a default arm when their value is used. Both forms accept several comma-separated patterns per arm (`case 1, 2`). A `switch` with `:` arms also works as a statement, and as the last item of a block it is the block's value; used as a statement with void arms it needs no default, like a switch statement. See [explicit fallthrough](../tour/control-flow.md#explicit-fallthrough) for a complete program and the placement diagnostics.
 
 ```gsharp
 let label = switch n {
@@ -131,7 +131,7 @@ let title = if user.IsAdmin {
 }
 ```
 
-Missing the terminal `else` in value position reports `GS0276`. A block with no trailing expression in value position reports `GS0277`. Branches with no common type report `GS0263` (shared with the ternary). The existing if-statement form (`if cond { … }` with optional `else`, optional simple-statement initializer) is unchanged.
+Missing the terminal `else` in value position reports `GS0276`. A branch can end in `throw`, `return`, `break` or `continue` instead of a value (`let n = if ok { 1 } else { return 0 }`); any other block with no trailing expression in value position reports `GS0277`. Where the value is discarded — a void lambda or arrow body — an `if` without `else` is simply the void `if`. Branches with no common type report `GS0263` (shared with the ternary). The existing if-statement form (`if cond { … }` with optional `else`, optional simple-statement initializer) is unchanged.
 
 ## Block expressions
 
@@ -150,7 +150,10 @@ return 2 * { let item = next() item }
 ```
 
 The block creates a lexical scope and receives the surrounding expected type.
-Missing the tail reports `GS0277`. Statement bodies and object, collection, and
+Its last item is its value when it is an expression, an `if … else …`, a nested
+`{ … }`, or a `switch` with `:` arms — the same rule as in lambda and `-> { … }`
+bodies. A block that ends in `throw`, `return`, `break` or `continue` needs no
+value. Otherwise a missing tail reports `GS0277`. Statement bodies and object, collection, and
 struct literal braces keep their existing meanings. Field/property initializers
 and `base(...)`/delegating-`init(...)` arguments reject `return`; nested lambdas
 inside those expressions keep their normal return rules.

@@ -749,7 +749,7 @@ open partial class Parser {
             suppressStructLiteral--
             suppressTrailingObjectInitializer--
         }
-        let thenBlock = ParseBlockExpression(valueRequired: true)
+        let thenBlock = ParseBlockExpression()
         var elseKeyword SyntaxToken? = nil
         var elseExpression ExpressionSyntax? = nil
         if Current.Kind == SyntaxKind.ElseKeyword {
@@ -760,7 +760,7 @@ open partial class Parser {
             } else if Current.Kind == SyntaxKind.IfKeyword {
                 elseExpression = ParseIfExpression()
             } else {
-                elseExpression = ParseBlockExpression(valueRequired: true)
+                elseExpression = ParseBlockExpression()
             }
         }
         return IfExpressionSyntax(syntaxTree, ifKeyword, condition, thenBlock, elseKeyword, elseExpression)
@@ -769,18 +769,17 @@ open partial class Parser {
     // Issue #669: parse a block expression `{ stmt*; expr? }`.
     // The last item in the block, if it is an expression statement, becomes
     // the trailing value-producing expression of the block.
-    // ADR-0151: `valueRequired` is true for the branch blocks of an
-    // if-/if-let-expression, where a trailing VALUE is mandatory (GS0277), and
-    // false for an arrow-lambda body block, where a missing tail simply makes
-    // the lambda void (ADR-0128). Only the former promotes a trailing `if let`
-    // to the value-producing binding form; see ParseBlockExpressionItem.
-    private func ParseBlockExpression(valueRequired bool = false) BlockExpressionSyntax {
+    // ADR-0200: every value-capable block — a general block expression, an
+    // if-/if-let-expression branch, an arrow-lambda body and an arrow-member
+    // body — is parsed the same way; whether a missing tail is an error
+    // (GS0277), a void block, or a `never` block is the binder's decision.
+    private func ParseBlockExpression() BlockExpressionSyntax {
         let statements = ImmutableArray.CreateBuilder[StatementSyntax]()
         var trailingExpression ExpressionSyntax? = nil
         let openBraceToken = MatchToken(SyntaxKind.OpenBraceToken)
         while Current.Kind != SyntaxKind.EndOfFileToken && Current.Kind != SyntaxKind.CloseBraceToken {
             let startToken = Current
-            let statement = ParseBlockExpressionItem(valueRequired)
+            let statement = ParseBlockExpressionItem()
             statements.Add(statement)
             if Current == startToken {
                 NextToken()
@@ -803,37 +802,50 @@ open partial class Parser {
     }
 
     // Issue #669: parse a single item inside a block expression. This is
-    // similar to ParseStatement() but recognizes `if` as potentially
-    // an if-expression (when followed by the block-expression shape).
-    private func ParseBlockExpressionItem(valueRequired bool = false) StatementSyntax {
-        // Issue #3355: a final nested brace block in a value-required block is
-        // itself the trailing expression, not a standalone statement block.
-        // A brace followed by a postfix/binary continuation is likewise
-        // unambiguously expression-shaped. Lambda bodies pass
-        // valueRequired:false, preserving their existing final nested
-        // statement-block interpretation.
-        if Current.Kind == SyntaxKind.OpenBraceToken &&
-            (valueRequired || NestedBraceStartsContinuedExpression()) &&
-            NestedBraceCanBeTrailingExpression() {
+    // similar to ParseStatement() but recognizes the constructs that have both
+    // a statement and an expression form (`if`, `switch`, a nested `{ … }`)
+    // and picks the expression form when the item has the expression shape.
+    //
+    // Issue #4963 / #4965 / #4966 (ADR-0200): this is the ONE place that
+    // decides what the last item of a value-capable block means — a general
+    // block expression, an if-/if-let-expression branch, an arrow-lambda block
+    // body and an arrow-member block body (`func f() T -> { … }`, which
+    // ParseArrowExpressionBody parses through ParseBlockExpression too). Every
+    // one of those blocks applies the same rule, so the same item means the
+    // same thing in all of them.
+    private func ParseBlockExpressionItem() StatementSyntax {
+        // Issue #3355 / #4965 §3: a final nested brace block is itself the
+        // trailing expression, not a standalone statement block — in every
+        // value-capable block, including lambda and arrow-member bodies (the
+        // last-position test is NestedBraceCanBeTrailingExpression). A brace
+        // followed by a postfix/binary continuation is likewise unambiguously
+        // expression-shaped. A nested block whose own tail is void leaves the
+        // enclosing body void, so only a nested block that ends in a value can
+        // change a body's type.
+        if Current.Kind == SyntaxKind.OpenBraceToken && NestedBraceCanBeTrailingExpression() {
             return ExpressionStatementSyntax(syntaxTree, ParseExpression())
         }
+        // Issue #4963 §2: a `switch` item is decided by ParseStatement, which
+        // makes a switch with expression-shaped arms the switch expression, so
+        // it is the block's trailing value the same way a trailing
+        // `if … else …` is.
         // If the current token is `if` and this could be an if-expression
         // (value-producing), parse it as an expression statement wrapping
         // an IfExpressionSyntax. This handles nested `if` in block position.
         //
-        // ADR-0151: a trailing `if let … else …` is likewise promoted to the
-        // value-producing binding form — but ONLY inside a block whose tail
-        // must be a value (`valueRequired`, i.e. an if-/if-let-expression
-        // branch), where the statement form is already rejected with GS0277.
-        // An arrow-lambda body block keeps parsing `if let` as the ADR-0071
-        // STATEMENT so an existing void body that ends in
-        // `if let x = y { return … } else { return … }` is unchanged.
+        // ADR-0151 / ADR-0200: an `if let … else …` chain ending in a plain
+        // `else` is likewise the value-producing binding form, in every
+        // value-capable block. (It used to stay the ADR-0071 statement in an
+        // arrow-lambda body; a body ending in
+        // `if let x = y { return … } else { return … }` is now an if-let
+        // expression whose exiting branches have the `never` type, and one
+        // whose branches are void is the void if-let, so both keep their
+        // meaning.)
         if Current.Kind == SyntaxKind.IfKeyword && LooksLikeIfExpression() {
-            if Peek(1).Kind != SyntaxKind.LetKeyword {
-                return ExpressionStatementSyntax(syntaxTree, ParseIfExpression())
-            }
-            if valueRequired {
-                return ExpressionStatementSyntax(syntaxTree, ParseIfLetExpression())
+            return if Peek(1).Kind == SyntaxKind.LetKeyword {
+                ExpressionStatementSyntax(syntaxTree, ParseIfLetExpression())
+            } else {
+                ExpressionStatementSyntax(syntaxTree, ParseIfExpression())
             }
         }
         return ParseStatement()

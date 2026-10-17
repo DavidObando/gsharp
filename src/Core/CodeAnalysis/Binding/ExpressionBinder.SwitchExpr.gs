@@ -23,7 +23,17 @@ internal partial class ExpressionBinder {
         targetType: nil
     )
 
-    private func BindSwitchExpression(syntax SwitchExpressionSyntax, targetType TypeSymbol?) BoundExpression {
+    /// @param canBeVoid Issue #4966 §2 (ADR-0200): the switch is in a position
+    /// whose value is discarded (an expression statement, a void arrow body, a
+    /// lambda body). When an arm is then void, the whole switch is the void
+    /// switch — the switch statement's meaning: arm values are discarded, and
+    /// with no default arm an unmatched value does nothing (GS0176 is a
+    /// value-position rule).
+    private func BindSwitchExpression(
+        syntax SwitchExpressionSyntax,
+        targetType TypeSymbol?,
+        canBeVoid bool = false
+    ) BoundExpression {
         // Issue #1238: when this switch-expression is an eagerly-bound call
         // argument with no target type yet, defer a no-common-type unification
         // failure (instead of reporting GS0179) so the argument can be re-bound
@@ -63,7 +73,7 @@ internal partial class ExpressionBinder {
                 }
                 hasDefault = true
                 let result = if targetType == nil {
-                    BindExpression(armSyntax.Result)
+                    BindExpression(armSyntax.Result, canBeVoid)
                 } else {
                     BindExpression(armSyntax.Result, targetType)
                 }
@@ -105,11 +115,22 @@ internal partial class ExpressionBinder {
             let armResult = BindWithPatternVariables(
                 guardWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(armSyntax.Result, frame, targetType)
+                    return BindExpressionWithNarrowing(armSyntax.Result, frame, targetType, canBeVoid)
                 }
             )
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
+        }
+        let armResults = List[BoundExpression](boundArmBuilders.Count)
+        for arm in boundArmBuilders {
+            armResults.Add(arm.Result)
+        }
+        if IsVoidInDiscardedPosition(canBeVoid, armResults) {
+            let voidArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](boundArmBuilders.Count)
+            for arm in boundArmBuilders {
+                voidArms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, DiscardValue(arm.Result)))
+            }
+            return BoundSwitchExpression(nil, discriminant, voidArms.MoveToImmutable(), TypeSymbol.Void)
         }
         if !hasDefault && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType) {
             Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location)

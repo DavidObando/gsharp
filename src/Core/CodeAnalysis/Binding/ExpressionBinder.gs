@@ -207,11 +207,12 @@ internal partial class ExpressionBinder {
     private func BindExpressionWithNarrowing(
         syntax ExpressionSyntax,
         frame Dictionary[AccessPath, TypeSymbol]?,
-        targetType TypeSymbol? = nil
+        targetType TypeSymbol? = nil,
+        canBeVoid bool = false
     ) BoundExpression {
         if frame == nil {
             return if targetType == nil {
-                BindExpression(syntax)
+                BindExpression(syntax, canBeVoid)
             } else {
                 BindExpression(syntax, targetType)
             }
@@ -220,7 +221,7 @@ internal partial class ExpressionBinder {
         binderCtx.NarrowedVariables.Add(frame)
         try {
             return if targetType == nil {
-                BindExpression(syntax)
+                BindExpression(syntax, canBeVoid)
             } else {
                 BindExpression(syntax, targetType)
             }
@@ -480,7 +481,7 @@ internal partial class ExpressionBinder {
                 return BindAwaitExpression(cast[AwaitExpressionSyntax](syntax))
             }
             case SyntaxKind.SwitchExpression {
-                return BindSwitchExpression(cast[SwitchExpressionSyntax](syntax))
+                return BindSwitchExpression(cast[SwitchExpressionSyntax](syntax), targetType: nil, canBeVoid: canBeVoid)
             }
             case SyntaxKind.MakeChannelExpression {
                 return BindMakeChannelExpression(cast[MakeChannelExpressionSyntax](syntax))
