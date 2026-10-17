@@ -475,6 +475,44 @@ open partial class Parser {
         return SwitchExpressionSyntax(syntaxTree, switchKeyword, expression, openBrace, arms.ToImmutable(), closeBrace)
     }
 
+    // Issue #4963: a `switch` that begins a block item is the switch
+    // EXPRESSION when its arms have the expression shape (`case P:` /
+    // `default:`, or the deprecated `->` separator) and the switch STATEMENT
+    // when they have the statement shape (`case P { … }` / `default { … }`) or
+    // the body is empty. The arm separator is the one thing that tells the two
+    // forms apart, so this speculatively parses the header and the first arm's
+    // pattern list and guard with the same routines the switch expression
+    // uses, then looks at the token that follows. Position, the token list
+    // (which pattern/type parsing may split) and diagnostics are all restored.
+    private func SwitchHasExpressionArms() bool {
+        let savedPosition = position
+        let savedTokens = tokens
+        let savedDiagnosticCount = Diagnostics.Count
+        try {
+            let _ = MatchToken(SyntaxKind.SwitchKeyword)
+            let _ = ParseExpressionInBodyHeader()
+            if Current.Kind != SyntaxKind.OpenBraceToken {
+                return false
+            }
+            let _ = NextToken()
+            if Current.Kind == SyntaxKind.DefaultKeyword {
+                let next = Peek(1).Kind
+                return next == SyntaxKind.ColonToken || next == SyntaxKind.RightArrowToken
+            }
+            if Current.Kind != SyntaxKind.CaseKeyword {
+                return false
+            }
+            let _ = NextToken()
+            let _ = ParseSwitchArmPattern(PatternParseContext.SwitchExpression)
+            let _ = ParseOptionalWhenGuard()
+            return Current.Kind == SyntaxKind.ColonToken || Current.Kind == SyntaxKind.RightArrowToken
+        } finally {
+            position = savedPosition
+            tokens = savedTokens
+            Diagnostics.TruncateTo(savedDiagnosticCount)
+        }
+    }
+
     private func ParseSwitchExpressionArm() SwitchExpressionArmSyntax {
         if Current.Kind == SyntaxKind.DefaultKeyword {
             let defaultKeyword = MatchToken(SyntaxKind.DefaultKeyword)
@@ -491,7 +529,7 @@ open partial class Parser {
             )
         }
         let caseKeyword = MatchToken(SyntaxKind.CaseKeyword)
-        let value = ParsePattern(PatternParseContext.SwitchExpression)
+        let value = ParseSwitchArmPattern(PatternParseContext.SwitchExpression)
         let (whenKeyword, guard_) = ParseOptionalWhenGuard()
         let arrow = MatchSwitchExpressionArmSeparator()
         let result = ParseExpression()

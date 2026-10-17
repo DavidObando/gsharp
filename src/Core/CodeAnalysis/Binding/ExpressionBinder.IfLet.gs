@@ -119,6 +119,20 @@ internal partial class ExpressionBinder {
             whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
+        if IsVoidInDiscardedPosition(canBeVoid, []BoundExpression{whenTrue, whenFalse}) {
+            // ADR-0200: the void if-let, as for the plain if-expression.
+            return BoundConditionalExpression(
+                nil,
+                Invariant.Required(
+                    BuildIfLetCondition(bound.ToImmutable(), 0, guard_),
+                    "a valid if-let expression has at least one binding",
+                    expression: "BuildIfLetCondition(bound.ToImmutable(), 0, guard)"
+                ),
+                DiscardValue(whenTrue),
+                DiscardValue(whenFalse),
+                TypeSymbol.Void
+            )
+        }
         TryAdaptConditionalIntegerLiteralArm(&whenTrue, &whenFalse)
         let resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
         if resultType == nil {

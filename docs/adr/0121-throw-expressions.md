@@ -1,6 +1,6 @@
 # ADR-0121: Throw expressions (`throw` in value position)
 
-- **Status**: Accepted
+- **Status**: Accepted; extended by [ADR-0200](0200-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-06-23
 - **Phase**: Phase 9 — language depth / null-handling ergonomics
 - **Related**: ADR-0062 (general ternary conditional), ADR-0116 (`??` null-coalescing operator), ADR-0072 (`??=`), ADR-0115 (cs2gs migration tool), issue [#1018](https://github.com/DavidObando/gsharp/issues/1018)
@@ -87,3 +87,13 @@ implicitly convertible to any target type and never produces a value, so
 - **Lower throw-expressions to an `if`-block in the binder (status quo of
   cs2gs).** Rejected: not an expression, doesn't compose as a `??`/ternary
   operand, and produces less faithful IL/source.
+
+## Addendum (ADR-0200)
+
+The `never` type is no longer produced only by a throw expression: a value
+block whose end is unreachable (it ends in `throw`, `return`, `break`,
+`continue`, …), and an if-/switch-expression all of whose branches are such
+blocks, have it too, and unify the same way. A bare `throw e` that ends a value
+block is therefore accepted (it is still parsed as the throw statement). An
+untyped local whose initializer is `never` (`let a = throw e`) reports GS0124;
+it used to crash the compiler with GS9998.

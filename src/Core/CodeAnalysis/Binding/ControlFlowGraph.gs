@@ -206,8 +206,12 @@ class ControlFlowGraph {
                     }
                     case BoundNodeKind.VariableDeclaration,
                     BoundNodeKind.LocalFunctionDeclaration,
-                    BoundNodeKind.ExpressionStatement {
+                    BoundNodeKind
+                        .ExpressionStatement {
                         statements.Add(statement)
+                        if treatThrowsAsTerminators && ControlFlowGraph.HasNeverValue(statement) {
+                            StartBlock()
+                        }
                     }
                     case BoundNodeKind.PatternSwitchStatement, BoundNodeKind.FixedStatement {
                         statements.Add(statement)
@@ -318,6 +322,13 @@ class ControlFlowGraph {
                             } else if isLastStatementInBlock {
                                 Connect(current, next)
                             }
+                        }
+                        case BoundNodeKind.VariableDeclaration, BoundNodeKind.ExpressionStatement
+                        when ControlFlowGraph.HasNeverValue(statement) {
+                            // Issue #4965 (ADR-0200): a never-typed value — a
+                            // throw expression, or a block/if/switch every path
+                            // of which exits — never completes, like a throw.
+                            Connect(current, end)
                         }
                         case BoundNodeKind.VariableDeclaration,
                         BoundNodeKind.LocalFunctionDeclaration,
@@ -573,6 +584,27 @@ class ControlFlowGraph {
             return hasDefault
         }
 
+        /// Issue #4965 (ADR-0200): whether [`statement`](paramref) evaluates a
+        /// never-typed value — a throw expression, or a block, if-, if-let- or
+        /// switch-expression every path of which exits — as an expression
+        /// statement or a local's initializer. Such a statement never completes
+        /// normally, exactly like a throw statement.
+        /// @param statement The bound statement.
+        /// @returns Whether the statement's value has the bottom type.
+        internal func HasNeverValue(statement BoundStatement) bool {
+            switch statement {
+                case expressionStatement is BoundExpressionStatement {
+                    return expressionStatement.Expression.Type == TypeSymbol.Never
+                }
+                case declaration is BoundVariableDeclaration {
+                    return declaration.Initializer?.Type == TypeSymbol.Never
+                }
+                default {
+                    return false
+                }
+            }
+        }
+
         /// Structurally determines whether a bound statement definitely returns (or
         /// throws) on the fall-through path — without constructing a sub control-flow
         /// graph. This is deliberately conservative: escaping jumps such as
@@ -601,7 +633,8 @@ class ControlFlowGraph {
                 default {
                     return statement.Kind == BoundNodeKind.ReturnStatement ||
                         statement.Kind == BoundNodeKind.ThrowStatement ||
-                        statement.Kind == BoundNodeKind.RethrowStatement
+                        statement.Kind == BoundNodeKind.RethrowStatement ||
+                        HasNeverValue(statement)
                 }
             }
         }
