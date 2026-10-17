@@ -11,8 +11,10 @@ literals:
 
   - whitespace at the end of a line;
   - a line that contained only a comment (the check deletes it);
-  - a run of blank lines (the check keeps one blank line), and blank lines at
-    the start or end of the file;
+  - a run of blank lines that contained a deleted comment line (the check
+    keeps one blank line), and blank lines at the start or end of the file.
+    A run of blank lines with no comment stays as it is, because it can be
+    data (a multi-line YAML plain scalar);
   - the spaces next to a comment inside a line. The check removes a comment
     and the spaces next to it. Between two characters that could join into
     one token, it leaves one space, so `a/**/b` does not become `ab`.
@@ -512,22 +514,48 @@ def classify_sh(text: str) -> bytearray:
 
 
 def _sh_scan(text: str, pos: int, mask: bytearray, nested: bool) -> int:
-    """Scan code from pos. If nested, stop after the `)` that closes $( and return its end."""
+    """Scan code from pos. If nested, stop after the `)` that closes $( and return its end.
+
+    A word starts after an unescaped space, tab, line break or one of
+    `;&|()<>`. A backslash-newline is removed before words are split, so it
+    does not start a word. An escaped character, a quoted string, `${...}` and
+    a backtick substitution are STRING, so normalization cannot change them.
+    """
     n = len(text)
     start = pos
     depth = 0
-    pending: list[tuple[str, bool]] = []
+    word_start = True
+    pending: list[tuple[str, bool, bool]] = []
     while pos < n:
         c = text[pos]
         if c == "\\":
+            if text.startswith("\\\n", pos):
+                pos += 2  # a line continuation: the word goes on
+                continue
+            _mark(mask, pos, min(pos + 2, n), STRING)
             pos += 2
+            word_start = False
             continue
         if c == "\n":
             pos += 1
+            word_start = True
             if pending:
                 pos = _sh_heredocs(text, pos, mask, pending)
                 pending = []
             continue
+        if c == "#":
+            if word_start:
+                end = _eol(text, pos)
+                if not (pos == 0 and text.startswith("#!")):
+                    _mark(mask, pos, end, COMMENT)
+                pos = end
+            else:
+                pos += 1
+            continue
+        if c in _SH_WORD_BREAK:
+            word_start = True
+        else:
+            word_start = False
         if c == "'":
             end = text.find("'", pos + 1)
             if end < 0:
@@ -548,33 +576,30 @@ def _sh_scan(text: str, pos: int, mask: bytearray, nested: bool) -> int:
             elif nxt == "(":
                 pos = _sh_scan(text, pos + 2, mask, nested=True)
             elif nxt == "{":
-                pos = _sh_param_end(text, pos + 2, mask)
+                end = _sh_param_end(text, pos + 2, mask)
+                _mark(mask, pos, end, STRING)
+                pos = end
             else:
                 pos += 2 if nxt else 1  # $#, $?, $1, $name: never a comment
             continue
         if c == "`":
-            pos = _sh_backtick_end(text, pos + 1)
+            end = _sh_backtick_end(text, pos + 1)
+            _mark(mask, pos, end, STRING)
+            pos = end
             continue
         if c == '"':
             end = _sh_dquote_end(text, pos, mask)
             _mark(mask, pos, end, STRING)
             pos = end
             continue
-        if c == "#":
-            if pos == 0 or text[pos - 1] in _SH_WORD_BREAK:
-                end = _eol(text, pos)
-                if not (pos == 0 and text.startswith("#!")):
-                    _mark(mask, pos, end, COMMENT)
-                pos = end
-            else:
-                pos += 1
-            continue
         if c == "<" and text.startswith("<<<", pos):
             pos += 3  # a here-string, not a heredoc
+            word_start = False
             continue
         if c == "<" and text.startswith("<<", pos):
             pos, heredoc = _sh_heredoc_word(text, pos + 2)
             pending.append(heredoc)
+            word_start = False
             continue
         if nested:
             if c == "(":
@@ -671,16 +696,18 @@ def _sh_backtick_end(text: str, pos: int) -> int:
     raise ScanError(text, start, "unterminated backtick")
 
 
-def _sh_heredoc_word(text: str, pos: int) -> tuple[int, tuple[str, bool]]:
-    """Read the delimiter after `<<`. Return the end and (delimiter, strip_tabs)."""
+def _sh_heredoc_word(text: str, pos: int) -> tuple[int, tuple[str, bool, bool]]:
+    """Read the delimiter after `<<`. Return the end and (delimiter, strip_tabs, quoted)."""
     strip_tabs = text.startswith("-", pos)
     if strip_tabs:
         pos += 1
     while pos < len(text) and text[pos] in " \t":
         pos += 1
     word = []
+    quoted = False
     while pos < len(text) and text[pos] not in _SH_WORD_BREAK:
         c = text[pos]
+        quoted = quoted or c in "'\"\\"
         if c in "'\"":
             end = text.find(c, pos + 1)
             if end < 0:
@@ -696,11 +723,11 @@ def _sh_heredoc_word(text: str, pos: int) -> tuple[int, tuple[str, bool]]:
     delimiter = "".join(word)
     if not delimiter:
         raise ScanError(text, pos, "heredoc without a delimiter")
-    return pos, (delimiter, strip_tabs)
+    return pos, (delimiter, strip_tabs, quoted)
 
 
-def _sh_heredocs(text: str, pos: int, mask: bytearray, pending: list[tuple[str, bool]]) -> int:
-    for delimiter, strip_tabs in pending:
+def _sh_heredocs(text: str, pos: int, mask: bytearray, pending: list[tuple[str, bool, bool]]) -> int:
+    for delimiter, strip_tabs, quoted in pending:
         body = pos
         while True:
             if pos >= len(text):
@@ -712,6 +739,10 @@ def _sh_heredocs(text: str, pos: int, mask: bytearray, pending: list[tuple[str, 
                 _mark(mask, body, pos, STRING)
                 pos = line_end + 1 if end >= 0 else line_end
                 break
+            if not quoted and line.endswith("\\"):
+                # Bash joins this line with the next one before it looks for
+                # the delimiter. The scanner does not model that.
+                raise ScanError(text, pos, "backslash at the end of an unquoted heredoc line")
             pos = line_end + 1
     return pos
 
@@ -735,6 +766,7 @@ def classify_yaml(text: str) -> bytearray:
         offset += len(line)
     i = 0
     quote: str | None = None  # an open quoted scalar that spans lines
+    flow = 0  # the depth of [ and { flow collections, which can span lines
     while i < len(lines):
         line = lines[i]
         base = starts[i]
@@ -782,11 +814,18 @@ def classify_yaml(text: str) -> bytearray:
                 while pos < len(body) and body[pos] not in " \t":
                     pos += 1
                 continue
+            after = body[pos + 1 : pos + 2]
             if c in "[{,":
+                flow += c != ","
                 at_scalar_start = True
-            elif c in "-?" and body[pos + 1 : pos + 2] in ("", " ", "\t") and at_scalar_start:
+            elif c in "]}":
+                flow = max(0, flow - 1)
+                at_scalar_start = False
+            elif c in "-?" and after in ("", " ", "\t") and at_scalar_start:
                 at_scalar_start = True
-            elif c == ":" and body[pos + 1 : pos + 2] in ("", " ", "\t"):
+            elif c == ":" and (after in ("", " ", "\t", "'", '"') or flow):
+                # In a flow collection, and before a quote, a value can follow
+                # the colon with no space: {"k":"v"}.
                 at_scalar_start = True
             else:
                 at_scalar_start = False
@@ -845,9 +884,13 @@ def _yaml_block_body(
     end_line = j if keep else last
     if end_line > i:
         # The line break after the last body line stays code, so the line
-        # that follows the block is a line of its own.
+        # that follows the block is a line of its own. If only blank lines
+        # follow, that line break is the final character of the value, so it
+        # is STRING.
         last_line = lines[end_line - 1]
-        end = starts[end_line - 1] + len(last_line.rstrip("\r\n"))
+        end = starts[end_line - 1] + len(last_line)
+        if any(line.strip() for line in lines[end_line:]):
+            end -= len(last_line) - len(last_line.rstrip("\r\n"))
         _mark(mask, starts[i], end, STRING)
     return end_line
 
@@ -985,22 +1028,33 @@ def normalize(text: str, mask: bytearray) -> list[Line]:
         pos = end
     lines.append(_finish(current))
 
+    # A group is a run of lines that are blank or held only a comment. The
+    # check deletes the comment lines of a group and keeps at most one blank
+    # line. A group without a comment line stays as it is, because a blank line
+    # can be data (for example inside a multi-line YAML plain scalar). Blank
+    # lines at the start and end of the file are dropped.
     result: list[Line] = []
+    group: list[Line] = []
     keep_next = False
-    for line in lines:
-        if keep_next:
-            result.append(line)
-        elif line.text == "" and line.had_comment:
-            pass  # a line that held only a comment
-        elif line.text == "" and result and result[-1].text == "":
-            pass  # collapse a run of blank lines
+
+    def flush(at_end: bool) -> None:
+        if not result or at_end:
+            pass  # the start or the end of the file
+        elif any(line.had_comment for line in group):
+            blanks = [line for line in group if not line.had_comment]
+            result.extend(blanks[:1])
         else:
+            result.extend(group)
+        group.clear()
+
+    for line in lines:
+        if line.text == "" and not keep_next:
+            group.append(line)
+        else:
+            flush(at_end=False)
             result.append(line)
         keep_next = line.text.endswith("\\") and not line.ends_in_string
-    while result and result[0].text == "":
-        result.pop(0)
-    while result and result[-1].text == "" and not (len(result) > 1 and result[-2].text.endswith("\\")):
-        result.pop()
+    flush(at_end=True)
     return result
 
 
