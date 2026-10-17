@@ -412,6 +412,9 @@ internal partial class ExpressionBinder {
             case SyntaxKind.AssignmentExpression {
                 return BindAssignmentExpression(cast[AssignmentExpressionSyntax](syntax))
             }
+            case SyntaxKind.NullCoalescingAssignmentExpression {
+                return BindNullCoalescingAssignmentExpression(cast[NullCoalescingAssignmentExpressionSyntax](syntax))
+            }
             case SyntaxKind.UnaryExpression {
                 return BindUnaryExpression(cast[UnaryExpressionSyntax](syntax))
             }

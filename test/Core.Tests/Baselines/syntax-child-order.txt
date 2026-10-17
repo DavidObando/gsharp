@@ -98,7 +98,7 @@ GSharp.Core.CodeAnalysis.Syntax.NamedDeconstructionFieldSyntax: FieldIdentifier,
 GSharp.Core.CodeAnalysis.Syntax.NamedDeconstructionStatementSyntax: Keyword, OpenBraceToken, Fields, CloseBraceToken, EqualsToken, Initializer
 GSharp.Core.CodeAnalysis.Syntax.NamedTupleElementSyntax: NameToken, ColonToken, Expression
 GSharp.Core.CodeAnalysis.Syntax.NotPatternSyntax: NotKeyword, Pattern
-GSharp.Core.CodeAnalysis.Syntax.NullCoalescingAssignmentStatementSyntax: Target, OperatorToken, Value
+GSharp.Core.CodeAnalysis.Syntax.NullCoalescingAssignmentExpressionSyntax: Target, OperatorToken, Value
 GSharp.Core.CodeAnalysis.Syntax.ObjectCreationExpressionSyntax: Target, OpenBraceToken, Initializers, CloseBraceToken
 GSharp.Core.CodeAnalysis.Syntax.PackageSyntax: PackageKeyword, Identifiers, IdentifiersWithDots, Annotations
 GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax: Annotations, Identifier, DeconstructionPattern, EllipsisToken, Type, ScopedModifier, RefKindModifier, EqualsToken, DefaultValue
