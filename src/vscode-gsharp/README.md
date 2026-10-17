@@ -55,15 +55,6 @@ Formatting is canonical and option-free: 4 spaces, K&R braces, and a fixed
 | `GSharp: Debug Tests at Cursor` | Debug tests at the current cursor position |
 | `GSharp: Report Issue` | Open GitHub Issues for bug reports |
 
-## Development
-
-```bash
-cd src/vscode-gsharp
-npm install
-npm run compile
-# Press F5 in VS Code to launch the Extension Host
-```
-
 ## License
 
 MIT

@@ -57,7 +57,7 @@ The extension contributes these settings:
 
 G# formatting is canonical and has no indentation settings. The extension
 enables format-on-save and uses the same 4-space, 120-column formatter as
-`gsfmt`, CI, and the SDK.
+`gsfmt` and the SDK.
 
 ```json title="settings.json"
 {

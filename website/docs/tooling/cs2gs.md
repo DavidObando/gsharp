@@ -7,7 +7,7 @@ description: "Translate C# projects to G# and understand the migration tool's ve
 
 # C# to G# migration (`cs2gs`)
 
-`cs2gs` is the repository's C#→G# migration tool and gap-discovery pipeline. It lives under `tools\cs2gs\`, uses Roslyn as an external C# front end, emits canonical G#, and then validates the result through the real G# toolchain. It is sibling tooling: `gsc` does not reference Roslyn.
+`cs2gs` translates a C# repository into a G# repository. It reads C# with Roslyn, emits canonical G#, and then checks the result with the real G# toolchain. `gsc` itself does not reference Roslyn.
 
 ## Install as a global tool
 
@@ -26,101 +26,77 @@ A migration run is deterministic and stage-based:
 1. **Translate** C# projects into `.gs` files and `.gsproj` projects.
 2. **Compile** the translated G# with `gsc`.
 3. **IL-verify** the emitted assembly.
-4. **Test parity** against expected output when the corpus app has a baseline.
+4. **Test parity**: run the migrated tests and compare the results with the C# tests.
 
-Every run writes artifacts, `report.html`, and `summary.json` under the run directory. Failures become structured triage records so compiler/tooling gaps can be tracked instead of hidden.
+Every run writes `report.html` and `summary.json`. Each failure becomes a structured record, so you can see which construct or stage failed.
 
 ## Basic usage
 
-The tool's help reports:
-
 ```sh
-cs2gs --help
+cs2gs migrate --help
 ```
+
+The main verbs are:
 
 ```text
 cs2gs migrate [options]
+cs2gs validate --corpus <repo-root> --migrated <dir> [--shard i/N | --app <id>...]
+cs2gs capture-test-oracle --corpus <repo-root> --out <dir> [--exclude <path>...]
 cs2gs report --run <runDir> [--out <file-or-dir>]
-cs2gs coverage [--write] [--repo-root <dir>]
-cs2gs triage list --run <runDir> [--gaps <file>]
-cs2gs triage file-issues --run <runDir> [--gaps <file>] [--file] [--limit N] [--milestone M]
-cs2gs triage sync [--gaps <file>] [--write] [--no-test-reason <why>]
 ```
 
-For a normal corpus run:
+To migrate a C# repository into an empty destination directory:
 
 ```sh
-cs2gs migrate --corpus tools\cs2gs\corpus --out cs2gs-runs
+cs2gs migrate --corpus path/to/csharp-repo --out path/to/gsharp-repo
 ```
+
+The destination keeps the source's relative directories. `cs2gs` translates checked-in `.cs` files to `.gs`, transforms `.csproj` files to `.gsproj`, mirrors each `.sln`, and copies non-C# files. Build outputs, logs and reports go to a separate artifacts directory, `<out>.cs2gs-runs` by default.
 
 Useful `migrate` options:
 
 | Option | Behavior |
 | --- | --- |
-| `--corpus <dir>` | Corpus root. Defaults to `tools\cs2gs\corpus` when run from the repository. |
-| `--app <id>` | Migrate only one app. May be repeated. |
+| `--corpus <dir>` | Root of the C# repository to migrate. |
+| `--out <dir>` | Empty destination directory for the G# repository. |
+| `--artifacts <dir>` | Directory for build outputs, logs and reports. The default is `<out>.cs2gs-runs`. |
+| `--exclude <path>` | Leave out projects whose repository-relative path starts with `<path>`. May be repeated. |
+| `--passthrough <path>` | Do not translate matching projects, but keep their original C# project and sources in the destination. May be repeated. |
+| `--sdk-version <v>` | Pin `Gsharp.NET.Sdk` to exactly `<v>`. A version published on NuGet works. |
+| `--sdk-pin <where>` | `project` (the default) writes the SDK version into each generated project. `global-json` writes it under `msbuild-sdks` in `global.json` and leaves the project `Sdk` attributes unversioned. |
 | `--via-sdk` | Build the emitted G# via `dotnet build` + the `Gsharp.NET.Sdk` so source generators run. This is the default. |
-| `--no-via-sdk` | Use the legacy direct-`gsc` translation path instead of the SDK build. |
-| `--out <dir>` | Runs root for artifacts; default is `cs2gs-runs`. |
+| `--no-via-sdk` | Compile with `gsc` directly instead of the SDK build. |
 | `--config <name>` | Build configuration used to find tools; default is `Release`. |
-| `--baseline <file>` | Gate on the gap ledger. New and regressed fingerprints fail; known-open gaps are tolerated. |
-| `--baseline-strict` | Also fail on stale ledger entries. Intended for nightly checks. |
-| `--stop-after <stage>` | Run the stages up to and including `translate`, `compile`, `ilverify` or `test-parity` (the default). `compile` includes the redundant-`!!` polish, so the migrated tree is final without running test parity. `--translate-only` selects the same stages as `--stop-after translate` but keeps its own reporting: it does not mark apps unverified, because the nightly pairs it with `cs2gs validate` shards. |
-| `--format` | Run the canonical formatter over emitted G#. This is the default since ADR-0179 phase 7b. |
-| `--no-format` | Keep the printer's own layout instead of the canonical one. Useful for A/B measurement against the formatter; the emitted G# is the same program either way, only its line breaks differ. |
+| `--stop-after <stage>` | Run the stages up to and including `translate`, `compile`, `ilverify` or `test-parity` (the default). `compile` includes the redundant-`!!` cleanup, so the migrated tree is final without running test parity. |
+| `--translate-only` | Run only the translate stage, and write a `validation-context.json` for each project so `cs2gs validate` can run the other stages later. |
+| `--format` | Run the canonical formatter over emitted G#. This is the default. |
+| `--no-format` | Keep the printer's own layout instead of the canonical one. The emitted G# is the same program either way; only its line breaks differ. |
 
-## Replay a translated repository
+The exit code is non-zero if any project fails a stage.
 
-A repository-layout `migrate --translate-only` run writes a
-`validation-context.json` for each app. Replay its compile, IL-verify and parity
-stages with the **same revision's original C# checkout**, migrated tree and
-original per-test-name oracles:
+## Validate a translated repository
+
+`cs2gs validate` runs the compile, IL-verify and test-parity stages on a tree that `migrate --translate-only` already produced. Use it to split a large repository across several machines. Give it the original C# checkout, the migrated tree, and the run directory that holds the `validation-context.json` files:
 
 ```sh
-cs2gs validate --corpus original-checkout --migrated downloaded-migrated-tree \
-  --manifests downloaded-runs/migrate-run-id --csharp-test-oracle original-oracles \
-  --app test/Compiler.Tests/Compiler.Tests.csproj
+cs2gs capture-test-oracle --corpus path/to/csharp-repo --out csharp-tests
+
+cs2gs validate --corpus path/to/csharp-repo --migrated path/to/gsharp-repo \
+  --manifests path/to/runs/<run-id> --csharp-test-oracle csharp-tests \
+  --shard 1/4
 ```
 
-Keep `--exclude` and `--passthrough` consistent with the producing run. Selecting
-an app does not narrow the repository-wide project-reference map.
+`capture-test-oracle` records the C# test-case names, and `validate` compares the migrated tests with them name for name. Use `--count-only-test-parity` to skip the per-name check.
 
-Manifests retain the producing `sourceRoot` and `sourceProjectPath`, and each
-emitted file's `relativeCsPath`, absolute source provenance and referenced-project
-ownership. Hydration resolves original sources only under the supplied
-`--corpus`, including linked sources and `.resx` inputs; it never substitutes
-generated G# or an unrelated checkout. This preserves the source-declared
-`[Fact]` count used by the existing parity budget, not the larger discovered
-per-name/theory oracle count (issue #4752).
-An explicitly empty or whitespace producing `sourceRoot` is invalid, even when
-no files were emitted. A valid modern project identity can represent no emitted
-or only referenced files; it does not manufacture own-source Facts or verification.
-Source roots and owning project paths are canonicalized consistently, including
-when the checkout is reached through a directory symlink.
-Legacy ownership uses that same canonical project identity for nested project
-directories and their explicit linked compile inputs.
+Pass the same `--exclude` and `--passthrough` values that the `migrate` run used. They define the set of projects, so a different list breaks project references. To select a subset, use `--app <id>` or `--shard <i>/<N>` instead.
 
-Older manifests without these additive fields use the exact full
-corpus-relative primary C# output mapping to establish one owning producing
-root. Namespace splits are not guessed by filename. Missing sources, conflicting
-roots, incomplete identity metadata and paths escaping either authorized tree
-fail explicitly. An old manifest with no unambiguous owning C# anchor needs a
-new translate pass; replay does not silently accept an empty source count.
-For projects directly at the corpus root, non-referenced primary C# inputs
-can establish that anchor, including SDK-default implicit compile items.
-Referenced-project entries never establish ownership.
-Relocation repairs source evidence, not runtime failures: a restored budget
-alone does not prove the test suite completes.
+`validate` reads the original C# sources only from the `--corpus` checkout. It fails when a source is missing, when a path is outside the checkout or the migrated tree, or when a manifest does not identify its owning project. In those cases, run a new `migrate --translate-only` pass.
 
 ## Roslyn analyzer projects
 
 When a project in the migration declares Roslyn analyzers, `cs2gs` switches that project into analyzer translation mode: `Microsoft.CodeAnalysis` usage is rewritten to the [G# analyzer API](./analyzers.md) instead of passing through as an ordinary library reference. The `[DiagnosticAnalyzer]` attribute, base class, analysis contexts, `SyntaxKind` values, and node/symbol members all map to their G# counterparts, and common idioms are rewritten (`GetLocation()` becomes `.Location`, operation actions become bound-node actions, and so on). The project file is retargeted too: the Roslyn compiler packages are dropped in favor of a `GSharp.Core` reference, and consumers' `OutputItemType="Analyzer"` wiring becomes `OutputItemType="GsharpCodeAnalyzer"`.
 
 Where C# and G# syntax genuinely differ in shape, the translator adapts the detection logic and flags the site with a `CS2GS-ANALYZER-SHAPE` warning for review; APIs it cannot map are reported loudly rather than translated wrong. Analyzer *test* snippets translate as well, with their `[|…|]` expected-diagnostic markers re-placed in the G# source and any unplaceable marker called out with `CS2GS-ANALYZER-SNIPPET`.
-
-## Coverage and triage
-
-`cs2gs` keeps a construct inventory for Roslyn syntax kinds, a generated coverage matrix, and automated gap triage. `cs2gs coverage --write` updates the inventory skeleton and generated matrix when Roslyn's surface changes. `cs2gs triage` commands list and cluster run gaps, and sync the gap ledger.
 
 ## Generated code policy
 

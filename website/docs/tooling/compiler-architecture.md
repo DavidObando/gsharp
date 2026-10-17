@@ -31,7 +31,7 @@ BoundProgram (lowered) → ReflectionMetadataEmitter → PE assembly
 
 ## The compiler is written in G#
 
-From 0.5 the compiler, language server, formatter and tools are G# source. cs2gs translated them from the C# source of the final C#-built release, and that C# source is kept on the semi-frozen `cs2gs/csharp-0.4` branch, a living C# corpus for cs2gs (no fixes or features; occasional back-ports from G# when they exercise cs2gs). The repository builds with the previous released compiler, pinned in `global.json` (the N-1 rule: repository source uses only language features the pinned release supports). A stage-2 check rebuilds the compiler with the stage-1 compiler and requires identical `GSharp.Core.dll` and `gsc.dll`, so the shipped compiler is the self-built one. The Visual Studio extension stays C#.
+From 0.5, `gsc`, the language server, the formatter and the other G# tools are written in G#. An earlier released version of the G# compiler compiles each new version. The Visual Studio extension is written in C#.
 
 ## No Roslyn dependency in the emit path
 

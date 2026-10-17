@@ -51,8 +51,6 @@ gsc @app.rsp
 
 ## Command-line options
 
-This option list was checked against `dotnet out\bin\Release\Compiler\gsc.dll --help` for the 0.4 line.
-
 | Option | Accepted values and behavior |
 | --- | --- |
 | `/out:<file>` | Save the emitted PE assembly to `<file>`. Without this option, `gsc` runs the emitted program immediately. |
@@ -103,7 +101,7 @@ This option list was checked against `dotnet out\bin\Release\Compiler\gsc.dll --
 | `/log:<file>` | Write compiler diagnostic logging to the specified file. |
 | `/?`, `/help`, `--help` | Show compiler help. |
 
-Unsupported values for `/target:<value>`, `/debug:<value>`, and boolean switches are errors. Missing required values, such as `/doc` without a path or `/globaloption` without `key=value`, are also errors. Although the current help text shows `/implicitimports[+|-]`, the verified Release parser accepts `/implicitimports` and `/implicitimports:<bool>` but rejects `/implicitimports+` and `/implicitimports-`; use `/noimplicitimports` or `/implicitimports:false` to disable it.
+Unsupported values for `/target:<value>`, `/debug:<value>`, and boolean switches are errors. Missing required values, such as `/doc` without a path or `/globaloption` without `key=value`, are also errors. Although the help text shows `/implicitimports[+|-]`, the parser accepts `/implicitimports` and `/implicitimports:<bool>` but rejects `/implicitimports+` and `/implicitimports-`; use `/noimplicitimports` or `/implicitimports:false` to disable it.
 
 ## References and target frameworks
 

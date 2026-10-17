@@ -12,30 +12,6 @@ The G# Visual Studio extension provides:
 Visual Studio 2026 or later is supported. The .NET 10 runtime is required by
 the bundled language server and G# SDK projects.
 
-## Build
-
-Run from a Visual Studio Developer PowerShell:
-
-```powershell
-msbuild src\vs-gsharp\VsGsharp.sln /restore /t:Build /p:Configuration=Release
-```
-
-The VSIX is written to
-`src\vs-gsharp\src\VsGsharp\bin\Release\net472\GSharp.VisualStudio.vsix`.
-
-## Experimental instance
-
-```powershell
-src\vs-gsharp\scripts\Install-ExperimentalVsix.ps1 -RootSuffix GSharp
-src\vs-gsharp\scripts\Invoke-Vs2026Smoke.ps1 `
-  -RootSuffix GSharp `
-  -SolutionPath path\to\sample.sln
-```
-
-The installer removes only the selected experimental profile's MEF,
-extension metadata, and project-template indexes, then warms that profile
-before a solution is opened.
-
 ## Settings and commands
 
 `Tools > Options > G#` controls the server lifecycle, formatting, on-type
