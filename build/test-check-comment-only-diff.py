@@ -339,6 +339,10 @@ class ShellTests(CommentOnlyCase):
         base = "declare -A a\na[ #old]=value\nprintf '%s\\n' \"${!a[@]}\"\n"
         self.assertFails("a.sh", base, base.replace("old", "new"), "unclosed")
 
+    def test_hash_inside_multi_line_subscript_fails_closed(self) -> None:
+        base = "declare -A a\na[\n #old]=value\nprintf '%s\\n' \"${!a[@]}\"\n"
+        self.assertFails("a.sh", base, base.replace("old", "new"), "unclosed")
+
     def test_comment_after_closed_test_bracket_passes(self) -> None:
         self.assertPasses("a.sh", 'if [ -n "$x" ]; then # old\n  :\nfi\n', 'if [ -n "$x" ]; then # new\n  :\nfi\n')
 
