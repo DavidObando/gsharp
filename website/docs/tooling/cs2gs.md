@@ -17,7 +17,7 @@ description: "Translate C# projects to G# and understand the migration tool's ve
 dotnet tool install --global Gsharp.Cs2Gs
 ```
 
-Once installed, the `cs2gs` command is on your `PATH`, and the examples below use it directly. Update or remove it with `dotnet tool update --global Gsharp.Cs2Gs` and `dotnet tool uninstall --global Gsharp.Cs2Gs`. When working from a source build of this repository instead, invoke the same verbs through the built assembly — `dotnet out\bin\Release\Cs2Gs.Cli\cs2gs.dll <verb>`.
+Once installed, the `cs2gs` command is on your `PATH`. Update or remove it with `dotnet tool update --global Gsharp.Cs2Gs` and `dotnet tool uninstall --global Gsharp.Cs2Gs`. When working from a source build of this repository instead, invoke the same verbs through the built assembly — `dotnet out\bin\Release\Cs2Gs.Cli\cs2gs.dll <verb>`. A migration also needs the setup in [Requirements](#requirements).
 
 ## What it does
 
@@ -26,9 +26,26 @@ A migration run is deterministic and stage-based:
 1. **Translate** C# projects into `.gs` files and `.gsproj` projects.
 2. **Compile** the translated G# with `gsc`.
 3. **IL-verify** the emitted assembly.
-4. **Test parity**: run the migrated tests and compare the results with the C# tests.
+4. **Test parity**: run the migrated tests. They must pass, and at least as many must run as the C# projects declare `[Fact]` methods. This minimum does not count `[Theory]` cases. To compare the test cases name for name, pass `--csharp-test-oracle` (see [Validate a translated repository](#validate-a-translated-repository)).
 
 Every run writes `report.html` and `summary.json`. Each failure becomes a structured record, so you can see which construct or stage failed.
+
+## Requirements
+
+A migration needs these tools, in addition to `cs2gs`:
+
+- **A `gsc.dll`.** `cs2gs` looks for `out/bin/<config>/Compiler/gsc.dll` in the current directory and its parents, which a source build of G# provides. Otherwise, pass `--gsc <path>`. The `Gsharp.NET.Sdk` package contains the compiler at `tools/compiler/gsc.dll`, for example under `~/.nuget/packages/gsharp.net.sdk/<version>/` after you restore a G# project.
+- **An SDK version.** Pass `--sdk-version <v>` with a `Gsharp.NET.Sdk` version that is on NuGet. Without it, `cs2gs` looks for a locally packed SDK and stops if it finds none.
+- **The `ilverify` tool.** The IL-verify stage runs `dotnet tool run ilverify`. Add `dotnet-ilverify` to a local tool manifest in the directory you run `cs2gs` from (`dotnet new tool-manifest`, then `dotnet tool install dotnet-ilverify`).
+
+Known limitation ([#4956](https://github.com/DavidObando/gsharp/issues/4956)): the published tool also looks for the G# source tree, and outside it `migrate` stops with "Could not locate the repository source root". Until this is fixed, set the `CS2GS_TEST_SOURCE_ROOT` environment variable to the root of the C# repository:
+
+```sh
+CS2GS_TEST_SOURCE_ROOT=path/to/csharp-repo cs2gs migrate \
+  --corpus path/to/csharp-repo --out path/to/gsharp-repo \
+  --gsc ~/.nuget/packages/gsharp.net.sdk/<version>/tools/compiler/gsc.dll \
+  --sdk-version <version>
+```
 
 ## Basic usage
 
@@ -45,7 +62,7 @@ cs2gs capture-test-oracle --corpus <repo-root> --out <dir> [--exclude <path>...]
 cs2gs report --run <runDir> [--out <file-or-dir>]
 ```
 
-To migrate a C# repository into an empty destination directory:
+To migrate a C# repository into an empty destination directory (add the options from [Requirements](#requirements)):
 
 ```sh
 cs2gs migrate --corpus path/to/csharp-repo --out path/to/gsharp-repo
@@ -68,6 +85,8 @@ Useful `migrate` options:
 | `--via-sdk` | Build the emitted G# via `dotnet build` + the `Gsharp.NET.Sdk` so source generators run. This is the default. |
 | `--no-via-sdk` | Compile with `gsc` directly instead of the SDK build. |
 | `--config <name>` | Build configuration used to find tools; default is `Release`. |
+| `--csharp-test-oracle <dir>` | Compare the migrated tests with the C# test-case names that `cs2gs capture-test-oracle` wrote to `<dir>`. |
+| `--gsc <path>` | Use this `gsc.dll`. See [Requirements](#requirements). |
 | `--stop-after <stage>` | Run the stages up to and including `translate`, `compile`, `ilverify` or `test-parity` (the default). `compile` includes the redundant-`!!` cleanup, so the migrated tree is final without running test parity. |
 | `--translate-only` | Run only the translate stage, and write a `validation-context.json` for each project so `cs2gs validate` can run the other stages later. |
 | `--format` | Run the canonical formatter over emitted G#. This is the default. |
@@ -87,7 +106,7 @@ cs2gs validate --corpus path/to/csharp-repo --migrated path/to/gsharp-repo \
   --shard 1/4
 ```
 
-`capture-test-oracle` records the C# test-case names, and `validate` compares the migrated tests with them name for name. `validate` requires either `--csharp-test-oracle` or `--count-only-test-parity`. The second option skips the per-name check and compares only test counts.
+`capture-test-oracle` records the C# test-case names, and `validate` compares the migrated tests with them name for name. `validate` requires either `--csharp-test-oracle` or `--count-only-test-parity`. The second option skips the per-name check and keeps only the minimum-count check, which does not detect lost `[Theory]` cases.
 
 Pass the same `--exclude` and `--passthrough` values that the `migrate` run used. They define the set of projects, so a different list breaks project references. To select a subset, use `--app <id>` or `--shard <i>/<N>` instead.
 
