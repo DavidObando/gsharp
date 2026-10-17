@@ -220,30 +220,65 @@ _FSTRING_STARTS = {getattr(tokenize, n) for n in ("FSTRING_START", "TSTRING_STAR
 _FSTRING_ENDS = {getattr(tokenize, n) for n in ("FSTRING_END", "TSTRING_END") if hasattr(tokenize, n)}
 
 
+_PY_UTF8 = {"utf-8", "utf8", "utf_8", "utf-8-sig", "utf_8_sig"}
+
+
 def py_tokens(text: str) -> list[Token]:
+    """Return the tokens that the comparison keeps.
+
+    An f-string or t-string is kept as one token with its exact source text,
+    because tokenize does not report the spaces inside a replacement field
+    (`f"{x =}"` and `f"{x=}"` differ). A shebang keeps its whole line, because
+    it works only at the first column.
+    """
+    for line in text.split("\n")[:2]:
+        if PY_CODING.match(line):
+            encoding = re.search(r"coding[:=][ \t]*([-\w.]+)", line)
+            if encoding and encoding.group(1).lower() not in _PY_UTF8:
+                # Python decodes the file with this codec before it lexes it,
+                # and the check reads it as UTF-8, so they can disagree.
+                raise CheckError(f"the file declares the encoding {encoding.group(1)}: review manually")
+    offsets = [0]
+    for line in io.StringIO(text):
+        offsets.append(offsets[-1] + len(line))
+
+    def offset(row_col: tuple[int, int]) -> int:
+        row, col = row_col
+        return offsets[min(row - 1, len(offsets) - 1)] + col
+
     tokens: list[Token] = []
     last_row = 0  # the row where the previous kept token ends
-    depth = 0  # f-string nesting; a comment inside one is part of the string
+    fstrings: list[int] = []  # start offsets of the open f-strings
+    first = (0, 0)  # where the outermost open f-string starts
+
+    def keep(kind: str, value: str, start: tuple[int, int], end: tuple[int, int]) -> None:
+        nonlocal last_row
+        before = "start" if not tokens else "same line" if start[0] == last_row else "new line"
+        tokens.append(Token(kind, value, start[0], before))
+        last_row = end[0]
+
     try:
         for tok in tokenize.generate_tokens(io.StringIO(text).readline):
             if tok.type in _FSTRING_STARTS:
-                depth += 1
-            elif tok.type in _FSTRING_ENDS:
-                depth -= 1
-            elif tok.type == tokenize.NL:
+                fstrings.append(offset(tok.start))
+                if len(fstrings) == 1:
+                    first = tok.start
                 continue
-            elif tok.type == tokenize.COMMENT and depth == 0:
+            if tok.type in _FSTRING_ENDS:
+                start = fstrings.pop()
+                if not fstrings:
+                    keep("FSTRING", text[start : offset(tok.end)], first, tok.end)
+                continue
+            if fstrings or tok.type == tokenize.NL:
+                continue
+            if tok.type == tokenize.COMMENT:
                 row = tok.start[0]
-                keep = (
-                    (row == 1 and tok.string.startswith("#!"))
-                    or (row <= 2 and PY_CODING.match(tok.line))
-                    or DIRECTIVE.search(tok.string)
-                )
-                if not keep:
+                if row == 1 and tok.line.lstrip().startswith("#!"):
+                    keep("SHEBANG", tok.line.rstrip("\r\n"), tok.start, tok.end)
                     continue
-            before = "start" if not tokens else "same line" if tok.start[0] == last_row else "new line"
-            tokens.append(Token(tokenize.tok_name[tok.type], tok.string, tok.start[0], before))
-            last_row = tok.end[0]
+                if not ((row <= 2 and PY_CODING.match(tok.line)) or DIRECTIVE.search(tok.string)):
+                    continue
+            keep(tokenize.tok_name[tok.type], tok.string, tok.start, tok.end)
     except (tokenize.TokenError, SyntaxError) as error:
         raise CheckError(f"Python tokenize failed: {error}") from error
     return tokens

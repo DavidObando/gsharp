@@ -209,6 +209,17 @@ class PythonTests(CommentOnlyCase):
     def test_shebang_change_fails(self) -> None:
         self.assertFails("a.py", "#!/usr/bin/env python3\nx = 1\n", "#!/usr/bin/python3\nx = 1\n")
 
+    def test_indented_shebang_fails(self) -> None:
+        self.assertFails("a.py", "#!/usr/bin/env python3\nx = 1\n", " #!/usr/bin/env python3\nx = 1\n")
+
+    def test_space_inside_f_string_replacement_field_fails(self) -> None:
+        # f"{x=}" gives "x=1" and f"{x =}" gives "x =1".
+        self.assertFails("a.py", 'x = 1\ny = f"{x=}"\n', 'x = 1\ny = f"{x =}"\n')
+
+    def test_other_declared_encoding_fails_closed(self) -> None:
+        base = "# coding: unicode_escape\n# note \\u000ax = 1\n"
+        self.assertFails("a.py", base, base.replace("x = 1", "x = 2"), "declares the encoding")
+
     def test_noqa_change_fails(self) -> None:
         self.assertFails("a.py", "import os  # noqa: F401\n", "import os  # unused\n")
 
