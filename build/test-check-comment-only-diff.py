@@ -225,6 +225,9 @@ class PythonTests(CommentOnlyCase):
         # The base prints 1 and the head prints 3.
         self.assertFails("a.py", "x = 1 \\\r\n# old\r\n+ 2\r\nprint(x)\r\n", "x = 1 \\\r\n+ 2\r\nprint(x)\r\n")
 
+    def test_byte_order_mark_fails_closed(self) -> None:
+        self.assertFails("a.py", "\ufeffx = 1  # old\n", "\ufeffx = 1  # new\n", "byte-order mark")
+
     def test_tokenize_error_fails_closed(self) -> None:
         self.assertFails("a.py", "x = (1,\n", "x = (1, # c\n", "cannot tokenize")
 
@@ -264,7 +267,8 @@ class ShellTests(CommentOnlyCase):
 
     def test_escaped_trailing_space_is_not_normalized(self) -> None:
         # Bash prints "<a >" for the base and "<a>" for the head.
-        self.assertFails("a.sh", "printf '<%s>\\n' a\\ \n", "printf '<%s>\\n' a\\\n")
+        self.assertFails("a.sh", "printf '<%s>\\n' a\\ \n", "printf '<%s>\\n' a\\\n", "")
+        self.assertFails("a.sh", "printf '<%s>\\n' a\\ \n", "printf '<%s>\\n' a\\\t\n")
 
     def test_quoted_text_inside_parameter_expansion_is_not_normalized(self) -> None:
         self.assertFails("a.sh", "x=${u:-'a   \nb'}\n", "x=${u:-'a\nb'}\n")
@@ -275,7 +279,7 @@ class ShellTests(CommentOnlyCase):
 
     def test_hash_after_escape_or_continuation_is_not_a_comment(self) -> None:
         self.assertFails("a.sh", "echo a\\ #old\n", "echo a\\ #new\n")
-        self.assertFails("a.sh", "echo a\\\n#old\n", "echo a\\\n#new\n")
+        self.assertFails("a.sh", "echo a\\\n#old\n", "echo a\\\n#new\n", "inside a word")
 
     def test_comment_after_continuation_and_space_is_a_comment(self) -> None:
         self.assertPasses("a.sh", "echo a \\\n#old\n", "echo a \\\n#new\n")
@@ -295,7 +299,7 @@ class ShellTests(CommentOnlyCase):
 
     def test_case_split_by_line_continuation_fails_closed(self) -> None:
         base = 'x="$(ca\\\nse x in x) echo "value # old";; esac)"\n'
-        self.assertFails("a.sh", base, base.replace("old", "new"), "case inside")
+        self.assertFails("a.sh", base, base.replace("old", "new"), "inside a word")
 
     def test_ansi_c_string_inside_parameter_expansion(self) -> None:
         base = "x=${u:-$'\\'} value # old'}\n"
@@ -308,6 +312,15 @@ class ShellTests(CommentOnlyCase):
 
     def test_byte_order_mark_fails_closed(self) -> None:
         self.assertFails("a.sh", "\ufeffecho hi # old\n", "\ufeffecho hi # new\n", "byte-order mark")
+
+    def test_continuation_inside_a_token_fails_closed(self) -> None:
+        for base in (
+            "printf '%s\\n' $\\\n#old\n",
+            "cat <\\\n<'EOF'\n#old\nEOF\n",
+            'x="$\\\n(echo "value # old")"\n',
+        ):
+            with self.subTest(base=base):
+                self.assertFails("a.sh", base, base.replace("old", "new"), "inside a word")
 
     def test_line_ending_change_fails(self) -> None:
         # Bash prints "<value\r>" for the base and "<value>" for the head.
@@ -394,6 +407,10 @@ class YamlTests(CommentOnlyCase):
 
     def test_byte_order_mark_fails_closed(self) -> None:
         self.assertFails("a.yml", "\ufeff- |\n    # old\n", "\ufeff- |\n    # new\n", "byte-order mark")
+
+    def test_byte_order_mark_before_later_document_fails_closed(self) -> None:
+        base = "--- a\n...\n\ufeff--- |\n  # old\n"
+        self.assertFails("a.yml", base, base.replace("old", "new"), "byte-order mark")
 
     def test_whitespace_only_block_lines_are_kept(self) -> None:
         # The values are "a\n \n" and "a\n".
