@@ -120,6 +120,29 @@ open class MetadataUpdateHandlerInvokerTests {
     }
 
     @Fact
+    func GenericHandlerMethod_IsReported_AndDoesNotStopOtherHandlers() {
+        Issue4960HandlerLog.Reset()
+        let reports = List[string]()
+        let invoker = MetadataUpdateHandlerInvoker((message string) -> reports.Add(message))
+        let actions = invoker.GetUpdateHandlerActions(
+            []Type{typeof(Issue4960GenericMethodHandler), typeof(Issue4960FirstHandler)}
+        )
+        Assert.Equal(2, reports.Count)
+        Assert.StartsWith(
+            "GSHR1005: type 'GSharp.Sdk.Tests.Issue4960GenericMethodHandler' has method 'Void ClearCache[T](System.Type[])'",
+            reports[0],
+            StringComparison.Ordinal
+        )
+        Assert.StartsWith(
+            "GSHR1005: expected to find a static method 'ClearCache', 'UpdateApplication' or 'UpdateContent' on type 'GSharp.Sdk.Tests.Issue4960GenericMethodHandler, ",
+            reports[1],
+            StringComparison.Ordinal
+        )
+        actions.MetadataUpdated(Type.EmptyTypes)
+        Assert.Equal([]string{"first ClearCache ", "first UpdateApplication "}, Issue4960HandlerLog.Entries.ToArray())
+    }
+
+    @Fact
     func ContentOnlyHandler_IsNotReported() {
         let reports = List[string]()
         let invoker = MetadataUpdateHandlerInvoker((message string) -> reports.Add(message))
@@ -270,6 +293,14 @@ internal class Issue4960MismatchedHandler {
 
     func UpdateApplication(updatedTypes[]?Type) {
         Issue4960HandlerLog.Entries.Add("mismatched UpdateApplication")
+    }
+}
+
+internal class Issue4960GenericMethodHandler {
+    shared {
+        func ClearCache[T](updatedTypes[]?Type) {
+            Issue4960HandlerLog.Entries.Add("generic ClearCache")
+        }
     }
 }
 
