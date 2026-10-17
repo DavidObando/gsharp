@@ -1886,7 +1886,7 @@ narrowing)* below.
 
 Ref:  and its  addenda.
 
-A successful `is` (or `!is`) test against a *stable narrowable receiver* flow-narrows that receiver to the tested type for the rest of the enclosing flow region. A stable receiver is either a *local root* — a local, a parameter, or a read-only top-level `let` binding — **or** a *stable member-access path*: a chain of immutable members read through a stable receiver chain, such as `b.Pet` or `o.Box.Pet`. The narrowing applies to member lookup, overload resolution, conversion, and emit. The same machinery composes through `!`, `&&`, `||`, `if`/`else`, `switch` arms, `if let` / `guard let` / `while let`, and the early-exit lift.
+A successful `is` (or `!is`) test against a *stable narrowable receiver* flow-narrows that receiver to the tested type for the rest of the enclosing flow region. A stable receiver is either a *local root* — a local, a parameter, or a read-only top-level `let` binding — **or** a *stable member-access path*: a chain of immutable members read through a stable receiver chain, such as `b.Pet` or `o.Box.Pet`. The narrowing applies to member lookup, overload resolution, conversion, and emit. The same machinery composes through `!`, `&&`, `||`, `if`/`else`, the branches of an `if` expression and of the conditional operator `?:`, `switch` arms, `if let` / `guard let` / `while let`, and the early-exit lift. The two conditional value forms narrow identically: `s != nil ? s.Length : 0` and `if s != nil { s.Length } else { 0 }` both read `s` as `string` in the first branch, and a nil guard or type test narrows only the branch it proves. Because a branch's type is its narrowed type, the conditional's result type can be the narrowed type: with `n int32?`, `n != nil ? n : 0` has type `int32`.
 
 ```gsharp
 if a is Dog {
@@ -1895,6 +1895,8 @@ if a is Dog {
 
 if a !is Dog { return }
 a.Bark()                          // a narrowed to Dog in the rest of the block
+
+let name = (a is Dog) ? a.Bark() : a.Name   // a narrowed to Dog in the first branch
 
 if a is Dog && a.Name != "" {
     Console.WriteLine(a.Bark())   // && threads the left narrowing into the right operand

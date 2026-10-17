@@ -677,64 +677,54 @@ internal partial class ExpressionBinder {
         // expression is invalid.
         let trueIsBareDefault = syntax.WhenTrue is DefaultExpressionSyntax tDef && tDef.TypeClause == nil
         let falseIsBareDefault = syntax.WhenFalse is DefaultExpressionSyntax fDef && fDef.TypeClause == nil
+        // Issue #4964: each branch is bound under the same smart-cast frames
+        // the equivalent if-expression uses (`s != nil ? s.Length : 0`), so
+        // the two conditional forms narrow identically.
+        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyConditionalNarrowing(condition)
         // ADR-0166: each branch sees the pattern variables the condition
         // definitely assigns on that branch (`x is T t ? t.Name : "none"`).
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        let bindWhenTrue = func (branchTargetType TypeSymbol?) BoundExpression {
+            return BindWithPatternVariables(
+                patternWhenTrue,
+                () -> {
+                    return BindExpressionWithNarrowing(syntax.WhenTrue, whenTrueNarrowing, branchTargetType)
+                }
+            )
+        }
+        let bindWhenFalse = func (branchTargetType TypeSymbol?) BoundExpression {
+            return BindWithPatternVariables(
+                patternWhenFalse,
+                () -> {
+                    return BindExpressionWithNarrowing(syntax.WhenFalse, whenFalseNarrowing, branchTargetType)
+                }
+            )
+        }
         var whenTrue BoundExpression
         var whenFalse BoundExpression
         if targetType != nil {
-            whenTrue = BindWithPatternVariables(
-                patternWhenTrue,
-                () -> {
-                    return BindExpression(syntax.WhenTrue, targetType)
-                }
-            )
-            whenFalse = BindWithPatternVariables(
-                patternWhenFalse,
-                () -> {
-                    return BindExpression(syntax.WhenFalse, targetType)
-                }
-            )
+            whenTrue = bindWhenTrue(targetType)
+            whenFalse = bindWhenFalse(targetType)
         } else if trueIsBareDefault && falseIsBareDefault {
             Diagnostics.ReportBareDefaultNoTargetType(
                 (cast[DefaultExpressionSyntax](syntax.WhenTrue)).DefaultKeyword.Location
             )
             return BoundErrorExpression(nil)
         } else if trueIsBareDefault {
-            whenFalse = BindWithPatternVariables(
-                patternWhenFalse,
-                () -> {
-                    return BindExpression(syntax.WhenFalse)
-                }
-            )
+            whenFalse = bindWhenFalse(nil)
             if whenFalse is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
             whenTrue = BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type)
         } else if falseIsBareDefault {
-            whenTrue = BindWithPatternVariables(
-                patternWhenTrue,
-                () -> {
-                    return BindExpression(syntax.WhenTrue)
-                }
-            )
+            whenTrue = bindWhenTrue(nil)
             if whenTrue is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
             whenFalse = BoundDefaultExpression(syntax.WhenFalse, whenTrue.Type)
         } else {
-            whenTrue = BindWithPatternVariables(
-                patternWhenTrue,
-                () -> {
-                    return BindExpression(syntax.WhenTrue)
-                }
-            )
-            whenFalse = BindWithPatternVariables(
-                patternWhenFalse,
-                () -> {
-                    return BindExpression(syntax.WhenFalse)
-                }
-            )
+            whenTrue = bindWhenTrue(nil)
+            whenFalse = bindWhenFalse(nil)
         }
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
@@ -773,42 +763,6 @@ internal partial class ExpressionBinder {
         targetType: nil,
         canBeVoid: false
     )
-
-    /// The narrowing frames an if-expression condition implies for its
-    /// branches. Shared by the if-expression and, for its guard, the `if let`
-    /// expression (issue #4961 / ADR-0201).
-    private func ClassifyIfExpressionNarrowing(condition BoundExpression)(
-        Then Dictionary[AccessPath, TypeSymbol]?,
-        Else Dictionary[AccessPath, TypeSymbol]?
-    ) {
-        // Issue #2640: an if-expression branch observes the same nil-guard
-        // narrowing as an if-statement. Otherwise a nullable hole can poison
-        // the interpolation before handler overload resolution runs.
-        var whenTrueNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-        var whenFalseNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-        if SmartCastStability.TryClassifyNilGuardLeaf(
-            condition,
-            restrictBareVariableToLocalsAndParams: false,
-            referenceNullableOnly: false,
-            out var target,
-            out var underlying,
-            out var nonNilWhenTrue
-        ) &&
-            target != nil &&
-            underlying != nil {
-            let frame = Dictionary[AccessPath, TypeSymbol]{[target] = underlying}
-            if nonNilWhenTrue {
-                whenTrueNarrowing = frame
-            } else {
-                whenFalseNarrowing = frame
-            }
-        }
-        let (typeWhenTrue, typeWhenFalse) = ClassifyTypeTestNarrowing(condition)
-        return (
-            MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue),
-            MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse)
-        )
-    }
 
     private func BindIfExpression(
         syntax IfExpressionSyntax,
@@ -878,7 +832,7 @@ internal partial class ExpressionBinder {
         // position; BindIfExpression rejects it elsewhere (GS0276).
         let elseSyntax = syntax.ElseExpression
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
-        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyIfExpressionNarrowing(condition)
+        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyConditionalNarrowing(condition)
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
@@ -2844,6 +2798,50 @@ internal partial class ExpressionBinder {
         private func CanLowerPointerComparisonOperand(type TypeSymbol) bool -> type == TypeSymbol.Null ||
             Conversion
             .Classify(type, TypeSymbol.NInt).Exists
+
+        /// Issue #4964: computes the smart-cast narrowing frames that a
+        /// conditional's condition implies for each branch. The if-expression
+        /// (`if c { a } else { b }`) and the conditional operator (`c ? a : b`)
+        /// are two spellings of one value form, and both bind their branches
+        /// under these frames, so the two cannot narrow differently.
+        ///
+        /// Issue #2640 introduced the frames for the if-expression: a top-level
+        /// nil guard (`x != nil`, `x == nil`, nullable value types included),
+        /// merged with the type-test and short-circuit frames of
+        /// `ClassifyTypeTestNarrowing` (`x is T`, `!`, `&&`, `||`).
+        /// @param condition The bound condition.
+        /// @returns The frame for the branch taken when the condition is true,
+        /// and the frame for the branch taken when it is false. Either may be
+        /// `nil` when that branch narrows nothing.
+        private func ClassifyConditionalNarrowing(condition BoundExpression)(
+            WhenTrue Dictionary[AccessPath, TypeSymbol]?,
+            WhenFalse Dictionary[AccessPath, TypeSymbol]?
+        ) {
+            var whenTrueNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
+            var whenFalseNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
+            if SmartCastStability.TryClassifyNilGuardLeaf(
+                condition,
+                restrictBareVariableToLocalsAndParams: false,
+                referenceNullableOnly: false,
+                out var target,
+                out var underlying,
+                out var nonNilWhenTrue
+            ) &&
+                target != nil &&
+                underlying != nil {
+                let frame = Dictionary[AccessPath, TypeSymbol]{[target] = underlying}
+                if nonNilWhenTrue {
+                    whenTrueNarrowing = frame
+                } else {
+                    whenFalseNarrowing = frame
+                }
+            }
+            let (typeWhenTrue, typeWhenFalse) = ClassifyTypeTestNarrowing(condition)
+            return (
+                MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue),
+                MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse)
+            )
+        }
 
         private func MergeIfExpressionNarrowing(
             first Dictionary[AccessPath, TypeSymbol]?,
