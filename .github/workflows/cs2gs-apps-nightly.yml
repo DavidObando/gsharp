@@ -29,8 +29,8 @@ name: cs2gs-apps-nightly
 # Oahu and Code Exploder used to be the PR jobs cs2gs-oahu and cs2gs-code-exploder
 # in build.yml (and `publish` dependencies). They are out of PR and official
 # builds and run only here, as legs of this one nightly, so they no longer slow
-# or block PRs. The self-host stage-2 check is separate:
-# selfhost-stage2-nightly.yml.
+# or block PRs. Self-host stage-2 certification is separate and owner-run
+# (build/selfhost-stage2.py; docs/self-host-bootstrap.md).
 #
 # Job layout. Oahu and Code Exploder are one job each (the `app` matrix). The
 # gsharp-csharp corpus is too big for one runner: run as one job it starved the

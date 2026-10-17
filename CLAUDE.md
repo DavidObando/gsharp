@@ -113,12 +113,10 @@ to translate. What gates a PR now:
   and Compiler test suites pass under stage 2. A stage-2 failure is a compiler
   defect only visible when gsc compiles itself: treat it as P0, stop and
   diagnose; do not re-run until green. It is an owner-run step, not a gate on
-  PRs or releases (the publish requirement was removed by #4914). It needs a
-  self-hosted runner with the controller's pinned .NET layout and takes about
-  eight hours (#4885). `selfhost-stage2-nightly` is an unwired hook
-  (`STAGE2_ARGS` is empty) whose scheduled runs queue and are cancelled. A PR
-  only runs the controller's contract tests in `test-partition`, which are not
-  certification.
+  PRs or releases (the publish requirement was removed by #4914), and no CI
+  workflow runs it. It needs the controller's pinned .NET layout and takes
+  about eight hours (#4885). A PR only runs the controller's contract tests in
+  `test-partition`, which are not certification.
 - **`cs2gs-corpus`** still guards cs2gs as a product on every PR: it runs the
   C# corpus under `tools/cs2gs/corpus` against the gap ledger.
 - **cs2gs apps nightly** (`cs2gs-apps-nightly`) runs cs2gs as built from `main`
@@ -145,9 +143,6 @@ to translate. What gates a PR now:
   `tools/cs2gs/Cs2Gs.Translator`. If it fails, a new `.gs` file contains one:
   write the code without it. Don't weaken the test, and don't treat it as a gate
   for other directories or for the other three families in the translator.
-- **`selfhost-windows`** (migrated Core.Tests on Windows) is parked and
-  unavailable until repaired: it is dispatch-only, not gating, and still expects
-  artifacts that no longer exist. Don't dispatch it expecting a result.
 - **Windows and differential-conformance nightlies** may be red. Shipping with a
   red nightly is a maintainer judgment call; don't assume a red Windows
   nightly is yours, and don't assume it isn't. Show the evidence.
@@ -259,8 +254,8 @@ names in `.gs` files. Before touching it, read:
 Every open issue carries exactly one of `P0`, `P1` or `P2`:
 
 - **P0:** actively breaking something. Examples: a red gate on `main`, a
-  merge-blocking regression, a stage-2 mismatch, a process crash or silent
-  miscompile reachable in default mode, a security issue. Keep these rare.
+  merge-blocking regression, a process crash or silent miscompile reachable
+  in default mode, a security issue. Keep these rare.
 - **P1:** a confirmed bug with concrete impact and a repro. This includes
   invalid IL or ILVerify failures, internal compiler errors (GS9998) on valid
   code, and cs2gs dropping semantics without a diagnostic.

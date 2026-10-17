@@ -59,19 +59,13 @@ layout fail identically under stage 1 and are excluded by name in
 `build/selfhost/stage2-env-bound-tests.json` until
 [#4873](https://github.com/DavidObando/gsharp/issues/4873) is fixed.
 
-`build/run-selfhost-stage2-certification.sh <new-work-root>` is the integrated
-positive control. It migrates the repository, commits the migrated tree to a
-throwaway Git repository, runs the controller with the Core.Tests and
-Compiler.Tests selections, and then `build/verify-stage2-report.py` rejects the
-result unless the report is a real `certified: true` with equal
-`GSharp.Core.dll` and `gsc.dll` and positive passing tests. The
-`selfhost-stage2` workflow runs it on demand on a self-hosted runner: the
-controller trusts only a pinned .NET layout and the run takes about eight hours,
-so it fits neither a hosted runner's toolchain nor its six-hour limit
-([#4885](https://github.com/DavidObando/gsharp/issues/4885)); the workflow's
-first step reports in seconds whether the runner qualifies
-(`python3 build/selfhost-stage2.py --probe-toolchain`). Recorded runs on the
-0.4.13xx line certified with
+The controller trusts only a pinned .NET layout and a run takes about eight
+hours, so it fits neither a hosted runner's toolchain nor its six-hour limit
+([#4885](https://github.com/DavidObando/gsharp/issues/4885)); no CI workflow runs
+it. `python3 build/selfhost-stage2.py --probe-toolchain` reports in seconds
+whether a machine qualifies. `build/verify-stage2-report.py` rejects a report
+unless it is a real `certified: true` with equal `GSharp.Core.dll` and `gsc.dll`
+and positive passing tests. Recorded runs on the 0.4.13xx line certified with
 both assemblies byte-identical (the MVID slot happened to match too), with 11229
 Core.Tests and 6990 Compiler.Tests passing under stage 2. Those counts are the
 selected tests: the environment-bound exclusions above are not included.
@@ -120,25 +114,3 @@ Measured on the nightly 36930275716 tree (main `6c4824cbc`):
 - Package payload: 150 entries.
 - Extras over stage 0: G#-built executables also ship `Gsharp.Extensions`, `Gsharp.Runtime.Channels` and `Gsharp.Runtime.Values`.
 - Missing docs: the XML documentation of the three executables.
-
-## Windows: the migrated Core.Tests on a 1 MB stack
-
-The compiler recurses deeply: the binder, lowering and emit all walk syntax and bound trees. Windows gives the main thread
-a 1 MB stack (Linux: 8 MB), and the frame sizes of G#-compiled code have never been measured. The workflow
-`.github/workflows/selfhost-windows.yml` (parked at the cut-over: manual dispatch only, not gating; the steps below describe the pre-cut-over procedure and need repair against `cs2gs/csharp-0.4` before reuse) does the following:
-- It takes the migrated tree from a `cs2gs-selfmig-nightly` run (retired at the cut-over; see `cs2gs-apps-nightly`) (default: the latest successful one) and replays that run's polish deltas.
-- Git Bash extracts polish archives using POSIX paths; the resulting tree is passed to native tools and Actions as a Windows path.
-- The C# checkout keeps LF line endings, like the migrated artifact, so raw-string theory arguments have matching xUnit test names.
-- It pins the tree to the commit's own C#-built SDK (`selfhost-pack-stage1.py --prepare-only`).
-- It runs the C# and the migrated Core.Tests on the same `windows-latest` runner.
-- The migrated suite receives `CS2GS_TEST_SOURCE_ROOT` pointing to the original C# checkout, matching the stage-4
-  source-root contract. Older nightly artifacts have C#-only source guards and cannot discover it from the downloaded tree.
-
-`build/selfhost-compare-trx.py` compares the two runs by failing-test multiset. Duplicate display names remain separate
-executions, and additional failing rows cannot be hidden by a passing row with the same name. The job fails if the migrated suite fails a test
-that the C# suite passes, or executes fewer than 95% of the tests the C# suite does (a crashed test host, such as a stack overflow).
-Failures the C# suite already has on Windows (tracked by `windows-nightly`) are reported, not counted.
-An empty C# baseline also fails: it cannot establish migration parity. The existing Windows test failures are tracked in
-[#4635](https://github.com/DavidObando/gsharp/issues/4635); this lane does not skip or weaken those tests.
-Both TRX files must describe completed runs (`Completed`, `Passed` or `Failed`): an aborted, errored or missing run summary
-fails independently of the execution ratio. Completed runs with shared assertion failures remain valid for comparison.

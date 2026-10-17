@@ -1,5 +1,7 @@
 # ADR-0198: Isolated stage-2 self-host certification
 
+> **Status note (2026-10-17):** the CI workflows that ran this controller were removed after the C# to G# cut-over; the controller (`build/selfhost-stage2.py`) remains for on-demand, owner-run use.
+
 - **Status**: Proposed (flips to Accepted on merge; owner direction was
   approved October 5-6, 2026)
 - **Date**: 2026-10-07
