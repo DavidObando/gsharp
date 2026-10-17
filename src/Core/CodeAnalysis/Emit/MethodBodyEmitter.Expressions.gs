@@ -2157,6 +2157,21 @@ internal partial class MethodBodyEmitter {
         // representation is identical for reference-type nullables, and
         // value-type nullables route through the existing
         // <c>EmitConversion</c> path before reaching here.
+        //
+        // Issue #4943: that routing is the binder's job
+        // (`ExpressionBinder.BuildNarrowedRead` wraps the read in a `!!`
+        // unwrap). A narrowed node that reaches here over value-type
+        // `Nullable<T>` storage would leave the `Nullable<T>` on the stack
+        // where `T` is expected — for a function pointer, `calli` then
+        // jumped to a garbage address. Fail loudly instead of emitting it.
+        if declared is NullableTypeSymbol valueNullable && NullableLifting.IsAnyValueTypeNullable(valueNullable) &&
+            !(narrowed is NullableTypeSymbol) {
+            throw InvalidOperationException(
+                "A smart-cast read of value-type nullable storage '${declared.Name}' narrowed to '${narrowed.Name}' " +
+                    "reached emit without its Nullable<T> unwrap; build narrowed reads with " +
+                    "ExpressionBinder.BuildNarrowedRead (issue #4943)."
+            )
+        }
         if declared is NullableTypeSymbol nts && nts.UnderlyingType == narrowed {
             return
         }

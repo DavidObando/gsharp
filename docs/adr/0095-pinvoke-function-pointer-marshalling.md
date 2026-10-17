@@ -405,9 +405,9 @@ self-migration to G# carried the change over unchanged.
 it worked from 0.4 through 0.4.1150, and with the runtime projection it is a
 well-defined testing conversion under ADR-0160. Prefer `cast[T]` for an
 address: it states the intent, does not depend on the operand's static type,
-and accepts `nuint`, the fixed-size integers and pointers too. (Calling an
-`as` result after a nil check without `!!` currently miscompiles; that is
-issue #4943, independent of this amendment.)
+and accepts `nuint`, the fixed-size integers and pointers too. A nil-checked `as`
+result is callable directly (`if let fn = address as (…)? { fn() }`); before
+issue #4943 that call used the `Nullable<nint>` storage as the address.
 
 ### Emit
 

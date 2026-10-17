@@ -1449,21 +1449,9 @@ internal partial class OverloadResolver {
         let fpVar VariableSymbol? = symbol as VariableSymbol
         let fpSym FunctionPointerTypeSymbol? = (narrowedCallTargetType ?? fpVar?.Type) as FunctionPointerTypeSymbol
         if fpVar != nil && fpSym != nil {
-            var pointer BoundExpression
-            if TryBuildImplicitMemberLoad(
-                fpVar,
-                syntax.Identifier.Location,
-                out var implicitPointer,
-                narrowedCallTargetType
-            ) {
-                pointer = Invariant.Required(
-                    implicitPointer,
-                    "an implicit function-pointer member load succeeds with a bound expression",
-                    expression: "implicitPointer"
-                )
-            } else {
-                pointer = BoundVariableExpression(nil, fpVar, narrowedCallTargetType)
-            }
+            // Issue #4943: a narrowed `(unmanaged[CC] () -> R)?` callee must be
+            // unwrapped from its `Nullable<nint>` storage before `calli`.
+            let pointer = BuildCalleeLoad(fpVar, syntax.Identifier.Location, narrowedCallTargetType)
             return BindFunctionPointerInvocation(
                 syntax,
                 pointer,
@@ -1582,21 +1570,7 @@ internal partial class OverloadResolver {
             // Issue #2849: preserve the narrowed receiver type on every load
             // shape so emit can parent Invoke at the reified generic TypeSpec
             // instead of the nullable declaration's erased ClrType.
-            var receiver BoundExpression
-            if TryBuildImplicitMemberLoad(
-                delegateVar,
-                syntax.Identifier.Location,
-                out var clrMemberLoad,
-                narrowedCallTargetType
-            ) {
-                receiver = Invariant.Required(
-                    clrMemberLoad,
-                    "an implicit member load succeeds with a bound expression",
-                    expression: "clrMemberLoad"
-                )
-            } else {
-                receiver = BoundVariableExpression(nil, delegateVar, narrowedCallTargetType)
-            }
+            var receiver = BuildCalleeLoad(delegateVar, syntax.Identifier.Location, narrowedCallTargetType)
             // Issue #2796 / #2798: a null-conditional raise `Evt?(args)` of a
             // CLR delegate-typed value — canonically a field-like event's
             // backing delegate, which PR #2792 (fix/2726) now emits as a

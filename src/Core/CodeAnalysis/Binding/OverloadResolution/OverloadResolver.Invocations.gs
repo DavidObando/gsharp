@@ -59,19 +59,8 @@ internal partial class OverloadResolver {
         // of the type-erased native-function Invoke, which would otherwise
         // mismatch the value's actual runtime (named-delegate) shape and fail
         // IL verification.
-        var receiverLoad BoundExpression
-        var receiverType TypeSymbol
-        if TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var memberLoad, narrowedTargetType) {
-            receiverLoad = Invariant.Required(
-                memberLoad,
-                "an implicit member load succeeds with a bound expression",
-                expression: "memberLoad"
-            )
-            receiverType = receiverLoad.Type ?? narrowedTargetType ?? variable.Type
-        } else {
-            receiverLoad = BoundVariableExpression(nil, variable, narrowedTargetType)
-            receiverType = narrowedTargetType ?? variable.Type
-        }
+        var receiverLoad = BuildCalleeLoad(variable, syntax.Identifier.Location, narrowedTargetType)
+        let receiverType = receiverLoad.Type ?? narrowedTargetType ?? variable.Type
         // Issue #1213 / #2798 / #2799 follow-up: the null-conditional
         // invocation form `Ev?(args)` of a structural function-typed value
         // must short-circuit when the delegate is null, evaluating the
@@ -763,6 +752,52 @@ internal partial class OverloadResolver {
                 i + argumentNumberOffset
             )
         }
+    }
+
+    /// Issue #4943: loads a callee variable — a local, a parameter, or a bare
+    /// implicit field/property — with its active narrowing applied through
+    /// (cref:ExpressionBinder.BuildNarrowedRead), the single place that
+    /// decides how a narrowed read is built. A narrowed value-type nullable
+    /// (a `(unmanaged[CC] () -> R)?` function pointer is `Nullable<nint>`)
+    /// is unwrapped there; building the narrowed node directly left the
+    /// `Nullable<nint>` storage on the stack for `calli`, which jumped to a
+    /// garbage address.
+    /// @param variable The callee variable.
+    /// @param location The callee location, for member-load diagnostics.
+    /// @param narrowedType The active narrowed type, or `null`.
+    /// @returns The callee load.
+    private func BuildCalleeLoad(
+        variable VariableSymbol,
+        location TextLocation,
+        narrowedType TypeSymbol?
+    ) BoundExpression {
+        let bareRead = if TryBuildImplicitMemberLoad(variable, location, out var memberLoad) {
+            Invariant.Required(
+                memberLoad,
+                "an implicit member load succeeds with a bound expression",
+                expression: "memberLoad"
+            )
+        } else {
+            cast[BoundExpression](BoundVariableExpression(nil, variable))
+        }
+        if narrowedType == nil || bareRead is BoundErrorExpression {
+            return bareRead
+        }
+        return ExpressionBinder.BuildNarrowedRead(
+            bareRead,
+            bareRead.Type,
+            narrowedType,
+            func (narrowed TypeSymbol) BoundExpression {
+                if TryBuildImplicitMemberLoad(variable, location, out var narrowedLoad, narrowed) {
+                    return Invariant.Required(
+                        narrowedLoad,
+                        "an implicit member load succeeds with a bound expression",
+                        expression: "narrowedLoad"
+                    )
+                }
+                return BoundVariableExpression(nil, variable, narrowed)
+            }
+        )
     }
 
     private func TryBuildImplicitMemberLoad(
