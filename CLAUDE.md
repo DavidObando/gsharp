@@ -110,13 +110,11 @@ to translate. What gates a PR now:
   the compiler built by the pinned compiler (stage 1) and the same source
   rebuilt by that stage-1 compiler (stage 2) emit identical `GSharp.Core.dll`
   and `gsc.dll` (except the validated `Module.Mvid` slot), and that the Core
-  and Compiler test suites pass under stage 2. A stage-2 failure is a compiler
-  defect only visible when gsc compiles itself: treat it as P0, stop and
-  diagnose; do not re-run until green. It is an owner-run step, not a gate on
-  PRs or releases (the publish requirement was removed by #4914), and no CI
-  workflow runs it. It needs the controller's pinned .NET layout and takes
-  about eight hours (#4885). A PR only runs the controller's contract tests in
-  `test-partition`, which are not certification.
+  and Compiler test suites pass under stage 2. It is optional, owner-run
+  evidence, not a gate on PRs or releases (the publish requirement was removed
+  by #4914), and no CI workflow runs it. It needs the controller's pinned .NET
+  layout and takes about eight hours (#4885). A PR only runs the controller's
+  contract tests in `test-partition`, which are not certification.
 - **`cs2gs-corpus`** still guards cs2gs as a product on every PR: it runs the
   C# corpus under `tools/cs2gs/corpus` against the gap ledger.
 - **cs2gs apps nightly** (`cs2gs-apps-nightly`) runs cs2gs as built from `main`
@@ -137,12 +135,23 @@ to translate. What gates a PR now:
   is no comment-on-`!!` or `= nil!!` gate for G# source. The
   release-version-reference check (`build/check-release-version-refs.py`) now
   runs in its own `release-version-refs` job.
-- **`Issue3347RemainingSpillInventoryTests`** (in `Cs2Gs.Tests`) counts retired
-  synthesized names in committed `.gs` files: all four families (`__spill`,
-  `__cast`, `__decon`, `__using`) under `src/Core`, and `let __spill` only under
-  `tools/cs2gs/Cs2Gs.Translator`. If it fails, a new `.gs` file contains one:
-  write the code without it. Don't weaken the test, and don't treat it as a gate
-  for other directories or for the other three families in the translator.
+- **`Issue3347RemainingSpillInventoryTests`** (in `Cs2Gs.Tests`) checks for
+  retired synthesized names: all four families (`__spill`, `__cast`, `__decon`,
+  `__using`) under `src/Core`, and `let __spill` only under
+  `tools/cs2gs/Cs2Gs.Translator`. Where it looks depends on
+  `CS2GS_TEST_SOURCE_ROOT`:
+  - In CI, `build.yml` sets the variable to the pinned `cs2gs/csharp-0.4`
+    checkout. The test translates the C# Core and Translator in that checkout
+    with cs2gs and fails if the output contains a retired name. It is the only
+    PR gate on these names in cs2gs output. If it fails there, change cs2gs,
+    or the C# back-ported to `cs2gs/csharp-0.4`, so the translation doesn't
+    produce the name.
+  - Run locally without the variable, it scans the committed `.gs` files. If it
+    fails there, a `.gs` file contains one of the names: write the code without
+    it.
+
+  Don't weaken the test, and don't treat it as a gate for other directories or
+  for the other three families in the translator.
 - **Windows and differential-conformance nightlies** may be red. Shipping with a
   red nightly is a maintainer judgment call; don't assume a red Windows
   nightly is yours, and don't assume it isn't. Show the evidence.
