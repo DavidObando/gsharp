@@ -82,6 +82,38 @@ dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --write .
 dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
 ```
 
+### Editor extensions
+
+The VS Code extension builds with npm. Press F5 in VS Code to launch an
+Extension Host with it:
+
+```sh
+cd src/vscode-gsharp
+npm install
+npm run compile
+```
+
+The Visual Studio extension builds from a Visual Studio Developer PowerShell:
+
+```powershell
+msbuild src\vs-gsharp\VsGsharp.sln /restore /t:Build /p:Configuration=Release
+```
+
+The VSIX is written to
+`src\vs-gsharp\src\VsGsharp\bin\Release\net472\GSharp.VisualStudio.vsix`.
+To try it in an experimental instance:
+
+```powershell
+src\vs-gsharp\scripts\Install-ExperimentalVsix.ps1 -RootSuffix GSharp
+src\vs-gsharp\scripts\Invoke-Vs2026Smoke.ps1 `
+  -RootSuffix GSharp `
+  -SolutionPath path\to\sample.sln
+```
+
+The installer removes only the selected experimental profile's MEF,
+extension metadata, and project-template indexes. It then warms that profile
+before a solution is opened.
+
 ## Test
 
 Run the smallest project and filter that covers the change:

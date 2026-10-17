@@ -121,7 +121,7 @@ var publish async (string) -> void = (msg string) -> Console.WriteLine(msg)
 `await` is a prefix expression. It is **not** restricted to an `async
 func`: awaiting is itself a suspension point, so a plain `func` may await
 and the compiler colours it suspending, exactly as a channel operation
-would (ADR-0174 D4). Where a signature is fixed and inference may not
+would. Where a signature is fixed and inference may not
 change it — an `open`/`override` method, an interface member, an accessor,
 a constructor, an operator, an iterator, a function literal — `GS0574` asks
 you to move the awaited work into a `suspend func` or an `async func` and

@@ -60,7 +60,7 @@ During `CoreCompile`, the SDK task builds a response file and invokes `dotnet gs
 
 ## Target frameworks
 
-The template defaults to `net10.0`. The SDK and compiler also support cross-targeting through MSBuild reference assemblies; repository end-to-end coverage currently exercises `net8.0` and `net10.0`, and the `gsc` runtime-config mapping recognizes `net8.0`, `net9.0`, and `net10.0`.
+The template defaults to `net10.0`. The SDK and compiler also support cross-targeting through MSBuild reference assemblies; `net8.0` and `net10.0` are tested end to end, and the `gsc` runtime-config mapping recognizes `net8.0`, `net9.0`, and `net10.0`.
 
 ```xml
 <PropertyGroup>
@@ -212,7 +212,7 @@ Top-level statements choose the entry-point package. The single-package case rem
 
 ## Local SDK side-loading
 
-`Gsharp.NET.Sdk` and `Gsharp.Templates` are published on NuGet, so projects resolve the SDK from the public feed by default. When you are developing the SDK itself, projects can instead resolve packed `.nupkg` files from a local feed. The template scaffolds a `NuGet.config` for this workflow.
+`Gsharp.NET.Sdk` and `Gsharp.Templates` are published on NuGet, so projects resolve the SDK from the public feed by default. Projects can also resolve packed `.nupkg` files from a local feed, for example to test an SDK build that is not on NuGet. The template scaffolds a `NuGet.config` for this.
 
 ```bash
 mkdir -p packages

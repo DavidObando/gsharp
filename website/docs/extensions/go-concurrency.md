@@ -8,7 +8,7 @@ description: "Use G# channels, goroutines, select, and structured scopes with .N
 # Go-flavored concurrency
 
 G#'s Go-shaped concurrency primitives — `go`, `chan[T]`, the send and
-receive arrows, and `select` — are part of the language (ADR-0174): no
+receive arrows, and `select` — are part of the language: no
 import, no opt-in. They sit on top of the runtime types that ship with .NET
 (`Task`, `System.Threading.Channels`) plus a small G#-owned channel runtime,
 `Gsharp.Runtime.Channels`, that the SDK references for you.
@@ -18,8 +18,8 @@ The structured concurrency surface (`scope`, `async`/`await`,
 [Concurrency and async](../guide/concurrency). Use this page when you
 want goroutine- and channel-shaped code in a G# project.
 
-:::note Coming from wave 1?
-ADR-0174 is a clean-cut break. `chan T` is now `chan[T]` (`GS0567`),
+:::note Coming from an early 0.4 package?
+The concurrency syntax has changed, with no compatibility mode. `chan T` is now `chan[T]` (`GS0567`),
 `make(chan T[, n])` is `chan[T]()` / `chan[T](n)` / `Chan.Unbounded[T]()`
 and `close(ch)` is `ch.Close()` (`GS0566`), the `len`/`cap`/`append`/`delete`
 built-ins are retired for their members (`GS0566`), and

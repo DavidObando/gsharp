@@ -34,7 +34,7 @@ Paths default to the current directory and directories recurse through `.gs` fil
 
 ## Build and editor integration
 
-The VS Code extension enables format-on-save for G# by default. LSP formatting options such as tab size are ignored so editor output cannot diverge from CI.
+The VS Code extension enables format-on-save for G# by default. LSP formatting options such as tab size are ignored, so editor output always matches `gsfmt`.
 
 SDK projects can opt into a check-only build gate:
 
@@ -44,4 +44,4 @@ SDK projects can opt into a check-only build gate:
 </PropertyGroup>
 ```
 
-The build never rewrites source. Repository CI should run `gsfmt --check`.
+The build never rewrites source. To check formatting in your continuous-integration build, run `gsfmt --check`.

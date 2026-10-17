@@ -11,7 +11,7 @@ The G# Language Server is a .NET process that speaks the Language Server Protoco
 
 ## Starting the server
 
-Build the server from the repository when developing it locally:
+The VS Code and Visual Studio extensions bundle the server. To use it with another editor, build it from source:
 
 ```bash
 dotnet build src/LanguageServer
@@ -28,7 +28,7 @@ Recognized command-line arguments are:
 | Argument | Behavior |
 | --- | --- |
 | `--pipe=<name>` | Connect to a Windows named pipe or Unix domain socket instead of stdio. |
-| `--log` | Enable protocol logging to the server's default debug log path. In current Unix source that default is `/tmp/gsharp-lsp-debug.log`. |
+| `--log` | Enable protocol logging to `gsharp-lsp-debug.log` in the system temporary directory (for example `/tmp/gsharp-lsp-debug.log` on Linux). |
 | `--log=<path>` | Enable protocol logging to a specific file. |
 
 VS Code exposes logging through `gsharp.server.log` and `gsharp.server.logPath`.
