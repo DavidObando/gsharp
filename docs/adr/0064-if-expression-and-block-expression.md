@@ -181,8 +181,10 @@ IfExpression := 'if' (SimpleStmt ';')? Expression Block ('else' (IfExpression | 
 
 - **One header routine.** Both forms parse `(SimpleStmt ';')? Expression`
   with the same parser routine (`ParseIfHeader`), so the two cannot drift.
-  The initializer is detected the same way (a `;` at parenthesis depth zero
-  before the then-block's `{`), and it is one of the simple statements the
+  The initializer is detected the same way: a `;` at parenthesis and
+  bracket depth zero before the then-block's `{` and before any nested `if`.
+  An if-expression nested in the condition (`if if var x = f(); x > 0 { … } else { … } { … }`,
+  or inside an index, `flags[if var i = 0; … ]`) keeps its own `;`. The initializer is one of the simple statements the
   statement form accepts: a `var` declaration, an assignment, an
   increment/decrement, or a call. The condition is parsed with the
   body-header rules in both forms (a bare `Name { }` is not read as a struct
@@ -228,10 +230,13 @@ IfExpression := 'if' (SimpleStmt ';')? Expression Block ('else' (IfExpression | 
 ### Compatibility
 
 The change only accepts code that failed to parse before. A valid
-if-expression never has a `;` at parenthesis depth zero before its
-then-block's `{` (a block-expression or lambda condition starts with or
+if-expression never has a `;` at parenthesis and bracket depth zero before
+its then-block's `{` (a block-expression or lambda condition starts with or
 contains its own braces first), so the initializer check is false for every
-existing if-expression and it parses exactly as before. A search of the
+existing if-expression and it parses exactly as before. Counting brackets and
+stopping at a nested `if` changes nothing for existing statements either: a
+`;` inside brackets or after a nested `if` was never a valid initializer
+separator. A search of the
 repository's `.gs` sources, tests, samples, docs and cs2gs goldens found 0
 if-expressions with an initializer. Two matches of the search pattern were
 `;` characters inside string literals, which are single tokens. There are 7

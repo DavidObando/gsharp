@@ -12,6 +12,26 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// The else branch is either another (cref:IfExpressionSyntax) (for
 /// `else if` chains) or a (cref:BlockExpressionSyntax).
 class IfExpressionSyntax : ExpressionSyntax {
+    /// Initializes a new instance of the (cref:IfExpressionSyntax) class
+    /// without an initializer.
+    /// @param syntaxTree The parent syntax tree.
+    /// @param ifKeyword The `if` keyword token.
+    /// @param condition The condition expression.
+    /// @param thenBlock The then-block expression.
+    /// @param elseKeyword The optional `else` keyword token (null when absent).
+    /// @param elseExpression The optional else-branch: a (cref:BlockExpressionSyntax) or another
+    /// (cref:IfExpressionSyntax) (null when absent).
+    convenience init(
+        syntaxTree SyntaxTree,
+        ifKeyword SyntaxToken,
+        condition ExpressionSyntax,
+        thenBlock BlockExpressionSyntax,
+        elseKeyword SyntaxToken?,
+        elseExpression ExpressionSyntax?
+    ) {
+        init(syntaxTree, ifKeyword, nil, nil, condition, thenBlock, elseKeyword, elseExpression)
+    }
+
     /// Initializes a new instance of the (cref:IfExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param ifKeyword The `if` keyword token.

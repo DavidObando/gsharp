@@ -221,6 +221,32 @@ Console.WriteLine(a + b + c)`)
         Assert.Equal(statement.Output, expression.Output)
     }
 
+    @Fact
+    func NestedIfExpressionWithInitializerInCondition_RunsInBothForms() {
+        let statement = Evaluate(`import System
+let flags = []bool{false, true}
+if if var x = 1; x > 0 { true } else { false } {
+    Console.Write("a ")
+}
+if flags[if var i = 1; i > 0 { i } else { 0 }] {
+    Console.Write("b ")
+}
+if var a = 1; if var b = a; b > 0 { true } else { false } {
+    Console.Write("c${a}")
+}
+Console.WriteLine()`)
+        let expression = Evaluate(`import System
+let flags = []bool{false, true}
+let r1 = if if var x = 1; x > 0 { true } else { false } { "a " } else { "- " }
+let r2 = if flags[if var i = 1; i > 0 { i } else { 0 }] { "b " } else { "- " }
+let r3 = if var a = 1; if var b = a; b > 0 { true } else { false } { "c${a}" } else { "-" }
+Console.WriteLine(r1 + r2 + r3)`)
+        AssertNoErrors(statement)
+        AssertNoErrors(expression)
+        Assert.Equal("a b c1${Environment.NewLine}", expression.Output)
+        Assert.Equal(statement.Output, expression.Output)
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult {
             return EmittedOracle.Evaluate(source)

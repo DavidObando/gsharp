@@ -164,9 +164,22 @@ stderr:
                 psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
                 psi.ArgumentList.Add(outPath)
                 using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
-                let stdout = proc.StandardOutput.ReadToEnd()
-                let stderr = proc.StandardError.ReadToEnd()
-                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                // Read both streams concurrently and bound the wait, so a hung
+                // program cannot block the test run and a full stderr pipe cannot
+                // deadlock it (as in Issue4903ThreadStaticFieldTests).
+                let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+                let stderrTask = proc.StandardError.ReadToEndAsync()
+                if !proc.WaitForExit(30_000) {
+                    try {
+                        proc.Kill(entireProcessTree: true)
+                    } catch (InvalidOperationException) {
+                        // The process exited between the timeout and the kill.
+
+                    }
+                    Assert.Fail("dotnet exec timed out")
+                }
+                let stdout = stdoutTask.GetAwaiter().GetResult()
+                let stderr = stderrTask.GetAwaiter().GetResult()
                 Assert.True(proc.ExitCode == 0, (`sample exited ` + "${proc.ExitCode}" + `
 stdout:
 ` + "$stdout" + `

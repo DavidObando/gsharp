@@ -134,6 +134,39 @@ let act = () -> { if var v = g(); v > 3 { Console.WriteLine(v) } else { Console.
         Assert.Contains(expressionTree.Diagnostics, (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Id == "GS0005")
     }
 
+    @Theory
+    @InlineData("if if var x = 1; x > 0 { true } else { false }")
+    @InlineData("if flags[if var i = 1; i > 0 { i } else { 0 }]")
+    @InlineData("if flags?[if var i = 1; i > 0 { i } else { 0 }] == true")
+    func NestedIfExpressionInCondition_KeepsItsSemicolon_InBothForms(head string) {
+        // The `;` of an if-expression nested in the condition, directly or
+        // inside brackets, belongs to the nested `if`. It is not the outer
+        // header's initializer separator.
+        let statementTree = SyntaxTree.Parse("func F(flags []bool) {\n    ${head} { flags[0] = true }\n}")
+        let expressionTree = SyntaxTree.Parse("func F(flags []bool) int32 -> ${head} { 1 } else { 2 }")
+        Assert.Empty(statementTree.Diagnostics)
+        Assert.Empty(expressionTree.Diagnostics)
+        Assert.Null(FindFirst[IfStatementSyntax](statementTree).Initializer)
+        let outer = FindFirst[IfExpressionSyntax](expressionTree)
+        Assert.Null(outer.Initializer)
+        let nested = Walk(outer.Condition).OfType[IfExpressionSyntax]().Single()
+        Assert.IsType[VariableDeclarationSyntax](nested.Initializer)
+        let nestedInStatement = Walk(FindFirst[IfStatementSyntax](statementTree).Condition).OfType[IfExpressionSyntax]()
+            .Single()
+        Assert.IsType[VariableDeclarationSyntax](nestedInStatement.Initializer)
+    }
+
+    @Fact
+    func OuterInitializer_FollowedByNestedIfExpressionCondition() {
+        const source = "func F() int32 -> if var a = 1; if var b = a; b > 0 { true } else { false } { a } else { 0 }"
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let outer = FindFirst[IfExpressionSyntax](tree)
+        Assert.Equal("a", Assert.IsType[VariableDeclarationSyntax](outer.Initializer).Identifier.Text)
+        let nested = Assert.IsType[IfExpressionSyntax](outer.Condition)
+        Assert.Equal("b", Assert.IsType[VariableDeclarationSyntax](nested.Initializer).Identifier.Text)
+    }
+
     shared {
         private func FindFirst[T SyntaxNode](tree SyntaxTree) T {
             return Walk(tree.Root).OfType[T]().First()

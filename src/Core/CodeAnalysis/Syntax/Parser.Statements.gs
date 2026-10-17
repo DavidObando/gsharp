@@ -733,8 +733,16 @@ open partial class Parser {
 
     private func HasIfInitClause() bool {
         // Mirrors LooksLikeForClause: scan ahead from the position
-        // after `if` looking for a depth-zero semicolon before the
-        // opening brace of the then-block.
+        // after `if` looking for a semicolon at parenthesis and bracket
+        // depth zero before the opening brace of the then-block.
+        //
+        // Issue #4962: an if-expression nested in the header has its own
+        // `if init; cond` header, so a nested `if` at depth zero ends the
+        // scan: the `;` that follows belongs to it. An initializer cannot
+        // itself hold a depth-zero `if`, because that if-expression's
+        // then-block `{` would end the scan first. A `;` inside brackets
+        // (`flags[if var i = 0; i > 0 { 1 } else { 0 }]`) is skipped the
+        // same way as one inside parentheses.
         var depth = 0
         for var i = 0; i < 256; i++ {
             let k = Peek(i).Kind
@@ -742,13 +750,15 @@ open partial class Parser {
                 if k == SyntaxKind.SemicolonToken {
                     return true
                 }
-                if k == SyntaxKind.OpenBraceToken || k == SyntaxKind.EndOfFileToken {
+                if k == SyntaxKind.OpenBraceToken || k == SyntaxKind.EndOfFileToken || k == SyntaxKind.IfKeyword {
                     return false
                 }
             }
-            if k == SyntaxKind.OpenParenthesisToken {
+            if k == SyntaxKind.OpenParenthesisToken ||
+                k == SyntaxKind.OpenSquareBracketToken ||
+                k == SyntaxKind.QuestionOpenBracketToken {
                 depth++
-            } else if k == SyntaxKind.CloseParenthesisToken && depth > 0 {
+            } else if (k == SyntaxKind.CloseParenthesisToken || k == SyntaxKind.CloseSquareBracketToken) && depth > 0 {
                 depth--
             }
         }
