@@ -150,6 +150,9 @@ open class Issue4938TypeClauseScannerParityTests {
     @InlineData("**uint8")
     @InlineData("*func(*int32) int32")
     @InlineData("[]*uint8")
+    @InlineData("unmanaged[Cdecl] () -> (*uint8)")
+    @InlineData("(*int32)")
+    @InlineData("*func() *uint8")
     func Cast_To_Pointer_Parses_As_Generic_Call_Without_GS0521(typeText string) {
         // ADR-0167: `cast` is reserved in call position, so its bracket is a
         // conversion target rather than a CLR generic instantiation. Pointer
@@ -180,6 +183,21 @@ open class Issue4938TypeClauseScannerParityTests {
     }
 
     @Theory
+    @InlineData("receiver.cast[*p](y)")
+    @InlineData("receiver?.cast[*p](y)")
+    @InlineData("receiver->cast[*p](y)")
+    func Member_Named_Cast_Is_Not_The_Intrinsic(expression string) {
+        // Only the unqualified `cast[T](x)` is the reserved intrinsic. A
+        // member named `cast` keeps the ordinary generic-argument rules, so
+        // `*p` there is still a dereference inside an indexer. (`p->m` is
+        // pointer member access only inside an unsafe context.)
+        let tree = Parse("unsafe func probe() {\n    let v = " + expression + "\n}\n")
+        AssertNoErrors(tree)
+        Assert.Empty(tree.Root.DescendantNodesAndSelf().OfType[TypeArgumentListSyntax]())
+    }
+
+    @Theory
+    @InlineData("receiver.cast[unmanaged[Cdecl] () -> int32](address)")
     @InlineData("cast[unmanaged[Cdecl] () -> int32]{}")
     @InlineData("Make[unmanaged[Cdecl] () -> int32](address)")
     @InlineData("Make[*func() int32](address)")

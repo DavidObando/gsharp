@@ -796,12 +796,12 @@ internal partial class MethodBodyEmitter {
         if arr.LengthExpression != nil {
             this.EmitExpression(arr.LengthExpression)
             this.il.OpCode(ILOpCode.Newarr)
-            this.il.Token(this.outer.memberRefs.GetArrayElementTypeToken(arr.ElementType))
+            this.il.Token(this.outer.memberRefs.GetExactTypeToken(arr.ElementType))
             return
         }
         this.il.LoadConstantI4(arr.Elements.Length)
         this.il.OpCode(ILOpCode.Newarr)
-        this.il.Token(this.outer.memberRefs.GetArrayElementTypeToken(arr.ElementType))
+        this.il.Token(this.outer.memberRefs.GetExactTypeToken(arr.ElementType))
         for var i = 0; i < arr.Elements.Length; i++ {
             this.il.OpCode(ILOpCode.Dup)
             this.il.LoadConstantI4(i)

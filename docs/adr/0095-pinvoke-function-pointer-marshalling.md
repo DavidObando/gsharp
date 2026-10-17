@@ -413,7 +413,9 @@ issue #4943, independent of this amendment.)
 
 Opcodes that act on a value's runtime type (`box`, `isinst`, `unbox.any`,
 `castclass`) tokenise a function pointer as `System.IntPtr`
-(`GetElementTypeToken`). The array-element opcodes (`newarr`, `ldelem`,
-`stelem`, `ldelema`) name the exact FNPTR element type
-(`GetArrayElementTypeToken`), so an array of function pointers still matches
-its `method …*[]` signature (issue #4685).
+(`GetElementTypeToken`). Opcodes that name a type's identity use the exact
+FNPTR TypeSpec (`GetExactTypeToken`): the array-element opcodes (`newarr`,
+`ldelem`, `stelem`, `ldelema`), so an array of function pointers still
+matches its `method …*[]` signature (issue #4685), and `ldtoken` for
+`typeof(unmanaged[CC] (T) -> R)`, which is a function-pointer `Type`
+(`IsFunctionPointer`), as in C#.

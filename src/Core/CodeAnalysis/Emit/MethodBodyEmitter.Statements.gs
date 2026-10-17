@@ -98,7 +98,7 @@ internal partial class MethodBodyEmitter {
         this.il.LoadLocal(pinnedSlot)
         this.il.LoadConstantI4(0)
         this.il.OpCode(ILOpCode.Ldelema)
-        this.il.Token(this.outer.memberRefs.GetArrayElementTypeToken(elementType))
+        this.il.Token(this.outer.memberRefs.GetExactTypeToken(elementType))
         this.EmitManagedPointerAsUnmanagedPointer(elementType, node.Syntax)
         this.il.StoreLocal(pointerSlot)
         this.il.MarkLabel(afterLabel)

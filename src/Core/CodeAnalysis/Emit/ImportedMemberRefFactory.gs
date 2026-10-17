@@ -73,19 +73,22 @@ internal class ImportedMemberRefFactory {
         this.signatures = outer.signatures ?? throw ArgumentNullException("outer")
     }
 
-    /// Issue #4938: the token for an array-element opcode (`newarr`,
-    /// `ldelem`, `stelem`, `ldelema`). These name the array's exact element
-    /// type so the array they create, or the element they address, matches
-    /// its `T[]` signature. For a function-pointer element that is the FNPTR
-    /// TypeSpec (issue #4684): `newarr System.IntPtr` would create an
-    /// `IntPtr[]` where the signature says `method …*[]`. Every other element
-    /// type tokenises exactly as (cref:GetElementTypeToken) does, which
-    /// gives a function pointer its runtime projection, `System.IntPtr`.
-    /// @param element The array's element type.
-    /// @returns The element type token.
-    internal func GetArrayElementTypeToken(element TypeSymbol) EntityHandle {
+    /// Issue #4938: the token for an opcode that names a type's exact
+    /// identity rather than a value's runtime type: the array-element opcodes
+    /// (`newarr`, `ldelem`, `stelem`, `ldelema`) and `ldtoken` for
+    /// `typeof(T)`. An array must match its `T[]` signature, and `typeof`
+    /// must reflect the written type. For a function pointer that is the
+    /// FNPTR TypeSpec: `newarr System.IntPtr` would create an `IntPtr[]`
+    /// where the signature says `method …*[]` (issue #4684), and
+    /// `typeof(unmanaged[CC] () -> R)` is a function-pointer `Type`
+    /// (`IsFunctionPointer`), not `IntPtr`. Every other type tokenises
+    /// exactly as (cref:GetElementTypeToken) does, which gives a function
+    /// pointer its runtime projection, `System.IntPtr`.
+    /// @param element The type to name.
+    /// @returns The type token.
+    internal func GetExactTypeToken(element TypeSymbol) EntityHandle {
         if element is PlatformTypeSymbol platformElement {
-            return this.GetArrayElementTypeToken(platformElement.UnderlyingType)
+            return this.GetExactTypeToken(platformElement.UnderlyingType)
         }
         if element is FunctionPointerTypeSymbol {
             let sigBlob = BlobBuilder()
@@ -191,8 +194,8 @@ internal class ImportedMemberRefFactory {
         // `unbox.any`, `castclass`) must name `IntPtr`: with the FNPTR TypeSpec
         // `box` produced nil and `isinst` never matched, so `x as
         // (unmanaged[CC] () -> R)?` silently yielded nil and `x is …` false.
-        // Only the array-element opcodes need the exact FNPTR element type;
-        // they use GetArrayElementTypeToken.
+        // Only the opcodes that name a type's identity (array elements,
+        // `typeof`) need the exact FNPTR type; they use GetExactTypeToken.
         if element is FunctionPointerTypeSymbol {
             return this.GetElementTypeToken(TypeSymbol.NInt)
         }
@@ -405,7 +408,7 @@ internal class ImportedMemberRefFactory {
         ) {
             return definitionHandle
         }
-        return this.GetElementTypeToken(type)
+        return this.GetExactTypeToken(type)
     }
 
     /// Issue #3678: the emitted TypeDef row for a user-declared type.

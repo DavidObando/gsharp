@@ -16,6 +16,7 @@ import System.Reflection.Metadata
 import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
 import Xunit
+import Xunit.Sdk
 
 /// Issue #4938: raw function-pointer dispatch through an address loaded at
 /// run time (`NativeLibrary.GetExport`, `GetProcAddress`,
@@ -128,46 +129,53 @@ run()`).Replace("CC", convention).Replace("LIBRARY", library).Replace("EXPORT", 
             Assert.Contains(
                 tokens,
                 (instruction IlInstruction) -> instruction.OpCode == OpCodes.Isinst &&
-                    DescribeTypeToken(result.Metadata, TypeOperand(il, instruction), out var _) == "System.IntPtr"
+                    result.TypeTokens[TypeOperand(il, instruction)] == "System.IntPtr"
             )
             for instruction in tokens {
                 // `box` / `unbox.any` of the `(unmanaged…)?` result name
                 // `Nullable<IntPtr>` (a GENERICINST TypeSpec) and `as object?`
                 // tests `System.Object`; no opcode may name the FNPTR type.
-                let _ = DescribeTypeToken(result.Metadata, TypeOperand(il, instruction), out var head)
-                Assert.NotEqual(SignatureTypeCode.FunctionPointer, head)
+                Assert.NotEqual(FunctionPointerTypeSpec, result.TypeTokens[TypeOperand(il, instruction)])
             }
         }
     }
 
     @Fact
-    func FunctionPointer_Array_Element_Keeps_Its_FNPTR_TypeSpec() {
-        // Issue #4685 non-regression: array-element opcodes still name the
-        // exact FNPTR element so `newarr` creates the `method …*[]` the
-        // signature declares, while type tests use IntPtr.
+    func FunctionPointer_Identity_Opcodes_Keep_The_FNPTR_TypeSpec() {
+        // Opcodes that name a type's identity keep the exact FNPTR type while
+        // type tests use IntPtr: `newarr` creates the `method …*[]` the
+        // signature declares (issue #4685), and `typeof` reflects a
+        // function-pointer Type, as in C# and 0.5.x.
         const source = `import System
 
 unsafe func makeArray() [](unmanaged[Cdecl] () -> int32) {
     return [2](unmanaged[Cdecl] () -> int32){}
 }
 
+unsafe func typeOfPointer() Type -> typeof(unmanaged[Cdecl] () -> int32)
+
 unsafe func run() {
     let items = makeArray()
     Console.WriteLine(items.Length)
     Console.WriteLine(items[0] == nil)
+    Console.WriteLine(typeOfPointer().IsFunctionPointer)
 }
 
 run()`
-        let result = CompileInspectAndRun(source, "makeArray")
-        Assert.Equal("2${Environment.NewLine}True${Environment.NewLine}", result.Output)
-        let il = result.MethodIl["makeArray"]
+        let result = CompileInspectAndRun(source, "makeArray", "typeOfPointer")
+        Assert.Equal(string.Join(Environment.NewLine, "2", "True", "True") + Environment.NewLine, result.Output)
+        let arrayIl = result.MethodIl["makeArray"]
         let newarr = Assert.Single(
-            IlInstructionReader.Read(il),
+            IlInstructionReader.Read(arrayIl),
             (instruction IlInstruction) -> instruction.OpCode == OpCodes.Newarr
         )
-        let description = DescribeTypeToken(result.Metadata, TypeOperand(il, newarr), out var signatureHead)
-        Assert.Equal("TypeSpec", description)
-        Assert.Equal(SignatureTypeCode.FunctionPointer, signatureHead)
+        Assert.Equal(FunctionPointerTypeSpec, result.TypeTokens[TypeOperand(arrayIl, newarr)])
+        let typeOfIl = result.MethodIl["typeOfPointer"]
+        let ldtoken = Assert.Single(
+            IlInstructionReader.Read(typeOfIl),
+            (instruction IlInstruction) -> instruction.OpCode == OpCodes.Ldtoken
+        )
+        Assert.Equal(FunctionPointerTypeSpec, result.TypeTokens[TypeOperand(typeOfIl, ldtoken)])
     }
 
     shared {
@@ -196,20 +204,25 @@ run()`
             opcode == OpCodes.Box ||
             opcode == OpCodes.Unbox_Any
 
-        /// The 4-byte `InlineType` operand that follows the opcode.
+        private const FunctionPointerTypeSpec string = "TypeSpec FunctionPointer"
+
+        /// The 4-byte `InlineType` / `InlineTok` operand that follows the
+        /// opcode.
         private func TypeOperand(il[]uint8, instruction IlInstruction) int32 {
-            Assert.Equal(OperandType.InlineType, instruction.OpCode.OperandType)
+            Assert.True(
+                instruction
+                    .OpCode
+                    .OperandType == OperandType.InlineType ||
+                    instruction
+                    .OpCode
+                    .OperandType == OperandType.InlineTok
+            )
             return BitConverter.ToInt32(il, instruction.Offset + instruction.OpCode.Size)
         }
 
-        /// Names a type token: `Namespace.Name` for a TypeRef, `TypeSpec`
-        /// for a TypeSpec (whose leading signature code is returned).
-        private func DescribeTypeToken(
-            metadata MetadataReader,
-            token int32,
-            out signatureHead SignatureTypeCode
-        ) string {
-            signatureHead = SignatureTypeCode.Invalid
+        /// Names a type token: `Namespace.Name` for a TypeRef, and
+        /// `TypeSpec <leading signature code>` for a TypeSpec.
+        private func DescribeTypeToken(metadata MetadataReader, token int32) string {
             let handle = MetadataTokens.EntityHandle(token)
             if handle.Kind == HandleKind.TypeReference {
                 let reference = metadata.GetTypeReference(TypeReferenceHandle(handle))
@@ -218,16 +231,32 @@ run()`
             if handle.Kind == HandleKind.TypeSpecification {
                 let specification = metadata.GetTypeSpecification(TypeSpecificationHandle(handle))
                 var blob = metadata.GetBlobReader(specification.Signature)
-                signatureHead = blob.ReadSignatureTypeCode()
-                return "TypeSpec"
+                return "TypeSpec " + blob.ReadSignatureTypeCode().ToString()
             }
             return handle.Kind.ToString()
         }
 
+        /// ilverify does not implement `calli` and reports it as an
+        /// uncategorised error, which `-g` cannot ignore. Accept a failure
+        /// only when every reported error is that one.
+        private func OnlyUnsupportedCalli(message string) bool {
+            let errors = message
+                .Split('\n')
+                .Select((line string) -> line.Trim())
+                .Where((line string) -> line.StartsWith("[IL]: Error", StringComparison.Ordinal))
+                .ToArray()
+            return errors.Length > 0 && errors.All(
+                (line string) -> line.EndsWith("ImportCalli not implemented", StringComparison.Ordinal)
+            )
+        }
+
+        /// Compiles, verifies and runs the sample. The requested methods' IL
+        /// and a description of every type token they use are read while
+        /// the PE image is open, so nothing outlives its reader.
         private func CompileInspectAndRun(source string, methods ...string)(
             Output string,
             MethodIl IReadOnlyDictionary[string, []uint8],
-            Metadata MetadataReader
+            TypeTokens IReadOnlyDictionary[int32, string]
         ) {
             let outputDirectory = Path.Combine(
                 AppContext.BaseDirectory,
@@ -259,25 +288,14 @@ stdout:
 ` + "$standardOut" + `
 stderr:
 ` + "$standardError"))
-                // Read the assembly into memory so the metadata outlives the
-                // output directory.
-                let image = ImmutableArrayBytes(File.ReadAllBytes(outputPath))
-                let peReader = PEReader(image)
-                let metadata = peReader.GetMetadataReader()
-                let methodIl = Dictionary[string, []uint8](StringComparer.Ordinal)
-                for name in methods {
-                    methodIl[name] = ReadMethodIl(peReader, metadata, name)
-                }
+                let (methodIl, typeTokens) = InspectMethods(outputPath, methods)
                 // Unsafe code is unverifiable by design; tolerate the inherent
                 // unsafety codes and the verifier's missing `calli` support,
                 // and still gate on every other verification error.
                 try {
                     IlVerifier.Verify(outputPath, nil, UnsafeIlVerifyIgnored)
-                } catch (ex Exception) when ex.Message.Contains(
-                    "ImportCalli not implemented",
-                    StringComparison.Ordinal
-                ) {
-                    // Known dotnet-ilverify limitation for `calli`.
+                } catch (ex XunitException) when OnlyUnsupportedCalli(ex.Message) {
+                    // Known dotnet-ilverify limitation for `calli` only.
 
                 }
                 let startInfo = ProcessStartInfo("dotnet"){
@@ -290,17 +308,15 @@ stderr:
                 startInfo.ArgumentList.Add("--runtimeconfig")
                 startInfo.ArgumentList.Add(Path.ChangeExtension(outputPath, ".runtimeconfig.json"))
                 startInfo.ArgumentList.Add(outputPath)
-                using let process = Process.Start(startInfo) ??
-                    throw InvalidOperationException("Failed to start dotnet exec.")
-                let stdout = process.StandardOutput.ReadToEnd()
-                let stderr = process.StandardError.ReadToEnd()
-                Assert.True(process.WaitForExit(30_000), "dotnet exec timed out.")
-                Assert.True(process.ExitCode == 0, (`sample exited ` + "${process.ExitCode}" + `
+                // RunProcess drains both pipes concurrently and kills the
+                // process tree on timeout, so a hanging sample fails the test.
+                let (sampleExit, stdout, stderr) = IlVerifier.RunProcess(startInfo, outputPath, 30_000)
+                Assert.True(sampleExit == 0, (`sample exited ` + "$sampleExit" + `
 stdout:
 ` + "$stdout" + `
 stderr:
 ` + "$stderr"))
-                return (stdout.ReplaceLineEndings(Environment.NewLine), methodIl, metadata)
+                return (stdout.ReplaceLineEndings(Environment.NewLine), methodIl, typeTokens)
             } finally {
                 try {
                     Directory.Delete(outputDirectory, recursive: true)
@@ -308,8 +324,34 @@ stderr:
             }
         }
 
-        private func ImmutableArrayBytes(bytes[]uint8) System.Collections.Immutable.ImmutableArray[uint8] ->
-        System.Collections.Immutable.ImmutableArray.Create(bytes)
+        /// Reads each method's IL and describes every type token it uses,
+        /// while the PE reader that backs the metadata is still open.
+        private func InspectMethods(outputPath string, methods[]string)(
+            MethodIl Dictionary[string, []uint8],
+            TypeTokens Dictionary[int32, string]
+        ) {
+            let methodIl = Dictionary[string, []uint8](StringComparer.Ordinal)
+            let typeTokens = Dictionary[int32, string]()
+            using let stream = File.OpenRead(outputPath)
+            using let peReader = PEReader(stream)
+            let metadata = peReader.GetMetadataReader()
+            for name in methods {
+                let il = ReadMethodIl(peReader, metadata, name)
+                methodIl[name] = il
+                for instruction in IlInstructionReader.Read(il) {
+                    if instruction
+                        .OpCode
+                        .OperandType == OperandType.InlineType ||
+                        instruction
+                        .OpCode
+                        .OperandType == OperandType.InlineTok {
+                        let token = TypeOperand(il, instruction)
+                        typeTokens[token] = DescribeTypeToken(metadata, token)
+                    }
+                }
+            }
+            return (methodIl, typeTokens)
+        }
 
         private func ReadMethodIl(peReader PEReader, metadata MetadataReader, methodName string)[]uint8 {
             for methodHandle in metadata.MethodDefinitions {

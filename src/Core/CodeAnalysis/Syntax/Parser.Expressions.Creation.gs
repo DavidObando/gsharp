@@ -577,12 +577,16 @@ open partial class Parser {
         return false
     }
 
+    /// @param isMemberName Whether this parses the member name after `.`,
+    /// `?.` or `->`. A member named `cast` is an ordinary member, never the
+    /// reserved `cast[T](x)` intrinsic.
     private func ParseNameOrCallExpression(
         stopBeforeIndirectInvocation bool = false,
-        allowContextualOperators bool = true
+        allowContextualOperators bool = true,
+        isMemberName bool = false
     ) ExpressionSyntax {
         var current ExpressionSyntax
-        let isCastIntrinsic = IsCastIntrinsicHead()
+        let isCastIntrinsic = !isMemberName && IsCastIntrinsicHead()
         if IsReadOnlyManagedHead() || IsReadOnlyManagedHead(address: true) {
             current = ParseReadOnlyManagedExpression()
         } else if IsReadOnlySliceHead() ||
@@ -1034,7 +1038,10 @@ open partial class Parser {
                     if Peek(pos).Kind == SyntaxKind.IdentifierToken && ScanLooksLikeTupleElementNameAt(pos) {
                         pos++
                     }
-                    if !TryScanTypeClause(&pos) {
+                    // A grouping or element inside an allowed position (for
+                    // example `cast[unmanaged[CC] () -> (*uint8)](x)`) is
+                    // not a generic argument either.
+                    if !TryScanTypeClause(&pos, out _, pointerAllowed) {
                         return false
                     }
                     if Peek(pos).Kind == SyntaxKind.CommaToken {
@@ -1052,7 +1059,7 @@ open partial class Parser {
             let isArrowFunction = Peek(pos).Kind == SyntaxKind.RightArrowToken
             if isArrowFunction {
                 pos++
-                if !TryScanTypeClause(&pos) {
+                if !TryScanTypeClause(&pos, out _, pointerAllowed) {
                     return false
                 }
             } else if sawEllipsis {
@@ -1094,9 +1101,11 @@ open partial class Parser {
                 return false
             }
             pos++
-            // Optional return type for the legacy func form.
-            if CanStartTypeClause(Peek(pos)) && Peek(pos).Kind != SyntaxKind.StarToken {
-                if !TryScanTypeClause(&pos) {
+            // Optional return type for the legacy func form. A managed
+            // function pointer may return a pointer (`*func() *uint8`),
+            // which ParseOptionalTypeClause accepts.
+            if CanStartTypeClause(Peek(pos)) && (Peek(pos).Kind != SyntaxKind.StarToken || isManagedFunctionPointer) {
+                if !TryScanTypeClause(&pos, out _, pointerAllowed: isManagedFunctionPointer) {
                     return false
                 }
             }
