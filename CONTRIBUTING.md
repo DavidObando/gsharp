@@ -12,9 +12,11 @@ The compiler, language server, formatter and tools are G# source (`.gs`,
 - `src/vs-gsharp` (the Visual Studio extension). It targets .NET Framework and
   keeps its `#if NETFRAMEWORK` directives. It builds on Windows only and
   references the G# language server.
-- `build/selfhost/*.csproj` (the ADR-0198 stage-2 controller's helper projects,
-  `PackageContentHash` and `TestSupervisorLogger`). The controller builds those
-  exact paths; do not translate or rename them.
+- `build/selfhost/PeBodyMutations.cs`, a file-based `dotnet run` helper that
+  `build/test-selfhost-stage2.py` runs by file name. (The stage-2 controller's
+  helper projects beside it, `PackageContentHash.gsproj` and
+  `TestSupervisorLogger.gsproj`, are G#; the controller builds those exact
+  paths, so do not rename them.)
 - Test fixtures and cs2gs inputs that are C# on purpose (for example
   `tools/cs2gs/corpus` and `*.cs.txt` source data). They are the C# the
   translator is tested against.
@@ -24,9 +26,11 @@ on branch `cs2gs/csharp-0.4`, which is **semi-frozen**: a living corpus for
 cs2gs. **Fixes happen in G#, on `main`.** Do not open bug-fix or feature PRs
 against the C# branch. It receives only code back-ported from G# to C# when that
 code merits exercising cs2gs, and a security fix released as `0.4.1270+k`. Both
-are made by the maintainer, and the cs2gs nightly pins a SHA of the branch.
-After the cut-over the cs2gs nightly runs cs2gs as built from `main` (written in
-G#) over the C# source on that branch, plus Oahu and Code Exploder.
+are made by the maintainer, and the cs2gs apps nightly
+(`.github/workflows/cs2gs-apps-nightly.yml`) pins a SHA of the branch in
+`tools/cs2gs/external/gsharp-csharp.json`. That nightly runs cs2gs as built from
+`main` (written in G#) over the C# source on that branch, plus Oahu and Code
+Exploder.
 
 ## Prerequisites
 
@@ -45,11 +49,16 @@ only language features that the pinned release supports.
 If your PR adds a language feature, do not use it in repository source (`src/`,
 `test/`, `tools/`, samples) in the same PR. Use it only after a release
 containing it becomes the pin. Moving the pin is a separate PR: update
-`global.json`, build from a clean clone, run the stage-2 check, and note the
-new version in the release notes.
+`global.json`, build from a clean clone, and note the new version in the
+release notes. That PR's green CI with the new pin is its stage-2 verification:
+each release is the repository built by the previous pin (stage 1 of its tag),
+so building `main` with it is stage 2.
 
 See [`docs/self-host-bootstrap.md`](docs/self-host-bootstrap.md) for how stage 0
-(the pin), stage 1 and stage 2 relate.
+(the pin), stage 1 and stage 2 relate. The isolated stage-2 controller
+(`build/selfhost-stage2.py`,
+[ADR-0198](docs/adr/0198-isolated-stage-2-self-host-certification.md)) is
+background and optional, owner-run evidence, not a merge requirement.
 
 ## Restore and build
 
@@ -59,10 +68,8 @@ dotnet tool restore
 dotnet build GSharp.slnx --configuration Release --no-restore -graph
 ```
 
-Restore uses the checked-in NuGet lock files (`packages.lock.json`). The
-cut-over regenerates them for the `.gsproj` projects (the rehearsal found the
-copies carried over from the C# projects stale). Do not update lock files unless
-dependency changes are part of the PR.
+Restore uses the checked-in NuGet lock files (`packages.lock.json`). Do not
+update lock files unless dependency changes are part of the PR.
 
 `-graph` matters: it prevents duplicate project builds from racing over shared
 compiler outputs. Warnings are errors.
@@ -89,10 +96,6 @@ The complete suite is memory-heavy and can exceed 45 minutes. CI shards it;
 local full-suite runs are not expected for focused changes. Run relevant e2e
 scripts under [`e2etests/`](e2etests/) when changing the SDK, templates,
 debugging, packaging, or generated projects.
-
-For a change to binding, lowering, emit or the runtime libraries, also run the
-stage-2 check (`build/selfhost-stage2.py`, ADR-0198). The compiler compiles
-itself, and a defect can be invisible until gsc builds gsc.
 
 `Cs2Gs.Tests` launches nested SDK builds. Its stability depends on both
 invariants pinned by `TestHostProcessSetupTests`: MSBuild node reuse is disabled

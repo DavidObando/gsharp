@@ -5,18 +5,25 @@ Bootstrapping it takes three compilers:
 
 | Stage | Compiler | Built from | Built by |
 |---|---|---|---|
-| 0 | C#-built `Gsharp.NET.Sdk` (the release pinned in `global.json`; at the cut-over, the final released 0.4.x) | C# source | csc |
+| 0 | the `Gsharp.NET.Sdk` release pinned in `global.json` (at the cut-over, the C#-built `0.4.1270`; since then a G#-built 0.5.x release) | the source of that release | the release before it (csc for the 0.4 line) |
 | 1 | stage-1 `Gsharp.NET.Sdk` | the repository's G# source | stage 0 |
-| 2 | the migrated tree rebuilt | the same G# tree | stage 1 |
+| 2 | the same G# tree rebuilt | the same G# tree | stage 1 |
 
-The cut-over requires stage 2 to reproduce stage 1. The certification contract
-is defined by
+The cut-over required stage 2 to reproduce stage 1, and was certified that way
+(see [`self-migration-cutover.md`](self-migration-cutover.md)). The
+certification contract is defined by
 [ADR-0198](adr/0198-isolated-stage-2-self-host-certification.md). It requires
 immutable isolated source and build trees, controller-owned evidence, graph and
 toolchain revalidation at each build/test boundary, and complete-PE equality
-except for the exact validated `Module.Mvid` GUID slot. Draft PR #4693 is an
-in-place prototype and discrimination inventory. It is not a landable
-certification gate.
+except for the exact validated `Module.Mvid` GUID slot. Draft PR #4693 was an
+in-place prototype and discrimination inventory; it was closed without landing.
+
+After the cut-over, every release is the repository built by the previous pin,
+so a release is stage 1 of its tag. A pin-move PR builds `main` with that
+release, which makes its green CI the stage-2 verification. The controller below
+is optional, owner-run evidence; it is not a merge or publish requirement.
+A cheap two-build fixpoint comparison in CI is tracked in
+[#4925](https://github.com/DavidObando/gsharp/issues/4925).
 
 The replacement controller is `build/selfhost-stage2.py`. It creates a new
 controller-owned work root, freezes one source snapshot, derives separate stage

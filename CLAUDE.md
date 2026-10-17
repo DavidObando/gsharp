@@ -12,7 +12,7 @@ Since 0.5 the compiler, the language server, the formatter and the tools in
 this repository are G# source (`.gs`, `.gsproj`). They were translated from C#
 by cs2gs at the final C#-built release (`v0.4.1270`); see
 [`docs/self-migration-cutover.md`](docs/self-migration-cutover.md) for the
-translation command and the path mapping. Three rules follow from that.
+translation command and the path mapping. These rules follow from that.
 
 - **Fixes happen in G#, on `main`.** Do not edit the C# branch
   `cs2gs/csharp-0.4` to fix a bug. That branch is **semi-frozen**: it holds the
@@ -29,13 +29,18 @@ translation command and the path mapping. Three rules follow from that.
   that adds a language feature must not use that feature in repository source
   (including tests, samples and `src/`) until a release containing it becomes the
   pin. Bumping the pin is its own PR: bump `global.json`, rebuild from a clean
-  clone, and confirm the stage-2 check still passes.
+  clone, and note the new version in the release notes. That PR's green CI with
+  the new pin is its stage-2 verification (each release is stage 1 of its tag);
+  the ~8-hour stage-2 controller run is not required.
 - **`src/vs-gsharp` (the Visual Studio extension) stays C#.** It is not a
   migration target and keeps its `#if NETFRAMEWORK` directives. It builds on
   Windows only and references the G# language server; don't translate it, and
   don't treat a C# file there as a missed migration.
-- **`build/selfhost/*.csproj` stays C#.** The stage-2 controller builds those
-  exact helper projects; never translate or rename them.
+- **`build/selfhost/PeBodyMutations.cs` stays C#.** It is a file-based
+  `dotnet run` helper that `build/test-selfhost-stage2.py` runs by file name.
+  The controller's helper projects beside it (`PackageContentHash.gsproj`,
+  `TestSupervisorLogger.gsproj`) are G#; the controller builds those exact
+  paths, so never rename them.
 - **Do not hand-edit pinned state to get green.** Never change the pin to a
   locally built or unreleased SDK in a PR, and never exclude a file to dodge a
   gsc defect. A gsc defect found while building the repository is a bug to fix
@@ -107,10 +112,13 @@ to translate. What gates a PR now:
   and `gsc.dll` (except the validated `Module.Mvid` slot), and that the Core
   and Compiler test suites pass under stage 2. A stage-2 failure is a compiler
   defect only visible when gsc compiles itself: treat it as P0, stop and
-  diagnose; do not re-run until green. It runs nightly (`selfhost-stage2-nightly`),
-  not on pull requests: a PR only runs the controller's contract tests in
-  `test-partition`, which are not certification. A release tag additionally
-  requires a successful stage-2 run on the tagged commit.
+  diagnose; do not re-run until green. It is an owner-run step, not a gate on
+  PRs or releases (the publish requirement was removed by #4914). It needs a
+  self-hosted runner with the controller's pinned .NET layout and takes about
+  eight hours (#4885). `selfhost-stage2-nightly` is an unwired hook
+  (`STAGE2_ARGS` is empty) whose scheduled runs queue and are cancelled. A PR
+  only runs the controller's contract tests in `test-partition`, which are not
+  certification.
 - **`cs2gs-corpus`** still guards cs2gs as a product on every PR: it runs the
   C# corpus under `tools/cs2gs/corpus` against the gap ledger.
 - **cs2gs apps nightly** (`cs2gs-apps-nightly`) runs cs2gs as built from `main`
@@ -124,16 +132,19 @@ to translate. What gates a PR now:
   on `main` (listed in `tools/cs2gs/apps-nightly-banked.json`) goes red,
   otherwise P1. Fix cs2gs; don't edit the issue's priority down to make the
   dashboard greener.
-- **`nullable-hygiene` is retired** (#4906). It existed to keep C# translatable
+- **`nullable-hygiene` is retired** (#4912; #4906 audits the other gates that
+  scan `.cs`). It existed to keep C# translatable
   to G#; the C# that remains (`src/vs-gsharp`, fixtures, benchmark apparatus) is
   never translated, and the compiler's nullable analysis still covers it. There
   is no comment-on-`!!` or `= nil!!` gate for G# source. The
   release-version-reference check (`build/check-release-version-refs.py`) now
   runs in its own `release-version-refs` job.
-- **`Issue3347RemainingSpillInventoryTests`** counts retired synthesized names
-  (`__spill`, `__cast`, `__decon`, `__using`) in the committed `.gs` tree.
-  If it fails, a new `.gs` file contains one: write the code without it. Don't
-  weaken the test.
+- **`Issue3347RemainingSpillInventoryTests`** (in `Cs2Gs.Tests`) counts retired
+  synthesized names in committed `.gs` files: all four families (`__spill`,
+  `__cast`, `__decon`, `__using`) under `src/Core`, and `let __spill` only under
+  `tools/cs2gs/Cs2Gs.Translator`. If it fails, a new `.gs` file contains one:
+  write the code without it. Don't weaken the test, and don't treat it as a gate
+  for other directories or for the other three families in the translator.
 - **`selfhost-windows`** (migrated Core.Tests on Windows) is parked and
   unavailable until repaired: it is dispatch-only, not gating, and still expects
   artifacts that no longer exist. Don't dispatch it expecting a result.
@@ -158,11 +169,13 @@ to translate. What gates a PR now:
 The compiler builds itself, so a gsc defect can break the build of gsc.
 
 - **A change to the compiler is compiled by the pinned (older) compiler.**
-  Your change is exercised by the pin first and by itself only in stage 2.
-  A bug that miscompiles gsc's own source shows up as a stage-2 mismatch or as
-  a crash in a test that is green under stage 1. Run the stage-2 check locally
-  for changes to binding, lowering, emit or the runtime libraries
-  (`build/selfhost-stage2.py`; see `docs/self-host-bootstrap.md`).
+  Your change is exercised by the pin first and by itself only in stage 2,
+  which in practice is the CI of the PR that next moves the pin. A bug that
+  miscompiles gsc's own source shows up there, as a crash or failure in a test
+  that is green under stage 1. Running the stage-2 controller before merge is
+  not required for binding, lowering, emit or runtime changes; it remains
+  available as on-demand evidence (`build/selfhost-stage2.py`; see
+  `docs/self-host-bootstrap.md`).
 - **Determinism matters.** Emit must be byte-for-byte reproducible. Do not
   iterate a hash-ordered collection to assign numbers, names or table order.
   (#4663 was exactly this.)

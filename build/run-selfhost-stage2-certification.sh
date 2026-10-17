@@ -40,7 +40,7 @@ dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj -c Release
 
 # The compile stage builds the migrated tree through the PACKED Gsharp.NET.Sdk
 # nupkg, which cs2gs picks by recency. Repack the Release SDK last, strictly
-# before migrate (the same ordering run-cs2gs-selfmig-pr-guard.sh depends on),
+# before migrate (the same ordering the retired run-cs2gs-selfmig-pr-guard.sh depended on),
 # so the stage-0 compiler is this checkout's, never a stale package.
 dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release -graph
 

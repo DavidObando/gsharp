@@ -17,9 +17,6 @@ on:
 # Pushes to main and `v*` tags (which run the publish job) get a group unique
 # to the run (github.run_id), so they never cancel or queue behind each other,
 # and cancel-in-progress is false for them regardless.
-# The group name is `build-...`, distinct from the job-level
-# `hot-core-translation-guard-<PR>` group below, which is kept so the guard
-# job's own cancellation semantics stay unchanged.
 concurrency:
   group: build-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
