@@ -2232,7 +2232,12 @@ internal partial class ExpressionBinder {
         /// @param makeNarrowedNode Factory building the narrowed read node for
         /// the reference-nullable (metadata no-op) case.
         /// @returns The narrowed read (possibly a value-type unwrap).
-        private func BuildNarrowedRead(
+        /// @remarks Issue #4943: this is the single place that builds a
+        /// narrowed read. Call binding (`OverloadResolver.BuildCalleeLoad`)
+        /// uses it too, because a narrowed `(unmanaged[CC] () -> R)?` callee
+        /// is a value-type `Nullable<nint>` whose storage must be unwrapped
+        /// before `calli`; the emitter rejects a narrowed node that skips it.
+        internal func BuildNarrowedRead(
             bareRead BoundExpression,
             declaredType TypeSymbol,
             narrowedType TypeSymbol?,

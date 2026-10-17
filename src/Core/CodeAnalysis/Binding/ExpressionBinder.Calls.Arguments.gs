@@ -479,6 +479,10 @@ internal partial class ExpressionBinder {
         let effectiveMemberType = switch memberLoad {
             case BoundFieldAccessExpression{NarrowedType: TypeSymbol narrowedField}: narrowedField
             case BoundPropertyAccessExpression{NarrowedType: TypeSymbol narrowedProperty}: narrowedProperty
+            // Issue #4943: BuildNarrowedRead narrows a value-type nullable member
+            // (`(unmanaged[CC] () -> R)?` is `Nullable<nint>`) by unwrapping it,
+            // so the narrowed type is the unwrap's result type.
+            case unwrap is BoundUnaryExpression when unwrap.Op.Kind == BoundUnaryOperatorKind.NullAssertion: unwrap.Type
             default: memberType
         }
         var callableType = if ce.NullableQuestionToken != nil &&
