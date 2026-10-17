@@ -243,7 +243,9 @@ It passes only if each changed file differs from the base in its comments.
 It reads `.gs` files with the compiler's lexer (it builds `build/gstokens`
 first), `.py` files with Python's `tokenize`, and `.yml` files with PyYAML.
 A change inside a string literal fails, and so does a change to a Python
-docstring or to a YAML block scalar such as `run: |`. Shell scripts, C# and
+docstring or to a YAML block scalar such as `run: |`. If you delete a comment
+inside a line, keep the space it leaves, because the parser can depend on
+whether two tokens touch. Shell scripts, C# and
 other file types fail as "unsupported: review manually". A comment in a test
 input (the cs2gs corpus, or a fixture that a test reads) can be test data, so
 run the tests that read the file.

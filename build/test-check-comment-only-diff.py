@@ -70,8 +70,21 @@ class GSharpTests(CommentOnlyCase):
             "let a = 1\n\nlet b = 2\n",
         )
 
-    def test_inline_block_comment_removal_passes(self) -> None:
-        self.assertPasses("a.gs", "let x = f(1 /* count */, 2)\n", "let x = f(1, 2)\n")
+    def test_inline_block_comment_removal_keeps_the_space(self) -> None:
+        # The parser can depend on whether two tokens touch, so the space that
+        # the comment leaves must stay.
+        self.assertPasses("a.gs", "let x = f(1 /* count */, 2)\n", "let x = f(1 , 2)\n")
+        self.assertFails("a.gs", "let x = f(1 /* count */, 2)\n", "let x = f(1, 2)\n")
+
+    def test_null_conditional_call_adjacency_is_compared(self) -> None:
+        # `a?(x)` is a null-conditional call; `a? (x)` starts a conditional.
+        self.assertFails("a.gs", "let r = GetHandler()?(x)\n", "let r = GetHandler()? /* note */ (x)\n")
+        self.assertFails("a.gs", "let r = GetHandler() /* note */?(x)\n", "let r = GetHandler()?(x)\n")
+        self.assertFails("a.gs", "let r = GetHandler()?(x)\n", "let r = GetHandler()? (x)\n")
+
+    def test_header_comment_insertion_and_deletion_pass(self) -> None:
+        self.assertPasses("a.gs", "// History.\nlet x = 1\n", "let x = 1\n")
+        self.assertPasses("a.gs", "let x = 1\n", "/// Summary.\nlet x = 1\n")
 
     def test_comment_reword_beside_tricky_strings_passes(self) -> None:
         base = (
@@ -199,6 +212,13 @@ class PythonTests(CommentOnlyCase):
     def test_noqa_change_fails(self) -> None:
         self.assertFails("a.py", "import os  # noqa: F401\n", "import os  # unused\n")
 
+    def test_moving_a_directive_off_its_line_fails(self) -> None:
+        self.assertFails(
+            "a.py",
+            "x = f(\n    missing  # type: ignore[name-defined]\n)\n",
+            "x = f(\n    missing\n    # type: ignore[name-defined]\n)\n",
+        )
+
     def test_deleting_comment_after_continuation_fails(self) -> None:
         # The base prints 1 and the head prints 3.
         self.assertFails("a.py", "x = 1 \\\n# old\n+ 2\nprint(x)\n", "x = 1 \\\n+ 2\nprint(x)\n")
@@ -240,6 +260,11 @@ class YamlTests(CommentOnlyCase):
 
     def test_change_inside_block_scalar_fails(self) -> None:
         self.assertFails("a.yml", self.BASE, self.BASE.replace("# shell comment", "# shell note"), "differs")
+
+    def test_schema_directive_change_or_deletion_fails(self) -> None:
+        base = "# yaml-language-server: $schema=old.json\nk: 1\n"
+        self.assertFails("a.yml", base, base.replace("old", "new"), "directive")
+        self.assertFails("a.yml", base, "k: 1\n", "directive")
 
     def test_parse_error_fails_closed(self) -> None:
         self.assertFails("a.yaml", "k: [1, 2]\n", "k: [1, 2\n", "YAML parse failed")
