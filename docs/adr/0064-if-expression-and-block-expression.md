@@ -291,31 +291,42 @@ The only differences left between the two forms follow from syntax: an
 if-expression branch is a block with a value tail, and its `else` is
 mandatory, while a ternary branch is a single expression.
 
-**Compatibility.** A narrowed branch has its narrowed type, so a ternary whose
-branch reads the guarded variable can now have a narrower result type, exactly
-as the matching if-expression already had. With `n int32?`,
-`n != nil ? n : 0` is now `int32` (it was `int32?`), which can change the
-inferred type of a `let`/`var` and the overload chosen for an argument. A
-user `!!` on the narrowed variable in the proven branch now reports the GS0536
-redundant-assertion warning. Outside expression-tree lambdas (below), code that
-compiled before keeps compiling, except where the narrower type is later
-assigned `nil`, or is passed to overloads that differ only in reference
-nullability (`f(string)` / `f(string?)`), which are ambiguous for any
-non-null argument (issue #4971). The fix is to state the type
-(`let r int32? = …`). At the
-time of the change the repository held no such ternary in compiler, tool or
-sample source (cs2gs lowers a C# `?:` to an if-expression, so its output was
-already narrowed); the cases in test sources are listed in the PR.
+**Compatibility.** This is a deliberate breaking change for parity. A narrowed
+branch has its narrowed type, so a ternary whose branch reads the guarded
+variable can now have a narrower result type, exactly as the matching
+if-expression already had. With `n int32?`, `n != nil ? n : 0` is now `int32`
+(it was `int32?`), which can change the inferred type of a `let`/`var` and the
+overload chosen for an argument, and a user `!!` on the narrowed variable in
+the proven branch now reports the GS0536 redundant-assertion warning.
 
-Expression-tree lambdas are the one place where previously compiling code now
-reports an error. With `v int32?`, `(v int32?) -> v != nil ? v + 1 : 0`
-converted to `Expression[Func[int32?, int32]]` compiled, then threw
-`ArgumentException` when the tree was built (the body had type
-`Nullable<int32>`). It now reports GS0473, as the if-expression form already
-did, because the expression-tree lowerer does not yet lower a narrowed
-value-type read; `(v ?? 0) + 1` is the workaround. A type-test narrowed read in
-an expression-tree lambda compiles and then throws at tree construction in
-every form (if-expression, `&&`, and now `?:`). Both gaps are issue #4974.
+Code that compiled before, in 0.4.1270 and 0.5.7, stops compiling in these
+cases:
+
+- **`Nullable<T>` members on the narrowed value.** `n != nil ? n.Value : 0`,
+  `n.GetValueOrDefault()` and `n.HasValue` in the proven branch report GS0158 /
+  GS0159, because `n` is `int32` there. The if-statement and if-expression
+  have always rejected these. Migration: the narrowed value is the value, so
+  write `n` for `n.Value` and `n.GetValueOrDefault()`, and `true` for
+  `n.HasValue`. Issue #4986 tracks a fix hint (or a rule that keeps the C#
+  idiom compiling in every form).
+- **The narrower type no longer fits.** A later `nil` assignment to an
+  inferred local, or a call to overloads that differ only in reference
+  nullability (`f(string)` / `f(string?)`), which are ambiguous for any
+  non-null argument (issue #4971). Migration: state the type
+  (`let r int32? = …`).
+- **Expression-tree lambdas.** `(v int32?) -> v != nil ? v + 1 : 0` converted to
+  `Expression[Func[int32?, int32]]` compiled, then threw `ArgumentException`
+  when the tree was built (the body had type `Nullable<int32>`). It now reports
+  GS0473, as the if-expression form already did, because the expression-tree
+  lowerer does not yet lower a narrowed value-type read. Migration:
+  `(v ?? -1) + 1`. A type-test narrowed read in an expression-tree lambda
+  compiles and then throws at tree construction in every form (if-expression,
+  `&&`, and now `?:`). Both gaps are issue #4974.
+
+At the time of the change the repository held no nil-guard or type-test
+ternary that reads its guarded variable in compiler, tool or sample source
+(cs2gs lowers a C# `?:` to an if-expression, so its output was already
+narrowed); the cases in test sources are listed in the PR.
 
 **Known gap, shared by both forms.** A nil guard on a value-type nullable
 under `!`, `&&` or `||` (`!(n == nil)`, `a != nil && b != nil` with `int32?`)
