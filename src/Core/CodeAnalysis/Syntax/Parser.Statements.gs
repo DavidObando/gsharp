@@ -797,18 +797,28 @@ open partial class Parser {
     // ──────────────────────────────────────────────────────────────────────
     private func ParseIfLetStatement() IfLetStatementSyntax {
         let ifKeyword = MatchToken(SyntaxKind.IfKeyword)
-        let bindings = ParseIfLetBindingList()
+        // Issue #4961 / ADR-0200: the same header routine as the expression
+        // form, so a top-level `&&` after the final binding starts the guard.
+        let (bindings, guardOperator, guard_) = ParseIfLetHeader()
         let thenStatement = ParseStatement()
         let elseClause = ParseElseClause()
-        return IfLetStatementSyntax(syntaxTree, ifKeyword, bindings, thenStatement, elseClause)
+        return IfLetStatementSyntax(syntaxTree, ifKeyword, bindings, guardOperator, guard_, thenStatement, elseClause)
     }
 
     private func ParseGuardLetStatement() GuardLetStatementSyntax {
         let guardKeyword = MatchToken(SyntaxKind.GuardKeyword)
-        let bindings = ParseIfLetBindingList()
+        let (bindings, guardOperator, guard_) = ParseIfLetHeader(unsupportedGuardForm: "guard let")
         let elseKeyword = MatchToken(SyntaxKind.ElseKeyword)
         let elseStatement = ParseStatement()
-        return GuardLetStatementSyntax(syntaxTree, guardKeyword, bindings, elseKeyword, elseStatement)
+        return GuardLetStatementSyntax(
+            syntaxTree,
+            guardKeyword,
+            bindings,
+            guardOperator,
+            guard_,
+            elseKeyword,
+            elseStatement
+        )
     }
 
     private func ParseForStatement() StatementSyntax {
@@ -1268,9 +1278,9 @@ open partial class Parser {
         // clause grammar so typing, recovery, and body-brace disambiguation
         // stay identical across if/guard/while let.
         let keyword = MatchToken(SyntaxKind.WhileKeyword)
-        let bindings = ParseIfLetBindingList()
+        let (bindings, guardOperator, guard_) = ParseIfLetHeader(unsupportedGuardForm: "while let")
         let body = ParseStatement()
-        return WhileLetStatementSyntax(syntaxTree, keyword, bindings, body)
+        return WhileLetStatementSyntax(syntaxTree, keyword, bindings, guardOperator, guard_, body)
     }
 
     private func ParseLockStatement() StatementSyntax {

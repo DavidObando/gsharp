@@ -19,26 +19,35 @@ import System.Diagnostics.CodeAnalysis
 import System.Threading
 
 internal partial class StatementBinder {
+    /// The narrowing frames an `if` condition implies for its then- and
+    /// else-branches. Shared by the `if` statement and, for its guard, the
+    /// `if let` statement (issue #4961 / ADR-0200).
+    private func ClassifyIfConditionNarrowing(condition BoundExpression)(
+        Then Dictionary[AccessPath, TypeSymbol]?,
+        Else Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
+        // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
+        // is intentionally deferred for the nil-guard classifier.
+        var thenNarrow Dictionary[AccessPath, TypeSymbol]?
+        var elseNarrow Dictionary[AccessPath, TypeSymbol]?
+        thenNarrow, elseNarrow = TryClassifyNilGuard(condition)
+        if thenNarrow == nil && elseNarrow == nil {
+            thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
+        }
+        // ADR-0069 / issue #700: smart-cast type-test narrowing on
+        // `x is T`, `x !is T`, and `&&` chains thereof. Compose with the
+        // nullable / `[NotNullWhen]` frames computed above so a condition
+        // that combines both styles narrows on both axes.
+        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition)
+        return (MergeNarrowingFrames(thenNarrow, typeThen), MergeNarrowingFrames(elseNarrow, typeElse))
+    }
+
     private func BindIfStatement(syntax IfStatementSyntax) BoundStatement {
         if syntax.Initializer == nil {
             let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             ApplyHeaderCallableEffects(condition)
-            // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
-            // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
-            // is intentionally deferred for the nil-guard classifier.
-            var thenNarrow Dictionary[AccessPath, TypeSymbol]?
-            var elseNarrow Dictionary[AccessPath, TypeSymbol]?
-            thenNarrow, elseNarrow = TryClassifyNilGuard(condition)
-            if thenNarrow == nil && elseNarrow == nil {
-                thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
-            }
-            // ADR-0069 / issue #700: smart-cast type-test narrowing on
-            // `x is T`, `x !is T`, and `&&` chains thereof. Compose with the
-            // nullable / `[NotNullWhen]` frames computed above so a condition
-            // that combines both styles narrows on both axes.
-            let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition)
-            thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen)
-            elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse)
+            let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(condition)
             // ADR-0166: pattern variables are in scope in the branch their
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
@@ -97,15 +106,7 @@ internal partial class StatementBinder {
         }
         let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
         ApplyHeaderCallableEffects(initCondition)
-        var initThenNarrow Dictionary[AccessPath, TypeSymbol]?
-        var initElseNarrow Dictionary[AccessPath, TypeSymbol]?
-        initThenNarrow, initElseNarrow = TryClassifyNilGuard(initCondition)
-        if initThenNarrow == nil && initElseNarrow == nil {
-            initThenNarrow, initElseNarrow = TryClassifyBoolCallNarrowing(initCondition)
-        }
-        let (initTypeThen, initTypeElse) = TryClassifyTypeTestNarrowing(initCondition)
-        initThenNarrow = MergeNarrowingFrames(initThenNarrow, initTypeThen)
-        initElseNarrow = MergeNarrowingFrames(initElseNarrow, initTypeElse)
+        let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition)
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initCallableEntry = CaptureExternalCallableAliases()
         let initThen = BindWithPatternVariables(
@@ -159,121 +160,164 @@ internal partial class StatementBinder {
     //  rewriter / walker / printer / spiller / emitter / interpreter
     //  surface needs no updates.
     // ──────────────────────────────────────────────────────────────────────
-    /// ADR-0071 / issue #708: bind `if let` as a self-contained block
-    /// containing the synthesized let-declarations and a nested if whose
-    /// condition is the nil-guard. Multi-binding forms with an else-arm use
-    /// a synthesized `bool` flag so the else-block appears in the
-    /// bound tree exactly once.
+    /// ADR-0071 / issue #708, issue #4961 / ADR-0200: binds the `if let`
+    /// STATEMENT. The header (bindings, optional guard, then-region) goes
+    /// through (cref:IfLetBindingSupport.BindHeader), shared with the
+    /// expression form, so a later initializer and the guard see earlier
+    /// bindings narrowed and no binding is visible in the else branch. The
+    /// lowering short-circuits left to right. Without an else branch (or with
+    /// a single test) it stays in nested statements:
+    ///
+    /// ```
+    /// if let a = e0, let b = e1 && g { T }
+    /// =>
+    /// { let a = e0; if a != nil { let b = e1; if b != nil && g { T } } }
+    /// ```
+    ///
+    /// With an else branch and more than one test it is one `if`/`else` over
+    /// (cref:IfLetBindingSupport.BuildShortCircuitCondition), the condition
+    /// the expression form uses, so each branch appears exactly once.
     private func BindIfLetStatement(syntax IfLetStatementSyntax) BoundStatement {
-        let bindings = syntax.Bindings.ToImmutableArray()
-        // Push a new scope to contain the synthesized locals. The locals
-        // declared from the bindings only need to be visible inside the
-        // then-branch, so a single block-scoped lifetime is correct.
-        $scope = BoundScope($scope)
-        let localsForFrame = List[(Variable VariableSymbol, Underlying TypeSymbol)](bindings.Length)
-        let declStatements = ImmutableArray.CreateBuilder[BoundStatement](bindings.Length)
-        var anyValid = false
-        for binding in bindings {
-            let (variable, underlying, decl) = BindIfLetBindingClause(binding)
-            declStatements.Add(decl)
-            if variable != nil && underlying != nil {
-                localsForFrame.Add((variable, underlying))
-                anyValid = true
-            }
-        }
-        // Build the nil-test condition: `_b0 != nil && _b1 != nil && …`.
-        // Each variable expression carries its underlying narrowing type so
-        // that read sites inside the then-branch see the non-null type.
-        // Build the narrowing frame so the then-block sees each binding at
-        // its non-null underlying type. The else-block does NOT see the
-        // narrowing — the bindings are not even in scope there.
-        var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
-        if localsForFrame.Count > 0 {
-            thenFrame = Dictionary[AccessPath, TypeSymbol](localsForFrame.Count)
-            for (variable, underlying) in localsForFrame {
-                thenFrame[variable] = underlying
-            }
-        }
-        let thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, thenFrame)
-        // Pop the scope BEFORE binding the else clause so the bindings are
-        // not visible inside it (ADR-0071: bindings are then-only).
-        $scope = $scope.Pop()
+        let (clauses, guard_, thenStatement) = IfLetBindingSupport.BindHeader(
+            binderCtx,
+            syntax.Bindings,
+            syntax.Guard,
+            Diagnostics,
+            conversions,
+            bindTypeClause,
+            (initializer ExpressionSyntax) -> bindExpression(initializer, false),
+            (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> bindLocalVariable(
+                identifier,
+                isReadOnly,
+                type
+            ),
+            (guardSyntax ExpressionSyntax) -> bindExpressionWithTargetType(guardSyntax, TypeSymbol.Bool),
+            (boundGuard BoundExpression) -> ClassifyIfConditionNarrowing(boundGuard).Then,
+            () -> BindStatementWithNarrowing(syntax.ThenStatement, nil)
+        )
+        // Bound AFTER the header scope is popped: the else branch never sees
+        // the bindings.
         let elseStatement = if syntax.ElseClause == nil {
             default(BoundStatement?)
         } else {
             BindStatement(syntax.ElseClause.ElseStatement)
         }
-        // If no binding survived (every initializer was an error), just
-        // return the synthesized block so the user still sees diagnostics
-        // but no synthetic if-shape leaks.
-        if !anyValid {
-            return BoundBlockStatement(syntax, declStatements.ToImmutable())
+        if !clauses.Any((clause IfLetBindingSupport.BoundIfLetClause) -> clause.Binding.IsValid) {
+            // Every initializer was an error: keep the declarations so the
+            // user still sees diagnostics, but no synthetic if-shape leaks.
+            return BoundBlockStatement(
+                syntax,
+                clauses.Select(
+                    (clause IfLetBindingSupport.BoundIfLetClause) -> cast[BoundStatement](DeclareIfLetClause(clause))
+                )
+                    .ToImmutableArray()
+            )
         }
-        let nilCheck = Invariant.Required(
-            BuildNilCheckChain(syntax, localsForFrame),
-            "a valid if-let binding always contributes a nil-check operand",
-            expression: "BuildNilCheckChain(syntax, localsForFrame)"
-        )
-        var core BoundStatement
-        if syntax.ElseClause == nil || localsForFrame.Count <= 1 {
-            // No else, or a single binding (which fits the natural shape
-            // without needing a matched-flag): build a simple if/else.
-            core = BoundIfStatement(syntax, nilCheck, thenStatement, elseStatement)
+        let usableGuard = if guard_ is BoundErrorExpression {
+            default(BoundExpression?)
         } else {
-            // Multi-binding with an else: route through a synthesized
-            // `bool _matched` flag so the else block runs exactly once and
-            // is duplicated zero times in the bound tree.
-            //
-            // var __ifLet_matched_<pos> = false
-            // let a = e0
-            // let b = e1
-            // if a != nil && b != nil { __matched = true; <then> }
-            // if !__matched { <else> }
-            let flagName = "<ifLetMatched${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-            let flagVar = LocalVariableSymbol(flagName, isReadOnly: false, TypeSymbol.Bool)
-            $scope.TryDeclareVariable(flagVar)
-            let flagDecl = BoundVariableDeclaration(
-                syntax,
-                flagVar,
-                BoundLiteralExpression(syntax, false, TypeSymbol.Bool)
-            )
-            let setFlag = BoundExpressionStatement(
-                syntax,
-                BoundAssignmentExpression(syntax, flagVar, BoundLiteralExpression(syntax, true, TypeSymbol.Bool))
-            )
-            let combinedThen = BoundBlockStatement(
-                syntax,
-                ImmutableArray.Create[BoundStatement](setFlag, thenStatement)
-            )
-            let matchIf = BoundIfStatement(syntax, nilCheck, combinedThen, elseStatement: nil)
-            let notOp = Invariant.Required(
-                BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
-                "a bool flag supports logical negation",
-                expression: "BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool)"
-            )
-            let notFlag = BoundUnaryExpression(syntax, notOp, BoundVariableExpression(syntax, flagVar))
-            let elseIf = BoundIfStatement(
-                syntax,
-                notFlag,
-                Invariant.Required(
-                    elseStatement,
-                    "the multi-binding shape has an else clause",
-                    expression: "elseStatement"
-                ),
-                elseStatement: nil
-            )
-            let sequenced = ImmutableArray.CreateBuilder[BoundStatement](declStatements.Count + 3)
-            sequenced.Add(flagDecl)
-            sequenced.AddRange(declStatements)
-            sequenced.Add(matchIf)
-            sequenced.Add(elseIf)
-            return BoundBlockStatement(syntax, sequenced.ToImmutable())
+            guard_
         }
-        let statements = ImmutableArray.CreateBuilder[BoundStatement](declStatements.Count + 1)
-        statements.AddRange(declStatements)
-        statements.Add(core)
-        return BoundBlockStatement(syntax, statements.ToImmutable())
+        // One `if` per valid non-final binding, plus the final `if` when the
+        // final binding is valid or a guard is present.
+        let last = clauses.Length - 1
+        var ifCount = 0
+        for var i = 0; i < last; i++ {
+            if clauses[i].Binding.IsValid {
+                ifCount++
+            }
+        }
+        if clauses[last].Binding.IsValid || usableGuard != nil {
+            ifCount++
+        }
+        if elseStatement == nil || ifCount == 1 {
+            return BoundBlockStatement(
+                syntax,
+                LowerIfLetClauses(syntax, clauses, 0, usableGuard, thenStatement, elseStatement)
+            )
+        }
+        // More than one test and an else branch: one `if`/`else` over the
+        // shared short-circuit condition, so each branch appears exactly once
+        // and return/reachability analysis sees a plain two-armed `if`. (The
+        // matched-flag shape ADR-0071 used here made a both-arms-return
+        // statement report GS0100.) An erroneous clause has already reported;
+        // only the valid ones take part.
+        let valid = clauses.Where((clause IfLetBindingSupport.BoundIfLetClause) -> clause.Binding.IsValid)
+            .ToImmutableArray()
+        let condition = IfLetBindingSupport.BuildShortCircuitCondition(valid, 0, usableGuard)
+        return BoundIfStatement(syntax, condition, thenStatement, elseStatement)
     }
+
+    /// Issue #4961 / ADR-0200: lowers clauses `index..` of an `if let`
+    /// statement into nested statements, assuming every earlier binding
+    /// matched: the clause's declaration, then an `if` on its nil test (an
+    /// erroneous clause has no test) wrapping the remaining clauses. The final
+    /// clause's test is conjoined with the guard. `elseStatement` is non-null
+    /// only when the caller knows exactly one `if` is produced.
+    private func LowerIfLetClauses(
+        syntax IfLetStatementSyntax,
+        clauses ImmutableArray[IfLetBindingSupport.BoundIfLetClause],
+        index int32,
+        $guard BoundExpression?,
+        thenStatement BoundStatement,
+        elseStatement BoundStatement?
+    ) ImmutableArray[BoundStatement] {
+        let clause = clauses[index]
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        statements.Add(DeclareIfLetClause(clause))
+        let test BoundExpression? = if clause.Binding.IsValid {
+            IfLetBindingSupport.BuildNilCheckChain(clause.Syntax, []VariableSymbol{clause.Binding.Variable})
+        } else {
+            nil
+        }
+        if index == clauses.Length - 1 {
+            var condition = test
+            if $guard != nil {
+                condition = if condition == nil {
+                    $guard
+                } else {
+                    let andOp = Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                        "boolean if-let tests support logical conjunction",
+                        expression: "BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool)"
+                    )
+                    BoundBinaryExpression(syntax, condition, andOp, $guard)
+                }
+            }
+            if condition == nil {
+                statements.Add(thenStatement)
+            } else {
+                statements.Add(BoundIfStatement(syntax, condition, thenStatement, elseStatement))
+            }
+            return statements.ToImmutable()
+        }
+        let rest = LowerIfLetClauses(
+            syntax,
+            clauses,
+            index + 1,
+            $guard,
+            thenStatement,
+            if test == nil {
+                elseStatement
+            } else {
+                nil
+            }
+        )
+        if test == nil {
+            statements.AddRange(rest)
+        } else {
+            statements.Add(BoundIfStatement(syntax, test, BoundBlockStatement(syntax, rest), elseStatement))
+        }
+        return statements.ToImmutable()
+    }
+
+    private func DeclareIfLetClause(
+        clause IfLetBindingSupport.BoundIfLetClause
+    ) BoundVariableDeclaration -> BoundVariableDeclaration(
+        clause.Syntax,
+        clause.Binding.Variable,
+        clause.Binding.Initializer
+    )
 
     /// ADR-0071: bind a single `let name [T] = expr`
     /// binding clause inside an `if let` or `guard let` header.

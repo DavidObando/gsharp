@@ -28,7 +28,7 @@ func F(s string?) string {
         let expr = FindFirst[IfLetExpressionSyntax](tree)
         Assert.Equal(1, expr.Bindings.Count)
         Assert.Equal("x", expr.Bindings[0].Identifier.Text)
-        Assert.Null(expr.AmpersandAmpersandToken)
+        Assert.Null(expr.GuardOperatorToken)
         Assert.Null(expr.Guard)
         Assert.NotNull(expr.ElseKeyword)
         Assert.IsType[BlockExpressionSyntax](expr.ElseExpression)
@@ -52,8 +52,8 @@ func F() string? {
         let tree = SyntaxTree.Parse(source)
         Assert.Empty(tree.Diagnostics)
         let expr = FindFirst[IfLetExpressionSyntax](tree)
-        Assert.NotNull(expr.AmpersandAmpersandToken)
-        Assert.Equal(SyntaxKind.AmpersandAmpersandToken, expr.AmpersandAmpersandToken!!.Kind)
+        Assert.NotNull(expr.GuardOperatorToken)
+        Assert.Equal(SyntaxKind.AmpersandAmpersandToken, expr.GuardOperatorToken!!.Kind)
         Assert.NotNull(expr.Guard)
         // The initializer is the bare call — no `&&` was folded into it.
         let initializer = expr.Bindings[0].Initializer
@@ -215,10 +215,11 @@ func F(a string?) {
     }
 
     @Fact
-    func StatementForm_IfLet_KeepsTopLevelLogicalAndInsideTheInitializer() {
-        // The statement form has no guard clause, so `a && b` stays a single
-        // initializer expression — the ADR-0151 delimiter rule is
-        // expression-form only.
+    func StatementForm_IfLet_TopLevelLogicalAndStartsTheGuard() {
+        // Issue #4961 / ADR-0200 (supersedes the ADR-0151 statement-form
+        // carve-out): the statement form shares the expression form's header,
+        // so a top-level `&&` after the final binding starts the guard instead
+        // of extending the initializer.
         const source = `package P
 import System
 func F(a bool, b bool) {
@@ -229,8 +230,8 @@ func F(a bool, b bool) {
         let tree = SyntaxTree.Parse(source)
         Assert.Empty(tree.Diagnostics)
         let stmt = FindFirst[IfLetStatementSyntax](tree)
-        let initializer = Assert.IsType[BinaryExpressionSyntax](stmt.Bindings[0].Initializer)
-        Assert.Equal(SyntaxKind.AmpersandAmpersandToken, initializer.OperatorToken.Kind)
+        Assert.IsType[CallExpressionSyntax](stmt.Bindings[0].Initializer)
+        Assert.Equal("b", Assert.IsType[NameExpressionSyntax](stmt.Guard).IdentifierToken.Text)
     }
 
     @Fact

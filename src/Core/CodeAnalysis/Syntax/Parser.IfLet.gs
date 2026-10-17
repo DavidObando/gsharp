@@ -22,23 +22,59 @@ import System.Runtime.CompilerServices
 /// ```
 open partial class Parser {
     // ──────────────────────────────────────────────────────────────────────
-    //  Shared binding header: `let name [T] = expr (, let …)*`
+    //  Shared binding header: `let name [T] = expr (, let …)* [&& guard]`
     // ──────────────────────────────────────────────────────────────────────
-    /// Parses the comma-separated binding list shared by `if let`,
-    /// `guard let`, and `while let` statements and the
-    /// `if let` expression.
-    /// @param stopAtTopLevelLogicalAnd When `true` (the ADR-0151 expression form) a top-level
-    /// `&&` terminates the initializer so it can introduce the
-    /// optional guard; a logical-and that genuinely belongs to the initializer
-    /// must then be parenthesized. When `false` (the ADR-0071
-    /// statement forms) the initializer keeps consuming `&&`
-    /// exactly as before.
-    private func ParseIfLetBindingList(stopAtTopLevelLogicalAnd bool = false) SeparatedSyntaxList[
-        IfLetBindingClauseSyntax
-    ] {
+    /// Issue #4961 / ADR-0200: parses the binding header shared by EVERY
+    /// `let`-binding form — the `if let` statement and expression, `guard let`,
+    /// and `while let` — so the initializer-termination and guard decision is
+    /// made in exactly one place. Each initializer stops before a top-level
+    /// `&&` or `||` (see (cref:ParseIfLetGuardedInitializer)); a following
+    /// `&&` introduces the optional `bool` guard. A top-level `||` there can
+    /// never start a guard, so it is reported (GS0626) and kept in the guard
+    /// slot purely so the tree stays full-fidelity and recovery is local. The
+    /// forms that do not support a guard (`guard let`, `while let`) still
+    /// parse it here, so it never leaks into an initializer, and it is
+    /// reported (GS0625).
+    /// @param unsupportedGuardForm The form's spelling when it does not accept a guard
+    /// (`guard let`, `while let`); `null` for `if let`.
+    /// @returns The binding list plus the optional guard operator and guard.
+    private func ParseIfLetHeader(unsupportedGuardForm string? = nil)(
+        Bindings SeparatedSyntaxList[IfLetBindingClauseSyntax],
+        GuardOperator SyntaxToken?,
+        Guard ExpressionSyntax?
+    ) {
+        let bindings = ParseIfLetBindingList()
+        if Current.Kind != SyntaxKind.AmpersandAmpersandToken && Current.Kind != SyntaxKind.PipePipeToken {
+            return (bindings, nil, nil)
+        }
+        let guardOperator = NextToken()
+        if guardOperator.Kind == SyntaxKind.PipePipeToken {
+            Diagnostics.ReportLetBindingLogicalOr(guardOperator.Location)
+        } else if unsupportedGuardForm != nil {
+            Diagnostics.ReportLetBindingGuardNotSupported(guardOperator.Location, unsupportedGuardForm)
+        }
+        // The guard is an ordinary boolean expression (it may itself use
+        // `&&`/`||`), parsed with the same struct-literal / object-
+        // initializer suppression the initializers use so the following
+        // `{` opens the then-block.
+        suppressTrailingObjectInitializer++
+        suppressStructLiteral++
+        var guard_ ExpressionSyntax
+        try {
+            guard_ = ParseExpression()
+        } finally {
+            suppressStructLiteral--
+            suppressTrailingObjectInitializer--
+        }
+        return (bindings, guardOperator, guard_)
+    }
+
+    /// Parses the comma-separated binding list of a `let`-binding header.
+    /// Callers go through (cref:ParseIfLetHeader), which owns the guard.
+    private func ParseIfLetBindingList() SeparatedSyntaxList[IfLetBindingClauseSyntax] {
         let nodesAndSeparators = ImmutableArray.CreateBuilder[SyntaxNode]()
         while true {
-            nodesAndSeparators.Add(ParseIfLetBindingClause(stopAtTopLevelLogicalAnd))
+            nodesAndSeparators.Add(ParseIfLetBindingClause())
             if Current.Kind != SyntaxKind.CommaToken {
                 break
             }
@@ -53,7 +89,7 @@ open partial class Parser {
         return SeparatedSyntaxList[IfLetBindingClauseSyntax](nodesAndSeparators.ToImmutable())
     }
 
-    private func ParseIfLetBindingClause(stopAtTopLevelLogicalAnd bool = false) IfLetBindingClauseSyntax {
+    private func ParseIfLetBindingClause() IfLetBindingClauseSyntax {
         let letKeyword = MatchToken(SyntaxKind.LetKeyword)
         let identifier = MatchToken(SyntaxKind.IdentifierToken)
         let typeClause = ParseOptionalTypeClauseBeforeEquals()
@@ -72,11 +108,7 @@ open partial class Parser {
             if Current.Kind == SyntaxKind.OpenBraceToken && Peek(1).Kind == SyntaxKind.CloseBraceToken {
                 initializer = ParseNameOrCallExpression()
             } else {
-                initializer = if stopAtTopLevelLogicalAnd {
-                    ParseIfLetGuardedInitializer()
-                } else {
-                    ParseExpression()
-                }
+                initializer = ParseIfLetGuardedInitializer()
             }
         } finally {
             suppressStructLiteral--
@@ -126,24 +158,7 @@ open partial class Parser {
 
     private func ParseIfLetExpressionCore() IfLetExpressionSyntax {
         let ifKeyword = MatchToken(SyntaxKind.IfKeyword)
-        let bindings = ParseIfLetBindingList(stopAtTopLevelLogicalAnd: true)
-        var ampersandAmpersandToken SyntaxToken? = nil
-        var guard_ ExpressionSyntax? = nil
-        if Current.Kind == SyntaxKind.AmpersandAmpersandToken {
-            ampersandAmpersandToken = NextToken()
-            // The guard is an ordinary boolean expression (it may itself use
-            // `&&`/`||`), parsed with the same struct-literal / object-
-            // initializer suppression the initializers use so the following
-            // `{` opens the then-block.
-            suppressTrailingObjectInitializer++
-            suppressStructLiteral++
-            try {
-                guard_ = ParseExpression()
-            } finally {
-                suppressStructLiteral--
-                suppressTrailingObjectInitializer--
-            }
-        }
+        let (bindings, guardOperator, guard_) = ParseIfLetHeader()
         let thenBlock = ParseBlockExpression()
         // The `else` branch is mandatory in value position. A missing one is
         // NOT manufactured here (that would cascade into a bogus block parse);
@@ -159,7 +174,7 @@ open partial class Parser {
             syntaxTree,
             ifKeyword,
             bindings,
-            ampersandAmpersandToken,
+            guardOperator,
             guard_,
             thenBlock,
             elseKeyword,

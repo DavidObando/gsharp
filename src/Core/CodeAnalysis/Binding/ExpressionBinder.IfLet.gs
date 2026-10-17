@@ -9,6 +9,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Linq
 
 /// ```xmldoc
 /// <content>
@@ -62,58 +63,41 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportIfExpressionMissingElse(syntax.IfKeyword.Location)
             return BoundErrorExpression(nil)
         }
-        // The bindings live in their own scope so they are invisible to the
-        // else branch (ADR-0071: bindings are then-only). `narrowing` is the
-        // single smart-cast frame every binding is added to as it succeeds, so
-        // a later initializer, the guard, and the then-block all observe the
-        // earlier bindings at their non-null underlying types.
-        $scope = BoundScope($scope)
-        let narrowing = Dictionary[AccessPath, TypeSymbol]()
-        binderCtx.BeginNarrowingProof(narrowing)
-        binderCtx.NarrowedVariables.Add(narrowing)
-        let bound = ImmutableArray.CreateBuilder[
-            (Syntax IfLetBindingClauseSyntax, Variable VariableSymbol, Initializer BoundExpression)
-        ]()
+        // Issue #4961 / ADR-0200: the bindings, the guard, and the then-block
+        // are bound through the header helper the STATEMENT form shares, so
+        // scoping (then-region only, never the else branch), progressive
+        // narrowing, and the guard rules cannot drift between the forms.
+        let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
+            binderCtx,
+            syntax.Bindings,
+            syntax.Guard,
+            Diagnostics,
+            conversions,
+            bindTypeClause,
+            (initializer ExpressionSyntax) -> BindExpression(initializer),
+            DeclareIfLetLocal,
+            (guardSyntax ExpressionSyntax) -> BindExpression(guardSyntax, TypeSymbol.Bool),
+            (boundGuard BoundExpression) -> ClassifyIfExpressionNarrowing(boundGuard).Then,
+            () -> BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
+        )
+        var whenTrue = whenTrueBound
+        let bound = ImmutableArray
+            .CreateBuilder[(Syntax IfLetBindingClauseSyntax, Variable VariableSymbol, Initializer BoundExpression)](
+            clauses.Length
+        )
         var anyInvalid = false
-        var guard_ BoundExpression? = nil
-        var whenTrue BoundExpression
-        let BindInitializer = func (initializer ExpressionSyntax) BoundExpression {
-            return BindExpression(initializer)
-        }
-        try {
-            for binding in syntax.Bindings {
-                let clause = IfLetBindingSupport.BindBindingClause(
-                    binding,
-                    Diagnostics,
-                    conversions,
-                    bindTypeClause,
-                    BindInitializer,
-                    DeclareIfLetLocal
-                )
-                if !clause.IsValid {
-                    anyInvalid = true
-                    continue
-                }
-                narrowing[clause.Variable] = Invariant.Required(
-                    clause.Underlying,
-                    "a valid if-let binding has an underlying type",
-                    expression: "clause.Underlying"
-                )
-                bound.Add((binding, clause.Variable, clause.Initializer))
+        for clause in clauses {
+            if !clause.Binding.IsValid {
+                anyInvalid = true
+                continue
             }
-            if syntax.Guard != nil {
-                guard_ = BindExpression(syntax.Guard, TypeSymbol.Bool)
-            }
-            whenTrue = BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
-        } finally {
-            binderCtx.EndNarrowingProof()
-            $scope = $scope.Pop()
+            bound.Add((clause.Syntax, clause.Binding.Variable, clause.Binding.Initializer))
         }
         // Bound AFTER the binding scope/frame is popped: the else branch never
         // sees the bindings.
         var whenFalse = BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
         if anyInvalid ||
-            bound.Count == 0 ||
+            clauses.Length == 0 ||
             guard_ is BoundErrorExpression ||
             whenTrue is BoundErrorExpression ||
             whenFalse is BoundErrorExpression {
@@ -156,11 +140,7 @@ internal partial class ExpressionBinder {
             }
             return BoundErrorExpression(nil)
         }
-        let condition = Invariant.Required(
-            BuildIfLetCondition(bound.ToImmutable(), 0, guard_),
-            "a valid if-let expression has at least one binding",
-            expression: "BuildIfLetCondition(bound.ToImmutable(), 0, guard)"
-        )
+        let condition = IfLetBindingSupport.BuildShortCircuitCondition(clauses, 0, guard_)
         return BoundConditionalExpression(nil, condition, convertedTrue, convertedFalse, resultType)
     }
 
@@ -178,50 +158,6 @@ internal partial class ExpressionBinder {
         let fallback = LocalVariableSymbol(identifier.ValueText ?? "?", isReadOnly, type, declaringSyntax: identifier)
         $scope.TryDeclareVariable(fallback)
         return fallback
-    }
-
-    /// Builds the boolean condition that declares each binding in turn and
-    /// short-circuits on the first `nil`. See
-    /// (cref:BindIfLetExpression) for the produced shape.
-    private func BuildIfLetCondition(
-        bindings ImmutableArray[
-            (Syntax IfLetBindingClauseSyntax, Variable VariableSymbol, Initializer BoundExpression)
-        ],
-        index int32,
-        $guard BoundExpression?
-    ) BoundExpression {
-        let (bindingSyntax, variable, initializer) = bindings[index]
-        let declaration = BoundVariableDeclaration(bindingSyntax, variable, initializer)
-        let test = Invariant.Required(
-            IfLetBindingSupport.BuildNilCheckChain(bindingSyntax, []VariableSymbol{variable}),
-            "an if-let binding condition has a nil check",
-            expression: "IfLetBindingSupport.BuildNilCheckChain(bindingSyntax, new[] { variable })"
-        )
-        var value BoundExpression
-        if index == bindings.Length - 1 {
-            value = if $guard == nil {
-                test
-            } else {
-                cast[BoundExpression](
-                    BoundConditionalExpression(
-                        nil,
-                        test,
-                        $guard,
-                        BoundLiteralExpression(bindingSyntax, false, TypeSymbol.Bool),
-                        TypeSymbol.Bool
-                    )
-                )
-            }
-        } else {
-            value = BoundConditionalExpression(
-                nil,
-                test,
-                BuildIfLetCondition(bindings, index + 1, $guard),
-                BoundLiteralExpression(bindingSyntax, false, TypeSymbol.Bool),
-                TypeSymbol.Bool
-            )
-        }
-        return BoundBlockExpression(nil, ImmutableArray.Create[BoundStatement](declaration), value)
     }
 
     /// Binds the branch after `else`: a chained `else if` /

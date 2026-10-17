@@ -1,0 +1,103 @@
+// <copyright file="SemanticLookupIfLetGuardTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.LanguageServer.Tests
+
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.LanguageServer
+import Xunit
+
+/// Issue #4961 / ADR-0200: the LSP symbol mapping (hover, definition,
+/// references) for an `if let` guard. In both forms, the bound name in the
+/// guard and in the then-region resolves to the binding's own symbol, and a
+/// same-named outer local is what the else branch and the code after it see.
+class SemanticLookupIfLetGuardTests {
+    @Fact
+    func Statement_GuardAndThenUses_ResolveToTheBinding_ElseAndAfterToTheOuterLocal() {
+        const Source = `func Run(maybe string?) int32 {
+    let value = 0
+    if let value = maybe && value.Length > 0 {
+        let inside = value
+    } else {
+        let otherwise = value
+    }
+    return value
+}`
+        let tree = SyntaxTree.Parse(Source)
+        let compilation = Compilation(tree)
+        let outer Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 1))
+        let binding Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 2))
+        let guardUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 3))
+        let thenUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 4))
+        let elseUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 5))
+        let afterUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 6))
+        Assert.IsAssignableFrom[VariableSymbol](binding)
+        Assert.NotSame(outer, binding)
+        Assert.Same(binding, guardUse)
+        Assert.Same(binding, thenUse)
+        Assert.Same(outer, elseUse)
+        Assert.Same(outer, afterUse)
+    }
+
+    @Fact
+    func Expression_GuardAndThenUses_ResolveToTheBinding() {
+        const Source = `func Run(maybe string?) int32 {
+    return if let value = maybe && value.Length > 0 { value.Length } else { 0 }
+}`
+        let tree = SyntaxTree.Parse(Source)
+        let compilation = Compilation(tree)
+        let binding Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 1))
+        let guardUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 2))
+        let thenUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 3))
+        Assert.IsAssignableFrom[VariableSymbol](binding)
+        Assert.Same(binding, guardUse)
+        Assert.Same(binding, thenUse)
+    }
+
+    @Fact
+    func Statement_LaterInitializerUse_ResolvesToTheEarlierBinding() {
+        const Source = `func Len(s string) int32? { return s.Length }
+func Run(maybe string?) int32 {
+    if let text = maybe, let n = Len(text) && n > 0 {
+        return n
+    }
+    return 0
+}`
+        let tree = SyntaxTree.Parse(Source)
+        let compilation = Compilation(tree)
+        let binding Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "text", occurrence: 1))
+        let initializerUse Symbol? = SemanticLookup.ResolveSymbol(
+            compilation,
+            IdentifierAt(tree, "text", occurrence: 2)
+        )
+        Assert.IsAssignableFrom[VariableSymbol](binding)
+        Assert.Same(binding, initializerUse)
+    }
+
+    shared {
+        private func IdentifierAt(tree SyntaxTree, text string, occurrence int32) SyntaxToken? {
+            var seen = 0
+            for token in EnumerateTokens(tree.Root) {
+                if token.Kind == SyntaxKind.IdentifierToken && token.Text == text && (seen += 1) == occurrence {
+                    return token
+                }
+            }
+            return nil
+        }
+
+        private func EnumerateTokens(node SyntaxNode) sequence[SyntaxToken] {
+            if node is SyntaxToken token {
+                yield token
+                yield break
+            }
+            for child in node.GetChildren() {
+                for childToken in EnumerateTokens(child) {
+                    yield childToken
+                }
+            }
+        }
+    }
+}
