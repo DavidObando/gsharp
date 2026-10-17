@@ -76,7 +76,6 @@ const sidebars: SidebarsConfig = {
     'ref/diagnostics',
     'design-decisions',
     'release-notes',
-    'project/quality-dashboard',
     'faq',
   ],
 
@@ -92,7 +91,6 @@ const sidebars: SidebarsConfig = {
     'tooling/lsp',
     'tooling/compiler-architecture',
     'playground',
-    'contributing/docs-authoring',
   ],
 };
 

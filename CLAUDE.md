@@ -146,9 +146,10 @@ to translate. What gates a PR now:
 - **Windows and differential-conformance nightlies** may be red. Shipping with a
   red nightly is a maintainer judgment call; don't assume a red Windows
   nightly is yours, and don't assume it isn't. Show the evidence.
-- **Build docs** (`pages.yml`): the WebKit dark-theme accessibility check on
-  `project/quality-dashboard` fails intermittently. When a PR doesn't touch
-  that page, rerun it with `gh run rerun <run-id> --failed`.
+- **Build docs** (`pages.yml`): the WebKit dark-theme accessibility checks in
+  `npm run test:browser` have failed intermittently. If the job log shows the
+  failure is on a page the PR doesn't touch, rerun it with
+  `gh run rerun <run-id> --failed`.
 - **The Oahu leg** of the apps nightly migrates Oahu at the commit pinned in
   `tools/cs2gs/external/oahu.json`.
   `JobSchedulerTests.Bounded_Concurrency_Limit_Is_Enforced` is a known flaky

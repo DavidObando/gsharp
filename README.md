@@ -9,7 +9,7 @@
 Kotlin- and Swift-style semantics, Go- and Python-inspired syntax — on the CLR you already know.
 
 [![build](https://github.com/DavidObando/gsharp/actions/workflows/build.yml/badge.svg)](https://github.com/DavidObando/gsharp/actions/workflows/build.yml)
-[![quality dashboard](https://github.com/DavidObando/gsharp/actions/workflows/pages.yml/badge.svg)](https://davidobando.github.io/gsharp/docs/next/project/quality-dashboard)
+[![docs](https://github.com/DavidObando/gsharp/actions/workflows/pages.yml/badge.svg)](https://davidobando.github.io/gsharp/)
 [![NuGet](https://img.shields.io/nuget/v/Gsharp.NET.Sdk.svg?label=Gsharp.NET.Sdk)](https://www.nuget.org/packages/Gsharp.NET.Sdk/)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 

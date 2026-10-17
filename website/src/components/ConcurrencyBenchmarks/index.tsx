@@ -73,7 +73,7 @@ export default function ConcurrencyBenchmarks(): ReactNode {
     return (
       <section className="gs-benchmark" aria-labelledby="benchmark-heading">
         <Heading as="h2" id="benchmark-heading">
-          Workflow measurements
+          Benchmark measurements
         </Heading>
         <p role="status">
           Measurements unavailable: {data.reason ?? 'No valid snapshot is available.'}
@@ -89,12 +89,11 @@ export default function ConcurrencyBenchmarks(): ReactNode {
     <section className="gs-benchmark" aria-labelledby="benchmark-heading">
       <p className="gs-eyebrow">Measured separately / not example timings</p>
       <Heading as="h2" id="benchmark-heading">
-        What the workflow actually measured.
+        What the benchmark actually measured.
       </Heading>
       <p>
-        These are the registered lower-level operations from{' '}
-        <a href={source.runUrl}>concurrency-bench.yml run {source.runId}</a>, not end-to-end timings
-        of the ten programs above.
+        These are the registered lower-level operations, not end-to-end timings of the ten programs
+        above. Source: <a href={source.runUrl}>benchmark run {source.runId}</a>.
       </p>
       <div className="gs-comparison-notice">
         <strong>

@@ -21,13 +21,6 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 bench = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bench)
-DASHBOARD_SPEC = importlib.util.spec_from_file_location(
-    "generate_quality_dashboard",
-    REPO / "build" / "generate-quality-dashboard.py",
-)
-assert DASHBOARD_SPEC and DASHBOARD_SPEC.loader
-dashboard = importlib.util.module_from_spec(DASHBOARD_SPEC)
-DASHBOARD_SPEC.loader.exec_module(dashboard)
 
 
 class ConcurrencyBenchTests(unittest.TestCase):
@@ -543,31 +536,6 @@ class ConcurrencyBenchTests(unittest.TestCase):
 
         with self.assertRaisesRegex(SystemExit, "divisible by the 2 measured modes"):
             bench.measure_modes([{"name": "a"}, {"name": "b"}], 3)
-
-    def test_dashboard_accepts_additive_result_schema(self) -> None:
-        results = SCRATCH / "results.json"
-        results.write_text(json.dumps({
-            "schemaVersion": 2,
-            "hardwareClass": "test-host",
-            "comparisonKey": "key",
-            "fingerprint": {"comparison": {}, "build": {}},
-            "gsharp": {
-                "select-ready": {
-                    "median_ns": 72.0,
-                    "ci95_ns": [70.0, 74.0],
-                    "samples": 3,
-                    "launch_samples_ns": [70.0, 72.0, 74.0],
-                }
-            },
-            "gsharp_aot": {},
-            "go": {},
-        }))
-
-        metrics = dashboard.concurrency_metrics(results)
-
-        self.assertEqual("test-host", metrics["hardwareClass"])
-        row = next(row for row in metrics["scenarios"] if row["name"] == "select-ready")
-        self.assertEqual(72.0, row["medianNs"])
 
 
 if __name__ == "__main__":

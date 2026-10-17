@@ -271,11 +271,6 @@ export default function Home(): ReactNode {
                 <small>Ten patterns, correctness, and measured operations</small>
                 <span aria-hidden="true">&rarr;</span>
               </Link>
-              <Link to="/docs/next/project/quality-dashboard">
-                <span>Quality dashboard</span>
-                <small>Latest project measurements, with context</small>
-                <span aria-hidden="true">&rarr;</span>
-              </Link>
             </div>
           </div>
         </section>

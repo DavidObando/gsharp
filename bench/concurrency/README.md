@@ -214,5 +214,3 @@ Kept deliberately, so they are not re-discovered or re-proposed on intuition:
 
 - `docs/adr/0174-goroutines-and-channels-wave-2.md` — the decision this
   harness supports, including the per-scenario budget table (D11).
-- `build/generate-quality-dashboard.py` — the existing perf harness whose JSON
-  output format and dashboard this suite should feed.

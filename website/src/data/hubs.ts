@@ -86,7 +86,7 @@ export const learn: Hub = {
         {
           title: 'Ten Go/G# concurrency patterns',
           description:
-            'Read runnable pairs, compare correctness and usability, and inspect separately sourced workflow measurements.',
+            'Read runnable pairs, compare correctness and usability, and inspect separately sourced benchmark measurements.',
           to: '/concurrency',
         },
         {
@@ -292,12 +292,6 @@ export const project: Hub = {
       title: 'Inspect the evidence',
       items: [
         {
-          title: 'Quality dashboard',
-          description:
-            'Latest project snapshot: conformance, benchmarks, environment, and methodology. Not a release guarantee.',
-          to: '/docs/next/project/quality-dashboard',
-        },
-        {
           title: 'Design decisions',
           description: 'The reasoning behind language choices, collected in one ADR index.',
           to: '/docs/design-decisions',
@@ -321,7 +315,7 @@ export const project: Hub = {
         {
           title: 'Improve the documentation',
           description: 'Write clear examples, preserve version context, and preview changes.',
-          to: '/docs/contributing/docs-authoring',
+          to: 'https://github.com/DavidObando/gsharp/blob/main/docs/docs-authoring.md',
         },
         {
           title: 'Report an issue',

@@ -20,7 +20,7 @@ This guide focuses on the structured surface. The Go-flavored layer
 (`go`, `chan[T]`, `select`, `for v in ch`) is part of the language too and
 is documented in [Go-flavored concurrency](../extensions/go-concurrency).
 
-For runnable examples and cross-language tradeoffs, see [Ten concurrency patterns: Go and G#](/concurrency). It separates the published-SDK correctness examples from the benchmark workflow's measured compiler and operations.
+For runnable examples and cross-language tradeoffs, see [Ten concurrency patterns: Go and G#](/concurrency). It separates the published-SDK correctness examples from the benchmark measurements of the compiler and lower-level operations.
 
 ## `scope` — structured concurrency
 

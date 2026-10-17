@@ -113,8 +113,6 @@ DOC_PAGES: tuple[tuple[str, str, str], ...] = (
     ("tutorials/trail.md", r"Trail for SDK ({V})", "Trail download link text"),
     ("tutorials/trail.md", r"/downloads/trail-({V})\.zip", "Trail download link target"),
     ("tooling/sdk-projects.md", r"\"Gsharp\.NET\.Sdk\":\s*\"({V})\"", "global.json pin example"),
-    ("contributing/docs-authoring.md", r"refreshed against `v({V})`",
-     "names the tag the default snapshot was refreshed from"),
 )
 
 TRACKED: tuple[Tracked, ...] = (
@@ -129,6 +127,11 @@ TRACKED: tuple[Tracked, ...] = (
     Tracked("website/versioned_docs/version-{D}/release-notes.md",
             r"follows the published `v({V})` Git tag", 1,
             "default snapshot names its source tag"),
+    Tracked("docs/docs-authoring.md", r"refreshed against `v({V})`", 1,
+            "names the tag the default snapshot was refreshed from"),
+    Tracked("website/versioned_docs/version-{D}/contributing/docs-authoring.md",
+            r"refreshed against `v({V})`", 1,
+            "default snapshot names the tag it was refreshed from"),
     Tracked("website/README.md", r"refreshed from `v({V})`", 1,
             "names the tag the default snapshot was refreshed from"),
     Tracked("website/static/data/concurrency-checks.json", r"\"sdkVersion\":\s*\"({V})\"", 1,
