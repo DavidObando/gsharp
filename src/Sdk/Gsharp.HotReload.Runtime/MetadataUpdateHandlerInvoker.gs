@@ -66,16 +66,24 @@ internal class MetadataUpdateHandlerInvoker {
         let handlerTypes = List[Type]()
         for assembly in TopologicalSort(assemblies) {
             for attribute in this.TryGetCustomAttributesData(assembly) {
-                // Match by name, as dotnet watch does, so a netstandard
-                // library may declare its own copy of the attribute.
-                if attribute.AttributeType.FullName != MetadataUpdateHandlerAttributeName {
-                    continue
-                }
-                let arguments = attribute.ConstructorArguments
-                if arguments.Count == 1 && arguments[0].Value is Type handlerType {
-                    handlerTypes.Add(handlerType)
-                } else {
-                    this.report("GSHR1005: '$attribute' found with invalid arguments.")
+                // A registration that cannot be read is reported and skipped,
+                // so it never hides the other assemblies' handlers.
+                try {
+                    // Match by name, as dotnet watch does, so a netstandard
+                    // library may declare its own copy of the attribute.
+                    if attribute.AttributeType.FullName != MetadataUpdateHandlerAttributeName {
+                        continue
+                    }
+                    let arguments = attribute.ConstructorArguments
+                    if arguments.Count == 1 && arguments[0].Value is Type handlerType {
+                        handlerTypes.Add(handlerType)
+                    } else {
+                        this.report("GSHR1005: '$attribute' found with invalid arguments.")
+                    }
+                } catch (ex Exception) {
+                    this.report(
+                        "GSHR1005: failed to read a metadata update handler registration in '${assembly.FullName}': $ex"
+                    )
                 }
             }
         }
@@ -90,32 +98,49 @@ internal class MetadataUpdateHandlerInvoker {
         let clearCacheHandlers = List[UpdateHandler]()
         let updateApplicationHandlers = List[UpdateHandler]()
         for handlerType in handlerTypes {
-            var methodFound = false
-            let clearCache MethodInfo? = this.GetHandlerMethod(
-                handlerType,
-                ClearCacheHandlerName,
-                MetadataUpdateSignature
-            )
-            if clearCache != nil {
-                clearCacheHandlers.Add(this.CreateHandler(handlerType, clearCache))
-                methodFound = true
-            }
-            let updateApplication MethodInfo? = this.GetHandlerMethod(
-                handlerType,
-                UpdateApplicationHandlerName,
-                MetadataUpdateSignature
-            )
-            if updateApplication != nil {
-                updateApplicationHandlers.Add(this.CreateHandler(handlerType, updateApplication))
-                methodFound = true
-            }
-            if this.GetHandlerMethod(handlerType, UpdateContentHandlerName, ContentUpdateSignature) != nil {
-                methodFound = true
-            }
-            if !methodFound {
-                this.report(
-                    "GSHR1005: expected to find a static method '$ClearCacheHandlerName', '$UpdateApplicationHandlerName' or '$UpdateContentHandlerName' on type '${handlerType.AssemblyQualifiedName}' but neither exists."
+            // Binding one handler type can fail in ways reflection does not
+            // describe up front; that type is reported and skipped, and the
+            // other handler types still bind.
+            try {
+                var methodFound = false
+                let clearCache MethodInfo? = this.GetHandlerMethod(
+                    handlerType,
+                    ClearCacheHandlerName,
+                    MetadataUpdateSignature
                 )
+                let updateApplication MethodInfo? = this.GetHandlerMethod(
+                    handlerType,
+                    UpdateApplicationHandlerName,
+                    MetadataUpdateSignature
+                )
+                let clearCacheHandler UpdateHandler? = if clearCache != nil {
+                    this.CreateHandler(handlerType, clearCache)
+                } else {
+                    nil
+                }
+                let updateApplicationHandler UpdateHandler? = if updateApplication != nil {
+                    this.CreateHandler(handlerType, updateApplication)
+                } else {
+                    nil
+                }
+                if clearCacheHandler != nil {
+                    clearCacheHandlers.Add(clearCacheHandler)
+                    methodFound = true
+                }
+                if updateApplicationHandler != nil {
+                    updateApplicationHandlers.Add(updateApplicationHandler)
+                    methodFound = true
+                }
+                if this.GetHandlerMethod(handlerType, UpdateContentHandlerName, ContentUpdateSignature) != nil {
+                    methodFound = true
+                }
+                if !methodFound {
+                    this.report(
+                        "GSHR1005: expected to find a static method '$ClearCacheHandlerName', '$UpdateApplicationHandlerName' or '$UpdateContentHandlerName' on type '${handlerType.AssemblyQualifiedName}' but neither exists."
+                    )
+                }
+            } catch (ex Exception) {
+                this.report("GSHR1005: failed to bind metadata update handler type '$handlerType': $ex")
             }
         }
         return RegisteredActions(clearCacheHandlers, updateApplicationHandlers)
@@ -138,15 +163,18 @@ internal class MetadataUpdateHandlerInvoker {
     }
 
     private func GetHandlerMethod(handlerType Type, name string, signature[]Type) MethodInfo? {
+        // Only non-generic methods can be handlers; asking for generic arity
+        // zero also keeps a generic overload from making the lookup ambiguous.
         let method MethodInfo? = handlerType.GetMethod(
             name,
+            genericParameterCount: 0,
             HandlerMethodBindingFlags,
             binder: nil,
             signature,
             modifiers: nil
         )
-        // An open generic method (or a method of an open generic handler
-        // type) cannot be bound to a delegate, so it does not match either.
+        // A method of an open generic handler type cannot be bound to a
+        // delegate either, so it does not match.
         if method != nil && method.ReturnType == typeof(void) && !method.ContainsGenericParameters {
             return method
         }
