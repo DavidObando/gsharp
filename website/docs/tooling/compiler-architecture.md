@@ -2,7 +2,7 @@
 title: "Compiler architecture"
 sidebar_position: 6
 draft: false
-description: "Understand the compiler pipeline and source layout when contributing to G#."
+description: "Understand the compiler pipeline and source layout."
 ---
 
 # Compiler architecture
@@ -71,7 +71,9 @@ G# generics are emitted as **CLR reified generics**, end-to-end. A user-declared
 
 Constraints (`any`, `comparable`, sealed-interface bounds) round-trip as `GenericParamConstraint` rows. Variance markers (`in`/`out`) on interface type parameters are emitted as the matching `GenericParam` variance flags. C# / F# consumers see the same shape they would see from a C#-defined equivalent: `GetGenericArguments()` returns the type parameters, `GetField("Value").FieldType` returns the parameter type, and there is no `box`/`unbox.any` boundary at member access.
 
-## Contributor file map
+<span id="contributor-file-map"></span>
+
+## Source layout
 
 | Area | Representative paths |
 | --- | --- |

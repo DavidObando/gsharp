@@ -64,6 +64,7 @@ Useful `migrate` options:
 | `--passthrough <path>` | Do not translate matching projects, but keep their original C# project and sources in the destination. May be repeated. |
 | `--sdk-version <v>` | Pin `Gsharp.NET.Sdk` to exactly `<v>`. A version published on NuGet works. |
 | `--sdk-pin <where>` | `project` (the default) writes the SDK version into each generated project. `global-json` writes it under `msbuild-sdks` in `global.json` and leaves the project `Sdk` attributes unversioned. |
+| `--allow-conditional-compilation` | Report each C# `#if`/`#elif` as a `CS2GS-CONDITIONAL-COMPILATION` warning and translate the active arm, instead of failing. G# has no conditional compilation. This applies to the translate stage only. |
 | `--via-sdk` | Build the emitted G# via `dotnet build` + the `Gsharp.NET.Sdk` so source generators run. This is the default. |
 | `--no-via-sdk` | Compile with `gsc` directly instead of the SDK build. |
 | `--config <name>` | Build configuration used to find tools; default is `Release`. |
@@ -86,7 +87,7 @@ cs2gs validate --corpus path/to/csharp-repo --migrated path/to/gsharp-repo \
   --shard 1/4
 ```
 
-`capture-test-oracle` records the C# test-case names, and `validate` compares the migrated tests with them name for name. Use `--count-only-test-parity` to skip the per-name check.
+`capture-test-oracle` records the C# test-case names, and `validate` compares the migrated tests with them name for name. `validate` requires either `--csharp-test-oracle` or `--count-only-test-parity`. The second option skips the per-name check and compares only test counts.
 
 Pass the same `--exclude` and `--passthrough` values that the `migrate` run used. They define the set of projects, so a different list breaks project references. To select a subset, use `--app <id>` or `--shard <i>/<N>` instead.
 
