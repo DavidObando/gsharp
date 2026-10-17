@@ -560,6 +560,7 @@ def _sh_scan(text: str, pos: int, mask: bytearray, nested: bool) -> int:
     start = pos
     depth = 0
     word_start = True
+    brackets = 0  # unclosed `[` on this line, as in an array subscript
     pending: list[tuple[str, bool, bool]] = []
     while pos < n:
         c = text[pos]
@@ -574,6 +575,7 @@ def _sh_scan(text: str, pos: int, mask: bytearray, nested: bool) -> int:
         if c == "\n":
             pos += 1
             word_start = True
+            brackets = 0
             if pending:
                 pos = _sh_heredocs(text, pos, mask, pending)
                 pending = []
@@ -583,6 +585,9 @@ def _sh_scan(text: str, pos: int, mask: bytearray, nested: bool) -> int:
             # the same text is pattern data in `@(a|#b)` and `case` patterns.
             # The check keeps it as code, so a change to it fails.
             if word_start and (pos == 0 or text[pos - 1] in " \t\n"):
+                if brackets:
+                    # Bash allows spaces and `#` in a subscript: a[ #k]=v.
+                    raise ScanError(text, pos, "a `#` after an unclosed `[`")
                 end = _eol(text, pos)
                 if not (pos == 0 and text.startswith("#!")):
                     _mark(mask, pos, end, COMMENT)
@@ -592,6 +597,10 @@ def _sh_scan(text: str, pos: int, mask: bytearray, nested: bool) -> int:
             continue
         at_word = word_start
         word_start = c in _SH_WORD_BREAK
+        if c == "[":
+            brackets += 1
+        elif c == "]":
+            brackets = max(0, brackets - 1)
         if c == "'":
             end = text.find("'", pos + 1)
             if end < 0:
@@ -1055,9 +1064,12 @@ class Line:
 _SPACE = " \t"
 
 
-# Characters that never join with a neighbor into one token. A removed comment
-# between two other characters becomes one space, so `a/**/b` stays two tokens.
-_SEPARATORS = set("()[]{},;")
+# A removed comment between two characters becomes one space, so `a/**/b`
+# stays two tokens. No space is needed after an opening bracket or before a
+# closing bracket, a comma or a semicolon: no G#, C# or Python token joins
+# them to a neighbor. Other characters can join (G# reads `?[` as one token).
+_OPENERS = set("([{")
+_CLOSERS = set(")]},;")
 
 
 def _finish(line: Line) -> Line:
@@ -1079,7 +1091,7 @@ def _finish(line: Line) -> Line:
                 continue
         if site:
             left = out[-1][1][-1:] if out else ""
-            if left and left not in _SPACE and left not in _SEPARATORS and piece[0] not in _SEPARATORS:
+            if left and left not in _SPACE and left not in _OPENERS and piece[0] not in _CLOSERS:
                 out.append(("c", " "))
             site = False
         out.append((kind, piece))

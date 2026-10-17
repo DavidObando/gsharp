@@ -116,6 +116,11 @@ class GSharpTests(CommentOnlyCase):
     def test_trailing_comment_edit_with_code_edit_on_same_line_fails(self) -> None:
         self.assertFails("a.gs", "let x = 1 // old count\n", "let x = 2 // new count\n")
 
+    def test_question_and_bracket_joined_by_comment_removal_fail(self) -> None:
+        # The G# lexer reads `?[` as one token.
+        self.assertFails("a.gs", "let x = c ? /* note */ [1] : [2]\n", "let x = c ?[1] : [2]\n")
+        self.assertPasses("a.gs", "let x = c ? /* note */ [1] : [2]\n", "let x = c ? [1] : [2]\n")
+
     def test_tokens_joined_by_comment_removal_fail(self) -> None:
         self.assertFails("a.gs", "let x = a/**/b\n", "let x = ab\n")
 
@@ -329,6 +334,13 @@ class ShellTests(CommentOnlyCase):
     def test_expansion_in_heredoc_delimiter_fails_closed(self) -> None:
         base = "cat <<$(echo EOF)\n$\n#old\n$(echo EOF)\n"
         self.assertFails("a.sh", base, base.replace("old", "new"), "heredoc delimiter")
+
+    def test_hash_inside_array_subscript_fails_closed(self) -> None:
+        base = "declare -A a\na[ #old]=value\nprintf '%s\\n' \"${!a[@]}\"\n"
+        self.assertFails("a.sh", base, base.replace("old", "new"), "unclosed")
+
+    def test_comment_after_closed_test_bracket_passes(self) -> None:
+        self.assertPasses("a.sh", 'if [ -n "$x" ]; then # old\n  :\nfi\n', 'if [ -n "$x" ]; then # new\n  :\nfi\n')
 
     def test_line_ending_change_fails(self) -> None:
         # Bash prints "<value\r>" for the base and "<value>" for the head.
