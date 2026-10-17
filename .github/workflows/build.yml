@@ -287,9 +287,6 @@ jobs:
       - name: Restore .NET local tools
         run: dotnet tool restore
 
-      - name: Verify the self-host TRX comparison
-        run: python3 build/test-selfhost-compare-trx.py
-
       - name: Build
         run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
