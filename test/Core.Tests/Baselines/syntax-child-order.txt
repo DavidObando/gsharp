@@ -62,11 +62,11 @@ GSharp.Core.CodeAnalysis.Syntax.GenericNameExpressionSyntax: ReadOnlySliceModifi
 GSharp.Core.CodeAnalysis.Syntax.GlobalStatementSyntax: Statement, Annotations
 GSharp.Core.CodeAnalysis.Syntax.GoStatementSyntax: GoKeyword, Expression
 GSharp.Core.CodeAnalysis.Syntax.GotoStatementSyntax: Keyword, LabelIdentifier
-GSharp.Core.CodeAnalysis.Syntax.GuardLetStatementSyntax: GuardKeyword, Bindings, ElseKeyword, ElseStatement
+GSharp.Core.CodeAnalysis.Syntax.GuardLetStatementSyntax: GuardKeyword, Bindings, GuardOperatorToken, Guard, ElseKeyword, ElseStatement
 GSharp.Core.CodeAnalysis.Syntax.IfExpressionSyntax: IfKeyword, Condition, ThenBlock, ElseKeyword, ElseExpression
 GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax: LetKeyword, Identifier, TypeClause, EqualsToken, Initializer
-GSharp.Core.CodeAnalysis.Syntax.IfLetExpressionSyntax: IfKeyword, Bindings, AmpersandAmpersandToken, Guard, ThenBlock, ElseKeyword, ElseExpression
-GSharp.Core.CodeAnalysis.Syntax.IfLetStatementSyntax: IfKeyword, Bindings, ThenStatement, ElseClause
+GSharp.Core.CodeAnalysis.Syntax.IfLetExpressionSyntax: IfKeyword, Bindings, GuardOperatorToken, Guard, ThenBlock, ElseKeyword, ElseExpression
+GSharp.Core.CodeAnalysis.Syntax.IfLetStatementSyntax: IfKeyword, Bindings, GuardOperatorToken, Guard, ThenStatement, ElseClause
 GSharp.Core.CodeAnalysis.Syntax.IfStatementSyntax: IfKeyword, Initializer, Semicolon, Condition, ThenStatement, ElseClause
 GSharp.Core.CodeAnalysis.Syntax.ImportSyntax: ImportKeyword, AliasIdentifier, EqualsToken, Identifiers, IdentifiersWithDots, Annotations
 GSharp.Core.CodeAnalysis.Syntax.IndexAssignmentExpressionSyntax: TargetIdentifier, OpenBracketToken, Indices, CloseBracketToken, EqualsToken, Value
@@ -149,7 +149,7 @@ GSharp.Core.CodeAnalysis.Syntax.UnaryExpressionSyntax: OperatorToken, Operand
 GSharp.Core.CodeAnalysis.Syntax.UsingStatementSyntax: UsingKeyword, Declaration
 GSharp.Core.CodeAnalysis.Syntax.VarPatternSyntax: VarKeyword, Designation
 GSharp.Core.CodeAnalysis.Syntax.VariableDeclarationSyntax: Annotations, AccessibilityModifier, AsyncModifier, Keyword, ScopedModifier, RefKindModifier, ReadOnlyRefModifier, Identifier, TypeParameterList, TypeClause, EqualsToken, Initializer
-GSharp.Core.CodeAnalysis.Syntax.WhileLetStatementSyntax: WhileKeyword, Bindings, Body
+GSharp.Core.CodeAnalysis.Syntax.WhileLetStatementSyntax: WhileKeyword, Bindings, GuardOperatorToken, Guard, Body
 GSharp.Core.CodeAnalysis.Syntax.WhileStatementSyntax: WhileKeyword, Condition, Body
 GSharp.Core.CodeAnalysis.Syntax.WithExpressionSyntax: Receiver, WithToken, OpenBraceToken, Initializers, CloseBraceToken
 GSharp.Core.CodeAnalysis.Syntax.YieldStatementSyntax: YieldKeyword, Expression, BreakKeyword

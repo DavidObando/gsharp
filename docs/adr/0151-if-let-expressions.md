@@ -1,6 +1,8 @@
 # ADR-0151: `if let` expressions
 
-- **Status**: Accepted
+- **Status**: Accepted; partly superseded by
+  [ADR-0200](0200-align-if-let-statement-and-expression.md) (semantics item 9
+  and the statement-form paragraph of "The `&&` delimiter rule")
 - **Date**: 2026-07-26
 - **Phase**: Phase 8 — language ergonomics / expression surface
 - **Related**: ADR-0064 (if-expression and block-with-trailing-expression), ADR-0071 (`if let` / `guard let` bindings), ADR-0069 (smart-cast flow narrowing), ADR-0115 (cs2gs canonical forms), ADR-0150 (source decomposition conventions)
@@ -103,6 +105,9 @@ if let first = GetFirst(), let second = GetSecond(first) && second.IsValid {
 9. **Statement forms are unchanged.** A statement-leading `if let` still parses
    as the ADR-0071 statement, and `guard let` is untouched. Source that
    compiled before continues to compile identically.
+   *Superseded by [ADR-0200](0200-align-if-let-statement-and-expression.md):
+   the statement form now shares this form's header (initializer rule, guard,
+   short circuit, progressive narrowing).*
 
 ### The `&&` delimiter rule
 
@@ -127,6 +132,11 @@ below the logical-and tier.
 The **statement** form keeps parsing initializers with the full expression
 grammar (`if let x = a && b { … }` still binds `a && b`); the statement form has
 no guard clause, so there is nothing to delimit.
+
+> *Superseded by [ADR-0200](0200-align-if-let-statement-and-expression.md):
+> every `let`-binding header now uses this delimiter rule, and the statement
+> form accepts the same guard. ADR-0200 also accepts a `?:` initializer whose
+> false arm follows the rule, in both forms.*
 
 ### Lowering
 

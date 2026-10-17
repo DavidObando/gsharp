@@ -3469,6 +3469,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportGotoIntoExceptionHandler(GSharp.Core.CodeAnalysis.Text.TextLocation location, String labelName)
   method public Void ReportGuardLetElseMustExit(GSharp.Core.CodeAnalysis.Text.TextLocation location)
   method public Void ReportIfExpressionMissingElse(GSharp.Core.CodeAnalysis.Text.TextLocation location)
+  method public Void ReportIfLetGuardSplitsInitializer(GSharp.Core.CodeAnalysis.Text.TextLocation location, String bindingName, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol actualType)
   method public Void ReportIfLetInitializerMustBeNullable(GSharp.Core.CodeAnalysis.Text.TextLocation location, String bindingName, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol actualType)
   method public Void ReportImplementerOverridesPrivateInterfaceMember(GSharp.Core.CodeAnalysis.Text.TextLocation location, String implementerName, String interfaceName, String methodName)
   method public Void ReportIncompatibleDataToStringOverride(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeName, Boolean isClass)
@@ -3520,6 +3521,8 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportLambdaBindingTypeCannotBeInferred(GSharp.Core.CodeAnalysis.Text.TextLocation location, String parameterName)
   method public Void ReportLegacyChanTypeClauseSyntax(GSharp.Core.CodeAnalysis.Text.TextLocation location, String elementTypeText)
   method public Void ReportLegacyMapTypeClauseSyntax(GSharp.Core.CodeAnalysis.Text.TextLocation location, String keyTypeText, String valueTypeText)
+  method public Void ReportLetBindingGuardNotSupported(GSharp.Core.CodeAnalysis.Text.TextLocation location, String form)
+  method public Void ReportLetBindingLogicalOr(GSharp.Core.CodeAnalysis.Text.TextLocation location)
   method public Void ReportLibraryImportInvalidStringMarshalling(GSharp.Core.CodeAnalysis.Text.TextLocation location, String value)
   method public Void ReportLibraryImportRequiresStringMarshalling(GSharp.Core.CodeAnalysis.Text.TextLocation location, String functionName)
   method public Void ReportListPatternRequiresArrayOrSlice(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
@@ -6387,17 +6390,21 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.GotoStatementSyntax : GSharp.C
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken Keyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken LabelIdentifier { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.GuardLetStatementSyntax : GSharp.Core.CodeAnalysis.Syntax.StatementSyntax
+  method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Guard()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> get_Bindings()
   method public GSharp.Core.CodeAnalysis.Syntax.StatementSyntax get_ElseStatement()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ElseKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_GuardKeyword()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken guardKeyword, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> bindings, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken elseKeyword, GSharp.Core.CodeAnalysis.Syntax.StatementSyntax elseStatement)
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_GuardOperatorToken()
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken guardKeyword, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> bindings, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken guardOperatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax guard, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken elseKeyword, GSharp.Core.CodeAnalysis.Syntax.StatementSyntax elseStatement)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
+  property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Guard { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> Bindings { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.StatementSyntax ElseStatement { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ElseKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken GuardKeyword { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken GuardOperatorToken { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.IfExpressionSyntax : GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.BlockExpressionSyntax get_ThenBlock()
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Condition()
@@ -6431,30 +6438,34 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.IfLetExpressionSyntax : GSharp
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_ElseExpression()
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Guard()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> get_Bindings()
-  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_AmpersandAmpersandToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ElseKeyword()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_GuardOperatorToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_IfKeyword()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ifKeyword, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> bindings, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ampersandAmpersandToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax guard, GSharp.Core.CodeAnalysis.Syntax.BlockExpressionSyntax thenBlock, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken elseKeyword, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax elseExpression)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ifKeyword, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> bindings, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken guardOperatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax guard, GSharp.Core.CodeAnalysis.Syntax.BlockExpressionSyntax thenBlock, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken elseKeyword, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax elseExpression)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Syntax.BlockExpressionSyntax ThenBlock { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax ElseExpression { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Guard { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> Bindings { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
-  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken AmpersandAmpersandToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ElseKeyword { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken GuardOperatorToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken IfKeyword { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.IfLetStatementSyntax : GSharp.Core.CodeAnalysis.Syntax.StatementSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.ElseClauseSyntax get_ElseClause()
+  method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Guard()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> get_Bindings()
   method public GSharp.Core.CodeAnalysis.Syntax.StatementSyntax get_ThenStatement()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_GuardOperatorToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_IfKeyword()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ifKeyword, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> bindings, GSharp.Core.CodeAnalysis.Syntax.StatementSyntax thenStatement, GSharp.Core.CodeAnalysis.Syntax.ElseClauseSyntax elseClause)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ifKeyword, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> bindings, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken guardOperatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax guard, GSharp.Core.CodeAnalysis.Syntax.StatementSyntax thenStatement, GSharp.Core.CodeAnalysis.Syntax.ElseClauseSyntax elseClause)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Syntax.ElseClauseSyntax ElseClause { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Guard { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> Bindings { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.StatementSyntax ThenStatement { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken GuardOperatorToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken IfKeyword { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.IfStatementSyntax : GSharp.Core.CodeAnalysis.Syntax.StatementSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.ElseClauseSyntax get_ElseClause()
@@ -7903,14 +7914,18 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.VariableDeclarationSyntax : GS
   property public GSharp.Core.CodeAnalysis.Syntax.TypeParameterListSyntax TypeParameterList { get; set; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> Annotations { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.WhileLetStatementSyntax : GSharp.Core.CodeAnalysis.Syntax.StatementSyntax
+  method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Guard()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> get_Bindings()
   method public GSharp.Core.CodeAnalysis.Syntax.StatementSyntax get_Body()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_GuardOperatorToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_WhileKeyword()
-  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken whileKeyword, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> bindings, GSharp.Core.CodeAnalysis.Syntax.StatementSyntax body)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken whileKeyword, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> bindings, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken guardOperatorToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax guard, GSharp.Core.CodeAnalysis.Syntax.StatementSyntax body)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
+  property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Guard { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax> Bindings { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.StatementSyntax Body { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken GuardOperatorToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken WhileKeyword { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.WhileStatementSyntax : GSharp.Core.CodeAnalysis.Syntax.StatementSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Condition()
